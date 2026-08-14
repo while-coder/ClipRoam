@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Server",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/apps/server/debug/index.js",
+      "cwd": "${workspaceFolder}/apps/server",
+      "preLaunchTask": "launch:server",
+      "env": {
+        "CLIPROAM_ADMIN_PASSWORD": "admin"
+      },
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/apps/server/debug/**/*.js"],
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Launch App",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path",
+          "${workspaceFolder}/apps/desktop/src-tauri/Cargo.toml"
+        ],
+        "filter": {
+          "name": "cliproam",
+          "kind": "bin"
+        }
+      },
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "ClipRoam: dev app",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      }
+    }
+  ]
+}

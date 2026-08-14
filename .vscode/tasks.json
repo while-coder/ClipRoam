@@ -1,0 +1,108 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "server:kill",
+      "type": "process",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/scripts/stop-dev.mjs",
+        "--port",
+        "4810"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "ClipRoam: stop web",
+      "type": "process",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/scripts/stop-dev.mjs",
+        "--port",
+        "1430"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "ClipRoam: stop app",
+      "type": "process",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/scripts/stop-dev.mjs",
+        "--executable",
+        "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "debug:server",
+      "type": "shell",
+      "command": "pnpm run debug:server",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$tsc",
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "ClipRoam: build admin",
+      "type": "process",
+      "command": "npm",
+      "args": ["run", "build"],
+      "options": { "cwd": "${workspaceFolder}/apps/admin" },
+      "problemMatcher": "$tsc",
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "ClipRoam: dev web",
+      "type": "process",
+      "command": "pnpm",
+      "args": ["dev:web"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": ["ClipRoam: stop web"],
+      "dependsOrder": "sequence",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": ".+" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".+",
+          "endsPattern": "Local.*1430"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ClipRoam: dev app",
+      "type": "process",
+      "command": "pnpm",
+      "args": ["dev:app"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": ["ClipRoam: stop web"],
+      "dependsOrder": "sequence",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": ".+" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".+",
+          "endsPattern": "Local.*1430"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ClipRoam: stop app dev",
+      "dependsOn": ["ClipRoam: stop app", "ClipRoam: stop web"],
+      "dependsOrder": "sequence"
+    },
+    {
+      "label": "launch:server",
+      "dependsOn": ["server:kill", "debug:server"],
+      "dependsOrder": "sequence"
+    }
+  ]
+}
