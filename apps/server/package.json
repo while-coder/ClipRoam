@@ -1,0 +1,26 @@
+{
+  "name": "@cliproam/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @cliproam/protocol build && cross-env CLIPROAM_ADMIN_PASSWORD=admin node --import tsx --watch src/index.ts",
+    "debug": "shx rm -rf debug && tsc -p tsconfig.debug.json",
+    "build": "tsc -p tsconfig.json && shx rm -rf dist/admin && shx cp -r admin dist/admin",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@cliproam/protocol": "workspace:*",
+    "@fastify/websocket": "^11.2.0",
+    "fastify": "^5.5.0",
+    "log4js": "^6.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "cross-env": "^7.0.3",
+    "shx": "^0.3.4",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
