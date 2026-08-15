@@ -22,10 +22,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam.exe",
       "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
-      "preLaunchTask": "ClipRoam: dev app",
-      "env": {
-        "RUST_BACKTRACE": "1"
-      }
+      "preLaunchTask": "ClipRoam: dev app"
     }
   ]
 }

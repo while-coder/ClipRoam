@@ -44,11 +44,8 @@ import {
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./services/concurrency";
 
 const HOTKEY = "CommandOrControl+Shift+V";
-const CONFIGURED_SERVER_ADDRESS = import.meta.env.VITE_CLIPROAM_SERVER ?? "127.0.0.1:4810";
-const CONFIGURED_SERVER_PROTOCOL = CONFIGURED_SERVER_ADDRESS.startsWith("https://")
-  || import.meta.env.VITE_CLIPROAM_SECURE === "true"
-  ? "https"
-  : "http";
+const CONFIGURED_SERVER_ADDRESS = "127.0.0.1:4810";
+const CONFIGURED_SERVER_PROTOCOL = "http";
 const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
   ? new URL(CONFIGURED_SERVER_ADDRESS).host
   : CONFIGURED_SERVER_ADDRESS;

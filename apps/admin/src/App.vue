@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
-type TlsStatus = { enabled: boolean; source: "environment" | "managed" | "none" };
+type TlsStatus = { enabled: boolean; source: "managed" | "none" };
 type TransferSettings = { maxStoredFileMb: number; resumableUploadTtlHours: number };
 type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 
@@ -20,7 +20,7 @@ const confirmingTlsRemoval = ref(false);
 
 const tlsSummary = computed(() => {
   if (!status.value?.enabled) return "尚未启用 HTTPS";
-  return status.value.source === "environment" ? "HTTPS 已启用（环境变量管理）" : "HTTPS 已启用（后台管理）";
+  return "HTTPS 已启用（后台管理）";
 });
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -223,22 +223,21 @@ onMounted(loadStatus);
             <h2 id="tls-settings-title">HTTPS 证书</h2>
             <p>上传 PEM 格式证书链与对应的私钥。私钥不会在后台再次显示。</p>
           </div>
-          <span v-if="status?.source === 'environment'" class="readonly">环境变量管理</span>
         </div>
 
         <form @submit.prevent="saveTls">
           <label for="certificate">证书或完整证书链</label>
           <input id="certificate-file" class="file-input" type="file" accept=".pem,.crt,.cer,text/plain" @change="loadPem($event, 'certificate')" />
-          <textarea id="certificate" v-model="certificate" rows="7" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" :disabled="submitting || status?.source === 'environment'" required />
+          <textarea id="certificate" v-model="certificate" rows="7" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" :disabled="submitting" required />
 
           <label for="private-key">私钥</label>
           <input id="private-key-file" class="file-input" type="file" accept=".pem,.key,text/plain" @change="loadPem($event, 'privateKey')" />
-          <textarea id="private-key" v-model="privateKey" rows="7" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----" :disabled="submitting || status?.source === 'environment'" required />
+          <textarea id="private-key" v-model="privateKey" rows="7" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----" :disabled="submitting" required />
 
           <p v-if="error" class="message error" role="alert">{{ error }}</p>
           <p v-if="notice" class="message success" role="status">{{ notice }}</p>
           <div class="form-actions">
-            <button type="submit" :disabled="submitting || status?.source === 'environment'">
+            <button type="submit" :disabled="submitting">
               {{ submitting ? "正在校验证书…" : status?.source === "managed" ? "替换证书" : "保存证书" }}
             </button>
             <button v-if="status?.source === 'managed'" class="danger" type="button" :disabled="submitting" @click="requestTlsRemoval">删除证书</button>

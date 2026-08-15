@@ -193,11 +193,7 @@ export class ClipRoamServer {
   }
 
   async #serveAdminAsset(requestPath: string, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown }; type: (contentType: string) => { send: (payload: unknown) => unknown } }): Promise<unknown> {
-    const directory = process.env.CLIPROAM_ADMIN_DIRECTORY
-      ? resolve(process.env.CLIPROAM_ADMIN_DIRECTORY)
-      : existsSync(bundledAdminDirectory)
-        ? bundledAdminDirectory
-        : workspaceAdminDirectory;
+    const directory = existsSync(bundledAdminDirectory) ? bundledAdminDirectory : workspaceAdminDirectory;
     if (!existsSync(directory)) {
       return reply.code(503).send({ message: "管理后台资源未构建。请先执行 pnpm --filter @cliproam/admin build。" });
     }

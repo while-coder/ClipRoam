@@ -35,9 +35,9 @@ pnpm dev:server
 pnpm dev
 ```
 
-桌面端首次启动会要求填写服务器 `IP:端口`、连接协议、账号和密码，可直接登录或注册。登录后只在当前设备保存 30 天会话令牌，不保存密码；服务端按“账号 + 设备”保留一个会话，同一设备重新登录会替换旧令牌，多个设备可同时登录。也可以暂时仅使用本地剪贴板，之后从窗口顶部的连接状态重新配置。默认开发地址为 `127.0.0.1:4810`，可通过桌面端的 `VITE_CLIPROAM_SERVER` 覆盖。
+桌面端首次启动会要求填写服务器 `IP:端口`、连接协议、账号和密码，可直接登录或注册。登录后只在当前设备保存 30 天会话令牌，不保存密码；服务端按“账号 + 设备”保留一个会话，同一设备重新登录会替换旧令牌，多个设备可同时登录。也可以暂时仅使用本地剪贴板，之后从窗口顶部的连接状态重新配置。默认开发地址为 `127.0.0.1:4810`。
 
-服务器默认将所有持久化数据放在 `$HOME/.cliproam`。账号与会话位于 `$HOME/.cliproam/accounts.sqlite`；每个用户位于 `$HOME/.cliproam/users/<userId>/`，其中 `data.sqlite` 保存该用户剪贴板记录和内容索引，`files/<内容标识前两位>/<内容标识>` 保存实际文件。内容池按用户隔离，不跨账号去重。Docker 部署时挂载该目录即可保留全部服务端数据，例如 `-v cliproam-data:/root/.cliproam`；也可单独备份或恢复某个用户目录。可用 `CLIPROAM_DATA_DIRECTORY` 修改数据根目录，`CLIPROAM_ACCOUNTS_DATABASE`、`CLIPROAM_USERS_DIRECTORY` 分别覆盖账号库与用户目录。不再被任何剪贴板记录引用的内容由后台回收，删除记录累计到一定次数、以及每 6 小时会各触发一次。`CLIPROAM_MAX_STORED_FILE_MB` 控制服务器允许持久化的单文件上限，默认 100MB；`CLIPROAM_UPLOAD_RESUME_TTL_HOURS` 控制未完成上传分片的保留时长，默认 24 小时。每台客户端可在连接设置中独立选择更小的自动上传阈值。
+服务器默认将所有持久化数据放在 `$HOME/.cliproam`。账号与会话位于 `$HOME/.cliproam/accounts.sqlite`；每个用户位于 `$HOME/.cliproam/users/<userId>/`，其中 `data.sqlite` 保存该用户剪贴板记录和内容索引，`files/<内容标识前两位>/<内容标识>` 保存实际文件。内容池按用户隔离，不跨账号去重。Docker 部署时挂载该目录即可保留全部服务端数据，例如 `-v cliproam-data:/root/.cliproam`；也可单独备份或恢复某个用户目录。不再被任何剪贴板记录引用的内容由后台回收，删除记录累计到一定次数、以及每 6 小时会各触发一次。服务器单文件上限默认 100MB，未完成上传分片默认保留 24 小时；这两项可在管理后台调整。每台客户端可在连接设置中独立选择更小的自动上传阈值。
 
 ## HTTPS 与管理后台
 
@@ -48,13 +48,13 @@ $env:CLIPROAM_ADMIN_PASSWORD = "请替换为高强度管理员密码"
 pnpm --filter @cliproam/server start
 ```
 
-`CLIPROAM_PORT`、`CLIPROAM_ADMIN_PASSWORD`、`CLIPROAM_MAX_STORED_FILE_MB` 和 `CLIPROAM_UPLOAD_RESUME_TTL_HOURS` 可以由启动环境传入；后两个值在后台保存后会由后台配置覆盖。
+`CLIPROAM_PORT` 和 `CLIPROAM_ADMIN_PASSWORD` 可以由启动环境传入。
 
 从 `src/` 启动的开发模式（VS Code 的 `Launch Server`、`pnpm dev:server`）默认管理员密码为 `admin`；编译后的正常 `start` 不提供默认密码。
 
-管理后台可上传 PEM 格式的完整证书链和私钥，并支持替换或删除后台托管的证书。证书保存在 `$HOME/.cliproam/tls/`；服务已经使用 HTTPS 时会热加载替换后的证书，HTTP 服务首次配置证书后必须重启，下一次启动会自动以 HTTPS/WSS 监听同一端口。删除证书后也必须重启，重启后同一端口将回到 HTTP/WS。也可不使用后台，改用 `CLIPROAM_TLS_CERT_FILE` 与 `CLIPROAM_TLS_KEY_FILE` 指向证书和私钥文件；两者必须同时配置，且此模式下后台只读。请仅在受信任的网络中通过 HTTP 初始配置证书；正式环境应直接使用 HTTPS 或在可信 TLS 反向代理后访问后台。
+管理后台可上传 PEM 格式的完整证书链和私钥，并支持替换或删除后台托管的证书。证书保存在 `$HOME/.cliproam/tls/`；服务已经使用 HTTPS 时会热加载替换后的证书，HTTP 服务首次配置证书后必须重启，下一次启动会自动以 HTTPS/WSS 监听同一端口。删除证书后也必须重启，重启后同一端口将回到 HTTP/WS。请仅在受信任的网络中通过 HTTP 初始配置证书；正式环境应直接使用 HTTPS 或在可信 TLS 反向代理后访问后台。
 
-管理后台也可调整服务器文件上限和断点续传有效期，配置保存在 `$HOME/.cliproam/server-settings.json`，优先于启动时的 `CLIPROAM_MAX_STORED_FILE_MB` 与 `CLIPROAM_UPLOAD_RESUME_TTL_HOURS` 默认值。将任一值设为 `0` 分别表示禁止服务器存储文件或禁用断点续传。
+管理后台也可调整服务器文件上限和断点续传有效期，配置保存在 `$HOME/.cliproam/server-settings.json`。将任一值设为 `0` 分别表示禁止服务器存储文件或禁用断点续传。
 
 ## 验证
 

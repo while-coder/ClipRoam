@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tlsDirectory } from "../storage/DataPaths.js";
 
 export type TlsOptions = { cert: Buffer; key: Buffer };
-export type TlsStatus = { enabled: boolean; source: "environment" | "managed" | "none" };
+export type TlsStatus = { enabled: boolean; source: "managed" | "none" };
 
 const certFile = join(tlsDirectory, "cert.pem");
 const keyFile = join(tlsDirectory, "key.pem");
@@ -13,20 +13,8 @@ const maxPemBytes = 1_024 * 1_024;
 export class TlsCertificateService {
   #options: TlsOptions | undefined;
   #source: TlsStatus["source"] = "none";
-  readonly #environmentConfigured: boolean;
 
   constructor() {
-    const certPath = process.env.CLIPROAM_TLS_CERT_FILE;
-    const keyPath = process.env.CLIPROAM_TLS_KEY_FILE;
-    if (Boolean(certPath) !== Boolean(keyPath)) {
-      throw new Error("CLIPROAM_TLS_CERT_FILE and CLIPROAM_TLS_KEY_FILE must be configured together.");
-    }
-    this.#environmentConfigured = Boolean(certPath);
-    if (certPath && keyPath) {
-      this.#setOptions(readCertificateFiles(certPath, keyPath), "environment");
-      return;
-    }
-
     if (existsSync(certFile) !== existsSync(keyFile)) {
       throw new Error("Managed TLS certificate and key files must both exist.");
     }
@@ -37,9 +25,6 @@ export class TlsCertificateService {
   get status(): TlsStatus { return { enabled: Boolean(this.#options), source: this.#source }; }
 
   replace(cert: unknown, key: unknown): TlsOptions {
-    if (this.#environmentConfigured) {
-      throw new Error("TLS is controlled by CLIPROAM_TLS_CERT_FILE and CLIPROAM_TLS_KEY_FILE.");
-    }
     if (typeof cert !== "string" || typeof key !== "string" || !cert.trim() || !key.trim()) {
       throw new Error("Certificate and private key are required.");
     }
@@ -57,9 +42,6 @@ export class TlsCertificateService {
   }
 
   remove(): void {
-    if (this.#environmentConfigured) {
-      throw new Error("TLS is controlled by CLIPROAM_TLS_CERT_FILE and CLIPROAM_TLS_KEY_FILE.");
-    }
     if (this.#source !== "managed") {
       throw new Error("No managed TLS certificate is configured.");
     }

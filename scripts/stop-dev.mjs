@@ -57,14 +57,14 @@ function executableProcessIds(path) {
       [
         "-NoProfile",
         "-Command",
-        "$target = [IO.Path]::GetFullPath($env:CLIPROAM_STOP_EXECUTABLE); Get-CimInstance Win32_Process -Filter \"Name = 'cliproam.exe'\" | Where-Object { $_.ExecutablePath -and [StringComparer]::OrdinalIgnoreCase.Equals($_.ExecutablePath, $target) } | Select-Object -ExpandProperty ProcessId",
+        "Get-CimInstance Win32_Process -Filter \"Name = 'cliproam.exe'\" | Select-Object ProcessId, ExecutablePath | ConvertTo-Json -Compress",
       ],
-      { env: { ...process.env, CLIPROAM_STOP_EXECUTABLE: targetPath } },
     );
-    return output
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((value) => Number.parseInt(value, 10));
+    if (!output.trim()) return [];
+    const processes = JSON.parse(output);
+    return (Array.isArray(processes) ? processes : [processes])
+      .filter((process) => process.ExecutablePath?.toLowerCase() === targetPath.toLowerCase())
+      .map((process) => process.ProcessId);
   }
 
   return commandOutput("ps", ["-axo", "pid=,command="])

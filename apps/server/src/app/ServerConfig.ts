@@ -18,8 +18,8 @@ export type TransferSettings = {
 
 export function loadServerConfig(): ServerConfig {
   const defaults: TransferSettings = {
-    maxStoredFileMb: normalizeSetting(process.env.CLIPROAM_MAX_STORED_FILE_MB, 100, "CLIPROAM_MAX_STORED_FILE_MB"),
-    resumableUploadTtlHours: normalizeSetting(process.env.CLIPROAM_UPLOAD_RESUME_TTL_HOURS, 24, "CLIPROAM_UPLOAD_RESUME_TTL_HOURS"),
+    maxStoredFileMb: 100,
+    resumableUploadTtlHours: 24,
   };
   const settings = { ...defaults, ...readTransferSettings() };
   return {
@@ -63,11 +63,6 @@ function writeSettings(settings: TransferSettings): void {
   const temporaryPath = `${serverSettingsPath}.${process.pid}.new`;
   writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporaryPath, serverSettingsPath);
-}
-
-function normalizeSetting(value: string | undefined, fallback: number, name: string): number {
-  if (value === undefined) return fallback;
-  return validateSetting(Number(value), name);
 }
 
 function validateSetting(value: unknown, name: string): number {
