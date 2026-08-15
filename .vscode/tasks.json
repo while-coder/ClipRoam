@@ -38,9 +38,10 @@
       "problemMatcher": []
     },
     {
-      "label": "debug:server",
-      "type": "shell",
-      "command": "pnpm run debug:server",
+      "label": "ClipRoam: build protocol",
+      "type": "process",
+      "command": "pnpm",
+      "args": ["--filter", "@cliproam/protocol", "build"],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$tsc",
       "presentation": { "reveal": "silent", "panel": "dedicated" }
@@ -52,6 +53,17 @@
       "args": ["run", "build"],
       "options": { "cwd": "${workspaceFolder}/apps/admin" },
       "problemMatcher": "$tsc",
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "ClipRoam: build app dev",
+      "type": "process",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--manifest-path=${workspaceFolder}/apps/desktop/src-tauri/Cargo.toml"
+      ],
+      "problemMatcher": ["$rustc"],
       "presentation": { "reveal": "silent", "panel": "dedicated" }
     },
     {
@@ -95,13 +107,18 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
+      "label": "ClipRoam: prep app dev",
+      "dependsOn": ["ClipRoam: stop app", "ClipRoam: build app dev", "ClipRoam: dev app"],
+      "dependsOrder": "sequence"
+    },
+    {
       "label": "ClipRoam: stop app dev",
       "dependsOn": ["ClipRoam: stop app", "ClipRoam: stop web"],
       "dependsOrder": "sequence"
     },
     {
-      "label": "launch:server",
-      "dependsOn": ["server:kill", "debug:server"],
+      "label": "ClipRoam: prep server dev",
+      "dependsOn": ["server:kill", "ClipRoam: build protocol"],
       "dependsOrder": "sequence"
     }
   ]
