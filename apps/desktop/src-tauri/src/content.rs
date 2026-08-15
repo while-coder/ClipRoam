@@ -82,6 +82,10 @@ pub struct LocalSources {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntrySummary {
+    /// Root shape used by the list icon without sending the whole tree.
+    /// Values are `"file"`, `"dir"`, `"mixed"`, or empty when unknown.
+    #[serde(default)]
+    pub root_kind: String,
     pub file_count: u64,
     pub hashed_count: u64,
     pub content_count: u64,
@@ -317,7 +321,7 @@ pub fn describe_roots(roots: &[ClipboardTreeRoot]) -> String {
     match roots.len() {
         0 => "文件".to_string(),
         1 => roots[0].name.clone(),
-        count => format!("{} 等 {count} 个文件", roots[0].name),
+        count => format!("{} 等 {count} 项", roots[0].name),
     }
 }
 
@@ -383,6 +387,11 @@ pub fn rebuild_entry_files(entry: &mut ClipboardEntry) {
 pub fn refresh_summary(entry: &mut ClipboardEntry, cached: &HashSet<String>, cache_dir: &Path) {
     let mut summary = EntrySummary::default();
     if let Some(tree) = &entry.tree {
+        summary.root_kind = match tree.roots.as_slice() {
+            [] => String::new(),
+            [root] => root.kind.clone(),
+            _ => "mixed".to_string(),
+        };
         summary.file_count = tree.files.len() as u64;
         summary.hashed_count = tree.files.iter().filter(|node| !node.f.is_empty()).count() as u64;
     }
@@ -579,6 +588,17 @@ mod tests {
     }
 
     #[test]
+    fn describe_roots_distinguishes_multiple_roots_from_files() {
+        let roots = vec![
+            ClipboardTreeRoot { name: "docs".to_string(), kind: "dir".to_string() },
+            ClipboardTreeRoot { name: "readme.md".to_string(), kind: "file".to_string() },
+            ClipboardTreeRoot { name: "assets".to_string(), kind: "dir".to_string() },
+        ];
+
+        assert_eq!(describe_roots(&roots), "docs 等 3 项");
+    }
+
+    #[test]
     fn rebuild_tree_restores_structure_and_shares_repeated_content() {
         let directory = TemporaryDirectory::new("rebuild");
         let source = directory.0.join("payload.bin");
@@ -687,6 +707,7 @@ mod tests {
         refresh_summary(&mut entry, &HashSet::from([uploaded]), Path::new("cache"));
 
         let summary = &entry.summary;
+        assert_eq!(summary.root_kind, "dir");
         assert_eq!((summary.file_count, summary.hashed_count), (3, 2));
         assert_eq!(summary.content_count, 3);
         assert_eq!((summary.total_size, summary.max_file_size), (900, 500));

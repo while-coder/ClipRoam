@@ -144,12 +144,18 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
 /// The frontend renders lists of hundreds of entries; shipping their trees
 /// would mean tens of thousands of nodes per refresh.
 fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
-    ClipboardEntry {
+    let mut lightweight = ClipboardEntry {
         tree: None,
         files: Vec::new(),
         sources: LocalSources::default(),
         ..entry.clone()
+    };
+    if lightweight.kind == "files" {
+        if let Some(tree) = &entry.tree {
+            lightweight.content = describe_roots(&tree.roots);
+        }
     }
+    lightweight
 }
 
 fn safe_file_name(name: &str) -> String {

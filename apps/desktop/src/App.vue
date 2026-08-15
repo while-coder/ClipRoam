@@ -16,6 +16,7 @@ import {
   Cloud,
   CloudOff,
   Download,
+  File,
   FileText,
   FolderOpen,
   Image,
@@ -69,6 +70,7 @@ type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
  * the list never receives the tree itself — only these counters.
  */
 type EntrySummary = {
+  rootKind: string;
   fileCount: number;
   hashedCount: number;
   contentCount: number;
@@ -87,6 +89,7 @@ type UploadProgress = { uploadedBytes: number; totalBytes: number };
 type DownloadProgress = { finished: number; total: number };
 
 const EMPTY_SUMMARY: EntrySummary = {
+  rootKind: "",
   fileCount: 0,
   hashedCount: 0,
   contentCount: 0,
@@ -100,6 +103,7 @@ const EMPTY_SUMMARY: EntrySummary = {
 type SettingsPage = "general" | "account" | "data";
 
 const entries = ref<LocalClipboardEntry[]>([]);
+const syncedEntryIds = ref(new Set<string>());
 const devicesById = ref<Record<string, Device>>({
   browser: { id: "browser", name: "浏览器预览", platform: "browser", osVersion: "未知" },
 });
@@ -234,9 +238,45 @@ function deviceName(entry: ClipboardEntry): string {
   return devicesById.value[entry.sourceDeviceId]?.name ?? "未知设备";
 }
 
+function entrySyncId(entry: ClipboardEntry): string {
+  return entry.clientId ?? entry.id;
+}
+
+function markEntrySynced(entry: ClipboardEntry): void {
+  const id = entrySyncId(entry);
+  if (syncedEntryIds.value.has(id)) return;
+  syncedEntryIds.value = new Set(syncedEntryIds.value).add(id);
+}
+
+function isEntrySynced(entry: ClipboardEntry): boolean {
+  return syncedEntryIds.value.has(entrySyncId(entry));
+}
+
+function syncStatusLabel(entry: ClipboardEntry): string {
+  return isEntrySynced(entry) ? "已同步到服务器" : "未同步到服务器";
+}
+
 function imageSource(entry: LocalClipboardEntry): string | undefined {
   const path = entry.summary.previewPath;
   return path && runningInTauri ? convertFileSrc(path) : undefined;
+}
+
+function fileEntrySummary(entry: LocalClipboardEntry): string | undefined {
+  if (entry.kind !== "files" || !entry.summary.fileCount) return undefined;
+  const count = `${entry.summary.fileCount} 个文件`;
+  if (!entry.summary.totalSize) return count;
+  return `${count} · ${formatFileSize(entry.summary.totalSize)}`;
+}
+
+function formatFileSize(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 async function focusSearch(): Promise<void> {
@@ -835,6 +875,7 @@ function handleKeys(event: KeyboardEvent): void {
 }
 
 async function upsertRemote(entry: ClipboardEntry): Promise<void> {
+  markEntrySynced(entry);
   if (!runningInTauri) {
     entries.value = [
       { ...entry, summary: EMPTY_SUMMARY },
@@ -860,6 +901,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
   if (!client) return;
 
   try {
+    syncedEntryIds.value = new Set(manifest.map((entry) => entry.clientId ?? entry.id));
     // Read the durable history rather than the rendered list. The latter can
     // be stale while another Tauri window is refreshing it.
     const localEntries = runningInTauri
@@ -915,6 +957,9 @@ async function startSync(config: SyncConfig): Promise<void> {
       onDevicePresence: (device) => { rememberDevices([device]); },
       onEntry: (entry) => { void upsertRemote(entry); },
       onDelete: (entryId) => {
+        const remaining = new Set(syncedEntryIds.value);
+        remaining.delete(entryId);
+        syncedEntryIds.value = remaining;
         if (runningInTauri) void invoke("delete_entry", { entryId }).then(refreshEntries);
         else entries.value = entries.value.filter((entry) => entry.id !== entryId);
       },
@@ -1257,6 +1302,7 @@ onBeforeUnmount(() => {
         <span v-else class="kind-icon">
           <LoaderCircle v-if="pastingEntryId === entry.id" :size="18" class="spin" />
           <FileText v-else-if="entry.kind === 'text'" :size="18" />
+          <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
           <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />
           <Image v-else-if="entry.kind === 'image'" :size="18" />
           <Clipboard v-else :size="18" />
@@ -1267,6 +1313,12 @@ onBeforeUnmount(() => {
             <Monitor :size="12" /> {{ deviceName(entry) }}
             <span>·</span>
             <span>{{ formatAge(entry.createdAt) }}</span>
+            <span>·</span>
+            <span class="sync-status" role="img" :title="syncStatusLabel(entry)" :aria-label="syncStatusLabel(entry)">{{ isEntrySynced(entry) ? "☁️" : "⏳" }}</span>
+            <template v-if="fileEntrySummary(entry)">
+              <span>·</span>
+              <span>{{ fileEntrySummary(entry) }}</span>
+            </template>
             <template v-if="uploadStatus(entry)">
               <span>·</span>
               <span class="upload-status" :class="{ uploaded: uploadStatus(entry) === '已上传', uploading: uploadStatus(entry)?.startsWith('上传中') }">{{ uploadStatus(entry) }}</span>
