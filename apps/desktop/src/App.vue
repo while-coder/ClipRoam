@@ -319,7 +319,6 @@ async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipbo
       await client.downloadFile(entry, {
         fileId: file.fileId,
         size: file.size,
-        mime: undefined,
         available: true,
       });
       finished += 1;

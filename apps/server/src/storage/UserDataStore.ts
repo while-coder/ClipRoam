@@ -225,7 +225,7 @@ export class UserDataStore {
   }
 
   // The tree is the only record of which contents an entry uses; the pool
-  // supplies size, mime and availability for each distinct reference.
+  // supplies size and availability for each distinct reference.
   #contentsOf(tree: ClipboardTree | undefined): ClipboardFile[] {
     return this.files.describe([...new Set((tree?.files ?? []).map((node) => node.f))]);
   }

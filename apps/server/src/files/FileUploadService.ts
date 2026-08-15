@@ -10,7 +10,6 @@ type Upload = {
   client: ClientConnection;
   userId: string;
   fileId: string;
-  mime?: string;
   expectedSize: number;
   receivedSize: number;
   hash: Hash;
@@ -60,7 +59,6 @@ export class FileUploadService {
       client,
       userId: client.userId,
       fileId: message.fileId,
-      mime: message.mime,
       expectedSize: message.size,
       receivedSize,
       // Feeding the resumed bytes back in keeps the digest incremental, since a
@@ -105,7 +103,7 @@ export class FileUploadService {
       return true;
     }
     renameSync(upload.temporaryPath, upload.finalPath);
-    this.files.store(upload.fileId, upload.expectedSize, upload.mime);
+    this.files.store(upload.fileId, upload.expectedSize);
     this.#uploads.delete(transferId);
     this.send(client, { type: "file.uploaded", transferId, fileId: upload.fileId });
     this.fileAvailable(upload.userId, upload.fileId);

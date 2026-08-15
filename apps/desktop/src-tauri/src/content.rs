@@ -48,8 +48,6 @@ pub struct ClipboardTree {
 pub struct ClipboardFile {
     pub file_id: String,
     pub size: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mime: Option<String>,
     /// Whether the server already holds the content.
     #[serde(default)]
     pub available: bool,
@@ -389,7 +387,6 @@ pub fn rebuild_entry_files(entry: &mut ClipboardEntry) {
         files.push(ClipboardFile {
             file_id: node.f.clone(),
             size: sizes.get(node.p.as_str()).copied().unwrap_or_default(),
-            mime: None,
             available: false,
         });
     }
@@ -710,9 +707,9 @@ mod tests {
                 ],
             }),
             files: vec![
-                ClipboardFile { file_id: uploaded.clone(), size: 100, mime: None, available: true },
-                ClipboardFile { file_id: local.clone(), size: 300, mime: None, available: false },
-                ClipboardFile { file_id: remote, size: 500, mime: None, available: false },
+                ClipboardFile { file_id: uploaded.clone(), size: 100, available: true },
+                ClipboardFile { file_id: local.clone(), size: 300, available: false },
+                ClipboardFile { file_id: remote, size: 500, available: false },
             ],
             source_device_id: "device".to_string(),
             created_at: "now".to_string(),

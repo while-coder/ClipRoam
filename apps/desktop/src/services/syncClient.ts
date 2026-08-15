@@ -392,7 +392,6 @@ export class SyncClient {
         files: entry.files.map((file) => ({
           fileId: file.fileId,
           size: file.size,
-          mime: file.mime,
           available: file.available,
         })),
         sourceDeviceId: entry.sourceDeviceId,
@@ -575,7 +574,6 @@ export class SyncClient {
       transferId,
       fileId: file.fileId,
       size: file.size,
-      mime: file.mime,
     })) {
       this.#rejectTransfer(transferId, "同步服务未连接");
       this.#rejectUploadReady(transferId, "同步服务未连接");
