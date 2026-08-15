@@ -856,6 +856,54 @@ fn mark_files_uploaded(
         .map_err(|error| error.to_string())
 }
 
+/// Server storage is content-addressed, so another device can finish uploading
+/// a file after this entry was already received locally. Update every local
+/// entry that references the now-available content.
+#[tauri::command(rename_all = "camelCase")]
+fn mark_file_available(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_id: String,
+) -> Result<(), String> {
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let changed_ids = {
+            let entries = history.active_entries_mut();
+            entries
+                .iter_mut()
+                .filter_map(|entry| {
+                    let mut changed = false;
+                    for file in entry.files.iter_mut() {
+                        if file.file_id == file_id && !file.available {
+                            file.available = true;
+                            changed = true;
+                        }
+                    }
+                    changed.then(|| entry.id.clone())
+                })
+                .collect::<HashSet<_>>()
+        };
+        if changed_ids.is_empty() {
+            return Ok(());
+        }
+        let changed_entries = history
+            .active_entries()
+            .iter()
+            .filter(|entry| changed_ids.contains(&entry.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let connection = open_history_database(&history_path)?;
+        for entry in &changed_entries {
+            write_entry_contents(&connection, entry, true)?;
+            refresh_entry_summary(&mut history, &entry.id, &cache_dir);
+        }
+    }
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn set_pinned(
     app: AppHandle,
@@ -865,8 +913,14 @@ fn set_pinned(
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if let Some(entry) = history.find_mut(&entry_id) {
+        let changed = if let Some(entry) = history.find_mut(&entry_id) {
             entry.pinned = pinned;
+            true
+        } else {
+            false
+        };
+        if changed {
+            history.pending_entry_updates.insert(entry_id);
         }
         save_active_history(&state, &history)?;
     }
@@ -878,7 +932,12 @@ fn set_pinned(
 fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let existed = history.active_entries().iter().any(|entry| entry.id == entry_id);
         history.active_entries_mut().retain(|entry| entry.id != entry_id);
+        if existed {
+            history.pending_deletions.insert(entry_id.clone());
+            history.pending_entry_updates.remove(&entry_id);
+        }
         save_active_history(&state, &history)?;
         // Dropping references is what frees disk space, so the sweep runs here.
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
@@ -891,12 +950,69 @@ fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) ->
 fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let deleted = history
+            .active_entries()
+            .iter()
+            .filter(|entry| !entry.pinned)
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>();
         history.active_entries_mut().retain(|entry| entry.pinned);
+        for entry_id in deleted {
+            history.pending_deletions.insert(entry_id.clone());
+            history.pending_entry_updates.remove(&entry_id);
+        }
         save_active_history(&state, &history)?;
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
+}
+
+/// Applies a server-confirmed deletion without creating a new local tombstone.
+#[tauri::command(rename_all = "camelCase")]
+fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        history.active_entries_mut().retain(|entry| entry.id != entry_id);
+        save_active_history(&state, &history)?;
+        let _ = collect_local_garbage(&state.histories_dir, &mut history);
+    }
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut pending = history.pending_deletions.iter().cloned().collect::<Vec<_>>();
+    pending.sort();
+    Ok(pending)
+}
+
+#[tauri::command]
+fn list_pending_entry_updates(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut pending = history.pending_entry_updates.iter().cloned().collect::<Vec<_>>();
+    pending.sort();
+    Ok(pending)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.pending_deletions.remove(&entry_id) {
+        save_active_history(&state, &history)?;
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn acknowledge_entry_update(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.pending_entry_updates.remove(&entry_id) {
+        save_active_history(&state, &history)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1535,9 +1651,15 @@ pub fn run() {
             save_sync_config,
             upsert_remote_entry,
             mark_files_uploaded,
+            mark_file_available,
             set_pinned,
             delete_entry,
             clear_history,
+            remove_remote_entry,
+            list_pending_deletions,
+            list_pending_entry_updates,
+            acknowledge_entry_deletion,
+            acknowledge_entry_update,
             open_paste,
             hide_paste,
             hide_main,
