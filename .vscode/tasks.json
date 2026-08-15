@@ -3,13 +3,8 @@
   "tasks": [
     {
       "label": "ui:kill",
-      "type": "process",
-      "command": "node",
-      "args": [
-        "${workspaceFolder}/scripts/stop-dev.mjs",
-        "--port",
-        "1430"
-      ],
+      "type": "shell",
+      "command": "npx kill-port 1430",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
@@ -46,11 +41,11 @@
     },
     {
       "label": "ui:dev",
-      "type": "process",
-      "command": "pnpm",
-      "args": ["dev:app"],
-      "options": { "cwd": "${workspaceFolder}" },
+      "type": "shell",
       "isBackground": true,
+      "command": "pnpm",
+      "args": ["vite", "dev", "--port", "1430"],
+      "options": { "cwd": "${workspaceFolder}/apps/desktop" },
       "problemMatcher": {
         "owner": "vite",
         "pattern": { "regexp": ".+" },
