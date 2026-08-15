@@ -18,20 +18,10 @@
     },
     {
       "name": "Launch App",
-      "type": "lldb",
+      "type": "cppvsdbg",
       "request": "launch",
-      "cargo": {
-        "args": [
-          "build",
-          "--manifest-path",
-          "${workspaceFolder}/apps/desktop/src-tauri/Cargo.toml"
-        ],
-        "filter": {
-          "name": "cliproam",
-          "kind": "bin"
-        }
-      },
-      "cwd": "${workspaceFolder}",
+      "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam.exe",
+      "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
       "preLaunchTask": "ClipRoam: dev app",
       "env": {
         "RUST_BACKTRACE": "1"

@@ -11,12 +11,6 @@ const passwordKeyLength = 64;
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
 export type AccountUser = { id: string; username: string };
-export type LegacyUserRow = AccountUser & {
-  password_hash: Uint8Array;
-  password_salt: Uint8Array;
-  created_at: string;
-};
-export type LegacySessionRow = { token_hash: string; user_id: string; expires_at: string; created_at: string };
 
 export class UsernameTakenError extends Error {
   constructor() { super("该账号已存在"); }
@@ -54,10 +48,6 @@ export class AccountStore {
       );
       CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
-      CREATE TABLE IF NOT EXISTS storage_migrations (
-        id TEXT PRIMARY KEY,
-        completed_at TEXT NOT NULL
-      );
     `);
     const sessionColumns = this.#database.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
     if (!sessionColumns.some((column) => column.name === "device_id")) {
@@ -132,39 +122,6 @@ export class AccountStore {
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `).get(hashSessionToken(token), new Date().toISOString()) as AccountUser | undefined;
-  }
-
-  hasMigration(id: string): boolean {
-    return Boolean(this.#database.prepare("SELECT 1 FROM storage_migrations WHERE id = ?").get(id));
-  }
-
-  hasUsers(): boolean {
-    return Boolean(this.#database.prepare("SELECT 1 FROM users LIMIT 1").get());
-  }
-
-  markMigration(id: string): void {
-    this.#database.prepare("INSERT OR IGNORE INTO storage_migrations (id, completed_at) VALUES (?, ?)")
-      .run(id, new Date().toISOString());
-  }
-
-  removeMigration(id: string): void {
-    this.#database.prepare("DELETE FROM storage_migrations WHERE id = ?").run(id);
-  }
-
-  importLegacyUser(user: LegacyUserRow): void {
-    this.#database.prepare(`
-      INSERT OR IGNORE INTO users (id, username, password_hash, password_salt, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(user.id, user.username, user.password_hash, user.password_salt, user.created_at);
-  }
-
-  importLegacySessions(sessions: LegacySessionRow[]): void {
-    for (const session of sessions) {
-      this.#database.prepare(`
-        INSERT OR REPLACE INTO sessions (token_hash, user_id, device_id, expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(session.token_hash, session.user_id, `legacy:${session.token_hash}`, session.expires_at, session.created_at);
-    }
   }
 
   close(): void { this.#database.close(); }

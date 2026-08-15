@@ -1,17 +1,20 @@
+mod content;
+mod store;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use image::{GenericImageView, ImageFormat};
-use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{mpsc, Mutex},
     thread,
-    time::{Duration, UNIX_EPOCH},
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -22,48 +25,23 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use uuid::Uuid;
 
-const MAX_UNPINNED_ENTRIES: usize = 200;
-const LOCAL_HISTORY_KEY: &str = "local";
+use content::{
+    blob_path, collect_tree, describe_roots, file_entry_signature, file_signature, hash_bytes, hash_file,
+    new_tree, preserve_local_sources, readable_path, rebuild_entry_files, rebuild_tree,
+    ClipboardEntry, ClipboardFile, ClipboardTreeFile, ClipboardTreeRoot, LocalSources,
+};
+use store::{
+    cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
+    load_history, open_history_database, refresh_entry_summary, register_cached_blob, remember_hash,
+    retain_single_history, save_history, trim_history, write_entry_contents, HistoryData, LOCAL_HISTORY_KEY,
+};
+
 const TRAY_SHOW_MAIN: &str = "show-main";
 const TRAY_QUIT: &str = "quit";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClipboardFile {
-    id: String,
-    name: String,
-    size: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mime: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    sha256: Option<String>,
-    location: String,
-    available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    local_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    local_modified_at: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClipboardEntry {
-    id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    client_id: String,
-    kind: String,
-    content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    html: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    rtf: Option<String>,
-    #[serde(default)]
-    files: Vec<ClipboardFile>,
-    source_device_id: String,
-    created_at: String,
-    #[serde(default)]
-    pinned: bool,
-}
+const FILE_CHUNK_LIMIT: usize = 128 * 1024;
+/// How many freshly hashed paths are folded into the entry before the UI is
+/// told about the progress.
+const HASH_PROGRESS_BATCH: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,76 +67,28 @@ fn default_auto_upload_limit_mb() -> u64 {
     10
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryData {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    entries: Vec<ClipboardEntry>,
-    #[serde(default)]
-    histories: HashMap<String, Vec<ClipboardEntry>>,
-    #[serde(default = "default_active_history")]
-    active_history: String,
-    #[serde(default)]
-    last_clipboard: String,
-    #[serde(default)]
-    last_file_signature: String,
-    #[serde(default)]
-    last_image_signature: String,
-    device_id: String,
-    device_name: String,
-}
-
-impl Default for HistoryData {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            histories: HashMap::new(),
-            active_history: default_active_history(),
-            last_clipboard: String::new(),
-            last_file_signature: String::new(),
-            last_image_signature: String::new(),
-            device_id: Uuid::new_v4().to_string(),
-            device_name: std::env::var("COMPUTERNAME")
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "This device".to_string()),
-        }
-    }
-}
-
-impl HistoryData {
-    fn active_entries(&self) -> &[ClipboardEntry] {
-        self.histories
-            .get(&self.active_history)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    fn active_entries_mut(&mut self) -> &mut Vec<ClipboardEntry> {
-        self.histories
-            .entry(self.active_history.clone())
-            .or_default()
-    }
-}
-
 struct AppState {
     history: Mutex<HistoryData>,
     histories_dir: PathBuf,
     sync_config: Mutex<Option<SyncConfig>>,
     sync_config_path: PathBuf,
     downloads: Mutex<HashMap<String, DownloadState>>,
+    /// `Sender` is not `Sync`, so managed state has to guard it.
+    hash_queue: Mutex<mpsc::Sender<String>>,
 }
 
 struct DownloadState {
     path: PathBuf,
+    file_id: String,
     expected_size: u64,
     received_size: u64,
+    hasher: Sha256,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MissingFile {
-    id: String,
-    name: String,
+    file_id: String,
     size: u64,
     source_device_id: String,
 }
@@ -170,8 +100,11 @@ struct RichText {
     rtf: Option<String>,
 }
 
-fn default_active_history() -> String {
-    LOCAL_HISTORY_KEY.to_string()
+struct PendingHash {
+    path: String,
+    source: String,
+    size: u64,
+    modified_at: Option<u64>,
 }
 
 fn history_key_for_config(config: &SyncConfig) -> String {
@@ -182,207 +115,8 @@ fn history_key_for_config(config: &SyncConfig) -> String {
             config.username.trim().to_ascii_lowercase()
         )
     } else {
-        default_active_history()
+        LOCAL_HISTORY_KEY.to_string()
     }
-}
-
-fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
-    histories_dir
-        .join(format!("{}-{:016x}", safe_history_directory_name(key), stable_key_hash(key)))
-        .join("history.sqlite")
-}
-
-fn safe_history_directory_name(key: &str) -> String {
-    let name = key
-        .strip_prefix("account:")
-        .unwrap_or(key)
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if name.is_empty() { "local".to_string() } else { name }
-}
-
-fn stable_key_hash(key: &str) -> u64 {
-    key.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-    })
-}
-
-fn open_history_database(path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let connection = Connection::open(path).map_err(|error| error.to_string())?;
-    connection
-        .execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS entries (
-                id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                pinned INTEGER NOT NULL,
-                source_device_id TEXT NOT NULL,
-                source_app TEXT NOT NULL DEFAULT '',
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
-            CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
-            CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE COLLATE NOCASE
-            );
-            CREATE TABLE IF NOT EXISTS entry_tags (
-                entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-                PRIMARY KEY (entry_id, tag_id)
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-                entry_id UNINDEXED,
-                content,
-                file_names,
-                pinyin
-            );
-            ",
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(connection)
-}
-
-fn load_history(path: &Path, key: &str) -> HistoryData {
-    let mut history = HistoryData {
-        active_history: key.to_string(),
-        ..HistoryData::default()
-    };
-    let Ok(connection) = open_history_database(path) else {
-        history.histories.insert(key.to_string(), Vec::new());
-        return history;
-    };
-
-    if let Ok(mut statement) = connection.prepare("SELECT key, value FROM metadata") {
-        if let Ok(rows) = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
-            for row in rows.flatten() {
-                match row.0.as_str() {
-                    "last_clipboard" => history.last_clipboard = row.1,
-                    "last_file_signature" => history.last_file_signature = row.1,
-                    "last_image_signature" => history.last_image_signature = row.1,
-                    "device_id" => history.device_id = row.1,
-                    "device_name" => history.device_name = row.1,
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let mut entries = Vec::new();
-    if let Ok(mut statement) = connection.prepare("SELECT payload_json FROM entries ORDER BY pinned DESC, created_at DESC") {
-        if let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) {
-            for raw in rows.flatten() {
-                if let Ok(mut entry) = serde_json::from_str::<ClipboardEntry>(&raw) {
-                    if entry.client_id.is_empty() {
-                        entry.client_id = Uuid::parse_str(&entry.id)
-                            .map(|id| id.to_string())
-                            .unwrap_or_else(|_| Uuid::new_v4().to_string());
-                    }
-                    entries.push(entry);
-                }
-            }
-        }
-    }
-    history.histories.insert(key.to_string(), entries);
-    history
-}
-
-fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
-    let mut connection = open_history_database(path)?;
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
-    transaction.execute("DELETE FROM entries_fts", []).map_err(|error| error.to_string())?;
-    let entry_ids = history.active_entries().iter().map(|entry| entry.id.as_str()).collect::<Vec<_>>();
-    if entry_ids.is_empty() {
-        transaction.execute("DELETE FROM entries", []).map_err(|error| error.to_string())?;
-    } else {
-        let placeholders = std::iter::repeat("?").take(entry_ids.len()).collect::<Vec<_>>().join(", ");
-        transaction
-            .execute(
-                &format!("DELETE FROM entries WHERE id NOT IN ({placeholders})"),
-                params_from_iter(entry_ids),
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    for entry in history.active_entries() {
-        let payload_json = serde_json::to_string(entry).map_err(|error| error.to_string())?;
-        let file_names = entry.files.iter().map(|file| file.name.as_str()).collect::<Vec<_>>().join("\n");
-        transaction
-            .execute(
-                "INSERT INTO entries (id, client_id, kind, content, created_at, pinned, source_device_id, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, kind = excluded.kind, content = excluded.content, created_at = excluded.created_at, pinned = excluded.pinned, source_device_id = excluded.source_device_id, payload_json = excluded.payload_json",
-                params![
-                    entry.id,
-                    entry.client_id,
-                    entry.kind,
-                    entry.content,
-                    entry.created_at,
-                    entry.pinned,
-                    entry.source_device_id,
-                    payload_json,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, '')",
-                params![entry.id, entry.content, file_names],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    for (key, value) in [
-        ("last_clipboard", history.last_clipboard.as_str()),
-        ("last_file_signature", history.last_file_signature.as_str()),
-        ("last_image_signature", history.last_image_signature.as_str()),
-        ("device_id", history.device_id.as_str()),
-        ("device_name", history.device_name.as_str()),
-    ] {
-        transaction
-            .execute(
-                "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    transaction.commit().map_err(|error| error.to_string())
-}
-
-fn save_active_history(state: &AppState, history: &HistoryData) -> Result<(), String> {
-    save_history(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        history,
-    )
-}
-
-fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
-    history_path_for_key(&state.histories_dir, &history.active_history)
-        .parent()
-        .expect("history file always has a parent directory")
-        .join("files")
-}
-
-fn is_cached_image_path(state: &AppState, path: &Path) -> bool {
-    path.starts_with(&state.histories_dir)
-        && path.parent().and_then(Path::file_name).is_some_and(|name| name == "images")
-        && path.parent().and_then(Path::parent).and_then(Path::file_name).is_some_and(|name| name == "files")
 }
 
 fn load_sync_config(path: &Path) -> Option<SyncConfig> {
@@ -396,24 +130,38 @@ fn write_sync_config(path: &Path, config: &Option<SyncConfig>) -> Result<(), Str
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
-fn retain_single_history(history: &mut HistoryData, key: &str) {
-    let entries = history.histories.remove(key).unwrap_or_default();
-    history.entries.clear();
-    history.histories.clear();
-    history.histories.insert(key.to_string(), entries);
-    history.active_history = key.to_string();
+fn save_active_history(state: &AppState, history: &HistoryData) -> Result<(), String> {
+    save_history(
+        &history_path_for_key(&state.histories_dir, &history.active_history),
+        history,
+    )
 }
 
-fn trim_history(entries: &mut Vec<ClipboardEntry>) {
-    let mut unpinned = 0usize;
-    entries.retain(|entry| {
-        if entry.pinned {
-            true
-        } else {
-            unpinned += 1;
-            unpinned <= MAX_UNPINNED_ENTRIES
-        }
-    });
+fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
+    cache_dir_for(&state.histories_dir, &history.active_history)
+}
+
+/// The frontend renders lists of hundreds of entries; shipping their trees
+/// would mean tens of thousands of nodes per refresh.
+fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
+    ClipboardEntry {
+        tree: None,
+        files: Vec::new(),
+        sources: LocalSources::default(),
+        ..entry.clone()
+    }
+}
+
+fn safe_file_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn rich_text_signature(rich_text: &RichText) -> String {
@@ -428,6 +176,33 @@ fn rich_text_signature(rich_text: &RichText) -> String {
         }
     }
     format!("{hash:016x}")
+}
+
+fn image_signature(image: &[u8]) -> String {
+    // FNV-1a is sufficient here: this only suppresses repeated reads of the current clipboard.
+    let hash = image.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{}:{hash:016x}", image.len())
+}
+
+fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
+    let client_id = Uuid::new_v4().to_string();
+    ClipboardEntry {
+        id: client_id.clone(),
+        client_id,
+        kind: kind.to_string(),
+        content,
+        html: None,
+        rtf: None,
+        tree: None,
+        files: Vec::new(),
+        source_device_id: device_id,
+        created_at: Utc::now().to_rfc3339(),
+        pinned: false,
+        summary: Default::default(),
+        sources: LocalSources::default(),
+    }
 }
 
 fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
@@ -445,19 +220,9 @@ fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
         history.last_file_signature.clear();
         history.last_image_signature.clear();
         let device_id = history.device_id.clone();
-        let client_id = Uuid::new_v4().to_string();
-        let entry = ClipboardEntry {
-            id: client_id.clone(),
-            client_id,
-            kind: "text".to_string(),
-            content: rich_text.text,
-            html: rich_text.html,
-            rtf: rich_text.rtf,
-            files: Vec::new(),
-            source_device_id: device_id,
-            created_at: Utc::now().to_rfc3339(),
-            pinned: false,
-        };
+        let mut entry = new_entry("text", rich_text.text, device_id);
+        entry.html = rich_text.html;
+        entry.rtf = rich_text.rtf;
         let entries = history.active_entries_mut();
         entries.retain(|item| item.content != entry.content);
         entries.insert(0, entry.clone());
@@ -465,7 +230,11 @@ fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
         save_active_history(&state, &history)?;
         entry
     };
-    app.emit("cliproam://entry-created", entry)
+    // Text has no contents to hash, so it is publishable the moment it lands —
+    // the frontend only ever publishes on `entry-ready`.
+    app.emit("cliproam://entry-created", lightweight_entry(&entry))
+        .map_err(|error| error.to_string())?;
+    app.emit("cliproam://entry-ready", entry.id)
         .map_err(|error| error.to_string())
 }
 
@@ -475,7 +244,19 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
     }
     let signature = file_signature(&paths);
     let state = app.state::<AppState>();
-    let entry = {
+    // Walking a large folder can take seconds, so the duplicate check happens
+    // before the tree is collected and the history lock is released for it.
+    if state
+        .history
+        .lock()
+        .map_err(|error| error.to_string())?
+        .last_file_signature
+        == signature
+    {
+        return Ok(());
+    }
+    let collected = collect_tree(&paths)?;
+    let (entry, entry_id) = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.last_file_signature == signature {
             return Ok(());
@@ -483,116 +264,266 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
         history.last_file_signature = signature.clone();
         history.last_clipboard.clear();
         history.last_image_signature.clear();
+        let cache_dir = active_cache_dir(&state, &history);
         let device_id = history.device_id.clone();
-        let files = paths
-            .iter()
-            .map(|path| {
-                let metadata = path.metadata().ok();
-                ClipboardFile {
-                    id: Uuid::new_v4().to_string(),
-                    name: path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.display().to_string()),
-                    size: metadata.as_ref().map(|value| value.len()).unwrap_or(0),
-                    mime: None,
-                    sha256: None,
-                    location: "device".to_string(),
-                    available: path.exists(),
-                    local_path: Some(path.display().to_string()),
-                    local_modified_at: metadata
-                        .and_then(|value| value.modified().ok())
-                        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                        .map(|value| value.as_millis() as u64),
-                }
-            })
-            .collect::<Vec<_>>();
-        let content = if files.len() == 1 {
-            files[0].name.clone()
-        } else {
-            format!("{} 等 {} 个文件", files[0].name, files.len())
-        };
-        let client_id = Uuid::new_v4().to_string();
-        let entry = ClipboardEntry {
-            id: client_id.clone(),
-            client_id,
-            kind: "files".to_string(),
-            content,
-            html: None,
-            rtf: None,
-            files,
-            source_device_id: device_id,
-            created_at: Utc::now().to_rfc3339(),
-            pinned: false,
-        };
+        let created_at = Utc::now().to_rfc3339();
+        let content = describe_roots(&collected.tree.roots);
         let entries = history.active_entries_mut();
-        let entry = if let Some(index) = entries
+        let entry_id = match entries
             .iter()
             .position(|item| item.kind == "files" && file_entry_signature(item) == signature)
         {
-            let mut existing = entries.remove(index);
-            existing.created_at = entry.created_at;
-            entries.insert(0, existing.clone());
-            existing
-        } else {
-            entries.insert(0, entry.clone());
-            entry
+            Some(index) => {
+                let mut existing = entries.remove(index);
+                existing.created_at = created_at;
+                let entry_id = existing.id.clone();
+                entries.insert(0, existing);
+                entry_id
+            }
+            None => {
+                let mut entry = new_entry("files", content, device_id);
+                entry.created_at = created_at;
+                entry.tree = Some(collected.tree);
+                entry.sources = collected.sources;
+                rebuild_entry_files(&mut entry);
+                let entry_id = entry.id.clone();
+                entries.insert(0, entry);
+                entry_id
+            }
         };
         trim_history(entries);
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
         save_active_history(&state, &history)?;
-        entry
+        let entry = history
+            .find(&entry_id)
+            .map(lightweight_entry)
+            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+        (entry, entry_id)
     };
+    queue_hashing(&state, &entry_id);
     app.emit("cliproam://entry-created", entry)
         .map_err(|error| error.to_string())
 }
 
-fn file_signature(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| {
-            let metadata = path.metadata().ok();
-            let size = metadata.as_ref().map(|value| value.len()).unwrap_or(0);
-            let modified_at = metadata
-                .and_then(|value| value.modified().ok())
-                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                .map(|value| value.as_millis())
-                .unwrap_or_default();
-            format!("{}:{size}:{modified_at}", path.to_string_lossy().to_ascii_lowercase())
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
+    let signature = image_signature(&image);
+    let state = app.state::<AppState>();
+    if state
+        .history
+        .lock()
+        .map_err(|error| error.to_string())?
+        .last_image_signature
+        == signature
+    {
+        return Ok(());
+    }
+    let (webp, width, height) = encode_image_as_webp(&image)?;
+    // The bytes are already in memory, so hashing is immediate and the entry
+    // never passes through the background queue.
+    let file_id = hash_bytes(&webp);
+    let entry = {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        if history.last_image_signature == signature {
+            return Ok(());
+        }
+        let cache_dir = active_cache_dir(&state, &history);
+        let blob = blob_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
+        if let Some(parent) = blob.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        if !blob.is_file() {
+            fs::write(&blob, &webp).map_err(|error| error.to_string())?;
+        }
+        register_cached_blob(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            &file_id,
+            webp.len() as u64,
+            Some("image/webp"),
+        )?;
+        history.cached_files.insert(file_id.clone());
+        history.last_image_signature = signature;
+        history.last_clipboard.clear();
+        history.last_file_signature.clear();
 
-fn file_entry_signature(entry: &ClipboardEntry) -> String {
-    entry
-        .files
-        .iter()
-        .filter_map(|file| file.local_path.as_deref().map(|path| {
-            format!(
-                "{}:{}:{}",
-                path.to_ascii_lowercase(),
-                file.size,
-                file.local_modified_at.unwrap_or_default(),
-            )
-        }))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn preserve_local_file_paths(remote: &mut ClipboardEntry, local: &ClipboardEntry) {
-    for (index, remote_file) in remote.files.iter_mut().enumerate() {
-        let local_file = local.files.iter().find(|file| file.id == remote_file.id).or_else(|| {
-            local.files.get(index).filter(|file| file.name == remote_file.name && file.size == remote_file.size)
+        let device_id = history.device_id.clone();
+        let name = format!("{}.webp", &file_id[..16]);
+        let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id);
+        let mut tree = new_tree();
+        tree.roots.push(ClipboardTreeRoot {
+            name: name.clone(),
+            kind: "file".to_string(),
         });
-        let Some(local_file) = local_file else {
-            continue;
+        tree.files.push(ClipboardTreeFile {
+            p: name,
+            f: file_id.clone(),
+        });
+        entry.tree = Some(tree);
+        entry.files = vec![ClipboardFile {
+            file_id,
+            size: webp.len() as u64,
+            mime: Some("image/webp".to_string()),
+            available: false,
+        }];
+        let entry_id = entry.id.clone();
+        let entries = history.active_entries_mut();
+        entries.insert(0, entry);
+        trim_history(entries);
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
+        save_active_history(&state, &history)?;
+        history
+            .find(&entry_id)
+            .map(lightweight_entry)
+            .ok_or_else(|| "剪贴板记录不存在".to_string())?
+    };
+    let entry_id = entry.id.clone();
+    app.emit("cliproam://entry-created", entry)
+        .map_err(|error| error.to_string())?;
+    app.emit("cliproam://entry-ready", entry_id)
+        .map_err(|error| error.to_string())
+}
+
+fn start_clipboard_monitor(app: AppHandle) {
+    thread::spawn(move || loop {
+        if let Some(paths) = read_clipboard_files().filter(|paths| !paths.is_empty()) {
+            let _ = capture_files(&app, paths);
+        } else if let Some(rich_text) = read_clipboard_text(&app) {
+            let _ = capture_text(&app, rich_text);
+        } else if let Some(image) = read_clipboard_image() {
+            let _ = capture_image(&app, image);
+        }
+        thread::sleep(Duration::from_millis(350));
+    });
+}
+
+fn queue_hashing(state: &AppState, entry_id: &str) {
+    if let Ok(sender) = state.hash_queue.lock() {
+        let _ = sender.send(entry_id.to_string());
+    }
+}
+
+fn pending_entry_ids(history: &HistoryData) -> Vec<String> {
+    history
+        .active_entries()
+        .iter()
+        .filter(|entry| entry.sources.files.iter().any(|source| source.file_id.is_none()))
+        .map(|entry| entry.id.clone())
+        .collect()
+}
+
+/// Hashing runs on one background thread: an entry becomes visible and pasteable
+/// straight away, and only reaches the server once every content is identified.
+fn start_hash_worker(app: AppHandle, receiver: mpsc::Receiver<String>) {
+    thread::spawn(move || {
+        for entry_id in receiver {
+            if let Err(error) = hash_entry_files(&app, &entry_id) {
+                eprintln!("ClipRoam: 计算 {entry_id} 的内容标识失败：{error}");
+            }
+        }
+    });
+}
+
+fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (history_key, pending) = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let Some(entry) = history.find(entry_id) else {
+            return Ok(());
         };
-        if let Some(path) = &local_file.local_path {
-            remote_file.local_path = Some(path.clone());
-            remote_file.available = Path::new(path).exists();
-            remote_file.local_modified_at = local_file.local_modified_at;
+        let pending = entry
+            .sources
+            .files
+            .iter()
+            .filter(|source| source.file_id.is_none())
+            .map(|source| PendingHash {
+                path: source.path.clone(),
+                source: source.source.clone(),
+                size: source.size,
+                modified_at: source.modified_at,
+            })
+            .collect::<Vec<_>>();
+        (history.active_history.clone(), pending)
+    };
+    if pending.is_empty() {
+        return app
+            .emit("cliproam://entry-ready", entry_id)
+            .map_err(|error| error.to_string());
+    }
+
+    // A second connection keeps the hash cache off the UI thread's connection.
+    let connection = open_history_database(&history_path_for_key(&state.histories_dir, &history_key))?;
+    let mut batch = Vec::new();
+    for item in pending {
+        let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
+        let file_id = cached_hash(&connection, &item.source, item.size, modified_at).or_else(|| {
+            // A file that vanished between copy and hash drops out of the tree.
+            let hashed = hash_file(Path::new(&item.source)).ok()?;
+            remember_hash(&connection, &item.source, item.size, modified_at, &hashed);
+            Some(hashed)
+        });
+        batch.push((item.path, file_id));
+        if batch.len() >= HASH_PROGRESS_BATCH {
+            if !apply_hashes(app, entry_id, &batch, false)? {
+                return Ok(());
+            }
+            batch.clear();
         }
     }
+    if !apply_hashes(app, entry_id, &batch, true)? {
+        return Ok(());
+    }
+    app.emit("cliproam://entry-ready", entry_id)
+        .map_err(|error| error.to_string())
+}
+
+/// Folds resolved content ids into the entry. Only the final call persists, so
+/// progress updates stay in memory.
+fn apply_hashes(
+    app: &AppHandle,
+    entry_id: &str,
+    resolved: &[(String, Option<String>)],
+    persist: bool,
+) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let hashes = resolved
+        .iter()
+        .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
+        .collect::<HashMap<_, _>>();
+    {
+        let Some(entry) = history.find_mut(entry_id) else {
+            return Ok(false);
+        };
+        if let Some(tree) = entry.tree.as_mut() {
+            tree.files.retain_mut(|node| match hashes.get(node.p.as_str()) {
+                Some(Some(file_id)) => {
+                    node.f = (*file_id).to_string();
+                    true
+                }
+                Some(None) => false,
+                None => true,
+            });
+        }
+        entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
+            Some(Some(file_id)) => {
+                source.file_id = Some((*file_id).to_string());
+                true
+            }
+            Some(None) => false,
+            None => true,
+        });
+        rebuild_entry_files(entry);
+        if persist {
+            let connection = open_history_database(&history_path)?;
+            write_entry_contents(&connection, entry, true)?;
+        }
+    }
+    refresh_entry_summary(&mut history, entry_id, &cache_dir);
+    drop(history);
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 #[cfg(target_os = "windows")]
@@ -666,14 +597,6 @@ fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
     })
 }
 
-fn image_signature(image: &[u8]) -> String {
-    // FNV-1a is sufficient here: this only suppresses repeated reads of the current clipboard.
-    let hash = image.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    });
-    format!("{}:{hash:016x}", image.len())
-}
-
 fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
     let decoded = image::load_from_memory_with_format(image, ImageFormat::Bmp)
         .map_err(|error| error.to_string())?;
@@ -694,79 +617,29 @@ fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output.into_inner())
 }
 
-fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
-    let signature = image_signature(&image);
-    let (webp, width, height) = encode_image_as_webp(&image)?;
-    let state = app.state::<AppState>();
-    let entry = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.last_image_signature == signature {
-            return Ok(());
-        }
-
-        let id = Uuid::new_v4().to_string();
-        let image_dir = active_cache_dir(&state, &history).join("images");
-        fs::create_dir_all(&image_dir).map_err(|error| error.to_string())?;
-        let image_path = image_dir.join(format!("{id}.webp"));
-        fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
-
-        history.last_image_signature = signature;
-        history.last_clipboard.clear();
-        history.last_file_signature.clear();
-        let device_id = history.device_id.clone();
-        let description = format!("截图（{width} × {height}）");
-        let entry = ClipboardEntry {
-            id: id.clone(),
-            client_id: id.clone(),
-            kind: "image".to_string(),
-            content: description,
-            html: None,
-            rtf: None,
-            files: vec![ClipboardFile {
-                id: Uuid::new_v4().to_string(),
-                name: format!("{id}.webp"),
-                size: webp.len() as u64,
-                mime: Some("image/webp".to_string()),
-                sha256: None,
-                location: "device".to_string(),
-                available: true,
-                local_path: Some(image_path.display().to_string()),
-                local_modified_at: None,
-            }],
-            source_device_id: device_id,
-            created_at: Utc::now().to_rfc3339(),
-            pinned: false,
-        };
-        history.active_entries_mut().insert(0, entry.clone());
-        trim_history(history.active_entries_mut());
-        save_active_history(&state, &history)?;
-        entry
-    };
-    app.emit("cliproam://entry-created", entry)
-        .map_err(|error| error.to_string())
-}
-
-fn start_clipboard_monitor(app: AppHandle) {
-    thread::spawn(move || loop {
-        if let Some(paths) = read_clipboard_files().filter(|paths| !paths.is_empty()) {
-            let _ = capture_files(&app, paths);
-        } else if let Some(rich_text) = read_clipboard_text(&app) {
-            let _ = capture_text(&app, rich_text);
-        } else if let Some(image) = read_clipboard_image() {
-            let _ = capture_image(&app, image);
-        }
-        thread::sleep(Duration::from_millis(350));
-    });
-}
-
 #[tauri::command]
 fn list_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
-    Ok(state
-        .history
-        .lock()
-        .map_err(|error| error.to_string())?
-        .active_entries()
-        .to_vec())
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    Ok(history.active_entries().iter().map(lightweight_entry).collect())
+}
+
+/// The full entry, tree included — used when publishing to the server.
+#[tauri::command(rename_all = "camelCase")]
+fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    history
+        .find(&entry_id)
+        .cloned()
+        .ok_or_else(|| "剪贴板记录不存在".to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<ClipboardFile>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    history
+        .find(&entry_id)
+        .map(|entry| entry.files.clone())
+        .ok_or_else(|| "剪贴板记录不存在".to_string())
 }
 
 #[tauri::command]
@@ -827,7 +700,7 @@ fn save_sync_config(
     config: SyncConfig,
 ) -> Result<(), String> {
     let history_key = history_key_for_config(&config);
-    {
+    let pending = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.active_history != history_key {
             save_active_history(&state, &history)?;
@@ -844,6 +717,10 @@ fn save_sync_config(
             *history = next_history;
         }
         save_active_history(&state, &history)?;
+        pending_entry_ids(&history)
+    };
+    for entry_id in pending {
+        queue_hashing(&state, &entry_id);
     }
     let config = Some(config);
     write_sync_config(&state.sync_config_path, &config)?;
@@ -860,11 +737,13 @@ fn upsert_remote_entry(
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let entries = history.active_entries_mut();
         if let Some(local) = entries.iter().find(|item| {
             item.id == entry.id || (!entry.client_id.is_empty() && item.client_id == entry.client_id)
         }) {
-            preserve_local_file_paths(&mut entry, local);
+            preserve_local_sources(&mut entry, local);
             if entry.id == entry.client_id && local.id != local.client_id {
                 entry.id = local.id.clone();
             }
@@ -872,10 +751,48 @@ fn upsert_remote_entry(
         entries.retain(|item| {
             item.id != entry.id && (entry.client_id.is_empty() || item.client_id != entry.client_id)
         });
+        let entry_id = entry.id.clone();
         entries.push(entry);
         entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         trim_history(entries);
+        // The server is authoritative for a remote entry, so its contents
+        // replace whatever was stored before.
+        if let Some(entry) = history.find(&entry_id) {
+            let connection = open_history_database(&history_path)?;
+            write_entry_contents(&connection, entry, true)?;
+        }
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
         save_active_history(&state, &history)?;
+    }
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn mark_files_uploaded(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    entry_id: String,
+    file_ids: Vec<String>,
+) -> Result<(), String> {
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let uploaded = file_ids.into_iter().collect::<HashSet<_>>();
+        {
+            let Some(entry) = history.find_mut(&entry_id) else {
+                return Ok(());
+            };
+            for file in entry.files.iter_mut() {
+                if uploaded.contains(&file.file_id) {
+                    file.available = true;
+                }
+            }
+            let connection = open_history_database(&history_path)?;
+            write_entry_contents(&connection, entry, true)?;
+        }
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -890,11 +807,7 @@ fn set_pinned(
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if let Some(entry) = history
-            .active_entries_mut()
-            .iter_mut()
-            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
-        {
+        if let Some(entry) = history.find_mut(&entry_id) {
             entry.pinned = pinned;
         }
         save_active_history(&state, &history)?;
@@ -904,29 +817,13 @@ fn set_pinned(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn delete_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-) -> Result<(), String> {
-    let removed_files = {
+fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let entries = history.active_entries_mut();
-        let removed_files = entries
-            .iter()
-            .filter(|entry| entry.id == entry_id && entry.kind == "image")
-            .flat_map(|entry| entry.files.iter())
-            .filter_map(|file| file.local_path.clone())
-            .collect::<Vec<_>>();
-        entries.retain(|entry| entry.id != entry_id);
+        history.active_entries_mut().retain(|entry| entry.id != entry_id);
         save_active_history(&state, &history)?;
-        removed_files
-    };
-    for path in removed_files {
-        let path = PathBuf::from(path);
-        if is_cached_image_path(&state, &path) {
-            let _ = fs::remove_file(path);
-        }
+        // Dropping references is what frees disk space, so the sweep runs here.
+        let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -934,24 +831,11 @@ fn delete_entry(
 
 #[tauri::command]
 fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let removed_files = {
+    {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let entries = history.active_entries_mut();
-        let removed_files = entries
-            .iter()
-            .filter(|entry| !entry.pinned && entry.kind == "image")
-            .flat_map(|entry| entry.files.iter())
-            .filter_map(|file| file.local_path.clone())
-            .collect::<Vec<_>>();
-        entries.retain(|entry| entry.pinned);
+        history.active_entries_mut().retain(|entry| entry.pinned);
         save_active_history(&state, &history)?;
-        removed_files
-    };
-    for path in removed_files {
-        let path = PathBuf::from(path);
-        if is_cached_image_path(&state, &path) {
-            let _ = fs::remove_file(path);
-        }
+        let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -1010,9 +894,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn position_history_window(window: &tauri::WebviewWindow) -> Result<(), String> {
-    let cursor = window
-        .cursor_position()
-        .map_err(|error| error.to_string())?;
+    let cursor = window.cursor_position().map_err(|error| error.to_string())?;
     let Some(monitor) = window
         .monitor_from_point(cursor.x, cursor.y)
         .map_err(|error| error.to_string())?
@@ -1118,10 +1000,7 @@ fn synthesize_paste() -> Result<(), String> {
     if sent == inputs.len() as u32 {
         Ok(())
     } else {
-        Err(format!(
-            "SendInput inserted {sent} of {} events",
-            inputs.len()
-        ))
+        Err(format!("SendInput inserted {sent} of {} events", inputs.len()))
     }
 }
 
@@ -1144,6 +1023,11 @@ fn write_clipboard_files(paths: &[String]) -> Result<(), String> {
     FileList
         .write_clipboard(paths)
         .map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_clipboard_files(_paths: &[String]) -> Result<(), String> {
+    Err("当前平台暂不支持文件粘贴".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -1199,35 +1083,62 @@ fn write_clipboard_text(_app: &AppHandle, rich_text: &RichText) -> Result<(), St
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn write_clipboard_files(_paths: &[String]) -> Result<(), String> {
-    Err("当前平台暂不支持文件粘贴".to_string())
+/// A snapshot taken under the history lock so file dialogs and disk work never
+/// block the clipboard monitor.
+struct EntrySnapshot {
+    entry: ClipboardEntry,
+    cached: HashSet<String>,
+    cache_dir: PathBuf,
 }
 
-#[tauri::command(rename_all = "camelCase")]
-fn get_missing_files(
-    state: State<'_, AppState>,
-    entry_id: String,
-) -> Result<Vec<MissingFile>, String> {
+fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(state, &history);
     let entry = history
-        .active_entries()
-        .iter()
-        .find(|entry| entry.id == entry_id)
-        .ok_or_else(|| "clipboard entry was not found".to_string())?;
-    Ok(entry
+        .find(entry_id)
+        .cloned()
+        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+    Ok(EntrySnapshot {
+        entry,
+        cached: history.cached_files.clone(),
+        cache_dir,
+    })
+}
+
+impl EntrySnapshot {
+    fn resolve(&self, file_id: &str) -> Option<PathBuf> {
+        readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
+    }
+}
+
+/// Recomputes one entry's aggregates. Downloads deliberately skip this so that
+/// finishing a file stays O(1); the caller refreshes once the batch is done.
+#[tauri::command(rename_all = "camelCase")]
+fn refresh_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    refresh_entry_summary(&mut history, &entry_id, &cache_dir);
+    Ok(())
+}
+
+/// Contents this machine cannot read yet, de-duplicated — the frontend turns
+/// each one into a download.
+#[tauri::command(rename_all = "camelCase")]
+fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
+    let snapshot = snapshot_entry(&state, &entry_id)?;
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        refresh_entry_summary(&mut history, &entry_id, &snapshot.cache_dir);
+    }
+    Ok(snapshot
+        .entry
         .files
         .iter()
-        .filter(|file| {
-            file.local_path
-                .as_deref()
-                .is_none_or(|path| !Path::new(path).exists())
-        })
+        .filter(|file| snapshot.resolve(&file.file_id).is_none())
         .map(|file| MissingFile {
-            id: file.id.clone(),
-            name: file.name.clone(),
+            file_id: file.file_id.clone(),
             size: file.size,
-            source_device_id: entry.source_device_id.clone(),
+            source_device_id: snapshot.entry.source_device_id.clone(),
         })
         .collect())
 }
@@ -1242,90 +1153,35 @@ fn read_file_chunk(
 ) -> Result<String, String> {
     let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        history
-            .active_entries()
-            .iter()
-            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
-            .and_then(|entry| entry.files.iter().find(|file| file.id == file_id))
-            .and_then(|file| file.local_path.clone())
-            .ok_or_else(|| "本机文件路径不可用".to_string())?
+        let cache_dir = active_cache_dir(&state, &history);
+        let entry = history
+            .find(&entry_id)
+            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+        readable_path(&cache_dir, &history.cached_files, entry, &file_id)
+            .ok_or_else(|| "本机文件内容不可用".to_string())?
     };
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     file.seek(SeekFrom::Start(offset))
         .map_err(|error| error.to_string())?;
-    let mut bytes = vec![0; length.min(128 * 1024)];
+    let mut bytes = vec![0; length.min(FILE_CHUNK_LIMIT)];
     let count = file.read(&mut bytes).map_err(|error| error.to_string())?;
     bytes.truncate(count);
     Ok(BASE64.encode(bytes))
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileUploadSource {
-    full_path: String,
-    size: u64,
-    modified_at: u64,
-}
-
-#[tauri::command(rename_all = "camelCase")]
-fn get_file_upload_source(
-    state: State<'_, AppState>,
-    entry_id: String,
-    file_id: String,
-) -> Result<FileUploadSource, String> {
-    let path = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        history
-            .active_entries()
-            .iter()
-            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
-            .and_then(|entry| entry.files.iter().find(|file| file.id == file_id))
-            .and_then(|file| file.local_path.clone())
-            .ok_or_else(|| "本机文件路径不可用".to_string())?
-    };
-    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default();
-    Ok(FileUploadSource {
-        full_path: path,
-        size: metadata.len(),
-        modified_at,
-    })
-}
-
-fn safe_file_name(name: &str) -> String {
-    name.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn begin_file_download(
     state: State<'_, AppState>,
     transfer_id: String,
-    file_name: String,
+    file_id: String,
     expected_size: u64,
 ) -> Result<(), String> {
-    let cache_dir = {
+    let parts_dir = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        active_cache_dir(&state, &history)
+        active_cache_dir(&state, &history).join("parts")
     };
-    fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
-    let path = cache_dir.join(format!(
-        "{}.{}.part",
-        transfer_id,
-        safe_file_name(&file_name)
-    ));
+    fs::create_dir_all(&parts_dir).map_err(|error| error.to_string())?;
+    let path = parts_dir.join(format!("{}.part", safe_file_name(&transfer_id)));
     fs::File::create(&path).map_err(|error| error.to_string())?;
     state
         .downloads
@@ -1335,8 +1191,10 @@ fn begin_file_download(
             transfer_id,
             DownloadState {
                 path,
+                file_id,
                 expected_size,
                 received_size: 0,
+                hasher: Sha256::new(),
             },
         );
     Ok(())
@@ -1357,6 +1215,7 @@ fn append_file_download(
     if download.received_size > download.expected_size {
         return Err("下载内容超过声明大小".to_string());
     }
+    download.hasher.update(&bytes);
     fs::OpenOptions::new()
         .append(true)
         .open(&download.path)
@@ -1364,14 +1223,10 @@ fn append_file_download(
         .map_err(|error| error.to_string())
 }
 
+/// Verifying the digest is what makes the blob cache trustworthy: the content id
+/// decides the path, so unverified bytes could poison every future reference.
 #[tauri::command(rename_all = "camelCase")]
-fn finish_file_download(
-    state: State<'_, AppState>,
-    transfer_id: String,
-    entry_id: String,
-    file_id: String,
-    file_name: String,
-) -> Result<(), String> {
+fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
     let download = state
         .downloads
         .lock()
@@ -1379,39 +1234,39 @@ fn finish_file_download(
         .remove(&transfer_id)
         .ok_or_else(|| "文件下载任务不存在".to_string())?;
     if download.received_size != download.expected_size {
-        let _ = fs::remove_file(download.path);
+        let _ = fs::remove_file(&download.path);
         return Err("文件下载不完整".to_string());
     }
-    let cache_dir = {
+    if content::to_hex(&download.hasher.finalize()) != download.file_id {
+        let _ = fs::remove_file(&download.path);
+        return Err("文件内容校验失败".to_string());
+    }
+
+    let (blob, database_path) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
-        if history
-            .active_entries()
-            .iter()
-            .any(|entry| entry.id == entry_id && entry.kind == "image")
-        {
-            cache_dir.join("images")
-        } else {
-            cache_dir
-        }
+        (
+            blob_path(&cache_dir, &download.file_id).ok_or_else(|| "内容标识不合法".to_string())?,
+            history_path_for_key(&state.histories_dir, &history.active_history),
+        )
     };
-    fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
-    let final_path = cache_dir.join(format!("{}-{}", file_id, safe_file_name(&file_name)));
-    if final_path.exists() {
-        fs::remove_file(&final_path).map_err(|error| error.to_string())?;
+    if let Some(parent) = blob.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::rename(download.path, &final_path).map_err(|error| error.to_string())?;
-
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let file = history
-        .active_entries_mut()
-        .iter_mut()
-        .find(|entry| entry.id == entry_id)
-        .and_then(|entry| entry.files.iter_mut().find(|file| file.id == file_id))
-        .ok_or_else(|| "剪贴板文件记录不存在".to_string())?;
-    file.local_path = Some(final_path.display().to_string());
-    file.available = true;
-    save_active_history(&state, &history)
+    if blob.exists() {
+        let _ = fs::remove_file(&blob);
+    }
+    fs::rename(&download.path, &blob).map_err(|error| error.to_string())?;
+    register_cached_blob(&database_path, &download.file_id, download.expected_size, None)?;
+    // The blob cache is independent of entries, so nothing else has to be
+    // rewritten — thousands of downloads stay O(1) each.
+    state
+        .history
+        .lock()
+        .map_err(|error| error.to_string())?
+        .cached_files
+        .insert(download.file_id);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1429,53 +1284,40 @@ fn cancel_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
 
 #[tauri::command(rename_all = "camelCase")]
 fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usize, String> {
-    let files = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let entry = history
-            .active_entries()
-            .iter()
-            .find(|entry| entry.id == entry_id)
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        if entry.files.is_empty() {
-            return Err("该记录不包含可另存的文件".to_string());
-        }
-        entry
-            .files
-            .iter()
-            .map(|file| {
-                let path = file
-                    .local_path
-                    .as_ref()
-                    .filter(|path| Path::new(path).is_file())
-                    .ok_or_else(|| format!("本机文件不可用：{}", file.name))?;
-                Ok((file.name.clone(), PathBuf::from(path)))
-            })
-            .collect::<Result<Vec<_>, String>>()?
-    };
+    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let tree = snapshot
+        .entry
+        .tree
+        .as_ref()
+        .ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+    if tree.roots.is_empty() {
+        return Err("该记录不包含可另存的文件".to_string());
+    }
 
-    let mut saved = 0;
-    for (file_name, source_path) in files {
-        let Some(destination_path) = rfd::FileDialog::new()
-            .set_file_name(&file_name)
+    if tree.roots.len() == 1 && tree.roots[0].kind == "file" {
+        let node = tree.files.first().ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+        let source = snapshot
+            .resolve(&node.f)
+            .ok_or_else(|| format!("文件内容不可用：{}", tree.roots[0].name))?;
+        let Some(destination) = rfd::FileDialog::new()
+            .set_file_name(&tree.roots[0].name)
             .save_file()
         else {
-            continue;
+            return Ok(0);
         };
-
-        let source_path = fs::canonicalize(&source_path).map_err(|error| error.to_string())?;
-        if destination_path.exists()
-            && fs::canonicalize(&destination_path)
-                .map(|path| path == source_path)
-                .unwrap_or(false)
-        {
-            continue;
+        if fs::canonicalize(&source).ok() == fs::canonicalize(&destination).ok() {
+            return Ok(0);
         }
-        fs::copy(&source_path, &destination_path).map_err(|error| {
-            format!("无法保存 {}：{}", file_name, error)
-        })?;
-        saved += 1;
+        fs::copy(&source, &destination).map_err(|error| format!("无法保存文件：{error}"))?;
+        return Ok(1);
     }
-    Ok(saved)
+
+    let Some(destination) = rfd::FileDialog::new().pick_folder() else {
+        return Ok(0);
+    };
+    // Real copies: the user owns the destination, and a hard link would let a
+    // later edit reach back into the cache.
+    rebuild_tree(&destination, tree, &|file_id| snapshot.resolve(file_id), false)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1485,58 +1327,75 @@ fn paste_entry(
     state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<(), String> {
-    let payload = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let entry = history
-            .active_entries()
-            .iter()
-            .find(|entry| entry.id == entry_id)
-            .cloned()
-            .ok_or_else(|| "clipboard entry was not found".to_string())?;
-        let payload = if entry.kind == "files" {
-            let paths = entry
-                .files
-                .iter()
-                .map(|file| {
-                    let path = file
-                        .local_path
-                        .as_ref()
-                        .ok_or_else(|| format!("文件 {} 仅存在于其他设备", file.name))?;
-                    if !Path::new(path).exists() {
-                        return Err(format!("文件已不存在：{}", file.name));
-                    }
-                    Ok(path.clone())
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            let signature_paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-            history.last_file_signature = file_signature(&signature_paths);
-            history.last_clipboard.clear();
+    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let payload = match snapshot.entry.kind.as_str() {
+        "files" => {
+            let tree = snapshot
+                .entry
+                .tree
+                .as_ref()
+                .ok_or_else(|| "该记录不包含文件".to_string())?;
+            let roots = &snapshot.entry.sources.roots;
+            // Copying and pasting on the same machine should not duplicate a
+            // single byte, so the original paths are reused when still intact.
+            let intact = !roots.is_empty()
+                && roots.len() == tree.roots.len()
+                && roots.iter().all(|path| Path::new(path).exists());
+            let paths = if intact {
+                roots.clone()
+            } else {
+                let view = snapshot.cache_dir.join("views").join(safe_file_name(&snapshot.entry.id));
+                let _ = fs::remove_dir_all(&view);
+                rebuild_tree(&view, tree, &|file_id| snapshot.resolve(file_id), true)?;
+                tree.roots
+                    .iter()
+                    .map(|root| view.join(&root.name).display().to_string())
+                    .collect()
+            };
             ClipboardPayload::Files(paths)
-        } else if entry.kind == "image" {
-            let image_path = entry
+        }
+        "image" => {
+            let file_id = snapshot
+                .entry
                 .files
                 .first()
-                .and_then(|file| file.local_path.as_deref())
-                .ok_or_else(|| "图片文件不可用".to_string())?;
-            let image = fs::read(image_path).map_err(|error| error.to_string())?;
-            history.last_image_signature = image_signature(&image);
-            history.last_clipboard.clear();
-            history.last_file_signature.clear();
-            ClipboardPayload::Image(image)
-        } else {
-            let rich_text = RichText {
-                text: entry.content,
-                html: entry.html,
-                rtf: entry.rtf,
-            };
-            history.last_clipboard = rich_text_signature(&rich_text);
-            history.last_file_signature.clear();
-            history.last_image_signature.clear();
-            ClipboardPayload::Text(rich_text)
-        };
-        save_active_history(&state, &history)?;
-        payload
+                .map(|file| file.file_id.clone())
+                .ok_or_else(|| "图片内容不可用".to_string())?;
+            let path = snapshot
+                .resolve(&file_id)
+                .ok_or_else(|| "图片内容不可用".to_string())?;
+            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
+        }
+        _ => ClipboardPayload::Text(RichText {
+            text: snapshot.entry.content.clone(),
+            html: snapshot.entry.html.clone(),
+            rtf: snapshot.entry.rtf.clone(),
+        }),
     };
+
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        match &payload {
+            ClipboardPayload::Files(paths) => {
+                let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+                history.last_file_signature = file_signature(&paths);
+                history.last_clipboard.clear();
+                history.last_image_signature.clear();
+            }
+            ClipboardPayload::Image(image) => {
+                history.last_image_signature = image_signature(image);
+                history.last_clipboard.clear();
+                history.last_file_signature.clear();
+            }
+            ClipboardPayload::Text(rich_text) => {
+                history.last_clipboard = rich_text_signature(rich_text);
+                history.last_file_signature.clear();
+                history.last_image_signature.clear();
+            }
+        }
+        save_active_history(&state, &history)?;
+    }
+
     match payload {
         ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text)?,
         ClipboardPayload::Files(paths) => write_clipboard_files(&paths)?,
@@ -1553,10 +1412,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| error.to_string())?;
+            let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
             let sync_config = load_sync_config(&sync_config_path);
@@ -1567,15 +1423,35 @@ pub fn run() {
             let mut history = load_history(&history_path_for_key(&histories_dir, &history_key), &history_key);
             retain_single_history(&mut history, &history_key);
             save_history(&history_path_for_key(&histories_dir, &history_key), &history)?;
+            let (sender, receiver) = mpsc::channel::<String>();
             app.manage(AppState {
                 history: Mutex::new(history),
                 histories_dir,
                 sync_config: Mutex::new(sync_config),
                 sync_config_path,
                 downloads: Mutex::new(HashMap::new()),
+                hash_queue: Mutex::new(sender),
             });
             setup_tray(app.handle())?;
+            start_hash_worker(app.handle().clone(), receiver);
             start_clipboard_monitor(app.handle().clone());
+
+            // Hashes that were still pending when the app last closed are
+            // persisted, so they simply resume.
+            let handle = app.handle().clone();
+            thread::spawn(move || {
+                let state = handle.state::<AppState>();
+                let pending = match state.history.lock() {
+                    Ok(mut history) => {
+                        let _ = collect_local_garbage(&state.histories_dir, &mut history);
+                        pending_entry_ids(&history)
+                    }
+                    Err(_) => Vec::new(),
+                };
+                for entry_id in pending {
+                    queue_hashing(&state, &entry_id);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -1590,20 +1466,23 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_entries,
+            get_entry,
+            list_entry_files,
             get_device,
             configure_device,
             get_sync_config,
             open_app_data_dir,
             save_sync_config,
             upsert_remote_entry,
+            mark_files_uploaded,
             set_pinned,
             delete_entry,
             clear_history,
             open_paste,
             hide_paste,
             hide_main,
-            get_missing_files,
-            get_file_upload_source,
+            refresh_entry,
+            prepare_entry_files,
             read_file_chunk,
             begin_file_download,
             append_file_download,
@@ -1643,25 +1522,9 @@ mod tests {
     }
 
     #[test]
-    fn history_database_supports_full_text_search() {
-        let directory = std::env::temp_dir().join(format!("cliproam-history-test-{}", Uuid::new_v4()));
-        let path = directory.join("history.sqlite");
-        let connection = open_history_database(&path).expect("create history database");
-        connection
-            .execute(
-                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, ?)",
-                params!["entry-1", "ClipRoam local history", "note.txt", "cliproam"],
-            )
-            .expect("insert search entry");
-        let matches: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH 'cliproam'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query full text index");
-        drop(connection);
-        fs::remove_dir_all(&directory).expect("remove temporary history database");
-        assert_eq!(matches, 1);
+    fn paste_window_position_stays_inside_the_work_area() {
+        let position = calculate_history_position(1900, 1050, 0, 0, 1920, 1080, 420, 560);
+        assert!(position.x + 420 <= 1920);
+        assert!(position.y + 560 <= 1080);
     }
 }

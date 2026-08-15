@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import websocket, { type WebSocket } from "@fastify/websocket";
 import {
   ClientMessageSchema,
+  MAX_MESSAGE_BYTES,
   type ClientMessage,
   type Device,
   type ServerMessage,
@@ -21,6 +22,9 @@ import { TlsCertificateService, type TlsOptions } from "../services/TlsCertifica
 
 const adminSessionCookie = "cliproam_admin";
 const adminSessionMaxAgeSeconds = 8 * 60 * 60;
+const garbageCollectionIntervalMs = 6 * 60 * 60 * 1_000;
+// Deleting an entry only drops references, so reclaiming disk is batched.
+const deletionsPerGarbageCollection = 20;
 const logger = getLogger("ClipRoamServer");
 const bundledAdminDirectory = fileURLToPath(new URL("../admin", import.meta.url));
 const workspaceAdminDirectory = fileURLToPath(new URL("../../admin", import.meta.url));
@@ -33,18 +37,25 @@ export class ClipRoamServer {
   readonly #admin = new AdminService();
   readonly #clients = new Set<ClientConnection>();
   readonly #transfers: FileTransferService;
+  readonly #deletionsSinceCollection = new Map<string, number>();
+  #collectionTimer?: NodeJS.Timeout;
 
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
     this.#transfers = new FileTransferService(this.#store, config, this.#send.bind(this));
   }
 
   async start(): Promise<void> {
-    await this.#app.register(websocket, { options: { maxPayload: 256 * 1024 } });
+    await this.#app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
     this.#registerRoutes();
+    this.#collectionTimer = setInterval(() => {
+      for (const userId of this.#store.loadedUserIds()) this.#collectGarbage(userId);
+    }, garbageCollectionIntervalMs);
+    this.#collectionTimer.unref();
     await this.#app.listen({ port: this.config.port, host: "0.0.0.0" });
   }
 
   async stop(): Promise<void> {
+    if (this.#collectionTimer) clearInterval(this.#collectionTimer);
     await this.#app.close();
   }
 
@@ -294,14 +305,15 @@ export class ClipRoamServer {
     }
     const client: ClientConnection = { socket, userId: user.id, device };
     this.#clients.add(client);
+    // The first connection since startup is also when leftovers from an
+    // interrupted upload or a previous process get reclaimed.
+    const firstConnection = !this.#store.loadedUserIds().includes(user.id);
     this.#store.upsertDevice(user.id, device);
+    if (firstConnection) this.#collectGarbage(user.id);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
     this.#send(client, {
       type: "auth.ack",
-      manifest: this.#store.list(user.id).map((entry) => ({
-        id: entry.id,
-        clientId: entry.clientId,
-      })),
+      manifest: this.#store.listManifest(user.id),
       devices: this.#store.listDevices(user.id),
     });
     this.#broadcast(user.id, { type: "device.presence", device, online: true }, client);
@@ -319,10 +331,31 @@ export class ClipRoamServer {
   }
 
   #deleteClipboard(client: ClientConnection, entryId: string): void {
-    this.#transfers.removeEntry(client.userId, entryId);
     this.#store.delete(client.userId, entryId);
     logger.info(`Clipboard entry deleted: user=${client.userId} entry=${entryId} device=${client.device.id}`);
     this.#broadcast(client.userId, { type: "clipboard.deleted", entryId }, client);
+    const deletions = (this.#deletionsSinceCollection.get(client.userId) ?? 0) + 1;
+    if (deletions < deletionsPerGarbageCollection) {
+      this.#deletionsSinceCollection.set(client.userId, deletions);
+      return;
+    }
+    this.#deletionsSinceCollection.delete(client.userId);
+    this.#collectGarbage(client.userId);
+  }
+
+  // Sweeping walks the whole content pool, so it is deferred off the message
+  // handler rather than run inline with the delete that triggered it.
+  #collectGarbage(userId: string): void {
+    setTimeout(() => {
+      try {
+        const { removedFiles, removedBytes } = this.#store.collectGarbage(userId, this.config.resumableUploadTtlMs);
+        if (removedFiles > 0) {
+          logger.info(`Reclaimed ${removedFiles} unreferenced files (${removedBytes} bytes) for user=${userId}`);
+        }
+      } catch (error) {
+        logger.error(`Failed to collect garbage for user=${userId}:`, error);
+      }
+    }, 0);
   }
 
   #handleClientClose(client: ClientConnection): void {

@@ -1,10 +1,13 @@
-import type { AuthResponse, ClipboardEntry, Device } from "@cliproam/protocol";
+import type {
+  AuthResponse,
+  ClipboardEntry,
+  ClipboardManifestEntry,
+  Device,
+} from "@cliproam/protocol";
 import { AccountStore } from "./AccountStore.js";
-import { LegacyStorageMigrator } from "./LegacyStorageMigrator.js";
-import { type StoredFile, type UploadSession, UserDataStore } from "./UserDataStore.js";
+import { UserDataStore } from "./UserDataStore.js";
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
-export type { StoredFile } from "./UserDataStore.js";
 
 export class ClipRoamStore {
   readonly #accounts: AccountStore;
@@ -12,7 +15,6 @@ export class ClipRoamStore {
 
   constructor(databasePath?: string) {
     this.#accounts = new AccountStore(databasePath);
-    new LegacyStorageMigrator(this.#accounts, (userId) => this.#userStore(userId)).migrate();
   }
 
   async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
@@ -35,39 +37,33 @@ export class ClipRoamStore {
 
   list(userId: string): ClipboardEntry[] { return this.#userStore(userId).list(); }
   listByIds(userId: string, entryIds: readonly string[]): ClipboardEntry[] {
-    const wanted = new Set(entryIds);
-    return this.#userStore(userId).list().filter((entry) => wanted.has(entry.id));
+    return this.#userStore(userId).listByIds(entryIds);
   }
+  listManifest(userId: string): ClipboardManifestEntry[] { return this.#userStore(userId).listManifest(); }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
   upsert(userId: string, entry: ClipboardEntry): ClipboardEntry {
-    return this.#userStore(userId).upsertClientEntry(entry);
+    return this.#userStore(userId).upsert(entry);
   }
   entryIdForClientId(userId: string, clientId: string): string | undefined {
     return this.#userStore(userId).entryIdForClientId(clientId);
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
   filePath(userId: string, fileId: string): string { return this.#userStore(userId).filePath(fileId); }
-  storeFile(userId: string, entryId: string, fileId: string, file: StoredFile): void {
-    this.#userStore(userId).storeFile(entryId, fileId, file);
+  prepareFilePath(userId: string, fileId: string): string {
+    return this.#userStore(userId).prepareFilePath(fileId);
   }
-  getFile(userId: string, fileId: string): StoredFile | undefined { return this.#userStore(userId).getFile(fileId); }
-  getUploadSession(userId: string, deviceId: string, fileFullPath: string): UploadSession | undefined {
-    return this.#userStore(userId).getUploadSession(deviceId, fileFullPath);
+  storeFile(userId: string, fileId: string, size: number, mime?: string): void {
+    this.#userStore(userId).storeFile(fileId, size, mime);
   }
-  saveUploadSession(
-    userId: string,
-    deviceId: string,
-    fileFullPath: string,
-    entryId: string,
-    session: UploadSession,
-  ): void { this.#userStore(userId).saveUploadSession(deviceId, fileFullPath, entryId, session); }
-  deleteUploadSession(userId: string, deviceId: string, fileFullPath: string): string | undefined {
-    return this.#userStore(userId).deleteUploadSession(deviceId, fileFullPath);
+  hasFile(userId: string, fileId: string): boolean { return this.#userStore(userId).hasFile(fileId); }
+  getFile(userId: string, fileId: string): { path: string; size: number } | undefined {
+    return this.#userStore(userId).getFile(fileId);
   }
-  deleteUploadSessionsForEntry(userId: string, entryId: string): string[] {
-    return this.#userStore(userId).deleteUploadSessionsForEntry(entryId);
+  collectGarbage(userId: string, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+    return this.#userStore(userId).collectGarbage(partialTtlMs);
   }
+  loadedUserIds(): string[] { return [...this.#userStores.keys()]; }
 
   close(): void {
     this.#accounts.close();

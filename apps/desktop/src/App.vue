@@ -6,7 +6,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isRegistered, register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import type {
   ClipboardEntry,
-  ClipboardFile,
   ClipboardKind,
   ClipboardManifestEntry,
   Device,
@@ -42,6 +41,7 @@ import {
   type AuthMode,
   type ServerProtocol,
 } from "./services/syncClient";
+import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./services/concurrency";
 
 const HOTKEY = "CommandOrControl+Shift+V";
 const CONFIGURED_SERVER_ADDRESS = import.meta.env.VITE_CLIPROAM_SERVER ?? "127.0.0.1:4810";
@@ -65,10 +65,41 @@ type SyncConfig = {
   autoUploadLimitMb: number;
 };
 
-type MissingFile = { id: string; name: string; size: number; sourceDeviceId: string };
-type LocalClipboardFile = ClipboardFile & { localPath?: string };
-type LocalClipboardEntry = Omit<ClipboardEntry, "files"> & { files: LocalClipboardFile[] };
+type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
+
+/**
+ * Aggregates computed by the backend. A folder can hold thousands of nodes, so
+ * the list never receives the tree itself — only these counters.
+ */
+type EntrySummary = {
+  fileCount: number;
+  hashedCount: number;
+  contentCount: number;
+  totalSize: number;
+  maxFileSize: number;
+  uploadedCount: number;
+  readyCount: number;
+  pendingCount: number;
+  pendingSize: number;
+  uploadableSize?: number;
+  previewPath?: string;
+};
+
+type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
 type UploadProgress = { uploadedBytes: number; totalBytes: number };
+type DownloadProgress = { finished: number; total: number };
+
+const EMPTY_SUMMARY: EntrySummary = {
+  fileCount: 0,
+  hashedCount: 0,
+  contentCount: 0,
+  totalSize: 0,
+  maxFileSize: 0,
+  uploadedCount: 0,
+  readyCount: 0,
+  pendingCount: 0,
+  pendingSize: 0,
+};
 type SettingsPage = "general" | "account" | "data";
 
 const entries = ref<LocalClipboardEntry[]>([]);
@@ -109,6 +140,7 @@ const currentUsername = ref("");
 const pastingEntryId = ref("");
 const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
+const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
 const savingEntryId = ref("");
 const previewImage = ref<LocalClipboardEntry>();
 const previewLoading = ref(false);
@@ -148,10 +180,12 @@ const demoEntries: LocalClipboardEntry[] = [
     id: "welcome",
     kind: "text",
     content: "ClipRoam 已准备好。复制一段文字，它会自动出现在这里。",
+    tree: undefined,
     files: [],
     sourceDeviceId: "browser",
     createdAt: new Date().toISOString(),
     pinned: true,
+    summary: EMPTY_SUMMARY,
   },
 ];
 
@@ -159,7 +193,7 @@ const filteredEntries = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   return entries.value.filter((entry) => {
     const matchesType = filter.value === "all"
-      || (filter.value === "pending-upload" && entry.files.some((file) => file.location !== "server"))
+      || (filter.value === "pending-upload" && entry.summary.uploadedCount < entry.summary.contentCount)
       || entry.kind === filter.value;
     const matchesQuery = !needle
       || entry.content.toLocaleLowerCase().includes(needle)
@@ -204,7 +238,7 @@ function deviceName(entry: ClipboardEntry): string {
 }
 
 function imageSource(entry: LocalClipboardEntry): string | undefined {
-  const path = entry.files[0]?.localPath;
+  const path = entry.summary.previewPath;
   return path && runningInTauri ? convertFileSrc(path) : undefined;
 }
 
@@ -219,17 +253,47 @@ async function hideWindow(): Promise<void> {
   if (runningInTauri) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
 }
 
+/**
+ * Fetches every content this device is missing. Downloads run through a fixed
+ * pool, and one failure no longer aborts the rest — a 3000-file folder should
+ * not be lost to a single bad transfer.
+ */
 async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
-  const missing = await invoke<MissingFile[]>("get_missing_files", { entryId: entry.id });
-  if (missing.length && !syncClient) throw new Error("同步服务未连接，无法获取其他设备的文件");
-  for (const missingFile of missing) {
-    const file = entry.files.find((candidate) => candidate.id === missingFile.id);
-    if (!file) throw new Error(`文件记录不存在：${missingFile.name}`);
-    await syncClient!.downloadFile(entry, file);
-  }
+  const missing = await invoke<MissingFile[]>("prepare_entry_files", { entryId: entry.id });
   if (!missing.length) return entry;
-  await refreshEntries();
+  const client = syncClient;
+  if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
+
+  let finished = 0;
+  const reportProgress = () => {
+    downloadProgressByEntryId.value = {
+      ...downloadProgressByEntryId.value,
+      [entry.id]: { finished, total: missing.length },
+    };
+  };
+  reportProgress();
+  try {
+    const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
+      await client.downloadFile(entry, {
+        fileId: file.fileId,
+        size: file.size,
+        mime: undefined,
+        available: true,
+      });
+      finished += 1;
+      reportProgress();
+    });
+    const failures = results.filter((result) => result.status === "rejected").length;
+    if (failures) {
+      throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
+    }
+  } finally {
+    const { [entry.id]: _, ...remaining } = downloadProgressByEntryId.value;
+    downloadProgressByEntryId.value = remaining;
+    await invoke("refresh_entry", { entryId: entry.id }).catch(() => undefined);
+    await refreshEntries();
+  }
   return entries.value.find((candidate) => candidate.id === entry.id) ?? entry;
 }
 
@@ -246,14 +310,28 @@ async function paste(entry?: LocalClipboardEntry): Promise<void> {
     await ensureLocalFiles(entry);
     await invoke("paste_entry", { entryId: entry.id });
   } catch (error) {
+    if (String(error).includes("clipboard entry was not found")) {
+      await refreshEntries();
+      return;
+    }
     errorMessage.value = String(error);
   } finally {
     pastingEntryId.value = "";
   }
 }
 
+function isHashing(entry: LocalClipboardEntry): boolean {
+  return entry.summary.hashedCount < entry.summary.fileCount;
+}
+
 function uploadStatus(entry: LocalClipboardEntry): string | undefined {
-  if (!entry.files.length) return undefined;
+  const summary = entry.summary;
+  if (!summary.fileCount) return undefined;
+  // Content ids are computed in the background, so a fresh entry is usable
+  // locally before it can be addressed on the server.
+  if (isHashing(entry)) return `计算中 ${summary.hashedCount}/${summary.fileCount}`;
+  const download = downloadProgressByEntryId.value[entry.id];
+  if (download) return `下载中 ${download.finished}/${download.total}`;
   const progress = uploadProgressByEntryId.value[entry.id];
   if (progress) {
     const percent = progress.totalBytes
@@ -261,19 +339,23 @@ function uploadStatus(entry: LocalClipboardEntry): string | undefined {
       : 0;
     return `上传中 ${percent}%`;
   }
-  const uploaded = entry.files.filter((file) => file.location === "server").length;
-  if (uploaded === entry.files.length) return "已上传";
-  if (uploaded) return `部分上传（${uploaded}/${entry.files.length}）`;
-  if (entry.files.every((file) => file.size >= MANUAL_UPLOAD_LIMIT)) return "未上传（超过 100 MB）";
+  if (!summary.contentCount) return undefined;
+  if (summary.uploadedCount === summary.contentCount) return "已上传";
+  if (summary.uploadedCount) {
+    return `部分上传（${summary.uploadedCount}/${summary.contentCount}）`;
+  }
+  if (summary.uploadableSize !== undefined && summary.uploadableSize >= MANUAL_UPLOAD_LIMIT) {
+    return "未上传（超过 100 MB）";
+  }
   return "未上传";
 }
 
 function canManualUpload(entry: LocalClipboardEntry): boolean {
-  return runningInTauri && entry.files.some((file) => (
-    file.location !== "server"
-    && file.size < MANUAL_UPLOAD_LIMIT
-    && Boolean(file.localPath)
-  ));
+  const uploadableSize = entry.summary.uploadableSize;
+  return runningInTauri
+    && !isHashing(entry)
+    && uploadableSize !== undefined
+    && uploadableSize < MANUAL_UPLOAD_LIMIT;
 }
 
 async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
@@ -285,7 +367,8 @@ async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
   uploadingEntryId.value = entry.id;
   errorMessage.value = "";
   try {
-    await syncClient.upload(entry);
+    // Publishing needs the tree, which the rendered list does not carry.
+    await syncClient.upload(await fullEntry(entry));
   } catch (error) {
     errorMessage.value = `上传失败：${error instanceof Error ? error.message : String(error)}`;
   } finally {
@@ -295,7 +378,9 @@ async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
 }
 
 function canSaveEntry(entry: LocalClipboardEntry): boolean {
-  return runningInTauri && (entry.kind === "files" || entry.kind === "image") && entry.files.length > 0;
+  return runningInTauri
+    && (entry.kind === "files" || entry.kind === "image")
+    && entry.summary.contentCount > 0;
 }
 
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
@@ -754,12 +839,23 @@ function handleKeys(event: KeyboardEvent): void {
 
 async function upsertRemote(entry: ClipboardEntry): Promise<void> {
   if (!runningInTauri) {
-    entries.value = [entry, ...entries.value.filter((item) => item.id !== entry.id)]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    entries.value = [
+      { ...entry, summary: EMPTY_SUMMARY },
+      ...entries.value.filter((item) => item.id !== entry.id),
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return;
   }
   await invoke("upsert_remote_entry", { entry });
   await refreshEntries();
+}
+
+/**
+ * The rendered list carries only aggregates. Publishing needs the directory tree,
+ * so it is fetched per entry instead of for the whole history.
+ */
+async function fullEntry(entry: LocalClipboardEntry): Promise<ClipboardEntry> {
+  if (!runningInTauri) return entry;
+  return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
 }
 
 async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<void> {
@@ -786,7 +882,10 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
 
     for (const entry of localEntries) {
       if (serverClientIds.has(entry.clientId ?? entry.id) || syncClient !== client) continue;
-      await client.restore(entry);
+      // An entry whose contents are still being hashed has no addressable ids
+      // yet; `entry-ready` publishes it once they exist.
+      if (isHashing(entry)) continue;
+      await client.restore(await fullEntry(entry));
     }
     await refreshEntries();
   } catch (error) {
@@ -876,11 +975,17 @@ onMounted(async () => {
 
   if (runningInTauri) {
     unlisteners = await Promise.all([
-      listen<ClipboardEntry>("cliproam://entry-created", async ({ payload }) => {
+      listen("cliproam://entry-created", refreshEntries),
+      // Emitted once every content of an entry has a known id, which for a
+      // folder happens after background hashing finishes.
+      listen<string>("cliproam://entry-ready", async ({ payload }) => {
         await refreshEntries();
-        if (!isPasteWindow) void syncClient?.publish(payload).catch((error) => {
+        if (isPasteWindow || !syncClient) return;
+        try {
+          await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
+        } catch (error) {
           errorMessage.value = `自动上传失败：${error instanceof Error ? error.message : String(error)}`;
-        });
+        }
       }),
       listen("cliproam://history-changed", refreshEntries),
       listen("cliproam://focus-search", focusSearch),

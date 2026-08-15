@@ -2,17 +2,39 @@ import { z } from "zod";
 
 export const DEFAULT_AUTO_UPLOAD_LIMIT = 10 * 1024 * 1024;
 export const FILE_CHUNK_SIZE = 128 * 1024;
+// A single entry carries its whole directory tree, so publish/fetch messages can
+// get large. The tree is compact (~40 bytes per node) but unbounded by design.
+export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+export const ENTRY_FETCH_BATCH = 20;
 
 export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
 
+// A file is addressed by the sha256 of its content, so identical bytes are one
+// entity no matter how many entries, paths or devices reference them.
+export const FileIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+// Content-pool entry: describes bytes only. Names and paths live in the tree.
 export const ClipboardFileSchema = z.object({
-  id: z.string(),
-  name: z.string(),
+  fileId: FileIdSchema,
   size: z.number().int().nonnegative(),
   mime: z.string().nullish().transform((value) => value ?? undefined),
-  sha256: z.string().nullish().transform((value) => value ?? undefined),
-  location: z.enum(["device", "server"]),
-  available: z.boolean(),
+  available: z.boolean().default(false),
+});
+
+// Structure of a `files` entry, kept compact: `p` is a relative path rooted at
+// one of `roots`, `f` is the content it points at. Directories never occupy a
+// content row, and duplicated content is a repeated `f`, not a repeated blob.
+export const ClipboardTreeSchema = z.object({
+  v: z.literal(1),
+  roots: z.array(z.object({
+    name: z.string().min(1).max(255),
+    kind: z.enum(["file", "dir"]),
+  })),
+  dirs: z.array(z.string().min(1).max(1024)).default([]),
+  files: z.array(z.object({
+    p: z.string().min(1).max(1024),
+    f: FileIdSchema,
+  })).default([]),
 });
 
 export const ClipboardEntrySchema = z.object({
@@ -22,6 +44,7 @@ export const ClipboardEntrySchema = z.object({
   content: z.string(),
   html: z.string().optional(),
   rtf: z.string().optional(),
+  tree: ClipboardTreeSchema.nullish().transform((value) => value ?? undefined),
   files: z.array(ClipboardFileSchema).default([]),
   sourceDeviceId: z.string(),
   createdAt: z.string(),
@@ -82,22 +105,22 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("clipboard.fetch"),
     requestId: z.string().uuid(),
-    entryIds: z.array(z.string()).min(1).max(200),
+    entryIds: z.array(z.string()).min(1).max(ENTRY_FETCH_BATCH),
   }),
+  // Uploads are addressed purely by content, so the server needs no entry
+  // context: it either already holds these bytes (instant) or it does not.
   z.object({
     type: z.literal("file.upload.begin"),
     transferId: z.string().uuid(),
-    entryId: z.string(),
-    clientId: z.string().uuid(),
-    fileFullPath: z.string().min(1).max(4096),
-    fileModifiedAt: z.number().int().nonnegative(),
-    file: ClipboardFileSchema,
+    fileId: FileIdSchema,
+    size: z.number().int().nonnegative(),
+    mime: z.string().nullish().transform((value) => value ?? undefined),
   }),
   z.object({
     type: z.literal("file.download"),
     transferId: z.string().uuid(),
     entryId: z.string(),
-    fileId: z.string(),
+    fileId: FileIdSchema,
     sourceDeviceId: z.string(),
   }),
   z.object({
@@ -144,19 +167,20 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("file.upload.ready"),
     transferId: z.string().uuid(),
-    fileId: z.string().uuid(),
     offset: z.number().int().nonnegative(),
   }),
+  // Also sent instead of `file.upload.ready` when the server already holds the
+  // content, which lets the client skip the transfer entirely.
   z.object({
     type: z.literal("file.uploaded"),
     transferId: z.string().uuid(),
-    fileId: z.string(),
+    fileId: FileIdSchema,
   }),
   z.object({
     type: z.literal("file.source.request"),
     transferId: z.string().uuid(),
     entryId: z.string(),
-    fileId: z.string(),
+    fileId: FileIdSchema,
   }),
   z.object({
     type: z.literal("file.chunk"),
@@ -182,6 +206,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
 
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
 export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
+export type ClipboardTree = z.infer<typeof ClipboardTreeSchema>;
+export type ClipboardTreeRoot = ClipboardTree["roots"][number];
 export type ClipboardEntry = z.infer<typeof ClipboardEntrySchema>;
 export type ClipboardManifestEntry = z.infer<typeof ClipboardManifestEntrySchema>;
 export type Device = z.infer<typeof DeviceSchema>;
