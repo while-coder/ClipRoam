@@ -1,13 +1,11 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const dataDirectory = resolve(process.env.CLIPROAM_DATA_DIRECTORY ?? join(homedir(), ".cliproam"));
-export const accountsDatabasePath = resolve(
-  process.env.CLIPROAM_ACCOUNTS_DATABASE ?? join(dataDirectory, "accounts.sqlite"),
-);
-export const usersDirectory = resolve(process.env.CLIPROAM_USERS_DIRECTORY ?? join(dataDirectory, "users"));
-export const tlsDirectory = resolve(process.env.CLIPROAM_TLS_DIRECTORY ?? join(dataDirectory, "tls"));
-export const serverSettingsPath = resolve(process.env.CLIPROAM_SETTINGS_FILE ?? join(dataDirectory, "server-settings.json"));
+export const dataDirectory = resolve(join(homedir(), ".cliproam"));
+export const accountsDatabasePath = join(dataDirectory, "accounts.sqlite");
+export const usersDirectory = join(dataDirectory, "users");
+export const tlsDirectory = join(dataDirectory, "tls");
+export const serverSettingsPath = join(dataDirectory, "server-settings.json");
 
 function safeUserId(userId: string): string {
   if (!/^[0-9a-f-]{36}$/i.test(userId)) throw new Error("Invalid user ID for storage path");
