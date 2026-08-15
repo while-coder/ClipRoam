@@ -9,10 +9,6 @@ const PARTIAL_SUFFIX = ".part";
 
 type FileRow = { file_id: string; size: number; mime: string | null; stored: number };
 
-// Transfers only ever need the pool of the user they belong to, so they resolve
-// it per connection instead of reaching into the whole store.
-export type FileStoreResolver = (userId: string) => FileStore;
-
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
 // bytes are stored once no matter how many entries or paths point at them.

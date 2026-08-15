@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, openSync, readSync, renameSync, rmSync, stat
 import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
 import type { ServerConfig } from "../app/ServerConfig.js";
-import type { FileStoreResolver } from "./FileStore.js";
+import type { FileStore } from "./FileStore.js";
 
 type UploadBegin = Extract<ClientMessage, { type: "file.upload.begin" }>;
 type Upload = {
@@ -24,9 +24,10 @@ type Upload = {
 // device or a renamed file — continues the same partial file.
 export class FileUploadService {
   #uploads = new Map<string, Upload>();
+  #waiters = new Map<string, { client: ClientConnection; fileId: string }>();
 
   constructor(
-    private readonly files: FileStoreResolver,
+    private readonly files: FileStore,
     private readonly config: ServerConfig,
     private readonly send: SendMessage,
   ) {}
@@ -37,14 +38,20 @@ export class FileUploadService {
       return;
     }
     // Content the server already holds needs no transfer at all.
-    if (this.files(client.userId).has(message.fileId)) {
+    if (this.files.has(message.fileId)) {
       this.send(client, { type: "file.uploaded", transferId: message.transferId, fileId: message.fileId });
       return;
     }
 
-    const finalPath = this.files(client.userId).preparePath(message.fileId);
+    // A different account may already be filling the same content-addressed
+    // target. Waiting avoids concurrent writes to one shared .part file.
+    if ([...this.#uploads.values()].some((upload) => upload.fileId === message.fileId)) {
+      this.#waiters.set(message.transferId, { client, fileId: message.fileId });
+      return;
+    }
+
+    const finalPath = this.files.preparePath(message.fileId);
     const temporaryPath = `${finalPath}.part`;
-    this.#cancelActiveUpload(client.userId, message.fileId);
     const receivedSize = this.#preparePartialFile(temporaryPath, message.size);
 
     this.#uploads.set(message.transferId, {
@@ -96,13 +103,19 @@ export class FileUploadService {
       return true;
     }
     renameSync(upload.temporaryPath, upload.finalPath);
-    this.files(upload.userId).store(upload.fileId, upload.expectedSize, upload.mime);
+    this.files.store(upload.fileId, upload.expectedSize, upload.mime);
     this.#uploads.delete(transferId);
     this.send(client, { type: "file.uploaded", transferId, fileId: upload.fileId });
+    this.#settleWaiters(upload.fileId, true);
     return true;
   }
 
   fail(client: ClientConnection, transferId: string, message: string): boolean {
+    const waiter = this.#waiters.get(transferId);
+    if (waiter?.client === client) {
+      this.#waiters.delete(transferId);
+      return true;
+    }
     const upload = this.#uploads.get(transferId);
     if (upload?.client !== client) return false;
     this.#fail(transferId, message, false);
@@ -110,16 +123,11 @@ export class FileUploadService {
   }
 
   handleClientClose(client: ClientConnection): void {
+    for (const [transferId, waiter] of this.#waiters) {
+      if (waiter.client === client) this.#waiters.delete(transferId);
+    }
     for (const [transferId, upload] of this.#uploads) {
       if (upload.client === client) this.#fail(transferId, "源设备已离线");
-    }
-  }
-
-  #cancelActiveUpload(userId: string, fileId: string): void {
-    for (const [transferId, upload] of this.#uploads) {
-      if (upload.userId === userId && upload.fileId === fileId) {
-        this.#fail(transferId, "文件上传已在其他连接中重新开始");
-      }
     }
   }
 
@@ -143,6 +151,16 @@ export class FileUploadService {
     if (!preservePartial) rmSync(upload.temporaryPath, { force: true });
     this.#uploads.delete(transferId);
     this.send(upload.client, { type: "file.failed", transferId, message });
+    this.#settleWaiters(upload.fileId, false, message);
+  }
+
+  #settleWaiters(fileId: string, uploaded: boolean, message = "相同文件上传失败"): void {
+    for (const [transferId, waiter] of this.#waiters) {
+      if (waiter.fileId !== fileId) continue;
+      this.#waiters.delete(transferId);
+      if (uploaded) this.send(waiter.client, { type: "file.uploaded", transferId, fileId });
+      else this.send(waiter.client, { type: "file.failed", transferId, message });
+    }
   }
 }
 

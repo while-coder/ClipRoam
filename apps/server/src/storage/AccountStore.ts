@@ -124,6 +124,10 @@ export class AccountStore {
     `).get(hashSessionToken(token), new Date().toISOString()) as AccountUser | undefined;
   }
 
+  listUserIds(): string[] {
+    return (this.#database.prepare("SELECT id FROM users").all() as Array<{ id: string }>).map(({ id }) => id);
+  }
+
   close(): void { this.#database.close(); }
 
   #issueSession(user: AccountUser, deviceId: string): AuthResponse {

@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
-import type { FileStoreResolver } from "./FileStore.js";
+import type { FileStore } from "./FileStore.js";
 
 type DownloadRequest = Extract<ClientMessage, { type: "file.download" }>;
 type Relay = { source: ClientConnection; target: ClientConnection; userId: string };
@@ -10,7 +10,8 @@ export class FileDownloadService {
   #relays = new Map<string, Relay>();
 
   constructor(
-    private readonly files: FileStoreResolver,
+    private readonly files: FileStore,
+    private readonly canRead: (userId: string, entryId: string, fileId: string) => boolean,
     private readonly send: SendMessage,
   ) {}
 
@@ -19,7 +20,11 @@ export class FileDownloadService {
     message: DownloadRequest,
     clients: ReadonlySet<ClientConnection>,
   ): Promise<void> {
-    const stored = this.files(client.userId).get(message.fileId);
+    if (!this.canRead(client.userId, message.entryId, message.fileId)) {
+      this.send(client, { type: "file.failed", transferId: message.transferId, message: "文件不属于该剪贴板记录" });
+      return;
+    }
+    const stored = this.files.get(message.fileId);
     if (stored) {
       try {
         for await (const chunk of createReadStream(stored.path, { highWaterMark: FILE_CHUNK_SIZE })) {

@@ -23,8 +23,6 @@ import { TlsCertificateService, type TlsOptions } from "../services/TlsCertifica
 const adminSessionCookie = "cliproam_admin";
 const adminSessionMaxAgeSeconds = 8 * 60 * 60;
 const garbageCollectionIntervalMs = 6 * 60 * 60 * 1_000;
-// Deleting an entry only drops references, so reclaiming disk is batched.
-const deletionsPerGarbageCollection = 20;
 const logger = getLogger("ClipRoamServer");
 const bundledAdminDirectory = fileURLToPath(new URL("../admin", import.meta.url));
 const workspaceAdminDirectory = fileURLToPath(new URL("../../admin", import.meta.url));
@@ -37,12 +35,12 @@ export class ClipRoamServer {
   readonly #admin = new AdminService();
   readonly #clients = new Set<ClientConnection>();
   readonly #transfers: FileTransferService;
-  readonly #deletionsSinceCollection = new Map<string, number>();
   #collectionTimer?: NodeJS.Timeout;
 
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
     this.#transfers = new FileTransferService(
-      (userId) => this.#store.files(userId),
+      this.#store.files(),
+      this.#store.canReadFile.bind(this.#store),
       config,
       this.#send.bind(this),
     );
@@ -57,7 +55,7 @@ export class ClipRoamServer {
     await this.#app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
     this.#registerRoutes();
     this.#collectionTimer = setInterval(() => {
-      for (const userId of this.#store.loadedUserIds()) this.#collectGarbage(userId);
+      this.#collectGarbage();
     }, garbageCollectionIntervalMs);
     this.#collectionTimer.unref();
     await this.#app.listen({ port: this.config.port, host: "0.0.0.0" });
@@ -310,11 +308,7 @@ export class ClipRoamServer {
     }
     const client: ClientConnection = { socket, userId: user.id, device };
     this.#clients.add(client);
-    // The first connection since startup is also when leftovers from an
-    // interrupted upload or a previous process get reclaimed.
-    const firstConnection = !this.#store.loadedUserIds().includes(user.id);
     this.#store.upsertDevice(user.id, device);
-    if (firstConnection) this.#collectGarbage(user.id);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
     this.#send(client, {
       type: "auth.ack",
@@ -339,26 +333,19 @@ export class ClipRoamServer {
     this.#store.delete(client.userId, entryId);
     logger.info(`Clipboard entry deleted: user=${client.userId} entry=${entryId} device=${client.device.id}`);
     this.#broadcast(client.userId, { type: "clipboard.deleted", entryId }, client);
-    const deletions = (this.#deletionsSinceCollection.get(client.userId) ?? 0) + 1;
-    if (deletions < deletionsPerGarbageCollection) {
-      this.#deletionsSinceCollection.set(client.userId, deletions);
-      return;
-    }
-    this.#deletionsSinceCollection.delete(client.userId);
-    this.#collectGarbage(client.userId);
   }
 
   // Sweeping walks the whole content pool, so it is deferred off the message
   // handler rather than run inline with the delete that triggered it.
-  #collectGarbage(userId: string): void {
+  #collectGarbage(): void {
     setTimeout(() => {
       try {
-        const { removedFiles, removedBytes } = this.#store.collectGarbage(userId, this.config.resumableUploadTtlMs);
+        const { removedFiles, removedBytes } = this.#store.collectGarbage(this.config.resumableUploadTtlMs);
         if (removedFiles > 0) {
-          logger.info(`Reclaimed ${removedFiles} unreferenced files (${removedBytes} bytes) for user=${userId}`);
+          logger.info(`Reclaimed ${removedFiles} globally unreferenced files (${removedBytes} bytes)`);
         }
       } catch (error) {
-        logger.error(`Failed to collect garbage for user=${userId}:`, error);
+        logger.error("Failed to collect globally unreferenced files:", error);
       }
     }, 0);
   }

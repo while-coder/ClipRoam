@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 
 export const dataDirectory = resolve(join(homedir(), ".cliproam"));
 export const accountsDatabasePath = join(dataDirectory, "accounts.sqlite");
+export const filesDatabasePath = join(dataDirectory, "files.sqlite");
+export const filesDirectory = join(dataDirectory, "files");
 export const usersDirectory = join(dataDirectory, "users");
 export const tlsDirectory = join(dataDirectory, "tls");
 export const serverSettingsPath = join(dataDirectory, "server-settings.json");
@@ -18,8 +20,4 @@ export function userDirectory(userId: string): string {
 
 export function userDatabasePath(userId: string): string {
   return join(userDirectory(userId), "data.sqlite");
-}
-
-export function userFilesDirectory(userId: string): string {
-  return join(userDirectory(userId), "files");
 }

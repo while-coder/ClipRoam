@@ -4,18 +4,26 @@ import type {
   ClipboardManifestEntry,
   Device,
 } from "@cliproam/protocol";
-import type { FileStore } from "../files/FileStore.js";
+import { DatabaseSync } from "node:sqlite";
+import { FileStore } from "../files/FileStore.js";
 import { AccountStore } from "./AccountStore.js";
+import { filesDatabasePath, filesDirectory } from "./DataPaths.js";
 import { UserDataStore } from "./UserDataStore.js";
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
 export class ClipRoamStore {
   readonly #accounts: AccountStore;
+  readonly #filesDatabase: DatabaseSync;
+  readonly #files: FileStore;
   readonly #userStores = new Map<string, UserDataStore>();
 
   constructor(databasePath?: string) {
     this.#accounts = new AccountStore(databasePath);
+    this.#filesDatabase = new DatabaseSync(filesDatabasePath);
+    this.#filesDatabase.exec("PRAGMA journal_mode = WAL;");
+    this.#files = new FileStore(this.#filesDatabase, filesDirectory);
+    this.#files.applySchema();
   }
 
   async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
@@ -47,16 +55,20 @@ export class ClipRoamStore {
     return this.#userStore(userId).upsert(entry);
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
-  // Content pools are per user: never de-duplicating across accounts keeps one
-  // user from probing for another's files through instant upload.
-  files(userId: string): FileStore { return this.#userStore(userId).files; }
-  collectGarbage(userId: string, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
-    return this.#userStore(userId).collectGarbage(partialTtlMs);
+  files(): FileStore { return this.#files; }
+  canReadFile(userId: string, entryId: string, fileId: string): boolean {
+    return this.#userStore(userId).hasFileReference(entryId, fileId);
   }
-  loadedUserIds(): string[] { return [...this.#userStores.keys()]; }
-
+  collectGarbage(partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+    const referenced = new Set<string>();
+    for (const userId of this.#accounts.listUserIds()) {
+      for (const fileId of this.#userStore(userId).referencedFileIds()) referenced.add(fileId);
+    }
+    return this.#files.sweep(referenced, partialTtlMs);
+  }
   close(): void {
     this.#accounts.close();
+    this.#filesDatabase.close();
     this.#userStores.forEach((store) => store.close());
     this.#userStores.clear();
   }
@@ -64,9 +76,10 @@ export class ClipRoamStore {
   #userStore(userId: string): UserDataStore {
     let store = this.#userStores.get(userId);
     if (!store) {
-      store = new UserDataStore(userId);
+      store = new UserDataStore(userId, this.#files);
       this.#userStores.set(userId, store);
     }
     return store;
   }
+
 }
