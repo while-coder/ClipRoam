@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, openSync, readSync, renameSync, rmSync, stat
 import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
 import type { ServerConfig } from "../app/ServerConfig.js";
-import { ClipRoamStore } from "../storage/ClipRoamStore.js";
+import type { FileStoreResolver } from "./FileStore.js";
 
 type UploadBegin = Extract<ClientMessage, { type: "file.upload.begin" }>;
 type Upload = {
@@ -26,7 +26,7 @@ export class FileUploadService {
   #uploads = new Map<string, Upload>();
 
   constructor(
-    private readonly store: ClipRoamStore,
+    private readonly files: FileStoreResolver,
     private readonly config: ServerConfig,
     private readonly send: SendMessage,
   ) {}
@@ -37,12 +37,12 @@ export class FileUploadService {
       return;
     }
     // Content the server already holds needs no transfer at all.
-    if (this.store.hasFile(client.userId, message.fileId)) {
+    if (this.files(client.userId).has(message.fileId)) {
       this.send(client, { type: "file.uploaded", transferId: message.transferId, fileId: message.fileId });
       return;
     }
 
-    const finalPath = this.store.prepareFilePath(client.userId, message.fileId);
+    const finalPath = this.files(client.userId).preparePath(message.fileId);
     const temporaryPath = `${finalPath}.part`;
     this.#cancelActiveUpload(client.userId, message.fileId);
     const receivedSize = this.#preparePartialFile(temporaryPath, message.size);
@@ -96,7 +96,7 @@ export class FileUploadService {
       return true;
     }
     renameSync(upload.temporaryPath, upload.finalPath);
-    this.store.storeFile(upload.userId, upload.fileId, upload.expectedSize, upload.mime);
+    this.files(upload.userId).store(upload.fileId, upload.expectedSize, upload.mime);
     this.#uploads.delete(transferId);
     this.send(client, { type: "file.uploaded", transferId, fileId: upload.fileId });
     return true;

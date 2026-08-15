@@ -23,8 +23,9 @@ ClipRoam 是一个本地优先的跨平台剪贴板历史与设备漫游工具�
 
 - `apps/server/src/index.ts`：进程入口，只启动服务。
 - `app/`：`ClipRoamServer`、运行配置与 WebSocket 连接类型。
-- `services/`：`AuthService`（账号和限流）与 `FileTransferService`（上传、续传、下载中继）。
-- `storage/`：`AccountStore`、`UserDataStore`、`ClipRoamStore` 与数据路径。
+- `files/`：内容寻址的文件子系统，与剪贴板记录相互独立。`FileStore` 是按用户隔离的内容池（落盘路径、内容索引、回收），`FileTransferService` 只做协议分发，`FileUploadService`（秒传、续传、内容校验）与 `FileDownloadService`（服务器直发或中继到源设备）各管一半生命周期。这一层不认识条目，只认识内容标识。
+- `services/`：`AuthService`（账号和限流）、`AdminService` 与 `TlsCertificateService`。
+- `storage/`：`AccountStore`、`UserDataStore`（剪贴板记录与设备）、`ClipRoamStore` 与数据路径。
 
 ## 开发
 
