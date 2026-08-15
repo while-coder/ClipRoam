@@ -2,25 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "ClipRoam: stop web",
+      "label": "ui:kill",
       "type": "process",
       "command": "node",
       "args": [
         "${workspaceFolder}/scripts/stop-dev.mjs",
         "--port",
         "1430"
-      ],
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": []
-    },
-    {
-      "label": "ClipRoam: stop app",
-      "type": "process",
-      "command": "node",
-      "args": [
-        "${workspaceFolder}/scripts/stop-dev.mjs",
-        "--executable",
-        "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam"
       ],
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
@@ -46,7 +34,7 @@
       "presentation": { "reveal": "always", "panel": "shared" }
     },
     {
-      "label": "ClipRoam: build app dev",
+      "label": "rust:build:dev",
       "type": "process",
       "command": "cargo",
       "args": [
@@ -57,13 +45,11 @@
       "presentation": { "reveal": "silent", "panel": "dedicated" }
     },
     {
-      "label": "ClipRoam: dev app",
+      "label": "ui:dev",
       "type": "process",
       "command": "pnpm",
       "args": ["dev:app"],
       "options": { "cwd": "${workspaceFolder}" },
-      "dependsOn": ["ClipRoam: stop web"],
-      "dependsOrder": "sequence",
       "isBackground": true,
       "problemMatcher": {
         "owner": "vite",
@@ -77,8 +63,8 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
-      "label": "ClipRoam: prep app dev",
-      "dependsOn": ["ClipRoam: stop app", "ClipRoam: build app dev", "ClipRoam: dev app"],
+      "label": "tauri:before:dev",
+      "dependsOn": ["ui:kill", "rust:build:dev", "ui:dev"],
       "dependsOrder": "sequence"
     },
     {

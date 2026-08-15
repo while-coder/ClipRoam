@@ -17,12 +17,20 @@
       "skipFiles": ["<node_internals>/**"]
     },
     {
-      "name": "Launch App",
+      "name": "Launch App · Windows",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam.exe",
       "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
-      "preLaunchTask": "ClipRoam: prep app dev"
+      "preLaunchTask": "tauri:before:dev"
+    },
+    {
+      "name": "Launch App · macOS",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam",
+      "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
+      "preLaunchTask": "tauri:before:dev"
     }
   ]
 }
