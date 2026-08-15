@@ -30,6 +30,7 @@ export class FileUploadService {
     private readonly files: FileStore,
     private readonly config: ServerConfig,
     private readonly send: SendMessage,
+    private readonly fileAvailable: (userId: string, fileId: string) => void,
   ) {}
 
   begin(client: ClientConnection, message: UploadBegin): void {
@@ -40,6 +41,7 @@ export class FileUploadService {
     // Content the server already holds needs no transfer at all.
     if (this.files.has(message.fileId)) {
       this.send(client, { type: "file.uploaded", transferId: message.transferId, fileId: message.fileId });
+      this.fileAvailable(client.userId, message.fileId);
       return;
     }
 
@@ -106,6 +108,7 @@ export class FileUploadService {
     this.files.store(upload.fileId, upload.expectedSize, upload.mime);
     this.#uploads.delete(transferId);
     this.send(client, { type: "file.uploaded", transferId, fileId: upload.fileId });
+    this.fileAvailable(upload.userId, upload.fileId);
     this.#settleWaiters(upload.fileId, true);
     return true;
   }

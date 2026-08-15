@@ -34,6 +34,13 @@ pub struct HistoryData {
     pub last_image_signature: String,
     pub device_id: String,
     pub device_name: String,
+    /// Locally initiated deletions are kept until the server echoes the
+    /// deletion, otherwise an offline delete would be restored on reconnect.
+    pub pending_deletions: HashSet<String>,
+    /// Small entry updates (currently pinning) need the same durable replay:
+    /// a manifest only contains ids, so it cannot discover an update to an
+    /// entry that already exists remotely.
+    pub pending_entry_updates: HashSet<String>,
     /// Content ids this machine has a blob for. Kept in memory so refreshing a
     /// summary never touches the disk.
     pub cached_files: HashSet<String>,
@@ -51,6 +58,8 @@ impl Default for HistoryData {
             device_name: std::env::var("COMPUTERNAME")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "This device".to_string()),
+            pending_deletions: HashSet::new(),
+            pending_entry_updates: HashSet::new(),
             cached_files: HashSet::new(),
         }
     }
@@ -241,6 +250,12 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                     "last_image_signature" => history.last_image_signature = value,
                     "device_id" => history.device_id = value,
                     "device_name" => history.device_name = value,
+                    "pending_deletions" => {
+                        history.pending_deletions = serde_json::from_str(&value).unwrap_or_default()
+                    }
+                    "pending_entry_updates" => {
+                        history.pending_entry_updates = serde_json::from_str(&value).unwrap_or_default()
+                    }
                     _ => {}
                 }
             }
@@ -423,6 +438,18 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
         ("device_id", history.device_id.as_str()),
         ("device_name", history.device_name.as_str()),
     ] {
+        transaction
+            .execute(
+                "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    for (key, values) in [
+        ("pending_deletions", &history.pending_deletions),
+        ("pending_entry_updates", &history.pending_entry_updates),
+    ] {
+        let value = serde_json::to_string(values).map_err(|error| error.to_string())?;
         transaction
             .execute(
                 "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

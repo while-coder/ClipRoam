@@ -43,6 +43,7 @@ export class ClipRoamServer {
       this.#store.canReadFile.bind(this.#store),
       config,
       this.#send.bind(this),
+      this.#publishFileAvailability.bind(this),
     );
   }
 
@@ -332,7 +333,12 @@ export class ClipRoamServer {
   #deleteClipboard(client: ClientConnection, entryId: string): void {
     this.#store.delete(client.userId, entryId);
     logger.info(`Clipboard entry deleted: user=${client.userId} entry=${entryId} device=${client.device.id}`);
+    this.#send(client, { type: "clipboard.deleted", entryId });
     this.#broadcast(client.userId, { type: "clipboard.deleted", entryId }, client);
+  }
+
+  #publishFileAvailability(userId: string, fileId: string): void {
+    this.#broadcast(userId, { type: "file.available", fileId });
   }
 
   // Sweeping walks the whole content pool, so it is deferred off the message

@@ -177,6 +177,12 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     transferId: z.string().uuid(),
     fileId: FileIdSchema,
   }),
+  // A file may become available after its entry was already synced to another
+  // device. Keep that per-file state current without re-sending the entry.
+  z.object({
+    type: z.literal("file.available"),
+    fileId: FileIdSchema,
+  }),
   z.object({
     type: z.literal("file.source.request"),
     transferId: z.string().uuid(),

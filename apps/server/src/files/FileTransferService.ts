@@ -19,8 +19,9 @@ export class FileTransferService {
     canRead: (userId: string, entryId: string, fileId: string) => boolean,
     config: ServerConfig,
     private readonly send: SendMessage,
+    fileAvailable: (userId: string, fileId: string) => void,
   ) {
-    this.#uploads = new FileUploadService(files, config, send);
+    this.#uploads = new FileUploadService(files, config, send, fileAvailable);
     this.#downloads = new FileDownloadService(files, canRead, send);
   }
 

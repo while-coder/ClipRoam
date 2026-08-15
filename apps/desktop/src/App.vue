@@ -467,23 +467,14 @@ async function togglePin(entry: ClipboardEntry): Promise<void> {
   }
   await invoke("set_pinned", { entryId: entry.id, pinned: !entry.pinned });
   await refreshEntries();
+  const client = syncClient;
+  if (client) client.publishMetadata(await fullEntry(entry as LocalClipboardEntry));
 }
 
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
   if (runningInTauri) await invoke("delete_entry", { entryId: entry.id });
   else entries.value = entries.value.filter((item) => item.id !== entry.id);
   syncClient?.delete(entry.id);
-  await refreshEntries();
-}
-
-async function removeLostSourceEntry(entryId: string, client: SyncClient): Promise<void> {
-  if (syncClient !== client) return;
-  if (runningInTauri) await invoke("delete_entry", { entryId });
-  else entries.value = entries.value.filter((entry) => entry.id !== entryId);
-  const remaining = new Set(syncedEntryIds.value);
-  remaining.delete(entryId);
-  syncedEntryIds.value = remaining;
-  client.delete(entryId);
   await refreshEntries();
 }
 
@@ -906,8 +897,8 @@ async function upsertRemote(entry: ClipboardEntry): Promise<void> {
  * The rendered list carries only aggregates. Publishing needs the directory tree,
  * so it is fetched per entry instead of for the whole history.
  */
-async function fullEntry(entry: LocalClipboardEntry): Promise<ClipboardEntry> {
-  if (!runningInTauri) return entry;
+async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEntry> {
+  if (!runningInTauri) return entry as ClipboardEntry;
   return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
 }
 
@@ -916,7 +907,13 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
   if (!client) return;
 
   try {
-    syncedEntryIds.value = new Set(manifest.map((entry) => entry.id));
+    const pendingDeletions = runningInTauri
+      ? new Set(await invoke<string[]>("list_pending_deletions"))
+      : new Set<string>();
+    for (const entryId of pendingDeletions) client.delete(entryId);
+    syncedEntryIds.value = new Set(
+      manifest.filter((entry) => !pendingDeletions.has(entry.id)).map((entry) => entry.id),
+    );
     // Read the durable history rather than the rendered list. The latter can
     // be stale while another Tauri window is refreshing it.
     const localEntries = runningInTauri
@@ -925,7 +922,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     const localClientIds = new Set(localEntries.map((entry) => entry.id));
     const serverClientIds = new Set(manifest.map((entry) => entry.id));
     const remoteOnlyEntryIds = manifest
-      .filter((entry) => !localClientIds.has(entry.id))
+      .filter((entry) => !localClientIds.has(entry.id) && !pendingDeletions.has(entry.id))
       .map((entry) => entry.id);
     const remoteEntries = await client.fetchEntries(remoteOnlyEntryIds);
 
@@ -935,7 +932,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     }
 
     for (const entry of localEntries) {
-      if (serverClientIds.has(entry.id) || syncClient !== client) continue;
+      if (pendingDeletions.has(entry.id) || serverClientIds.has(entry.id) || syncClient !== client) continue;
       // An entry whose contents are still being hashed has no addressable ids
       // yet; `entry-ready` publishes it once they exist.
       if (isHashing(entry)) continue;
@@ -946,6 +943,17 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
         // captured its snapshot. It no longer needs restoring.
         if (String(error).includes("剪贴板记录不存在")) continue;
         throw error;
+      }
+    }
+    if (runningInTauri) {
+      const pendingUpdates = await invoke<string[]>("list_pending_entry_updates");
+      for (const entryId of pendingUpdates) {
+        if (pendingDeletions.has(entryId) || syncClient !== client) continue;
+        try {
+          client.publishMetadata(await fullEntry({ id: entryId }));
+        } catch (error) {
+          if (!String(error).includes("剪贴板记录不存在")) throw error;
+        }
       }
     }
     await refreshEntries();
@@ -977,16 +985,25 @@ async function startSync(config: SyncConfig): Promise<void> {
         void reconcileManifest(manifest);
       },
       onDevicePresence: (device) => { rememberDevices([device]); },
-      onEntry: (entry) => { void upsertRemote(entry); },
+      onEntry: (entry) => {
+        void upsertRemote(entry).then(() => {
+          if (runningInTauri) return invoke("acknowledge_entry_update", { entryId: entry.id });
+        });
+      },
       onDelete: (entryId) => {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
         syncedEntryIds.value = remaining;
-        if (runningInTauri) void invoke("delete_entry", { entryId }).then(refreshEntries);
+        if (runningInTauri) {
+          void Promise.all([
+            invoke("acknowledge_entry_deletion", { entryId }),
+            invoke("remove_remote_entry", { entryId }),
+          ]).then(refreshEntries);
+        }
         else entries.value = entries.value.filter((entry) => entry.id !== entryId);
       },
-      onLocalSourceLost: (entryId) => {
-        void removeLostSourceEntry(entryId, client);
+      onFileAvailable: (fileId) => {
+        if (runningInTauri) void invoke("mark_file_available", { fileId });
       },
       onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
         uploadProgressByEntryId.value = {

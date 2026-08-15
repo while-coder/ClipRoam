@@ -26,7 +26,7 @@ type SyncHandlers = {
   onDevicePresence: (device: Device) => void;
   onEntry: (entry: ClipboardEntry) => void;
   onDelete: (entryId: string) => void;
-  onLocalSourceLost: (entryId: string) => void;
+  onFileAvailable: (fileId: string) => void;
   onUploadProgress: (entryId: string, uploadedBytes: number, totalBytes: number) => void;
   onUploadFinished: (entryId: string) => void;
   onError: (message: string) => void;
@@ -266,6 +266,11 @@ export class SyncClient {
     await this.#uploadEntry(entry, this.autoUploadLimit, false);
   }
 
+  /** Sends an existing entry update (such as pinning) without re-uploading files. */
+  publishMetadata(entry: ClipboardEntry): boolean {
+    return this.#publishEntry(entry);
+  }
+
   async restore(entry: ClipboardEntry): Promise<void> {
     // A snapshot can show that the server no longer has this entry. Do not
     // treat a WebSocket send as success: retain the local entry until the
@@ -352,16 +357,17 @@ export class SyncClient {
       const uploaded = results.flatMap((result) => (
         result.status === "fulfilled" ? [result.value] : []
       ));
-      const sourceWasLost = results.some((result) => (
+      if (uploaded.length) {
+        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds: uploaded });
+      }
+      const sourceFailure = results.find((result) => (
         result.status === "rejected"
         && String(result.reason).includes("复制的源文件已删除或移动")
       ));
-      if (sourceWasLost) {
-        this.handlers.onLocalSourceLost(entry.id);
+      if (sourceFailure?.status === "rejected") {
+        this.handlers.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
+        if (reportFailures) throw sourceFailure.reason;
         return;
-      }
-      if (uploaded.length) {
-        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds: uploaded });
       }
       if (reportFailures) {
         const failure = results.find((result) => result.status === "rejected");
@@ -698,6 +704,9 @@ export class SyncClient {
         // no-op, so both cases share this branch.
         this.#resolveUploadReady(message.transferId, { stored: true });
         this.#resolveTransfer(message.transferId);
+        return;
+      case "file.available":
+        this.handlers.onFileAvailable(message.fileId);
         return;
       case "file.upload.ready":
         this.#resolveUploadReady(message.transferId, { stored: false, offset: message.offset });
