@@ -17,7 +17,7 @@ import { userDatabasePath } from "./DataPaths.js";
 
 // The server-wide content pool changed layout. Older per-user entries are not
 // retained because their content metadata belongs to the discarded pool.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 type EntryRow = {
   id: string;
@@ -56,7 +56,6 @@ export class UserDataStore {
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS clipboard_entries (
         id TEXT PRIMARY KEY,
-        client_id TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
         content TEXT NOT NULL,
         extra TEXT NOT NULL DEFAULT '{}',
@@ -150,16 +149,13 @@ export class UserDataStore {
   }
 
   upsert(entry: ClipboardEntry): ClipboardEntry {
-    // Entry IDs are deterministically generated on the capturing device.
-    // The legacy `client_id` column is deliberately written with the same ID.
     const storedEntry = entry;
     this.#transaction(() => {
       this.#database.prepare(`
         INSERT INTO clipboard_entries (
-          id, client_id, kind, content, extra, source_device_id, created_at, pinned
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          id, kind, content, extra, source_device_id, created_at, pinned
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          client_id = excluded.client_id,
           kind = excluded.kind,
           content = excluded.content,
           extra = excluded.extra,
@@ -167,7 +163,6 @@ export class UserDataStore {
           created_at = excluded.created_at,
           pinned = excluded.pinned
       `).run(
-        storedEntry.id,
         storedEntry.id,
         storedEntry.kind,
         storedEntry.content,
