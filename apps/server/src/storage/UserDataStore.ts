@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   ClipboardEntrySchema,
@@ -12,15 +12,13 @@ import {
   type ClipboardTree,
   type Device,
 } from "@cliproam/protocol";
+import { FileStore } from "../files/FileStore.js";
+import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
 import { userDatabasePath, userFilesDirectory } from "./DataPaths.js";
 
 // Bumping this drops and rebuilds the clipboard tables. File storage moved to
 // content addressing, which no old row can be translated into.
 const SCHEMA_VERSION = 2;
-// SQLite allows 999 bound parameters by default, and one entry can reference
-// far more files than that.
-const QUERY_BATCH = 500;
-const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 type EntryRow = {
   id: string;
@@ -32,19 +30,20 @@ type EntryRow = {
   created_at: string;
   pinned: number;
 };
-type FileRow = { file_id: string; size: number; mime: string | null; stored: number };
 
+// Clipboard records and devices. Contents live in an independent pool that this
+// store only references by id, so a tree is the sole record of which bytes an
+// entry needs.
 export class UserDataStore {
   readonly #database: DatabaseSync;
-  readonly #filesDirectory: string;
+  readonly files: FileStore;
 
   constructor(userId: string) {
     const databasePath = userDatabasePath(userId);
-    this.#filesDirectory = userFilesDirectory(userId);
     mkdirSync(dirname(databasePath), { recursive: true });
-    mkdirSync(this.#filesDirectory, { recursive: true });
     this.#database = new DatabaseSync(databasePath);
     this.#database.exec("PRAGMA journal_mode = WAL;");
+    this.files = new FileStore(this.#database, userFilesDirectory(userId));
     this.#applySchema();
   }
 
@@ -52,13 +51,8 @@ export class UserDataStore {
     const version = (this.#database.prepare("PRAGMA user_version").get() as
       { user_version: number } | undefined)?.user_version ?? 0;
     if (version !== SCHEMA_VERSION) {
-      this.#database.exec(`
-        DROP TABLE IF EXISTS clipboard_entries;
-        DROP TABLE IF EXISTS files;
-        DROP TABLE IF EXISTS upload_sessions;
-      `);
-      rmSync(this.#filesDirectory, { recursive: true, force: true });
-      mkdirSync(this.#filesDirectory, { recursive: true });
+      this.#database.exec("DROP TABLE IF EXISTS clipboard_entries;");
+      this.files.reset();
     }
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS clipboard_entries (
@@ -74,17 +68,6 @@ export class UserDataStore {
       CREATE INDEX IF NOT EXISTS clipboard_entries_created_at
         ON clipboard_entries(created_at DESC);
 
-      -- Content pool. Rows describe bytes, never entries: 'stored' says whether
-      -- the server actually holds them, 'size'/'mime' are known as soon as any
-      -- entry references the content so peers can render totals before upload.
-      CREATE TABLE IF NOT EXISTS files (
-        file_id TEXT PRIMARY KEY,
-        size INTEGER NOT NULL,
-        mime TEXT,
-        stored INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
         device_info TEXT NOT NULL,
@@ -97,6 +80,7 @@ export class UserDataStore {
       && !deviceColumns.some((column) => column.name === "device_info")) {
       this.#database.exec("ALTER TABLE devices RENAME COLUMN payload TO device_info");
     }
+    this.files.applySchema();
     this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
@@ -204,7 +188,7 @@ export class UserDataStore {
         storedEntry.createdAt,
         Number(storedEntry.pinned),
       );
-      this.#registerContents(storedEntry.files);
+      this.files.register(storedEntry.files);
     });
     return { ...storedEntry, files: this.#contentsOf(storedEntry.tree) };
   }
@@ -221,74 +205,16 @@ export class UserDataStore {
     this.#database.prepare("DELETE FROM clipboard_entries WHERE id = ?").run(entryId);
   }
 
-  filePath(fileId: string): string {
-    if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid file ID for storage path");
-    return join(this.#filesDirectory, fileId.slice(0, 2), fileId);
-  }
-
-  // Creates the shard directory so callers can write straight away.
-  prepareFilePath(fileId: string): string {
-    const path = this.filePath(fileId);
-    mkdirSync(dirname(path), { recursive: true });
-    return path;
-  }
-
-  storeFile(fileId: string, size: number, mime?: string): void {
-    this.#database.prepare(`
-      INSERT INTO files (file_id, size, mime, stored, created_at)
-      VALUES (?, ?, ?, 1, ?)
-      ON CONFLICT(file_id) DO UPDATE SET stored = 1, size = excluded.size
-    `).run(fileId, size, mime ?? null, new Date().toISOString());
-  }
-
-  hasFile(fileId: string): boolean {
-    return Boolean(this.#database
-      .prepare("SELECT 1 FROM files WHERE file_id = ? AND stored = 1")
-      .get(fileId));
-  }
-
-  getFile(fileId: string): { path: string; size: number } | undefined {
-    const file = this.#database
-      .prepare("SELECT size FROM files WHERE file_id = ? AND stored = 1")
-      .get(fileId) as { size: number } | undefined;
-    return file && { path: this.filePath(fileId), size: file.size };
-  }
-
-  // Mark-and-sweep over every entry's tree. Content addressing means a blob can
-  // be reachable from any number of entries, so per-entry cleanup would delete
-  // bytes that are still in use.
+  // The mark half of mark-and-sweep: only the trees know which contents are
+  // still in use, and a content can be reachable from any number of entries, so
+  // per-entry cleanup would delete bytes that are still needed.
   collectGarbage(partialTtlMs: number): { removedFiles: number; removedBytes: number } {
     const referenced = new Set<string>();
     const rows = this.#database.prepare("SELECT extra FROM clipboard_entries").all() as Array<{ extra: string }>;
     for (const row of rows) {
       for (const node of parseExtra(row.extra).tree?.files ?? []) referenced.add(node.f);
     }
-
-    let removedFiles = 0;
-    let removedBytes = 0;
-    this.#transaction(() => {
-      const known = this.#database.prepare("SELECT file_id FROM files").all() as Array<{ file_id: string }>;
-      const remove = this.#database.prepare("DELETE FROM files WHERE file_id = ?");
-      for (const { file_id } of known) {
-        if (!referenced.has(file_id)) remove.run(file_id);
-      }
-    });
-
-    for (const bucket of readDirectorySafely(this.#filesDirectory)) {
-      const bucketPath = join(this.#filesDirectory, bucket);
-      for (const name of readDirectorySafely(bucketPath)) {
-        const path = join(bucketPath, name);
-        const partial = name.endsWith(".part");
-        const fileId = partial ? name.slice(0, -".part".length) : name;
-        // A .part belongs to an upload in flight; only age retires it.
-        if (partial ? !isExpired(path, partialTtlMs) : referenced.has(fileId)) continue;
-        removedBytes += sizeOf(path);
-        rmSync(path, { force: true });
-        removedFiles += 1;
-      }
-      if (readDirectorySafely(bucketPath).length === 0) rmSync(bucketPath, { recursive: true, force: true });
-    }
-    return { removedFiles, removedBytes };
+    return this.files.sweep(referenced, partialTtlMs);
   }
 
   close(): void { this.#database.close(); }
@@ -311,51 +237,14 @@ export class UserDataStore {
     return result.success ? result.data : undefined;
   }
 
-  // The tree is the only record of which content an entry uses; the file table
+  // The tree is the only record of which contents an entry uses; the pool
   // supplies size, mime and availability for each distinct reference.
   #contentsOf(tree: ClipboardTree | undefined): ClipboardFile[] {
-    const fileIds = [...new Set((tree?.files ?? []).map((node) => node.f))];
-    if (fileIds.length === 0) return [];
-    const known = new Map<string, FileRow>();
-    for (const batch of chunk(fileIds, QUERY_BATCH)) {
-      const rows = this.#database.prepare(`
-        SELECT file_id, size, mime, stored FROM files
-        WHERE file_id IN (${batch.map(() => "?").join(",")})
-      `).all(...batch) as Array<FileRow>;
-      for (const file of rows) known.set(file.file_id, file);
-    }
-    return fileIds.map((fileId) => {
-      const file = known.get(fileId);
-      return {
-        fileId,
-        size: file?.size ?? 0,
-        mime: file?.mime ?? undefined,
-        available: Boolean(file?.stored),
-      };
-    });
-  }
-
-  #registerContents(files: readonly ClipboardFile[]): void {
-    const insert = this.#database.prepare(`
-      INSERT INTO files (file_id, size, mime, stored, created_at)
-      VALUES (?, ?, ?, 0, ?)
-      ON CONFLICT(file_id) DO NOTHING
-    `);
-    const now = new Date().toISOString();
-    for (const file of files) {
-      if (FILE_ID_PATTERN.test(file.fileId)) insert.run(file.fileId, file.size, file.mime ?? null, now);
-    }
+    return this.files.describe([...new Set((tree?.files ?? []).map((node) => node.f))]);
   }
 
   #transaction(work: () => void): void {
-    this.#database.exec("BEGIN");
-    try {
-      work();
-      this.#database.exec("COMMIT");
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    }
+    withTransaction(this.#database, work);
   }
 }
 
@@ -374,35 +263,3 @@ function parseExtra(extra: string): { html?: string; rtf?: string; tree?: Clipbo
   };
 }
 
-function chunk<T>(items: readonly T[], size: number): T[][] {
-  const batches: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    batches.push(items.slice(index, index + size));
-  }
-  return batches;
-}
-
-function readDirectorySafely(path: string): string[] {
-  try {
-    return readdirSync(path);
-  } catch {
-    return [];
-  }
-}
-
-function sizeOf(path: string): number {
-  try {
-    return statSync(path).size;
-  } catch {
-    return 0;
-  }
-}
-
-function isExpired(path: string, ttlMs: number): boolean {
-  if (ttlMs === 0) return true;
-  try {
-    return Date.now() - statSync(path).mtimeMs > ttlMs;
-  } catch {
-    return false;
-  }
-}

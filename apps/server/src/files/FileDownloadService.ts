@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
-import { ClipRoamStore } from "../storage/ClipRoamStore.js";
+import type { FileStoreResolver } from "./FileStore.js";
 
 type DownloadRequest = Extract<ClientMessage, { type: "file.download" }>;
 type Relay = { source: ClientConnection; target: ClientConnection; userId: string };
@@ -10,7 +10,7 @@ export class FileDownloadService {
   #relays = new Map<string, Relay>();
 
   constructor(
-    private readonly store: ClipRoamStore,
+    private readonly files: FileStoreResolver,
     private readonly send: SendMessage,
   ) {}
 
@@ -19,7 +19,7 @@ export class FileDownloadService {
     message: DownloadRequest,
     clients: ReadonlySet<ClientConnection>,
   ): Promise<void> {
-    const stored = this.store.getFile(client.userId, message.fileId);
+    const stored = this.files(client.userId).get(message.fileId);
     if (stored) {
       try {
         for await (const chunk of createReadStream(stored.path, { highWaterMark: FILE_CHUNK_SIZE })) {

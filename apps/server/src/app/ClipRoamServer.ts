@@ -15,7 +15,7 @@ import { AuthService } from "../services/AuthService.js";
 import { AdminService } from "../services/AdminService.js";
 import { getLogger } from "./Logger.js";
 import type { ClientConnection, ConnectionTarget } from "./Connection.js";
-import { FileTransferService } from "../services/FileTransferService.js";
+import { FileTransferService } from "../files/FileTransferService.js";
 import { getTransferSettings, loadServerConfig, updateTransferSettings, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../storage/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../services/TlsCertificateService.js";
@@ -41,7 +41,11 @@ export class ClipRoamServer {
   #collectionTimer?: NodeJS.Timeout;
 
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
-    this.#transfers = new FileTransferService(this.#store, config, this.#send.bind(this));
+    this.#transfers = new FileTransferService(
+      (userId) => this.#store.files(userId),
+      config,
+      this.#send.bind(this),
+    );
   }
 
   async start(): Promise<void> {

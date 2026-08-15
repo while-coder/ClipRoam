@@ -4,6 +4,7 @@ import type {
   ClipboardManifestEntry,
   Device,
 } from "@cliproam/protocol";
+import type { FileStore } from "../files/FileStore.js";
 import { AccountStore } from "./AccountStore.js";
 import { UserDataStore } from "./UserDataStore.js";
 
@@ -49,17 +50,9 @@ export class ClipRoamStore {
     return this.#userStore(userId).entryIdForClientId(clientId);
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
-  filePath(userId: string, fileId: string): string { return this.#userStore(userId).filePath(fileId); }
-  prepareFilePath(userId: string, fileId: string): string {
-    return this.#userStore(userId).prepareFilePath(fileId);
-  }
-  storeFile(userId: string, fileId: string, size: number, mime?: string): void {
-    this.#userStore(userId).storeFile(fileId, size, mime);
-  }
-  hasFile(userId: string, fileId: string): boolean { return this.#userStore(userId).hasFile(fileId); }
-  getFile(userId: string, fileId: string): { path: string; size: number } | undefined {
-    return this.#userStore(userId).getFile(fileId);
-  }
+  // Content pools are per user: never de-duplicating across accounts keeps one
+  // user from probing for another's files through instant upload.
+  files(userId: string): FileStore { return this.#userStore(userId).files; }
   collectGarbage(userId: string, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
     return this.#userStore(userId).collectGarbage(partialTtlMs);
   }
