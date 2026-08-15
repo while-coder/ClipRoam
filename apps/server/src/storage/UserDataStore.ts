@@ -13,11 +13,11 @@ import {
 } from "@cliproam/protocol";
 import { FileStore } from "../files/FileStore.js";
 import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
-import { userDatabasePath, userFilesDirectory } from "./DataPaths.js";
+import { userDatabasePath } from "./DataPaths.js";
 
-// Bumping this drops and rebuilds the clipboard tables. File storage moved to
-// content addressing, which no old row can be translated into.
-const SCHEMA_VERSION = 2;
+// The server-wide content pool changed layout. Older per-user entries are not
+// retained because their content metadata belongs to the discarded pool.
+const SCHEMA_VERSION = 3;
 
 type EntryRow = {
   id: string;
@@ -34,14 +34,12 @@ type EntryRow = {
 // entry needs.
 export class UserDataStore {
   readonly #database: DatabaseSync;
-  readonly files: FileStore;
 
-  constructor(userId: string) {
+  constructor(userId: string, readonly files: FileStore) {
     const databasePath = userDatabasePath(userId);
     mkdirSync(dirname(databasePath), { recursive: true });
     this.#database = new DatabaseSync(databasePath);
     this.#database.exec("PRAGMA journal_mode = WAL;");
-    this.files = new FileStore(this.#database, userFilesDirectory(userId));
     this.#applySchema();
   }
 
@@ -49,8 +47,11 @@ export class UserDataStore {
     const version = (this.#database.prepare("PRAGMA user_version").get() as
       { user_version: number } | undefined)?.user_version ?? 0;
     if (version !== SCHEMA_VERSION) {
-      this.#database.exec("DROP TABLE IF EXISTS clipboard_entries;");
-      this.files.reset();
+      this.#database.exec(`
+        DROP TABLE IF EXISTS clipboard_entries;
+        DROP TABLE IF EXISTS files;
+        DROP TABLE IF EXISTS upload_sessions;
+      `);
     }
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS clipboard_entries (
@@ -78,7 +79,6 @@ export class UserDataStore {
       && !deviceColumns.some((column) => column.name === "device_info")) {
       this.#database.exec("ALTER TABLE devices RENAME COLUMN payload TO device_info");
     }
-    this.files.applySchema();
     this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
@@ -192,16 +192,21 @@ export class UserDataStore {
     this.#database.prepare("DELETE FROM clipboard_entries WHERE id = ?").run(entryId);
   }
 
-  // The mark half of mark-and-sweep: only the trees know which contents are
-  // still in use, and a content can be reachable from any number of entries, so
-  // per-entry cleanup would delete bytes that are still needed.
-  collectGarbage(partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+  // The server-wide pool owns collection. This returns this account's mark set
+  // so ClipRoamStore can union it with every other account before sweeping.
+  referencedFileIds(): Set<string> {
     const referenced = new Set<string>();
     const rows = this.#database.prepare("SELECT extra FROM clipboard_entries").all() as Array<{ extra: string }>;
     for (const row of rows) {
       for (const node of parseExtra(row.extra).tree?.files ?? []) referenced.add(node.f);
     }
-    return this.files.sweep(referenced, partialTtlMs);
+    return referenced;
+  }
+
+  hasFileReference(entryId: string, fileId: string): boolean {
+    const row = this.#database.prepare("SELECT extra FROM clipboard_entries WHERE id = ?")
+      .get(entryId) as { extra: string } | undefined;
+    return Boolean(row && parseExtra(row.extra).tree?.files.some((node) => node.f === fileId));
   }
 
   close(): void { this.#database.close(); }

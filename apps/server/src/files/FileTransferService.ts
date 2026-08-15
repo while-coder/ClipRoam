@@ -1,7 +1,7 @@
 import { type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
 import type { ServerConfig } from "../app/ServerConfig.js";
-import type { FileStoreResolver } from "./FileStore.js";
+import type { FileStore } from "./FileStore.js";
 import { FileDownloadService } from "./FileDownloadService.js";
 import { FileUploadService } from "./FileUploadService.js";
 
@@ -15,12 +15,13 @@ export class FileTransferService {
   readonly #downloads: FileDownloadService;
 
   constructor(
-    files: FileStoreResolver,
+    files: FileStore,
+    canRead: (userId: string, entryId: string, fileId: string) => boolean,
     config: ServerConfig,
     private readonly send: SendMessage,
   ) {
     this.#uploads = new FileUploadService(files, config, send);
-    this.#downloads = new FileDownloadService(files, send);
+    this.#downloads = new FileDownloadService(files, canRead, send);
   }
 
   beginUpload(client: ClientConnection, message: UploadBegin): void {
