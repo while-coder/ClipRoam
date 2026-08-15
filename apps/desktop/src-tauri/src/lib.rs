@@ -372,7 +372,6 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
             &history_path_for_key(&state.histories_dir, &history.active_history),
             &file_id,
             webp.len() as u64,
-            Some("image/webp"),
         )?;
         history.cached_files.insert(file_id.clone());
         history.last_image_signature = signature;
@@ -397,7 +396,6 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         entry.files = vec![ClipboardFile {
             file_id,
             size: webp.len() as u64,
-            mime: Some("image/webp".to_string()),
             available: false,
         }];
         let entry_id = entry.id.clone();
@@ -1435,7 +1433,7 @@ fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         let history = state.history.lock().map_err(|error| error.to_string())?;
         history_path_for_key(&state.histories_dir, &history.active_history)
     };
-    register_cached_file(&database_path, &download.file_id, download.expected_size, None)?;
+    register_cached_file(&database_path, &download.file_id, download.expected_size)?;
     state
         .history
         .lock()
@@ -1716,13 +1714,11 @@ mod tests {
         let first = ClipboardFile {
             file_id: hash_bytes(b"first"),
             size: 1,
-            mime: None,
             available: false,
         };
         let second = ClipboardFile {
             file_id: hash_bytes(b"second"),
             size: 2,
-            mime: None,
             available: false,
         };
         assert_eq!(

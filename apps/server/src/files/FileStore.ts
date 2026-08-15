@@ -6,8 +6,9 @@ import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
+const SCHEMA_VERSION = 2;
 
-type FileRow = { file_id: string; size: number; mime: string | null; stored: number };
+type FileRow = { file_id: string; size: number; stored: number };
 
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
@@ -22,17 +23,20 @@ export class FileStore {
   }
 
   applySchema(): void {
+    const version = (this.database.prepare("PRAGMA user_version").get() as
+      { user_version: number } | undefined)?.user_version ?? 0;
+    if (version !== SCHEMA_VERSION) this.reset();
     this.database.exec(`
       -- Rows describe bytes, never entries: 'stored' says whether the server
-      -- actually holds them, 'size'/'mime' are known as soon as any entry
-      -- references the content so peers can render totals before upload.
+      -- actually holds them, while size is known as soon as an entry refers to
+      -- the content so peers can render totals before upload.
       CREATE TABLE IF NOT EXISTS files (
         file_id TEXT PRIMARY KEY,
         size INTEGER NOT NULL,
-        mime TEXT,
         stored INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       );
+      PRAGMA user_version = ${SCHEMA_VERSION};
     `);
   }
 
@@ -59,12 +63,12 @@ export class FileStore {
     return path;
   }
 
-  store(fileId: string, size: number, mime?: string): void {
+  store(fileId: string, size: number): void {
     this.database.prepare(`
-      INSERT INTO files (file_id, size, mime, stored, created_at)
-      VALUES (?, ?, ?, 1, ?)
+      INSERT INTO files (file_id, size, stored, created_at)
+      VALUES (?, ?, 1, ?)
       ON CONFLICT(file_id) DO UPDATE SET stored = 1, size = excluded.size
-    `).run(fileId, size, mime ?? null, new Date().toISOString());
+    `).run(fileId, size, new Date().toISOString());
   }
 
   has(fileId: string): boolean {
@@ -84,23 +88,23 @@ export class FileStore {
   // that peers can see sizes before the upload happens.
   register(files: readonly ClipboardFile[]): void {
     const insert = this.database.prepare(`
-      INSERT INTO files (file_id, size, mime, stored, created_at)
-      VALUES (?, ?, ?, 0, ?)
+      INSERT INTO files (file_id, size, stored, created_at)
+      VALUES (?, ?, 0, ?)
       ON CONFLICT(file_id) DO NOTHING
     `);
     const now = new Date().toISOString();
     for (const file of files) {
-      if (FILE_ID_PATTERN.test(file.fileId)) insert.run(file.fileId, file.size, file.mime ?? null, now);
+      if (FILE_ID_PATTERN.test(file.fileId)) insert.run(file.fileId, file.size, now);
     }
   }
 
-  // Fills in size, mime and availability for a list of content ids.
+  // Fills in size and availability for a list of content ids.
   describe(fileIds: readonly string[]): ClipboardFile[] {
     if (fileIds.length === 0) return [];
     const known = new Map<string, FileRow>();
     for (const batch of chunk(fileIds, QUERY_BATCH)) {
       const rows = this.database.prepare(`
-        SELECT file_id, size, mime, stored FROM files
+        SELECT file_id, size, stored FROM files
         WHERE file_id IN (${batch.map(() => "?").join(",")})
       `).all(...batch) as Array<FileRow>;
       for (const file of rows) known.set(file.file_id, file);
@@ -110,7 +114,6 @@ export class FileStore {
       return {
         fileId,
         size: file?.size ?? 0,
-        mime: file?.mime ?? undefined,
         available: Boolean(file?.stored),
       };
     });

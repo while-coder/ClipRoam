@@ -17,7 +17,6 @@ export const FileIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
 export const ClipboardFileSchema = z.object({
   fileId: FileIdSchema,
   size: z.number().int().nonnegative(),
-  mime: z.string().nullish().transform((value) => value ?? undefined),
   available: z.boolean().default(false),
 });
 
@@ -115,7 +114,6 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     transferId: z.string().uuid(),
     fileId: FileIdSchema,
     size: z.number().int().nonnegative(),
-    mime: z.string().nullish().transform((value) => value ?? undefined),
   }),
   z.object({
     type: z.literal("file.download"),

@@ -19,7 +19,7 @@ use crate::content::{
     LocalSources,
 };
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 pub const MAX_UNPINNED_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
@@ -196,7 +196,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             CREATE TABLE IF NOT EXISTS files (
                 file_id TEXT PRIMARY KEY,
                 size INTEGER NOT NULL,
-                mime TEXT,
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS hash_cache (
@@ -506,13 +505,12 @@ pub fn register_cached_file(
     database_path: &Path,
     file_id: &str,
     size: u64,
-    mime: Option<&str>,
 ) -> Result<(), String> {
     let connection = open_history_database(database_path)?;
     connection
         .execute(
-            "INSERT INTO files (file_id, size, mime, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size, mime = COALESCE(excluded.mime, files.mime)",
-            params![file_id, size, mime, now_rfc3339()],
+            "INSERT INTO files (file_id, size, created_at) VALUES (?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size",
+            params![file_id, size, now_rfc3339()],
         )
         .map_err(|error| error.to_string())?;
     Ok(())
