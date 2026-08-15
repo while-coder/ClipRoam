@@ -1,6 +1,7 @@
 import {
   AuthResponseSchema,
   DEFAULT_AUTO_UPLOAD_LIMIT,
+  ENTRY_FETCH_BATCH,
   FILE_CHUNK_SIZE,
   ServerMessageSchema,
   type AuthResponse,
@@ -12,9 +13,12 @@ import {
 } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
 
+import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
+
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
 
-type FileUploadSource = { fullPath: string; size: number; modifiedAt: number };
+/** `stored` means the server already holds the content, so nothing is sent. */
+type UploadReady = { stored: true } | { stored: false; offset: number };
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -189,7 +193,7 @@ export class SyncClient {
     file?: ClipboardFile;
   }>();
   #uploadReady = new Map<string, {
-    resolve: (ready: { fileId: string; offset: number }) => void;
+    resolve: (ready: UploadReady) => void;
     reject: (error: Error) => void;
     timer: number;
   }>();
@@ -203,7 +207,7 @@ export class SyncClient {
     reject: (error: Error) => void;
     timer: number;
   }>();
-  #entryUploads = new Map<string, Promise<ClipboardEntry>>();
+  #entryUploads = new Map<string, Promise<void>>();
 
   constructor(
     private readonly url: string,
@@ -254,113 +258,106 @@ export class SyncClient {
     this.#entryFetches.clear();
   }
 
-  async publish(entry: ClipboardEntry): Promise<ClipboardEntry> {
+  async publish(entry: ClipboardEntry): Promise<void> {
     // Publish the metadata first. Other devices can then retrieve the original
     // from this online device while the server copy is still uploading.
     this.#publishEntry(entry);
-    return this.#uploadAndPublish(entry, this.autoUploadLimit, false);
+    await this.#uploadEntry(entry, this.autoUploadLimit, false);
   }
 
-  async restore(entry: ClipboardEntry): Promise<ClipboardEntry> {
+  async restore(entry: ClipboardEntry): Promise<void> {
     // A snapshot can show that the server no longer has this entry. Do not
     // treat a WebSocket send as success: retain the local entry until the
-    // server echoes it back, then restore locally available files as well.
+    // server echoes it back, then re-upload whatever it is missing.
     await this.#publishAndConfirm(entry);
-    return this.#uploadAndPublish(entry, this.autoUploadLimit, false, true, true);
+    await this.#uploadEntry(entry, this.autoUploadLimit, false, true);
   }
 
-  async upload(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    return this.#uploadAndPublish(entry, MANUAL_UPLOAD_LIMIT, true);
+  async upload(entry: ClipboardEntry): Promise<void> {
+    // A manual upload can be the first time the server learns about this entry.
+    // Without the reference, garbage collection would reclaim the contents that
+    // were just uploaded.
+    this.#publishEntry(entry);
+    await this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, true);
   }
 
   async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     const entries: ClipboardEntry[] = [];
-    for (let index = 0; index < entryIds.length; index += 200) {
-      entries.push(...await this.#fetchEntryBatch(entryIds.slice(index, index + 200)));
+    for (let index = 0; index < entryIds.length; index += ENTRY_FETCH_BATCH) {
+      entries.push(
+        ...await this.#fetchEntryBatch(entryIds.slice(index, index + ENTRY_FETCH_BATCH)),
+      );
     }
     return entries;
   }
 
-  async #uploadAndPublish(
+  async #uploadEntry(
     entry: ClipboardEntry,
     sizeLimit: number,
     reportFailures: boolean,
     forceUpload = false,
-    confirmPublish = false,
-  ): Promise<ClipboardEntry> {
+  ): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
     if (existingUpload) return existingUpload;
 
-    const upload = (async () => {
-      const updatedEntry = await this.#uploadFiles(entry, sizeLimit, reportFailures, forceUpload);
-      if (updatedEntry !== entry) {
-        if (confirmPublish) await this.#publishAndConfirm(updatedEntry);
-        else this.#publishEntry(updatedEntry);
-      }
-      return updatedEntry;
-    })();
+    const upload = this.#uploadFiles(entry, sizeLimit, reportFailures, forceUpload);
     this.#entryUploads.set(entry.id, upload);
     try {
-      return await upload;
+      await upload;
     } finally {
       this.#entryUploads.delete(entry.id);
     }
   }
 
+  /**
+   * Content ids are known before publishing, so a finished upload never changes
+   * the entry — the server just learns it now holds those bytes.
+   */
   async #uploadFiles(
     entry: ClipboardEntry,
     sizeLimit: number,
     reportFailures: boolean,
     forceUpload: boolean,
-  ): Promise<ClipboardEntry> {
-    if (entry.kind !== "files" && entry.kind !== "image") return entry;
-    const candidates = entry.files.filter((file) => (
-      file.size < sizeLimit && (forceUpload || file.location !== "server")
+  ): Promise<void> {
+    if (entry.kind !== "files" && entry.kind !== "image") return;
+    const files = await invoke<ClipboardFile[]>("list_entry_files", { entryId: entry.id });
+    const candidates = files.filter((file) => (
+      file.size < sizeLimit && (forceUpload || !file.available)
     ));
     if (!candidates.length) {
       if (reportFailures) throw new Error("没有小于 100 MB 的未上传文件");
-      return entry;
+      return;
     }
 
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
-    const uploadedBytesByFileId = new Map(candidates.map((file) => [file.id, 0]));
+    const uploadedByFileId = new Map(candidates.map((file) => [file.fileId, 0]));
     this.handlers.onUploadProgress(entry.id, 0, totalBytes);
     try {
-      const results = await Promise.allSettled(candidates.map(async (file) => {
-        const serverFileId = await this.#uploadFile(entry, file, (fileUploadedBytes) => {
-          uploadedBytesByFileId.set(file.id, fileUploadedBytes);
-          const uploadedBytes = [...uploadedBytesByFileId.values()].reduce(
-            (total, bytes) => total + bytes,
-            0,
-          );
-          this.handlers.onUploadProgress(entry.id, uploadedBytes, totalBytes);
-        });
-        return { localFileId: file.id, serverFileId };
-      }));
-      const uploadedFileIds = new Map(
-        results.flatMap((result) => result.status === "fulfilled" ? [[result.value.localFileId, result.value.serverFileId] as const] : []),
+      const results = await mapWithConcurrency(
+        candidates,
+        TRANSFER_CONCURRENCY,
+        async (file) => {
+          await this.#uploadFile(entry, file, (fileUploadedBytes) => {
+            uploadedByFileId.set(file.fileId, fileUploadedBytes);
+            const uploadedBytes = [...uploadedByFileId.values()].reduce(
+              (total, bytes) => total + bytes,
+              0,
+            );
+            this.handlers.onUploadProgress(entry.id, uploadedBytes, totalBytes);
+          });
+          return file.fileId;
+        },
       );
-      const updatedEntry = uploadedFileIds.size
-        ? {
-          ...entry,
-          files: entry.files.map((file) => {
-            const serverFileId = uploadedFileIds.get(file.id);
-            return serverFileId
-              ? { ...file, id: serverFileId, location: "server" as const }
-              : file;
-          }),
-        }
-        : entry;
-
-      if (uploadedFileIds.size) await invoke("upsert_remote_entry", { entry: updatedEntry });
+      const uploaded = results.flatMap((result) => (
+        result.status === "fulfilled" ? [result.value] : []
+      ));
+      if (uploaded.length) {
+        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds: uploaded });
+      }
       if (reportFailures) {
         const failure = results.find((result) => result.status === "rejected");
-        if (failure?.status === "rejected") {
-          if (uploadedFileIds.size) this.#publishEntry(updatedEntry);
-          throw failure.reason;
-        }
+        if (failure?.status === "rejected") throw failure.reason;
       }
-      return updatedEntry;
     } finally {
       this.handlers.onUploadFinished(entry.id);
     }
@@ -376,13 +373,11 @@ export class SyncClient {
         content: entry.content,
         html: entry.html,
         rtf: entry.rtf,
+        tree: entry.tree,
         files: entry.files.map((file) => ({
-          id: file.id,
-          name: file.name,
+          fileId: file.fileId,
           size: file.size,
           mime: file.mime,
-          sha256: file.sha256,
-          location: file.location,
           available: file.available,
         })),
         sourceDeviceId: entry.sourceDeviceId,
@@ -472,7 +467,7 @@ export class SyncClient {
     const transferId = crypto.randomUUID();
     await invoke("begin_file_download", {
       transferId,
-      fileName: file.name,
+      fileId: file.fileId,
       expectedSize: file.size,
     });
     try {
@@ -481,7 +476,7 @@ export class SyncClient {
         type: "file.download",
         transferId,
         entryId: entry.id,
-        fileId: file.id,
+        fileId: file.fileId,
         sourceDeviceId: entry.sourceDeviceId,
       })) {
         this.#rejectTransfer(transferId, "同步服务未连接");
@@ -539,16 +534,11 @@ export class SyncClient {
     entry: ClipboardEntry,
     file: ClipboardFile,
     onProgress: (uploadedBytes: number) => void,
-  ): Promise<string> {
-    const source = await invoke<FileUploadSource>("get_file_upload_source", {
-      entryId: entry.id,
-      fileId: file.id,
-    });
-    if (source.size !== file.size) throw new Error("本机文件大小已变化，请重新复制后再上传");
+  ): Promise<void> {
     while (!this.#stopped) {
       try {
-        const ready = await this.#uploadFileOnce(entry, file, source, onProgress);
-        return ready.fileId;
+        await this.#uploadFileOnce(entry, file, onProgress);
+        return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
         await this.#waitForConnection();
@@ -560,20 +550,17 @@ export class SyncClient {
   async #uploadFileOnce(
     entry: ClipboardEntry,
     file: ClipboardFile,
-    source: FileUploadSource,
     onProgress: (uploadedBytes: number) => void,
-  ): Promise<{ fileId: string; offset: number }> {
+  ): Promise<void> {
     const transferId = crypto.randomUUID();
     const completed = this.#waitForTransfer(transferId);
     const ready = this.#waitForUploadReady(transferId);
     if (!this.#send({
       type: "file.upload.begin",
       transferId,
-      entryId: entry.id,
-      clientId: entry.clientId ?? entry.id,
-      fileFullPath: source.fullPath,
-      fileModifiedAt: source.modifiedAt,
-      file,
+      fileId: file.fileId,
+      size: file.size,
+      mime: file.mime,
     })) {
       this.#rejectTransfer(transferId, "同步服务未连接");
       this.#rejectUploadReady(transferId, "同步服务未连接");
@@ -582,6 +569,13 @@ export class SyncClient {
     }
     try {
       const upload = await ready;
+      // The server already had these bytes, so the transfer is over before it
+      // began — this is what makes copying a folder twice nearly free.
+      if (upload.stored) {
+        onProgress(file.size);
+        await completed;
+        return;
+      }
       const resumeOffset = upload.offset;
       if (resumeOffset > file.size) throw new Error("服务器续传偏移超出文件大小");
       onProgress(resumeOffset);
@@ -589,7 +583,7 @@ export class SyncClient {
       for (let offset = resumeOffset; offset < file.size; offset += FILE_CHUNK_SIZE) {
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
         const data = await invoke<string>("read_file_chunk", {
-          entryId: entry.id, fileId: file.id, offset, length,
+          entryId: entry.id, fileId: file.fileId, offset, length,
         });
         if (!this.#send({ type: "file.chunk", transferId, data })) {
           this.#rejectTransfer(transferId, "同步服务未连接");
@@ -604,7 +598,6 @@ export class SyncClient {
         this.#rejectTransfer(transferId, "同步服务未连接");
       }
       await completed;
-      return upload;
     } catch (error) {
       await completed.catch(() => undefined);
       throw error;
@@ -623,8 +616,8 @@ export class SyncClient {
     });
   }
 
-  #waitForUploadReady(transferId: string): Promise<{ fileId: string; offset: number }> {
-    return new Promise<{ fileId: string; offset: number }>((resolve, reject) => {
+  #waitForUploadReady(transferId: string): Promise<UploadReady> {
+    return new Promise<UploadReady>((resolve, reject) => {
       const timer = window.setTimeout(
         () => {
           this.#rejectUploadReady(transferId, "服务器未接受文件上传");
@@ -636,12 +629,12 @@ export class SyncClient {
     });
   }
 
-  #resolveUploadReady(transferId: string, fileId: string, offset: number): void {
+  #resolveUploadReady(transferId: string, ready: UploadReady): void {
     const transfer = this.#uploadReady.get(transferId);
     if (!transfer) return;
     window.clearTimeout(transfer.timer);
     this.#uploadReady.delete(transferId);
-    transfer.resolve({ fileId, offset });
+    transfer.resolve(ready);
   }
 
   #rejectUploadReady(transferId: string, message: string): void {
@@ -691,10 +684,14 @@ export class SyncClient {
     const message = result.data;
     switch (message.type) {
       case "file.uploaded":
+        // Sent either instead of `file.upload.ready` (instant upload) or after
+        // the last chunk; resolving a ready waiter that is already gone is a
+        // no-op, so both cases share this branch.
+        this.#resolveUploadReady(message.transferId, { stored: true });
         this.#resolveTransfer(message.transferId);
         return;
       case "file.upload.ready":
-        this.#resolveUploadReady(message.transferId, message.fileId, message.offset);
+        this.#resolveUploadReady(message.transferId, { stored: false, offset: message.offset });
         return;
       case "file.failed":
         this.#rejectUploadReady(message.transferId, message.message);
@@ -717,12 +714,7 @@ export class SyncClient {
         if (!transfer?.entryId || !transfer.file) return;
         try {
           await transfer.writeChain;
-          await invoke("finish_file_download", {
-            transferId: message.transferId,
-            entryId: transfer.entryId,
-            fileId: transfer.file.id,
-            fileName: transfer.file.name,
-          });
+          await invoke("finish_file_download", { transferId: message.transferId });
           this.#resolveTransfer(message.transferId);
         } catch (error) {
           this.#rejectTransfer(message.transferId, String(error));

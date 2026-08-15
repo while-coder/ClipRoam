@@ -1,0 +1,747 @@
+//! Local persistence for the clipboard history.
+//!
+//! Entry rows stay small and are rewritten freely; trees, content lists and
+//! local sources live in `entry_contents` and are only written at the three
+//! points that actually change them (capture, hashing, remote upsert), so
+//! pinning or pasting never rewrites megabytes of tree JSON.
+
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use uuid::Uuid;
+
+use crate::content::{
+    refresh_summary, ClipboardEntry, ClipboardEntryExtra, ClipboardFile, ClipboardTree, LocalSources,
+};
+
+pub const SCHEMA_VERSION: i64 = 2;
+pub const MAX_UNPINNED_ENTRIES: usize = 200;
+pub const LOCAL_HISTORY_KEY: &str = "local";
+pub const HASH_CACHE_LIMIT: i64 = 20_000;
+pub const DOWNLOAD_PART_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+
+#[derive(Debug)]
+pub struct HistoryData {
+    pub histories: HashMap<String, Vec<ClipboardEntry>>,
+    pub active_history: String,
+    pub last_clipboard: String,
+    pub last_file_signature: String,
+    pub last_image_signature: String,
+    pub device_id: String,
+    pub device_name: String,
+    /// Content ids this machine has a blob for. Kept in memory so refreshing a
+    /// summary never touches the disk.
+    pub cached_files: HashSet<String>,
+}
+
+impl Default for HistoryData {
+    fn default() -> Self {
+        Self {
+            histories: HashMap::new(),
+            active_history: default_active_history(),
+            last_clipboard: String::new(),
+            last_file_signature: String::new(),
+            last_image_signature: String::new(),
+            device_id: Uuid::new_v4().to_string(),
+            device_name: std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .unwrap_or_else(|_| "This device".to_string()),
+            cached_files: HashSet::new(),
+        }
+    }
+}
+
+impl HistoryData {
+    pub fn active_entries(&self) -> &[ClipboardEntry] {
+        self.histories
+            .get(&self.active_history)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn active_entries_mut(&mut self) -> &mut Vec<ClipboardEntry> {
+        self.histories.entry(self.active_history.clone()).or_default()
+    }
+
+    pub fn find(&self, entry_id: &str) -> Option<&ClipboardEntry> {
+        self.active_entries()
+            .iter()
+            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+    }
+
+    pub fn find_mut(&mut self, entry_id: &str) -> Option<&mut ClipboardEntry> {
+        self.active_entries_mut()
+            .iter_mut()
+            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+    }
+}
+
+pub fn default_active_history() -> String {
+    LOCAL_HISTORY_KEY.to_string()
+}
+
+pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
+    histories_dir
+        .join(format!("{}-{:016x}", safe_history_directory_name(key), stable_key_hash(key)))
+        .join("history.sqlite")
+}
+
+pub fn cache_dir_for(histories_dir: &Path, key: &str) -> PathBuf {
+    history_path_for_key(histories_dir, key)
+        .parent()
+        .expect("history file always has a parent directory")
+        .join("files")
+}
+
+fn safe_history_directory_name(key: &str) -> String {
+    let name = key
+        .strip_prefix("account:")
+        .unwrap_or(key)
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if name.is_empty() {
+        "local".to_string()
+    } else {
+        name
+    }
+}
+
+fn stable_key_hash(key: &str) -> u64 {
+    key.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// Content addressing changed the storage layout outright, so a database from
+/// an older schema is reset rather than migrated.
+pub fn open_history_database(path: &Path) -> Result<Connection, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    connection
+        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+        .map_err(|error| error.to_string())?;
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if version != SCHEMA_VERSION {
+        connection
+            .execute_batch(
+                "
+                DROP TABLE IF EXISTS entries_fts;
+                DROP TABLE IF EXISTS entry_tags;
+                DROP TABLE IF EXISTS tags;
+                DROP TABLE IF EXISTS entry_contents;
+                DROP TABLE IF EXISTS files;
+                DROP TABLE IF EXISTS hash_cache;
+                DROP TABLE IF EXISTS upload_sessions;
+                DROP TABLE IF EXISTS entries;
+                DROP TABLE IF EXISTS metadata;
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent.join("files"));
+        }
+    }
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS entries (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                extra TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                pinned INTEGER NOT NULL,
+                source_device_id TEXT NOT NULL,
+                source_app TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
+            CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
+            CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
+            CREATE TABLE IF NOT EXISTS entry_contents (
+                entry_id TEXT PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+                tree TEXT,
+                files TEXT,
+                sources TEXT
+            );
+            CREATE TABLE IF NOT EXISTS files (
+                file_id TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                mime TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS hash_cache (
+                source TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                file_id TEXT NOT NULL,
+                used_at INTEGER NOT NULL,
+                PRIMARY KEY (source, size, modified_at)
+            );
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE
+            );
+            CREATE TABLE IF NOT EXISTS entry_tags (
+                entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (entry_id, tag_id)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+                entry_id UNINDEXED,
+                content,
+                file_names,
+                pinyin
+            );
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+        .map_err(|error| error.to_string())?;
+    Ok(connection)
+}
+
+pub fn load_history(path: &Path, key: &str) -> HistoryData {
+    let mut history = HistoryData {
+        active_history: key.to_string(),
+        ..HistoryData::default()
+    };
+    let Ok(connection) = open_history_database(path) else {
+        history.histories.insert(key.to_string(), Vec::new());
+        return history;
+    };
+
+    if let Ok(mut statement) = connection.prepare("SELECT key, value FROM metadata") {
+        if let Ok(rows) = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+            for (name, value) in rows.flatten() {
+                match name.as_str() {
+                    "last_clipboard" => history.last_clipboard = value,
+                    "last_file_signature" => history.last_file_signature = value,
+                    "last_image_signature" => history.last_image_signature = value,
+                    "device_id" => history.device_id = value,
+                    "device_name" => history.device_name = value,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut entries = Vec::new();
+    if let Ok(mut statement) = connection.prepare(
+        "SELECT id, client_id, kind, content, extra, source_device_id, created_at, pinned FROM entries ORDER BY pinned DESC, created_at DESC",
+    ) {
+        if let Ok(rows) = statement.query_map([], |row| {
+            let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>(4)?).unwrap_or_default();
+            Ok(ClipboardEntry {
+                id: row.get(0)?,
+                client_id: row.get(1)?,
+                kind: row.get(2)?,
+                content: row.get(3)?,
+                html: extra.html,
+                rtf: extra.rtf,
+                tree: None,
+                files: Vec::new(),
+                source_device_id: row.get(5)?,
+                created_at: row.get(6)?,
+                pinned: row.get::<_, i64>(7)? != 0,
+                summary: Default::default(),
+                sources: LocalSources::default(),
+            })
+        }) {
+            entries.extend(rows.flatten());
+        }
+    }
+
+    let mut contents = HashMap::new();
+    if let Ok(mut statement) = connection.prepare("SELECT entry_id, tree, files, sources FROM entry_contents") {
+        if let Ok(rows) = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        }) {
+            for (entry_id, tree, files, sources) in rows.flatten() {
+                contents.insert(entry_id, (tree, files, sources));
+            }
+        }
+    }
+    for entry in &mut entries {
+        let Some((tree, files, sources)) = contents.remove(&entry.id) else {
+            continue;
+        };
+        entry.tree = tree.and_then(|raw| serde_json::from_str::<ClipboardTree>(&raw).ok());
+        entry.files = files
+            .and_then(|raw| serde_json::from_str::<Vec<ClipboardFile>>(&raw).ok())
+            .unwrap_or_default();
+        entry.sources = sources
+            .and_then(|raw| serde_json::from_str::<LocalSources>(&raw).ok())
+            .unwrap_or_default();
+    }
+
+    history.cached_files = load_cached_files(&connection);
+    history.histories.insert(key.to_string(), entries);
+    let cache_dir = cache_dir_for_path(path);
+    refresh_summaries(&mut history, &cache_dir);
+    history
+}
+
+pub fn cache_dir_for_path(path: &Path) -> PathBuf {
+    path.parent()
+        .expect("history file always has a parent directory")
+        .join("files")
+}
+
+fn load_cached_files(connection: &Connection) -> HashSet<String> {
+    let Ok(mut statement) = connection.prepare("SELECT file_id FROM files") else {
+        return HashSet::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return HashSet::new();
+    };
+    rows.flatten().collect()
+}
+
+pub fn refresh_summaries(history: &mut HistoryData, cache_dir: &Path) {
+    let HistoryData {
+        histories,
+        active_history,
+        cached_files,
+        ..
+    } = history;
+    let Some(entries) = histories.get_mut(active_history) else {
+        return;
+    };
+    for entry in entries.iter_mut() {
+        refresh_summary(entry, cached_files, cache_dir);
+    }
+}
+
+pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_dir: &Path) {
+    let HistoryData {
+        histories,
+        active_history,
+        cached_files,
+        ..
+    } = history;
+    let Some(entries) = histories.get_mut(active_history) else {
+        return;
+    };
+    if let Some(entry) = entries
+        .iter_mut()
+        .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+    {
+        refresh_summary(entry, cached_files, cache_dir);
+    }
+}
+
+/// Writes the small entry rows plus metadata. Contents are inserted only when
+/// missing — callers that changed a tree must persist it explicitly.
+pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
+    let mut connection = open_history_database(path)?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM entries_fts", [])
+        .map_err(|error| error.to_string())?;
+    let entry_ids = history
+        .active_entries()
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    if entry_ids.is_empty() {
+        transaction
+            .execute("DELETE FROM entries", [])
+            .map_err(|error| error.to_string())?;
+    } else {
+        let placeholders = std::iter::repeat("?").take(entry_ids.len()).collect::<Vec<_>>().join(", ");
+        transaction
+            .execute(
+                &format!("DELETE FROM entries WHERE id NOT IN ({placeholders})"),
+                params_from_iter(entry_ids),
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    for entry in history.active_entries() {
+        let extra = serde_json::to_string(&ClipboardEntryExtra {
+            html: entry.html.clone(),
+            rtf: entry.rtf.clone(),
+        })
+        .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "INSERT INTO entries (id, client_id, kind, content, extra, created_at, pinned, source_device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, kind = excluded.kind, content = excluded.content, extra = excluded.extra, created_at = excluded.created_at, pinned = excluded.pinned, source_device_id = excluded.source_device_id",
+                params![
+                    entry.id,
+                    entry.client_id,
+                    entry.kind,
+                    entry.content,
+                    extra,
+                    entry.created_at,
+                    entry.pinned,
+                    entry.source_device_id,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        write_entry_contents(&transaction, entry, false)?;
+        transaction
+            .execute(
+                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, '')",
+                params![entry.id, entry.content, searchable_names(entry)],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    for (key, value) in [
+        ("last_clipboard", history.last_clipboard.as_str()),
+        ("last_file_signature", history.last_file_signature.as_str()),
+        ("last_image_signature", history.last_image_signature.as_str()),
+        ("device_id", history.device_id.as_str()),
+        ("device_name", history.device_name.as_str()),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn searchable_names(entry: &ClipboardEntry) -> String {
+    entry
+        .tree
+        .as_ref()
+        .map(|tree| {
+            tree.roots
+                .iter()
+                .map(|root| root.name.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+pub fn write_entry_contents(connection: &Connection, entry: &ClipboardEntry, overwrite: bool) -> Result<(), String> {
+    if entry.tree.is_none() && entry.files.is_empty() && entry.sources.files.is_empty() {
+        return Ok(());
+    }
+    let tree = entry
+        .tree
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let files = serde_json::to_string(&entry.files).map_err(|error| error.to_string())?;
+    let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
+    let conflict = if overwrite {
+        "ON CONFLICT(entry_id) DO UPDATE SET tree = excluded.tree, files = excluded.files, sources = excluded.sources"
+    } else {
+        "ON CONFLICT(entry_id) DO NOTHING"
+    };
+    connection
+        .execute(
+            &format!("INSERT INTO entry_contents (entry_id, tree, files, sources) VALUES (?, ?, ?, ?) {conflict}"),
+            params![entry.id, tree, files, sources],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Records a blob this machine now holds. The content pool is independent of
+/// entries, so this never rewrites history rows.
+pub fn register_cached_blob(
+    database_path: &Path,
+    file_id: &str,
+    size: u64,
+    mime: Option<&str>,
+) -> Result<(), String> {
+    let connection = open_history_database(database_path)?;
+    connection
+        .execute(
+            "INSERT INTO files (file_id, size, mime, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size, mime = COALESCE(excluded.mime, files.mime)",
+            params![file_id, size, mime, now_rfc3339()],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
+    let file_id = connection
+        .query_row(
+            "SELECT file_id FROM hash_cache WHERE source = ? AND size = ? AND modified_at = ?",
+            params![source, size, modified_at],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    let _ = connection.execute(
+        "UPDATE hash_cache SET used_at = ? WHERE source = ? AND size = ? AND modified_at = ?",
+        params![now_millis() as i64, source, size, modified_at],
+    );
+    Some(file_id)
+}
+
+pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, file_id: &str) {
+    let _ = connection.execute(
+        "INSERT INTO hash_cache (source, size, modified_at, file_id, used_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, size, modified_at) DO UPDATE SET file_id = excluded.file_id, used_at = excluded.used_at",
+        params![source, size, modified_at, file_id, now_millis() as i64],
+    );
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM hash_cache", [], |row| row.get(0))
+        .unwrap_or_default();
+    if count > HASH_CACHE_LIMIT {
+        let _ = connection.execute(
+            "DELETE FROM hash_cache WHERE rowid IN (SELECT rowid FROM hash_cache ORDER BY used_at ASC LIMIT ?)",
+            params![count / 2],
+        );
+    }
+}
+
+/// Mark-sweep over the local cache: blobs nothing references, rebuilt views for
+/// entries that are gone, and abandoned partial downloads.
+pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) -> Result<usize, String> {
+    let cache_dir = cache_dir_for(histories_dir, &history.active_history);
+    let mut referenced = HashSet::new();
+    let mut entry_ids = HashSet::new();
+    for entry in history.active_entries() {
+        entry_ids.insert(entry.id.clone());
+        if let Some(tree) = &entry.tree {
+            for node in &tree.files {
+                if !node.f.is_empty() {
+                    referenced.insert(node.f.clone());
+                }
+            }
+        }
+    }
+
+    let mut removed = Vec::new();
+    if let Ok(shards) = fs::read_dir(cache_dir.join("blobs")) {
+        for shard in shards.filter_map(Result::ok) {
+            let Ok(blobs) = fs::read_dir(shard.path()) else {
+                continue;
+            };
+            for blob in blobs.filter_map(Result::ok) {
+                let file_id = blob.file_name().to_string_lossy().into_owned();
+                if referenced.contains(&file_id) {
+                    continue;
+                }
+                if fs::remove_file(blob.path()).is_ok() {
+                    removed.push(file_id);
+                }
+            }
+            let _ = fs::remove_dir(shard.path());
+        }
+    }
+    if let Ok(views) = fs::read_dir(cache_dir.join("views")) {
+        for view in views.filter_map(Result::ok) {
+            if !entry_ids.contains(&view.file_name().to_string_lossy().into_owned()) {
+                let _ = fs::remove_dir_all(view.path());
+            }
+        }
+    }
+    if let Ok(parts) = fs::read_dir(cache_dir.join("parts")) {
+        let now = now_millis();
+        for part in parts.filter_map(Result::ok) {
+            let expired = part
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|age| now.saturating_sub(age.as_millis() as u64) > DOWNLOAD_PART_TTL_MS)
+                .unwrap_or(true);
+            if expired {
+                let _ = fs::remove_file(part.path());
+            }
+        }
+    }
+
+    if !removed.is_empty() {
+        let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
+        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        for chunk in removed.chunks(500) {
+            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(", ");
+            transaction
+                .execute(
+                    &format!("DELETE FROM files WHERE file_id IN ({placeholders})"),
+                    params_from_iter(chunk.iter()),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+        for file_id in &removed {
+            history.cached_files.remove(file_id);
+        }
+    }
+    Ok(removed.len())
+}
+
+pub fn trim_history(entries: &mut Vec<ClipboardEntry>) {
+    let mut unpinned = 0usize;
+    entries.retain(|entry| {
+        if entry.pinned {
+            true
+        } else {
+            unpinned += 1;
+            unpinned <= MAX_UNPINNED_ENTRIES
+        }
+    });
+}
+
+pub fn retain_single_history(history: &mut HistoryData, key: &str) {
+    let entries = history.histories.remove(key).unwrap_or_default();
+    history.histories.clear();
+    history.histories.insert(key.to_string(), entries);
+    history.active_history = key.to_string();
+}
+
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_database_supports_full_text_search() {
+        let directory = std::env::temp_dir().join(format!("cliproam-history-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        let connection = open_history_database(&path).expect("create history database");
+        connection
+            .execute(
+                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, ?)",
+                params!["entry-1", "ClipRoam local history", "note.txt", "cliproam"],
+            )
+            .expect("insert search entry");
+        let matches: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH 'cliproam'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query full text index");
+        drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary history database");
+        assert_eq!(matches, 1);
+    }
+
+    #[test]
+    fn opening_an_older_schema_resets_the_database() {
+        let directory = std::env::temp_dir().join(format!("cliproam-schema-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        let connection = open_history_database(&path).expect("create history database");
+        connection
+            .execute(
+                "INSERT INTO entries (id, client_id, kind, content, created_at, pinned, source_device_id) VALUES ('a', 'a', 'text', 'kept', '', 0, 'd')",
+                [],
+            )
+            .expect("insert entry");
+        connection.execute_batch("PRAGMA user_version = 1").expect("downgrade schema");
+        drop(connection);
+
+        let connection = open_history_database(&path).expect("reopen history database");
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count entries");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read schema version");
+        drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary history database");
+        assert_eq!(remaining, 0);
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn saving_history_keeps_contents_until_they_are_rewritten_explicitly() {
+        use crate::content::{ClipboardTreeFile, ClipboardTreeRoot};
+
+        let directory = std::env::temp_dir().join(format!("cliproam-contents-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        let tree = |file_id: &str| ClipboardTree {
+            v: crate::content::TREE_VERSION,
+            roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
+            dirs: vec!["bundle".to_string()],
+            files: vec![ClipboardTreeFile { p: "bundle/a.txt".to_string(), f: file_id.to_string() }],
+        };
+        let mut history = HistoryData {
+            active_history: LOCAL_HISTORY_KEY.to_string(),
+            ..HistoryData::default()
+        };
+        history.active_entries_mut().push(ClipboardEntry {
+            id: "entry".to_string(),
+            client_id: "entry".to_string(),
+            kind: "files".to_string(),
+            content: "bundle".to_string(),
+            html: None,
+            rtf: None,
+            // Hashing has not run yet, so the content id is still empty.
+            tree: Some(tree("")),
+            files: Vec::new(),
+            source_device_id: "device".to_string(),
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            pinned: false,
+            summary: Default::default(),
+            sources: LocalSources::default(),
+        });
+        save_history(&path, &history).expect("store history");
+
+        // Pinning, pasting or trimming all go through `save_history`, which must
+        // never clobber a tree the hash worker filled in the meantime.
+        let hashed = "a".repeat(64);
+        {
+            let connection = open_history_database(&path).expect("reopen database");
+            let mut updated = history.active_entries()[0].clone();
+            updated.tree = Some(tree(&hashed));
+            write_entry_contents(&connection, &updated, true).expect("persist hashed tree");
+        }
+        history.active_entries_mut()[0].pinned = true;
+        save_history(&path, &history).expect("store history again");
+
+        let reloaded = load_history(&path, LOCAL_HISTORY_KEY);
+        let entry = &reloaded.active_entries()[0];
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+        assert!(entry.pinned);
+        assert_eq!(entry.tree.as_ref().expect("tree").files[0].f, hashed);
+    }
+
+    #[test]
+    fn hash_cache_round_trips_and_evicts() {
+        let directory = std::env::temp_dir().join(format!("cliproam-hash-test-{}", Uuid::new_v4()));
+        let connection = open_history_database(&directory.join("history.sqlite")).expect("create database");
+        remember_hash(&connection, "C:/a.txt", 12, 99, "abc");
+        assert_eq!(cached_hash(&connection, "C:/a.txt", 12, 99).as_deref(), Some("abc"));
+        assert_eq!(cached_hash(&connection, "C:/a.txt", 13, 99), None);
+        drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+}

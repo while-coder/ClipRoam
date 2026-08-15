@@ -56,8 +56,4 @@ export class FileTransferService {
     this.#uploads.handleClientClose(client);
     this.#downloads.handleClientClose(client);
   }
-
-  removeEntry(userId: string, entryId: string): void {
-    this.#uploads.removeEntry(userId, entryId);
-  }
 }

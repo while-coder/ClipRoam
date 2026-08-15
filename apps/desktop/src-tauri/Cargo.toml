@@ -24,6 +24,7 @@ base64 = "0.22"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "webp"] }
 rfd = "0.15"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = { version = "5.4.1", features = ["std"] }

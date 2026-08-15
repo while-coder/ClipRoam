@@ -25,13 +25,3 @@ export function userDatabasePath(userId: string): string {
 export function userFilesDirectory(userId: string): string {
   return join(userDirectory(userId), "files");
 }
-
-export function legacyDatabasePaths(): string[] {
-  return [...new Set([
-    process.env.CLIPROAM_LEGACY_DATABASE,
-    process.env.CLIPROAM_DATABASE,
-    join(dataDirectory, "cliproam.sqlite"),
-    resolve(process.cwd(), "data", "cliproam.sqlite"),
-  ].filter((path): path is string => Boolean(path)).map((path) => resolve(path)))]
-    .filter((path) => path !== accountsDatabasePath);
-}

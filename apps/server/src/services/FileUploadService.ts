@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { appendFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, type Hash } from "node:crypto";
+import { appendFileSync, closeSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
 import type { ClientConnection, SendMessage } from "../app/Connection.js";
 import type { ServerConfig } from "../app/ServerConfig.js";
@@ -9,17 +9,19 @@ type UploadBegin = Extract<ClientMessage, { type: "file.upload.begin" }>;
 type Upload = {
   client: ClientConnection;
   userId: string;
-  deviceId: string;
-  entryId: string;
   fileId: string;
-  fileFullPath: string;
-  name: string;
+  mime?: string;
   expectedSize: number;
   receivedSize: number;
+  hash: Hash;
   temporaryPath: string;
   finalPath: string;
 };
 
+// Uploads are addressed by the sha256 of their content, which makes the server
+// side of a transfer stateless with respect to entries and devices: the same
+// bytes are always the same target, so a resumed upload — even from a different
+// device or a renamed file — continues the same partial file.
 export class FileUploadService {
   #uploads = new Map<string, Upload>();
 
@@ -30,50 +32,35 @@ export class FileUploadService {
   ) {}
 
   begin(client: ClientConnection, message: UploadBegin): void {
-    if (message.file.size >= this.config.maxStoredFileBytes) {
+    if (message.size >= this.config.maxStoredFileBytes) {
       this.send(client, { type: "file.failed", transferId: message.transferId, message: "文件超过服务器存储上限" });
       return;
     }
-    const entryId = this.store.entryIdForClientId(client.userId, message.clientId);
-    if (!entryId) {
-      this.send(client, { type: "file.failed", transferId: message.transferId, message: "剪贴板记录尚未创建" });
+    // Content the server already holds needs no transfer at all.
+    if (this.store.hasFile(client.userId, message.fileId)) {
+      this.send(client, { type: "file.uploaded", transferId: message.transferId, fileId: message.fileId });
       return;
     }
 
-    const existing = this.store.getUploadSession(client.userId, client.device.id, message.fileFullPath);
-    const matchesExistingFile = existing
-      && existing.fileSize === message.file.size
-      && existing.fileModifiedAt === message.fileModifiedAt;
-    if (existing && !matchesExistingFile) {
-      const staleFileId = this.store.deleteUploadSession(client.userId, client.device.id, message.fileFullPath);
-      if (staleFileId) rmSync(`${this.store.filePath(client.userId, staleFileId)}.part`, { force: true });
-    }
-
-    const fileId = matchesExistingFile ? existing.fileId : randomUUID();
-    const finalPath = this.store.filePath(client.userId, fileId);
+    const finalPath = this.store.prepareFilePath(client.userId, message.fileId);
     const temporaryPath = `${finalPath}.part`;
-    this.#cancelActiveUpload(client.userId, fileId);
-    const receivedSize = this.#preparePartialFile(temporaryPath, message.file.size);
-    this.store.saveUploadSession(client.userId, client.device.id, message.fileFullPath, entryId, {
-      fileId,
-      fileSize: message.file.size,
-      fileModifiedAt: message.fileModifiedAt,
-    });
+    this.#cancelActiveUpload(client.userId, message.fileId);
+    const receivedSize = this.#preparePartialFile(temporaryPath, message.size);
 
     this.#uploads.set(message.transferId, {
       client,
       userId: client.userId,
-      deviceId: client.device.id,
-      entryId,
-      fileId,
-      fileFullPath: message.fileFullPath,
-      name: message.file.name,
-      expectedSize: message.file.size,
+      fileId: message.fileId,
+      mime: message.mime,
+      expectedSize: message.size,
       receivedSize,
+      // Feeding the resumed bytes back in keeps the digest incremental, since a
+      // hash state cannot be persisted across connections.
+      hash: hashPrefix(temporaryPath, receivedSize),
       temporaryPath,
       finalPath,
     });
-    this.send(client, { type: "file.upload.ready", transferId: message.transferId, fileId, offset: receivedSize });
+    this.send(client, { type: "file.upload.ready", transferId: message.transferId, offset: receivedSize });
   }
 
   receiveChunk(client: ClientConnection, transferId: string, encodedData: string): boolean {
@@ -91,6 +78,7 @@ export class FileUploadService {
       return true;
     }
     appendFileSync(upload.temporaryPath, data);
+    upload.hash.update(data);
     return true;
   }
 
@@ -101,13 +89,14 @@ export class FileUploadService {
       this.#fail(transferId, "上传内容大小不完整", false);
       return true;
     }
+    // The declared hash decides where the content lands, so accepting bytes that
+    // do not match it would let one upload poison every reference to that hash.
+    if (upload.hash.digest("hex") !== upload.fileId) {
+      this.#fail(transferId, "文件内容校验失败", false);
+      return true;
+    }
     renameSync(upload.temporaryPath, upload.finalPath);
-    this.store.storeFile(upload.userId, upload.entryId, upload.fileId, {
-      path: upload.finalPath,
-      size: upload.expectedSize,
-      name: upload.name,
-    });
-    this.store.deleteUploadSession(upload.userId, upload.deviceId, upload.fileFullPath);
+    this.store.storeFile(upload.userId, upload.fileId, upload.expectedSize, upload.mime);
     this.#uploads.delete(transferId);
     this.send(client, { type: "file.uploaded", transferId, fileId: upload.fileId });
     return true;
@@ -124,16 +113,6 @@ export class FileUploadService {
     for (const [transferId, upload] of this.#uploads) {
       if (upload.client === client) this.#fail(transferId, "源设备已离线");
     }
-  }
-
-  removeEntry(userId: string, entryId: string): void {
-    const partialFileIds = this.store.deleteUploadSessionsForEntry(userId, entryId);
-    for (const [transferId, upload] of this.#uploads) {
-      if (upload.userId === userId && upload.entryId === entryId) {
-        this.#fail(transferId, "剪贴板记录已删除", false);
-      }
-    }
-    for (const fileId of partialFileIds) rmSync(`${this.store.filePath(userId, fileId)}.part`, { force: true });
   }
 
   #cancelActiveUpload(userId: string, fileId: string): void {
@@ -165,4 +144,23 @@ export class FileUploadService {
     this.#uploads.delete(transferId);
     this.send(upload.client, { type: "file.failed", transferId, message });
   }
+}
+
+function hashPrefix(path: string, byteLength: number): Hash {
+  const hash = createHash("sha256");
+  if (byteLength <= 0) return hash;
+  const descriptor = openSync(path, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(FILE_CHUNK_SIZE);
+    let read = 0;
+    while (read < byteLength) {
+      const bytes = readSync(descriptor, buffer, 0, Math.min(buffer.length, byteLength - read), read);
+      if (bytes <= 0) break;
+      hash.update(buffer.subarray(0, bytes));
+      read += bytes;
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash;
 }
