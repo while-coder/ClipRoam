@@ -5,15 +5,14 @@
       "name": "Launch Server",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/server/debug/index.js",
+      "runtimeArgs": ["--import", "tsx"],
+      "program": "${workspaceFolder}/apps/server/src/index.ts",
       "cwd": "${workspaceFolder}/apps/server",
-      "preLaunchTask": "launch:server",
+      "preLaunchTask": "ClipRoam: prep server dev",
       "env": {
         "CLIPROAM_ADMIN_PASSWORD": "admin"
       },
       "console": "integratedTerminal",
-      "sourceMaps": true,
-      "outFiles": ["${workspaceFolder}/apps/server/debug/**/*.js"],
       "skipFiles": ["<node_internals>/**"]
     },
     {
@@ -22,7 +21,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam.exe",
       "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
-      "preLaunchTask": "ClipRoam: dev app"
+      "preLaunchTask": "ClipRoam: prep app dev"
     }
   ]
 }
