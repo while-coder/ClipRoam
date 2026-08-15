@@ -15,14 +15,15 @@ use std::{
 use uuid::Uuid;
 
 use crate::content::{
-    refresh_summary, ClipboardEntry, ClipboardEntryExtra, ClipboardFile, ClipboardTree, LocalSources,
+    cached_file_path, refresh_summary, ClipboardEntry, ClipboardEntryExtra, ClipboardFile, ClipboardTree,
+    LocalSources,
 };
 
 pub const SCHEMA_VERSION: i64 = 2;
 pub const MAX_UNPINNED_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
-pub const DOWNLOAD_PART_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 
 #[derive(Debug)]
 pub struct HistoryData {
@@ -70,13 +71,13 @@ impl HistoryData {
     pub fn find(&self, entry_id: &str) -> Option<&ClipboardEntry> {
         self.active_entries()
             .iter()
-            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+            .find(|entry| entry.id == entry_id)
     }
 
     pub fn find_mut(&mut self, entry_id: &str) -> Option<&mut ClipboardEntry> {
         self.active_entries_mut()
             .iter_mut()
-            .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+            .find(|entry| entry.id == entry_id)
     }
 }
 
@@ -248,22 +249,22 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
 
     let mut entries = Vec::new();
     if let Ok(mut statement) = connection.prepare(
-        "SELECT id, client_id, kind, content, extra, source_device_id, created_at, pinned FROM entries ORDER BY pinned DESC, created_at DESC",
+        "SELECT id, kind, content, extra, source_device_id, created_at, pinned FROM entries ORDER BY pinned DESC, created_at DESC",
     ) {
         if let Ok(rows) = statement.query_map([], |row| {
             let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>(4)?).unwrap_or_default();
             Ok(ClipboardEntry {
                 id: row.get(0)?,
-                client_id: row.get(1)?,
-                kind: row.get(2)?,
-                content: row.get(3)?,
+                kind: row.get(1)?,
+                content: row.get(2)?,
                 html: extra.html,
                 rtf: extra.rtf,
+                thumbnail: extra.thumbnail,
                 tree: None,
                 files: Vec::new(),
-                source_device_id: row.get(5)?,
-                created_at: row.get(6)?,
-                pinned: row.get::<_, i64>(7)? != 0,
+                source_device_id: row.get(4)?,
+                created_at: row.get(5)?,
+                pinned: row.get::<_, i64>(6)? != 0,
                 summary: Default::default(),
                 sources: LocalSources::default(),
             })
@@ -300,9 +301,12 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
             .unwrap_or_default();
     }
 
-    history.cached_files = load_cached_files(&connection);
-    history.histories.insert(key.to_string(), entries);
     let cache_dir = cache_dir_for_path(path);
+    history.cached_files = load_cached_files(&connection)
+        .into_iter()
+        .filter(|file_id| cached_file_path(&cache_dir, file_id).is_some())
+        .collect();
+    history.histories.insert(key.to_string(), entries);
     refresh_summaries(&mut history, &cache_dir);
     history
 }
@@ -350,7 +354,7 @@ pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_di
     };
     if let Some(entry) = entries
         .iter_mut()
-        .find(|entry| entry.id == entry_id || entry.client_id == entry_id)
+        .find(|entry| entry.id == entry_id)
     {
         refresh_summary(entry, cached_files, cache_dir);
     }
@@ -386,6 +390,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
         let extra = serde_json::to_string(&ClipboardEntryExtra {
             html: entry.html.clone(),
             rtf: entry.rtf.clone(),
+            thumbnail: entry.thumbnail.clone(),
         })
         .map_err(|error| error.to_string())?;
         transaction
@@ -393,7 +398,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
                 "INSERT INTO entries (id, client_id, kind, content, extra, created_at, pinned, source_device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, kind = excluded.kind, content = excluded.content, extra = excluded.extra, created_at = excluded.created_at, pinned = excluded.pinned, source_device_id = excluded.source_device_id",
                 params![
                     entry.id,
-                    entry.client_id,
+                    entry.id,
                     entry.kind,
                     entry.content,
                     extra,
@@ -468,9 +473,9 @@ pub fn write_entry_contents(connection: &Connection, entry: &ClipboardEntry, ove
     Ok(())
 }
 
-/// Records a blob this machine now holds. The content pool is independent of
+/// Records a local content file this machine now holds. The content pool is independent of
 /// entries, so this never rewrites history rows.
-pub fn register_cached_blob(
+pub fn register_cached_file(
     database_path: &Path,
     file_id: &str,
     size: u64,
@@ -519,8 +524,8 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
     }
 }
 
-/// Mark-sweep over the local cache: blobs nothing references, rebuilt views for
-/// entries that are gone, and abandoned partial downloads.
+/// Mark-sweep over local uploads, downloaded content, and views for entries
+/// that are gone. Incomplete downloads expire after one day.
 pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) -> Result<usize, String> {
     let cache_dir = cache_dir_for(histories_dir, &history.active_history);
     let mut referenced = HashSet::new();
@@ -537,21 +542,27 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
     }
 
     let mut removed = Vec::new();
-    if let Ok(shards) = fs::read_dir(cache_dir.join("blobs")) {
-        for shard in shards.filter_map(Result::ok) {
-            let Ok(blobs) = fs::read_dir(shard.path()) else {
+    for directory in [cache_dir.join("upload").join("images"), cache_dir.join("download")] {
+        let Ok(files) = fs::read_dir(directory) else {
+            continue;
+        };
+        for file in files.filter_map(Result::ok) {
+            let file_id = file.file_name().to_string_lossy().into_owned();
+            if referenced.contains(&file_id) && history.cached_files.contains(&file_id) {
                 continue;
-            };
-            for blob in blobs.filter_map(Result::ok) {
-                let file_id = blob.file_name().to_string_lossy().into_owned();
-                if referenced.contains(&file_id) {
-                    continue;
-                }
-                if fs::remove_file(blob.path()).is_ok() {
+            }
+            let expired = file
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|time| now_millis().saturating_sub(time.as_millis() as u64) > DOWNLOAD_TTL_MS)
+                .unwrap_or(true);
+            if !referenced.contains(&file_id) || expired {
+                if fs::remove_file(file.path()).is_ok() {
                     removed.push(file_id);
                 }
             }
-            let _ = fs::remove_dir(shard.path());
         }
     }
     if let Ok(views) = fs::read_dir(cache_dir.join("views")) {
@@ -561,22 +572,6 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
             }
         }
     }
-    if let Ok(parts) = fs::read_dir(cache_dir.join("parts")) {
-        let now = now_millis();
-        for part in parts.filter_map(Result::ok) {
-            let expired = part
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|age| now.saturating_sub(age.as_millis() as u64) > DOWNLOAD_PART_TTL_MS)
-                .unwrap_or(true);
-            if expired {
-                let _ = fs::remove_file(part.path());
-            }
-        }
-    }
-
     if !removed.is_empty() {
         let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
@@ -699,11 +694,11 @@ mod tests {
         };
         history.active_entries_mut().push(ClipboardEntry {
             id: "entry".to_string(),
-            client_id: "entry".to_string(),
             kind: "files".to_string(),
             content: "bundle".to_string(),
             html: None,
             rtf: None,
+            thumbnail: None,
             // Hashing has not run yet, so the content id is still empty.
             tree: Some(tree("")),
             files: Vec::new(),

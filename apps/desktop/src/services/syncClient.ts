@@ -26,6 +26,7 @@ type SyncHandlers = {
   onDevicePresence: (device: Device) => void;
   onEntry: (entry: ClipboardEntry) => void;
   onDelete: (entryId: string) => void;
+  onLocalSourceLost: (entryId: string) => void;
   onUploadProgress: (entryId: string, uploadedBytes: number, totalBytes: number) => void;
   onUploadFinished: (entryId: string) => void;
   onError: (message: string) => void;
@@ -351,6 +352,14 @@ export class SyncClient {
       const uploaded = results.flatMap((result) => (
         result.status === "fulfilled" ? [result.value] : []
       ));
+      const sourceWasLost = results.some((result) => (
+        result.status === "rejected"
+        && String(result.reason).includes("复制的源文件已删除或移动")
+      ));
+      if (sourceWasLost) {
+        this.handlers.onLocalSourceLost(entry.id);
+        return;
+      }
       if (uploaded.length) {
         await invoke("mark_files_uploaded", { entryId: entry.id, fileIds: uploaded });
       }
@@ -365,14 +374,14 @@ export class SyncClient {
 
   #publishEntry(entry: ClipboardEntry): boolean {
     return this.#send({
-      type: "clipboard.publish",
-      entry: {
-        id: entry.id,
-        clientId: entry.clientId,
-        kind: entry.kind,
+        type: "clipboard.publish",
+        entry: {
+          id: entry.id,
+          kind: entry.kind,
         content: entry.content,
         html: entry.html,
         rtf: entry.rtf,
+        thumbnail: entry.thumbnail,
         tree: entry.tree,
         files: entry.files.map((file) => ({
           fileId: file.fileId,
@@ -401,33 +410,33 @@ export class SyncClient {
   }
 
   #waitForPublishConfirmation(entry: ClipboardEntry): Promise<void> {
-    const clientId = entry.clientId ?? entry.id;
+    const entryId = entry.id;
     return new Promise<void>((resolve, reject) => {
       const timer = window.setTimeout(
-        () => this.#rejectPublishConfirmation(clientId, "剪贴板同步确认超时"),
+        () => this.#rejectPublishConfirmation(entryId, "剪贴板同步确认超时"),
         30_000,
       );
-      this.#publishConfirmations.set(clientId, { resolve, reject, timer });
+      this.#publishConfirmations.set(entryId, { resolve, reject, timer });
       if (!this.#publishEntry(entry)) {
-        this.#rejectPublishConfirmation(clientId, "同步服务未连接");
+        this.#rejectPublishConfirmation(entryId, "同步服务未连接");
       }
     });
   }
 
   #resolvePublishConfirmation(entry: ClipboardEntry): void {
-    const clientId = entry.clientId ?? entry.id;
-    const confirmation = this.#publishConfirmations.get(clientId);
+    const entryId = entry.id;
+    const confirmation = this.#publishConfirmations.get(entryId);
     if (!confirmation) return;
     window.clearTimeout(confirmation.timer);
-    this.#publishConfirmations.delete(clientId);
+    this.#publishConfirmations.delete(entryId);
     confirmation.resolve();
   }
 
-  #rejectPublishConfirmation(clientId: string, message: string): void {
-    const confirmation = this.#publishConfirmations.get(clientId);
+  #rejectPublishConfirmation(entryId: string, message: string): void {
+    const confirmation = this.#publishConfirmations.get(entryId);
     if (!confirmation) return;
     window.clearTimeout(confirmation.timer);
-    this.#publishConfirmations.delete(clientId);
+    this.#publishConfirmations.delete(entryId);
     confirmation.reject(new Error(message));
   }
 

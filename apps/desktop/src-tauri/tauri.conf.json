@@ -43,7 +43,10 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/histories/*/files/images/*"]
+        "scope": [
+          "$APPDATA/histories/*/files/upload/images/*",
+          "$APPDATA/histories/*/files/download/*"
+        ]
       }
     }
   },
