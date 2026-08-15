@@ -39,11 +39,13 @@ export const ClipboardTreeSchema = z.object({
 
 export const ClipboardEntrySchema = z.object({
   id: z.string(),
-  clientId: z.string().uuid().optional(),
   kind: ClipboardKindSchema,
   content: z.string(),
   html: z.string().optional(),
   rtf: z.string().optional(),
+  // A small WebP data payload for image-list rendering. Full-resolution image
+  // bytes remain in the content pool and are only fetched for preview/paste.
+  thumbnail: z.string().max(96 * 1024).optional(),
   tree: ClipboardTreeSchema.nullish().transform((value) => value ?? undefined),
   files: z.array(ClipboardFileSchema).default([]),
   sourceDeviceId: z.string(),
@@ -55,7 +57,6 @@ export const ClipboardEntrySchema = z.object({
 // fetched only for records missing from the local history.
 export const ClipboardManifestEntrySchema = z.object({
   id: z.string(),
-  clientId: z.string().uuid().optional(),
 });
 
 export const DeviceSchema = z.object({

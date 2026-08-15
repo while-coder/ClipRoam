@@ -46,9 +46,6 @@ export class ClipRoamStore {
   upsert(userId: string, entry: ClipboardEntry): ClipboardEntry {
     return this.#userStore(userId).upsert(entry);
   }
-  entryIdForClientId(userId: string, clientId: string): string | undefined {
-    return this.#userStore(userId).entryIdForClientId(clientId);
-  }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
   // Content pools are per user: never de-duplicating across accounts keeps one
   // user from probing for another's files through instant upload.

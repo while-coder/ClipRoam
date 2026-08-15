@@ -23,22 +23,24 @@ use tauri::{
 };
 #[cfg(not(target_os = "windows"))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use uuid::Uuid;
 
 use content::{
-    blob_path, collect_tree, describe_roots, file_entry_signature, file_signature, hash_bytes, hash_file,
-    new_tree, preserve_local_sources, readable_path, rebuild_entry_files, rebuild_tree,
+    collect_tree, describe_roots, download_path, file_entry_signature, file_signature, hash_bytes, hash_file,
+    local_source_was_lost, new_tree, preserve_local_sources, readable_path, rebuild_entry_files, rebuild_tree,
+    upload_image_path,
     ClipboardEntry, ClipboardFile, ClipboardTreeFile, ClipboardTreeRoot, LocalSources,
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, open_history_database, refresh_entry_summary, register_cached_blob, remember_hash,
+    load_history, open_history_database, refresh_entry_summary, register_cached_file, remember_hash,
     retain_single_history, save_history, trim_history, write_entry_contents, HistoryData, LOCAL_HISTORY_KEY,
 };
 
 const TRAY_SHOW_MAIN: &str = "show-main";
 const TRAY_QUIT: &str = "quit";
 const FILE_CHUNK_LIMIT: usize = 128 * 1024;
+const THUMBNAIL_MAX_EDGE: u32 = 64;
+const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
 const HASH_PROGRESS_BATCH: usize = 32;
@@ -192,15 +194,41 @@ fn image_signature(image: &[u8]) -> String {
     format!("{}:{hash:016x}", image.len())
 }
 
+/// Entry identity is owned by the capturing device. The NUL separator keeps
+/// the two variable-length inputs unambiguous while preserving the requested
+/// `sha256(content + deviceId)` identity model.
+fn entry_id(content: &str, device_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    hasher.update([0]);
+    hasher.update(device_id.as_bytes());
+    content::to_hex(&hasher.finalize())
+}
+
+fn entry_id_for_files(files: &[ClipboardFile], device_id: &str, fallback: &str) -> String {
+    let mut file_ids = files
+        .iter()
+        .map(|file| file.file_id.as_str())
+        .filter(|file_id| !file_id.is_empty())
+        .collect::<Vec<_>>();
+    file_ids.sort_unstable();
+    file_ids.dedup();
+    let identity = if file_ids.is_empty() {
+        fallback.to_string()
+    } else {
+        file_ids.join("\n")
+    };
+    entry_id(&identity, device_id)
+}
+
 fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
-    let client_id = Uuid::new_v4().to_string();
     ClipboardEntry {
-        id: client_id.clone(),
-        client_id,
+        id: entry_id(&content, &device_id),
         kind: kind.to_string(),
         content,
         html: None,
         rtf: None,
+        thumbnail: None,
         tree: None,
         files: Vec::new(),
         source_device_id: device_id,
@@ -323,7 +351,7 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
     {
         return Ok(());
     }
-    let (webp, width, height) = encode_image_as_webp(&image)?;
+    let (webp, width, height, thumbnail) = encode_image_as_webp(&image)?;
     // The bytes are already in memory, so hashing is immediate and the entry
     // never passes through the background queue.
     let file_id = hash_bytes(&webp);
@@ -333,14 +361,14 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
             return Ok(());
         }
         let cache_dir = active_cache_dir(&state, &history);
-        let blob = blob_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
-        if let Some(parent) = blob.parent() {
+        let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
+        if let Some(parent) = image_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        if !blob.is_file() {
-            fs::write(&blob, &webp).map_err(|error| error.to_string())?;
+        if !image_path.is_file() {
+            fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
         }
-        register_cached_blob(
+        register_cached_file(
             &history_path_for_key(&state.histories_dir, &history.active_history),
             &file_id,
             webp.len() as u64,
@@ -353,7 +381,9 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
 
         let device_id = history.device_id.clone();
         let name = format!("{}.webp", &file_id[..16]);
-        let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id);
+        let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id.clone());
+        entry.id = entry_id(&file_id, &device_id);
+        entry.thumbnail = thumbnail;
         let mut tree = new_tree();
         tree.roots.push(ClipboardTreeRoot {
             name: name.clone(),
@@ -457,6 +487,7 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
 
     // A second connection keeps the hash cache off the UI thread's connection.
     let connection = open_history_database(&history_path_for_key(&state.histories_dir, &history_key))?;
+    let mut current_entry_id = entry_id.to_string();
     let mut batch = Vec::new();
     for item in pending {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
@@ -468,16 +499,17 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
         });
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            if !apply_hashes(app, entry_id, &batch, false)? {
+            let Some(updated_entry_id) = apply_hashes(app, &current_entry_id, &batch, false)? else {
                 return Ok(());
-            }
+            };
+            current_entry_id = updated_entry_id;
             batch.clear();
         }
     }
-    if !apply_hashes(app, entry_id, &batch, true)? {
+    let Some(final_entry_id) = apply_hashes(app, &current_entry_id, &batch, true)? else {
         return Ok(());
-    }
-    app.emit("cliproam://entry-ready", entry_id)
+    };
+    app.emit("cliproam://entry-ready", final_entry_id)
         .map_err(|error| error.to_string())
 }
 
@@ -488,18 +520,22 @@ fn apply_hashes(
     entry_id: &str,
     resolved: &[(String, Option<String>)],
     persist: bool,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let state = app.state::<AppState>();
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let cache_dir = active_cache_dir(&state, &history);
-    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let device_id = history.device_id.clone();
+    let current_entry_index = history
+        .active_entries()
+        .iter()
+        .position(|entry| entry.id == entry_id);
     let hashes = resolved
         .iter()
         .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
         .collect::<HashMap<_, _>>();
-    {
+    let final_entry_id = {
         let Some(entry) = history.find_mut(entry_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         if let Some(tree) = entry.tree.as_mut() {
             tree.files.retain_mut(|node| match hashes.get(node.p.as_str()) {
@@ -521,15 +557,27 @@ fn apply_hashes(
         });
         rebuild_entry_files(entry);
         if persist {
-            let connection = open_history_database(&history_path)?;
-            write_entry_contents(&connection, entry, true)?;
+            entry.id = entry_id_for_files(&entry.files, &device_id, &entry.content);
+        }
+        entry.id.clone()
+    };
+    if persist && final_entry_id != entry_id {
+        let entries = history.active_entries_mut();
+        if let Some(index) = entries.iter().enumerate().find_map(|(index, entry)| {
+            (Some(index) != current_entry_index && entry.id == final_entry_id).then_some(index)
+        })
+        {
+            entries.remove(index);
         }
     }
-    refresh_entry_summary(&mut history, entry_id, &cache_dir);
+    refresh_entry_summary(&mut history, &final_entry_id, &cache_dir);
+    if persist {
+        save_active_history(&state, &history)?;
+    }
     drop(history);
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())?;
-    Ok(true)
+    Ok(Some(final_entry_id))
 }
 
 #[cfg(target_os = "windows")]
@@ -603,7 +651,7 @@ fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
     })
 }
 
-fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32, Option<String>), String> {
     let decoded = image::load_from_memory_with_format(image, ImageFormat::Bmp)
         .map_err(|error| error.to_string())?;
     let (width, height) = decoded.dimensions();
@@ -611,7 +659,18 @@ fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
     decoded
         .write_to(&mut output, ImageFormat::WebP)
         .map_err(|error| error.to_string())?;
-    Ok((output.into_inner(), width, height))
+    let thumbnail = decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE);
+    let mut thumbnail_output = Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut thumbnail_output, ImageFormat::WebP)
+        .map_err(|error| error.to_string())?;
+    let thumbnail = thumbnail_output.into_inner();
+    Ok((
+        output.into_inner(),
+        width,
+        height,
+        (thumbnail.len() <= THUMBNAIL_MAX_BYTES).then(|| BASE64.encode(thumbnail)),
+    ))
 }
 
 fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
@@ -746,29 +805,22 @@ fn upsert_remote_entry(
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let entries = history.active_entries_mut();
-        if let Some(local) = entries.iter().find(|item| {
-            item.id == entry.id || (!entry.client_id.is_empty() && item.client_id == entry.client_id)
-        }) {
+        if let Some(local) = entries.iter().find(|item| item.id == entry.id) {
             preserve_local_sources(&mut entry, local);
-            if entry.id == entry.client_id && local.id != local.client_id {
-                entry.id = local.id.clone();
-            }
         }
-        entries.retain(|item| {
-            item.id != entry.id && (entry.client_id.is_empty() || item.client_id != entry.client_id)
-        });
+        entries.retain(|item| item.id != entry.id);
         let entry_id = entry.id.clone();
         entries.push(entry);
         entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         trim_history(entries);
-        // The server is authoritative for a remote entry, so its contents
-        // replace whatever was stored before.
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
+        save_active_history(&state, &history)?;
+        // The entry row must exist before its contents can be replaced: the
+        // latter has a foreign key to `entries`.
         if let Some(entry) = history.find(&entry_id) {
             let connection = open_history_database(&history_path)?;
             write_entry_contents(&connection, entry, true)?;
         }
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        save_active_history(&state, &history)?;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -1157,16 +1209,29 @@ fn read_file_chunk(
     offset: u64,
     length: usize,
 ) -> Result<String, String> {
-    let path = {
+    let (path, source_was_lost) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
         let entry = history
             .find(&entry_id)
             .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        readable_path(&cache_dir, &history.cached_files, entry, &file_id)
-            .ok_or_else(|| "本机文件内容不可用".to_string())?
+        let source_was_lost = local_source_was_lost(entry, &file_id);
+        let path = readable_path(&cache_dir, &history.cached_files, entry, &file_id).ok_or_else(|| {
+            if source_was_lost {
+                "复制的源文件已删除或移动".to_string()
+            } else {
+                "本机文件内容不可用".to_string()
+            }
+        })?;
+        (path, source_was_lost)
     };
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut file = fs::File::open(path).map_err(|error| {
+        if source_was_lost {
+            "复制的源文件已删除或移动".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
     file.seek(SeekFrom::Start(offset))
         .map_err(|error| error.to_string())?;
     let mut bytes = vec![0; length.min(FILE_CHUNK_LIMIT)];
@@ -1182,12 +1247,14 @@ fn begin_file_download(
     file_id: String,
     expected_size: u64,
 ) -> Result<(), String> {
-    let parts_dir = {
+    let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        active_cache_dir(&state, &history).join("parts")
+        download_path(&active_cache_dir(&state, &history), &file_id)
+            .ok_or_else(|| "内容标识不合法".to_string())?
     };
-    fs::create_dir_all(&parts_dir).map_err(|error| error.to_string())?;
-    let path = parts_dir.join(format!("{}.part", safe_file_name(&transfer_id)));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
     fs::File::create(&path).map_err(|error| error.to_string())?;
     state
         .downloads
@@ -1229,8 +1296,8 @@ fn append_file_download(
         .map_err(|error| error.to_string())
 }
 
-/// Verifying the digest is what makes the blob cache trustworthy: the content id
-/// decides the path, so unverified bytes could poison every future reference.
+/// A completed download is retained at `files/download/<fileId>` only after
+/// its digest matches the id used by history and sync.
 #[tauri::command(rename_all = "camelCase")]
 fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
     let download = state
@@ -1248,24 +1315,11 @@ fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         return Err("文件内容校验失败".to_string());
     }
 
-    let (blob, database_path) = {
+    let database_path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        (
-            blob_path(&cache_dir, &download.file_id).ok_or_else(|| "内容标识不合法".to_string())?,
-            history_path_for_key(&state.histories_dir, &history.active_history),
-        )
+        history_path_for_key(&state.histories_dir, &history.active_history)
     };
-    if let Some(parent) = blob.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    if blob.exists() {
-        let _ = fs::remove_file(&blob);
-    }
-    fs::rename(&download.path, &blob).map_err(|error| error.to_string())?;
-    register_cached_blob(&database_path, &download.file_id, download.expected_size, None)?;
-    // The blob cache is independent of entries, so nothing else has to be
-    // rewritten — thousands of downloads stay O(1) each.
+    register_cached_file(&database_path, &download.file_id, download.expected_size, None)?;
     state
         .history
         .lock()
@@ -1516,8 +1570,9 @@ mod tests {
             .write_to(&mut bmp, ImageFormat::Bmp)
             .unwrap();
 
-        let (webp, width, height) = encode_image_as_webp(&bmp.into_inner()).unwrap();
+        let (webp, width, height, thumbnail) = encode_image_as_webp(&bmp.into_inner()).unwrap();
         assert_eq!((width, height), (16, 12));
+        assert!(thumbnail.is_some());
         assert_eq!(image::guess_format(&webp).unwrap(), ImageFormat::WebP);
 
         let restored_bmp = decode_image_as_bmp(&webp).unwrap();
@@ -1525,6 +1580,37 @@ mod tests {
             .unwrap()
             .to_rgba8();
         assert_eq!(restored, source);
+    }
+
+    #[test]
+    fn entry_id_is_stable_per_content_and_device() {
+        assert_eq!(entry_id("same", "device"), entry_id("same", "device"));
+        assert_ne!(entry_id("same", "device"), entry_id("other", "device"));
+        assert_ne!(entry_id("same", "device"), entry_id("same", "other-device"));
+    }
+
+    #[test]
+    fn file_entry_id_is_order_independent_and_deduplicated() {
+        let first = ClipboardFile {
+            file_id: hash_bytes(b"first"),
+            size: 1,
+            mime: None,
+            available: false,
+        };
+        let second = ClipboardFile {
+            file_id: hash_bytes(b"second"),
+            size: 2,
+            mime: None,
+            available: false,
+        };
+        assert_eq!(
+            entry_id_for_files(
+                &[first.clone(), second.clone(), first.clone()],
+                "device",
+                "fallback",
+            ),
+            entry_id_for_files(&[second, first], "device", "fallback"),
+        );
     }
 
     #[test]

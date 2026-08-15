@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -22,7 +21,6 @@ const SCHEMA_VERSION = 2;
 
 type EntryRow = {
   id: string;
-  client_id: string;
   kind: string;
   content: string;
   extra: string;
@@ -87,7 +85,7 @@ export class UserDataStore {
   list(): ClipboardEntry[] {
     const rows = this.#database
       .prepare(`
-        SELECT id, client_id, kind, content, extra, source_device_id, created_at, pinned
+        SELECT id, kind, content, extra, source_device_id, created_at, pinned
         FROM clipboard_entries
         ORDER BY created_at DESC
       `)
@@ -103,7 +101,7 @@ export class UserDataStore {
     for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
       const rows = this.#database
         .prepare(`
-          SELECT id, client_id, kind, content, extra, source_device_id, created_at, pinned
+          SELECT id, kind, content, extra, source_device_id, created_at, pinned
           FROM clipboard_entries
           WHERE id IN (${batch.map(() => "?").join(",")})
           ORDER BY created_at DESC
@@ -121,9 +119,9 @@ export class UserDataStore {
   // for it would parse every directory tree in the account.
   listManifest(): ClipboardManifestEntry[] {
     const rows = this.#database
-      .prepare("SELECT id, client_id FROM clipboard_entries ORDER BY created_at DESC")
-      .all() as Array<{ id: string; client_id: string }>;
-    return rows.map((row) => ({ id: row.id, clientId: row.client_id }));
+      .prepare("SELECT id FROM clipboard_entries ORDER BY created_at DESC")
+      .all() as Array<{ id: string }>;
+    return rows;
   }
 
   upsertDevice(device: Device): void {
@@ -152,15 +150,9 @@ export class UserDataStore {
   }
 
   upsert(entry: ClipboardEntry): ClipboardEntry {
-    const clientId = entry.clientId ?? entry.id;
-    const existing = this.#database
-      .prepare("SELECT id FROM clipboard_entries WHERE client_id = ?")
-      .get(clientId) as { id: string } | undefined;
-    const storedEntry: ClipboardEntry = {
-      ...entry,
-      id: existing?.id ?? randomUUID(),
-      clientId,
-    };
+    // Entry IDs are deterministically generated on the capturing device.
+    // The legacy `client_id` column is deliberately written with the same ID.
+    const storedEntry = entry;
     this.#transaction(() => {
       this.#database.prepare(`
         INSERT INTO clipboard_entries (
@@ -176,12 +168,13 @@ export class UserDataStore {
           pinned = excluded.pinned
       `).run(
         storedEntry.id,
-        clientId,
+        storedEntry.id,
         storedEntry.kind,
         storedEntry.content,
         JSON.stringify({
           html: storedEntry.html,
           rtf: storedEntry.rtf,
+          thumbnail: storedEntry.thumbnail,
           tree: storedEntry.tree,
         }),
         storedEntry.sourceDeviceId,
@@ -191,12 +184,6 @@ export class UserDataStore {
       this.files.register(storedEntry.files);
     });
     return { ...storedEntry, files: this.#contentsOf(storedEntry.tree) };
-  }
-
-  entryIdForClientId(clientId: string): string | undefined {
-    return (this.#database
-      .prepare("SELECT id FROM clipboard_entries WHERE client_id = ?")
-      .get(clientId) as { id: string } | undefined)?.id;
   }
 
   // Content is shared across entries, so deletion only drops the reference.
@@ -224,9 +211,9 @@ export class UserDataStore {
     const result = ClipboardEntrySchema.safeParse({
       html: extra.html,
       rtf: extra.rtf,
+      thumbnail: extra.thumbnail,
       tree: extra.tree,
       id: row.id,
-      clientId: row.client_id,
       kind: row.kind,
       content: row.content,
       files: this.#contentsOf(extra.tree),
@@ -248,8 +235,8 @@ export class UserDataStore {
   }
 }
 
-function parseExtra(extra: string): { html?: string; rtf?: string; tree?: ClipboardTree } {
-  let raw: { html?: unknown; rtf?: unknown; tree?: unknown };
+function parseExtra(extra: string): { html?: string; rtf?: string; thumbnail?: string; tree?: ClipboardTree } {
+  let raw: { html?: unknown; rtf?: unknown; thumbnail?: unknown; tree?: unknown };
   try {
     raw = JSON.parse(extra) as typeof raw;
   } catch {
@@ -259,7 +246,9 @@ function parseExtra(extra: string): { html?: string; rtf?: string; tree?: Clipbo
   return {
     html: typeof raw.html === "string" ? raw.html : undefined,
     rtf: typeof raw.rtf === "string" ? raw.rtf : undefined,
+    thumbnail: typeof raw.thumbnail === "string" && raw.thumbnail.length <= 96 * 1024
+      ? raw.thumbnail
+      : undefined,
     tree: tree?.success ? tree.data : undefined,
   };
 }
-

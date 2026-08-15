@@ -107,14 +107,16 @@ pub struct EntrySummary {
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntry {
     pub id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub client_id: String,
     pub kind: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtf: Option<String>,
+    /// Base64-encoded WebP thumbnail carried with image metadata, so lists do
+    /// not need the full-resolution clipboard image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<ClipboardTree>,
     #[serde(default)]
@@ -134,6 +136,7 @@ pub struct ClipboardEntry {
 pub struct ClipboardEntryExtra {
     pub html: Option<String>,
     pub rtf: Option<String>,
+    pub thumbnail: Option<String>,
 }
 
 pub struct CollectedTree {
@@ -178,8 +181,19 @@ pub fn is_file_id(value: &str) -> bool {
 
 /// Content ids decide where bytes land on disk, so the shape is validated
 /// before it is ever turned into a path.
-pub fn blob_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
-    is_file_id(file_id).then(|| cache_dir.join("blobs").join(&file_id[..2]).join(file_id))
+pub fn upload_image_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
+    is_file_id(file_id).then(|| cache_dir.join("upload").join("images").join(file_id))
+}
+
+pub fn download_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
+    is_file_id(file_id).then(|| cache_dir.join("download").join(file_id))
+}
+
+pub fn cached_file_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
+    [upload_image_path(cache_dir, file_id), download_path(cache_dir, file_id)]
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
 }
 
 pub fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
@@ -446,6 +460,18 @@ pub fn local_source_of(entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf>
         })
 }
 
+/// A recorded source existed for this content, but it no longer resolves to
+/// the same file. This is distinct from content that only lives on another
+/// device and therefore must be downloaded rather than discarded.
+pub fn local_source_was_lost(entry: &ClipboardEntry, file_id: &str) -> bool {
+    entry
+        .sources
+        .files
+        .iter()
+        .any(|source| source.file_id.as_deref() == Some(file_id))
+        && local_source_of(entry, file_id).is_none()
+}
+
 pub fn readable_path(
     cache_dir: &Path,
     cached: &HashSet<String>,
@@ -453,7 +479,7 @@ pub fn readable_path(
     file_id: &str,
 ) -> Option<PathBuf> {
     if cached.contains(file_id) {
-        if let Some(path) = blob_path(cache_dir, file_id).filter(|path| path.is_file()) {
+        if let Some(path) = cached_file_path(cache_dir, file_id) {
             return Some(path);
         }
     }
@@ -667,11 +693,11 @@ mod tests {
         let remote = hash_bytes(b"remote");
         let mut entry = ClipboardEntry {
             id: "entry".to_string(),
-            client_id: String::new(),
             kind: "files".to_string(),
             content: String::new(),
             html: None,
             rtf: None,
+            thumbnail: None,
             tree: Some(ClipboardTree {
                 v: TREE_VERSION,
                 roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
@@ -720,14 +746,18 @@ mod tests {
     }
 
     #[test]
-    fn blob_path_rejects_ids_that_are_not_content_hashes() {
+    fn cache_paths_reject_ids_that_are_not_content_hashes() {
         let cache = Path::new("cache");
-        assert!(blob_path(cache, "../escape").is_none());
-        assert!(blob_path(cache, &"A".repeat(64)).is_none());
+        assert!(upload_image_path(cache, "../escape").is_none());
+        assert!(download_path(cache, &"A".repeat(64)).is_none());
         let file_id = hash_bytes(b"content");
         assert_eq!(
-            blob_path(cache, &file_id).unwrap(),
-            cache.join("blobs").join(&file_id[..2]).join(&file_id)
+            upload_image_path(cache, &file_id).unwrap(),
+            cache.join("upload").join("images").join(&file_id)
+        );
+        assert_eq!(
+            download_path(cache, &file_id).unwrap(),
+            cache.join("download").join(&file_id)
         );
     }
 }
