@@ -48,6 +48,11 @@ export class ClipRoamServer {
     );
   }
 
+  get adminUrl(): string {
+    const protocol = this.#tls.status.enabled ? "https" : "http";
+    return `${protocol}://localhost:${this.config.port}/admin`;
+  }
+
   async start(): Promise<void> {
     await this.#app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
     this.#registerRoutes();

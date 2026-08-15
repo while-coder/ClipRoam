@@ -5,14 +5,15 @@
       "name": "Launch Server",
       "type": "node",
       "request": "launch",
-      "runtimeArgs": ["--import", "tsx"],
-      "program": "${workspaceFolder}/apps/server/src/index.ts",
+      "program": "${workspaceFolder}/apps/server/debug/index.js",
       "cwd": "${workspaceFolder}/apps/server",
-      "preLaunchTask": "ClipRoam: prep server dev",
+      "preLaunchTask": "launch:server",
       "env": {
         "CLIPROAM_ADMIN_PASSWORD": "admin"
       },
       "console": "integratedTerminal",
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/apps/server/debug/**/*.js"],
       "skipFiles": ["<node_internals>/**"]
     },
     {

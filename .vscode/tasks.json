@@ -2,18 +2,6 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "server:kill",
-      "type": "process",
-      "command": "node",
-      "args": [
-        "${workspaceFolder}/scripts/stop-dev.mjs",
-        "--port",
-        "4810"
-      ],
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": []
-    },
-    {
       "label": "ClipRoam: stop web",
       "type": "process",
       "command": "node",
@@ -38,22 +26,24 @@
       "problemMatcher": []
     },
     {
-      "label": "ClipRoam: build protocol",
-      "type": "process",
-      "command": "pnpm",
-      "args": ["--filter", "@cliproam/protocol", "build"],
+      "label": "debug:server",
+      "type": "shell",
+      "command": "pnpm run debug:server",
       "options": { "cwd": "${workspaceFolder}" },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "problemMatcher": "$tsc",
-      "presentation": { "reveal": "silent", "panel": "dedicated" }
+      "presentation": { "reveal": "always", "panel": "shared" }
     },
     {
-      "label": "ClipRoam: build admin",
-      "type": "process",
-      "command": "npm",
-      "args": ["run", "build"],
-      "options": { "cwd": "${workspaceFolder}/apps/admin" },
+      "label": "build:admin",
+      "type": "shell",
+      "command": "pnpm --filter @cliproam/admin build",
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": "$tsc",
-      "presentation": { "reveal": "silent", "panel": "dedicated" }
+      "presentation": { "reveal": "always", "panel": "shared" }
     },
     {
       "label": "ClipRoam: build app dev",
@@ -65,26 +55,6 @@
       ],
       "problemMatcher": ["$rustc"],
       "presentation": { "reveal": "silent", "panel": "dedicated" }
-    },
-    {
-      "label": "ClipRoam: dev web",
-      "type": "process",
-      "command": "pnpm",
-      "args": ["dev:web"],
-      "options": { "cwd": "${workspaceFolder}" },
-      "dependsOn": ["ClipRoam: stop web"],
-      "dependsOrder": "sequence",
-      "isBackground": true,
-      "problemMatcher": {
-        "owner": "vite",
-        "pattern": { "regexp": ".+" },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": ".+",
-          "endsPattern": "Local.*1430"
-        }
-      },
-      "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
       "label": "ClipRoam: dev app",
@@ -112,13 +82,8 @@
       "dependsOrder": "sequence"
     },
     {
-      "label": "ClipRoam: stop app dev",
-      "dependsOn": ["ClipRoam: stop app", "ClipRoam: stop web"],
-      "dependsOrder": "sequence"
-    },
-    {
-      "label": "ClipRoam: prep server dev",
-      "dependsOn": ["server:kill", "ClipRoam: build protocol"],
+      "label": "launch:server",
+      "dependsOn": ["debug:server", "build:admin"],
       "dependsOrder": "sequence"
     }
   ]

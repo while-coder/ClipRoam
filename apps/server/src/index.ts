@@ -31,7 +31,7 @@ async function failServer(source: string, error: unknown): Promise<void> {
 
 try {
   await server.start();
-  logger.info(`Server listening on ${process.env.CLIPROAM_PORT ?? "4810"}`);
+  logger.info(`Server listening on ${process.env.CLIPROAM_PORT ?? "4810"}; Admin: ${server.adminUrl}`);
   logger.info(`Data directory: ${dataDirectory}`);
   logger.info(`Users directory: ${usersDirectory}`);
   logger.info(`Logs directory: ${logsDirectory}`);
