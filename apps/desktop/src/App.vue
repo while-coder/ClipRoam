@@ -417,6 +417,33 @@ async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
   }
 }
 
+/**
+ * A larger automatic-upload limit can make old local files newly eligible.
+ * Reuse the normal publish path so entries that already exist on the server
+ * only transfer their missing contents and keep the usual progress feedback.
+ */
+async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
+  const client = syncClient;
+  if (!client || sizeLimit <= 0) return;
+  const candidates = entries.value.filter((entry) => (
+    (entry.kind === "files" || entry.kind === "image")
+    && !isHashing(entry)
+    && entry.summary.uploadableSize !== undefined
+    && entry.summary.uploadableSize < sizeLimit
+  ));
+  for (const entry of candidates) {
+    if (syncClient !== client) return;
+    try {
+      await client.publish(await fullEntry(entry));
+    } catch (error) {
+      if (syncClient === client) {
+        errorMessage.value = `自动上传失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+  }
+  if (syncClient === client) await refreshEntries();
+}
+
 function canSaveEntry(entry: LocalClipboardEntry): boolean {
   return runningInTauri
     && (entry.kind === "files" || entry.kind === "image")
@@ -655,11 +682,15 @@ async function saveSettings(): Promise<void> {
   if (!activeSyncConfig || savingSettings.value || changingPassword.value) return;
   savingSettings.value = true;
   settingsError.value = "";
+  const previousAutoUploadLimitMb = activeSyncConfig.autoUploadLimitMb;
   const config = { ...activeSyncConfig, autoUploadLimitMb: autoUploadLimitMb.value };
   try {
     await persistSyncConfig(config);
     activeSyncConfig = config;
     if (config.enabled && config.username && config.sessionToken) await startSync(config);
+    if (config.autoUploadLimitMb > previousAutoUploadLimitMb) {
+      void uploadNowEligibleEntries(config.autoUploadLimitMb * 1024 * 1024);
+    }
     settingsVisible.value = false;
     await nextTick();
     await focusSearch();
