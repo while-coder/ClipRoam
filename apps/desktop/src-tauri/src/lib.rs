@@ -197,6 +197,30 @@ struct PendingHash {
     modified_at: Option<u64>,
 }
 
+/// The business flow is shared; only the final system clipboard delivery
+/// differs. Windows can expose remote contents lazily, while macOS/Linux need
+/// real local paths before they can publish a file list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilePasteStrategy {
+    VirtualStream,
+    MaterializedPaths,
+}
+
+impl FilePasteStrategy {
+    fn for_entry(entry: &ClipboardEntry) -> Self {
+        #[cfg(target_os = "windows")]
+        if entry.kind == "files" && virtual_files::supports_entry(entry) {
+            return Self::VirtualStream;
+        }
+        let _ = entry;
+        Self::MaterializedPaths
+    }
+
+    fn requires_complete_content(self, kind: &str) -> bool {
+        kind == "image" || (kind == "files" && self == Self::MaterializedPaths)
+    }
+}
+
 fn history_key_for_config(config: &SyncConfig) -> String {
     if config.enabled && !config.username.trim().is_empty() {
         format!(
@@ -248,7 +272,6 @@ fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     lightweight
 }
 
-#[cfg(not(target_os = "windows"))]
 fn safe_file_name(name: &str) -> String {
     name.chars()
         .map(|character| {
@@ -955,11 +978,6 @@ fn list_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, Strin
     Ok(history.active_entries().iter().map(lightweight_entry).collect())
 }
 
-#[tauri::command]
-fn supports_virtual_file_paste() -> bool {
-    cfg!(target_os = "windows")
-}
-
 /// The full entry, tree included — used when publishing to the server.
 #[tauri::command(rename_all = "camelCase")]
 fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
@@ -1602,6 +1620,26 @@ impl EntrySnapshot {
     }
 }
 
+fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
+    snapshot
+        .entry
+        .files
+        .iter()
+        .filter(|file| snapshot.resolve(&file.file_id).is_none())
+        .map(|file| MissingFile {
+            file_id: file.file_id.clone(),
+            size: file.size,
+            source_device_id: snapshot.entry.source_device_id.clone(),
+        })
+        .collect()
+}
+
+fn refresh_snapshot_summary(state: &AppState, snapshot: &EntrySnapshot, entry_id: &str) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    refresh_entry_summary(&mut history, entry_id, &snapshot.cache_dir);
+    Ok(())
+}
+
 /// Recomputes one entry's aggregates. Downloads deliberately skip this so that
 /// finishing a file stays O(1); the caller refreshes once the batch is done.
 #[tauri::command(rename_all = "camelCase")]
@@ -1617,21 +1655,21 @@ fn refresh_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), Str
 #[tauri::command(rename_all = "camelCase")]
 fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
     let snapshot = snapshot_entry(&state, &entry_id)?;
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        refresh_entry_summary(&mut history, &entry_id, &snapshot.cache_dir);
+    refresh_snapshot_summary(&state, &snapshot, &entry_id)?;
+    Ok(missing_files(&snapshot))
+}
+
+/// Returns only the contents that must exist before this platform can start a
+/// paste. The frontend does not need to know which operating system it runs on.
+#[tauri::command(rename_all = "camelCase")]
+fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
+    let snapshot = snapshot_entry(&state, &entry_id)?;
+    refresh_snapshot_summary(&state, &snapshot, &entry_id)?;
+    if FilePasteStrategy::for_entry(&snapshot.entry).requires_complete_content(&snapshot.entry.kind) {
+        Ok(missing_files(&snapshot))
+    } else {
+        Ok(Vec::new())
     }
-    Ok(snapshot
-        .entry
-        .files
-        .iter()
-        .filter(|file| snapshot.resolve(&file.file_id).is_none())
-        .map(|file| MissingFile {
-            file_id: file.file_id.clone(),
-            size: file.size,
-            source_device_id: snapshot.entry.source_device_id.clone(),
-        })
-        .collect())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1861,20 +1899,29 @@ fn paste_entry(
             if intact {
                 ClipboardPayload::Files(roots.clone())
             } else {
-                #[cfg(target_os = "windows")]
-                {
-                    ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                let view = snapshot.cache_dir.join("views").join(safe_file_name(&snapshot.entry.id));
-                let _ = fs::remove_dir_all(&view);
-                rebuild_tree(&view, tree, &|file_id| snapshot.resolve_content(file_id), true)?;
-                let paths = tree.roots
-                    .iter()
-                    .map(|root| view.join(&root.name).display().to_string())
-                    .collect();
-                ClipboardPayload::Files(paths)
+                match FilePasteStrategy::for_entry(&snapshot.entry) {
+                    FilePasteStrategy::VirtualStream => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        unreachable!("virtual file paste is only available on Windows")
+                    }
+                    FilePasteStrategy::MaterializedPaths => {
+                        let view = snapshot
+                            .cache_dir
+                            .join("views")
+                            .join(safe_file_name(&snapshot.entry.id));
+                        let _ = fs::remove_dir_all(&view);
+                        rebuild_tree(&view, tree, &|file_id| snapshot.resolve_content(file_id), true)?;
+                        let paths = tree
+                            .roots
+                            .iter()
+                            .map(|root| view.join(&root.name).display().to_string())
+                            .collect();
+                        ClipboardPayload::Files(paths)
+                    }
                 }
             }
         }
@@ -1937,7 +1984,14 @@ fn paste_entry(
     }
     window.hide().map_err(|error| error.to_string())?;
     thread::sleep(Duration::from_millis(90));
-    synthesize_paste()
+    if let Err(error) = synthesize_paste() {
+        // The clipboard content is still valid, but the user needs to see why
+        // automatic delivery failed (for example missing Linux helpers or
+        // macOS Accessibility permission).
+        let _ = window.show();
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2007,7 +2061,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_entries,
-            supports_virtual_file_paste,
             get_entry,
             list_entry_files,
             get_device,
@@ -2031,6 +2084,7 @@ pub fn run() {
             hide_main,
             refresh_entry,
             prepare_entry_files,
+            prepare_paste_entry,
             read_file_chunk,
             begin_file_download,
             append_file_download,
@@ -2096,6 +2150,18 @@ mod tests {
             rtf: None,
         };
         assert_eq!(rich_text_signature(&fragment), rich_text_signature(&wrapped));
+    }
+
+    #[test]
+    fn paste_strategy_owns_platform_materialization_policy() {
+        let virtual_stream = FilePasteStrategy::VirtualStream;
+        let materialized = FilePasteStrategy::MaterializedPaths;
+
+        assert!(!virtual_stream.requires_complete_content("files"));
+        assert!(virtual_stream.requires_complete_content("image"));
+        assert!(materialized.requires_complete_content("files"));
+        assert!(materialized.requires_complete_content("image"));
+        assert!(!materialized.requires_complete_content("text"));
     }
 
     #[test]

@@ -53,7 +53,6 @@ const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
 const BROWSER_CONFIG_KEY = "cliproam.syncConfig";
 const runningInTauri = "__TAURI_INTERNALS__" in window;
 const isPasteWindow = runningInTauri && getCurrentWindow().label === "paste";
-const supportsVirtualFilePaste = ref(false);
 
 type SyncConfig = {
   enabled: boolean;
@@ -306,9 +305,12 @@ async function hideWindow(): Promise<void> {
  * pool, and one failure no longer aborts the rest — a 3000-file folder should
  * not be lost to a single bad transfer.
  */
-async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
+async function downloadRequiredFiles(
+  entry: LocalClipboardEntry,
+  prepareCommand: "prepare_entry_files" | "prepare_paste_entry",
+): Promise<LocalClipboardEntry> {
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
-  const missing = await invoke<MissingFile[]>("prepare_entry_files", { entryId: entry.id });
+  const missing = await invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
   if (!missing.length) return entry;
   const client = syncClient;
   if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
@@ -344,6 +346,14 @@ async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipbo
   return entries.value.find((candidate) => candidate.id === entry.id) ?? entry;
 }
 
+async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
+  return downloadRequiredFiles(entry, "prepare_entry_files");
+}
+
+async function ensurePasteReady(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
+  return downloadRequiredFiles(entry, "prepare_paste_entry");
+}
+
 async function paste(entry?: LocalClipboardEntry): Promise<void> {
   if (!entry) return;
   errorMessage.value = "";
@@ -354,11 +364,9 @@ async function paste(entry?: LocalClipboardEntry): Promise<void> {
   if (pastingEntryId.value) return;
   pastingEntryId.value = entry.id;
   try {
-    // Windows file paste exposes virtual files immediately. Explorer then
-    // pulls each stream on demand; images still need their complete payload.
-    if (entry.kind !== "files" || !supportsVirtualFilePaste.value) {
-      await ensureLocalFiles(entry);
-    }
+    // Rust selects the native strategy. This downloads only what the current
+    // platform must materialize before it can start the paste.
+    await ensurePasteReady(entry);
     await invoke("paste_entry", { entryId: entry.id });
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
@@ -1099,7 +1107,6 @@ onMounted(async () => {
   document.addEventListener("keydown", handleKeys);
 
   if (runningInTauri) {
-    supportsVirtualFilePaste.value = await invoke<boolean>("supports_virtual_file_paste");
     unlisteners = await Promise.all([
       listen("cliproam://entry-created", refreshEntries),
       // Emitted once every content of an entry has a known id, which for a
