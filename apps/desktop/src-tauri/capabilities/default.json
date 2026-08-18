@@ -3,6 +3,7 @@
   "identifier": "default",
   "description": "Least-privilege capability for the ClipRoam main and quick-paste windows",
   "windows": ["main", "paste"],
+  "platforms": ["windows", "macOS", "linux"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

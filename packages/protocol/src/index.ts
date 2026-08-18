@@ -103,6 +103,13 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("clipboard.publish"),
     entry: ClipboardEntrySchema,
   }),
+  // A durable history update and a live clipboard change are different
+  // events. Reconnect restores and metadata edits publish entries without
+  // unexpectedly replacing the clipboard on every other device.
+  z.object({
+    type: z.literal("clipboard.activate"),
+    entryId: z.string(),
+  }),
   z.object({
     type: z.literal("clipboard.delete"),
     entryId: z.string(),
@@ -157,6 +164,10 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("clipboard.created"),
+    entry: ClipboardEntrySchema,
+  }),
+  z.object({
+    type: z.literal("clipboard.activated"),
     entry: ClipboardEntrySchema,
   }),
   z.object({

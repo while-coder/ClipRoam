@@ -8,6 +8,7 @@ ClipRoam 是一个本地优先的跨平台剪贴板历史与设备漫游工具�
 - Windows、macOS 与 Linux 自动采集文件列表和图片，支持一次复制多个文件或整个文件夹（含空目录），并可从历史中再次粘贴还原原有目录结构
 - 应用正常启动显示主界面；`Ctrl + Shift + V`（macOS 为 `Cmd + Shift + V`）打开精简的快速粘贴列表
 - 搜索、键盘选择、固定、删除与清理历史
+- 同账号在线设备会实时接收剪贴板并写入本机系统剪贴板，可按设备关闭；桌面端支持文本、富文本和图片，移动端当前仅自动接收文本；文件与文件夹只同步到历史，接收设备不会为其自动创建本地缓存或覆盖系统剪贴板
 - 选择条目后自动写入系统剪贴板并粘贴到原应用；Windows 远端文件按需流式读取，macOS/Linux 会先将缺失内容完整恢复到本地缓存视图
 - 多账号同步服务，账号之间的剪贴板历史和在线设备完全隔离
 - 密码使用加盐哈希保存，客户端仅保存可过期的登录会话
@@ -36,6 +37,26 @@ pnpm install
 pnpm dev:server
 pnpm dev
 ```
+
+### Android / iOS
+
+移动端复用登录、设备、历史、搜索、固定、删除和前台同步。Android/iOS 不启动桌面托盘、全局快捷键和后台剪贴板轮询；点按文本条目会复制到系统剪贴板，点按图片或文件条目会把缺失内容下载到应用缓存。移动端系统分享、文件导出和后台传输仍需各自的原生扩展。
+
+Android 首次生成工程并构建 APK：
+
+```powershell
+pnpm --filter @cliproam/desktop android:init
+pnpm --filter @cliproam/desktop android:build
+```
+
+iOS 必须在安装了 Xcode 的 macOS 上执行：
+
+```bash
+pnpm --filter @cliproam/desktop ios:init
+pnpm --filter @cliproam/desktop ios:build
+```
+
+Android debug 构建允许连接开发用 HTTP 服务；release 和 iOS 正式包应连接 HTTPS/WSS 服务。
 
 桌面端首次启动会要求填写服务器 `IP:端口`、连接协议、账号和密码，可直接登录或注册。登录后只在当前设备保存 30 天会话令牌，不保存密码；服务端按“账号 + 设备”保留一个会话，同一设备重新登录会替换旧令牌，多个设备可同时登录。也可以暂时仅使用本地剪贴板，之后从窗口顶部的连接状态重新配置。默认开发地址为 `127.0.0.1:4810`。
 

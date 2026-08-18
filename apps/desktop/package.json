@@ -9,7 +9,11 @@
     "build": "vue-tsc --noEmit && vite build",
     "check": "vue-tsc --noEmit",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init --ci",
+    "android:build": "tauri android build --apk --ci",
+    "ios:init": "tauri ios init --ci",
+    "ios:build": "tauri ios build --ci"
   },
   "dependencies": {
     "@cliproam/protocol": "workspace:*",

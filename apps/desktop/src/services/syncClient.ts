@@ -25,6 +25,7 @@ type SyncHandlers = {
   onManifest: (entries: ClipboardManifestEntry[], devices: Device[]) => void;
   onDevicePresence: (device: Device) => void;
   onEntry: (entry: ClipboardEntry) => void;
+  onActivation: (entry: ClipboardEntry) => void;
   onDelete: (entryId: string) => void;
   onFileAvailable: (fileId: string) => void;
   onUploadProgress: (entryId: string, uploadedBytes: number, totalBytes: number) => void;
@@ -262,7 +263,13 @@ export class SyncClient {
   async publish(entry: ClipboardEntry): Promise<void> {
     // Publish the metadata first. Other devices can then retrieve the original
     // from this online device while the server copy is still uploading.
-    this.#publishEntry(entry);
+    const published = this.#publishEntry(entry);
+    // Only a fresh OS clipboard capture calls publish(). Restores, uploads and
+    // metadata edits use separate paths, so they can never overwrite another
+    // device's clipboard. File lists stay history-only to avoid eager caches.
+    if (published && entry.kind !== "files") {
+      this.#send({ type: "clipboard.activate", entryId: entry.id });
+    }
     await this.#uploadEntry(entry, this.autoUploadLimit, false);
   }
 
@@ -772,6 +779,9 @@ export class SyncClient {
       case "clipboard.created":
         this.#resolvePublishConfirmation(message.entry);
         this.handlers.onEntry(message.entry);
+        return;
+      case "clipboard.activated":
+        this.handlers.onActivation(message.entry);
         return;
       case "clipboard.deleted":
         this.handlers.onDelete(message.entryId);

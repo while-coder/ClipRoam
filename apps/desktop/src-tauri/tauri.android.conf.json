@@ -1,0 +1,16 @@
+{
+  "identifier": "com.cliproam.mobile",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ClipRoam"
+      }
+    ]
+  },
+  "bundle": {
+    "android": {
+      "minSdkVersion": 24
+    }
+  }
+}
