@@ -161,6 +161,13 @@ fn virtual_items(entry: &ClipboardEntry) -> Result<Vec<VirtualItem>, String> {
     Ok(items)
 }
 
+/// Entries that cannot be represented by FILEDESCRIPTORW (for example paths
+/// beyond its fixed MAX_PATH field) fall back to the shared materialized-path
+/// strategy instead of failing after the user starts a paste.
+pub fn supports_entry(entry: &ClipboardEntry) -> bool {
+    virtual_items(entry).is_ok()
+}
+
 fn descriptor(item: &VirtualItem) -> FILEDESCRIPTORW {
     let mut value = FILEDESCRIPTORW::default();
     let mut flags = FD_ATTRIBUTES.0 as u32 | FD_PROGRESSUI.0 as u32 | FD_UNICODE.0 as u32;
@@ -665,4 +672,16 @@ pub fn set_clipboard(
         let _ = previous.send(());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_descriptor_path;
+
+    #[test]
+    fn descriptor_paths_fall_back_before_the_fixed_filename_buffer_overflows() {
+        assert!(normalize_descriptor_path(&"a".repeat(259)).is_ok());
+        assert!(normalize_descriptor_path(&"a".repeat(260)).is_err());
+        assert!(normalize_descriptor_path("root/../outside").is_err());
+    }
 }
