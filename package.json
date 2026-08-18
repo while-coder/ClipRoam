@@ -9,7 +9,16 @@
     "dev:web": "pnpm --filter @cliproam/app dev",
     "dev:server": "pnpm --filter @cliproam/server dev",
     "debug:server": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/server debug",
-    "build": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/admin build && pnpm --filter @cliproam/server build && pnpm --filter @cliproam/app build",
+    "build": "pnpm --filter @cliproam/server build && pnpm --filter @cliproam/app build",
+    "build:server": "pnpm --filter @cliproam/server build",
+    "docker": "pnpm build:server && docker build --tag cliproam-server:latest --file apps/server/Dockerfile apps/server/dist",
+    "build:windows": "pnpm --filter @cliproam/app tauri build",
+    "build:mac": "pnpm --filter @cliproam/app tauri build --target universal-apple-darwin",
+    "build:linux": "pnpm --filter @cliproam/app tauri build",
+    "android:init": "pnpm --filter @cliproam/app android:init",
+    "build:android": "pnpm --filter @cliproam/app tauri android build --apk --aab --ci",
+    "ios:init": "pnpm --filter @cliproam/app ios:init",
+    "build:ios": "pnpm --filter @cliproam/app tauri ios build --target aarch64 --no-sign --ci",
     "check": "pnpm --filter @cliproam/protocol build && pnpm -r check"
   }
 }

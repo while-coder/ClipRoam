@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    "outDir": "dist",
+    "outDir": "build",
     "rootDir": "src",
     "sourceMap": true,
     "skipLibCheck": true,

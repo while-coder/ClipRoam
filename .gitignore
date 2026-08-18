@@ -13,4 +13,5 @@ data/
 !.vscode/tasks.json
 apps/app/src-tauri/gen/
 apps/server/admin/
+apps/server/build/
 apps/server/debug/

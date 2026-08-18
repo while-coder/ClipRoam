@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "build"
+  ],
   "scripts": {
     "dev": "pnpm --filter @cliproam/protocol build && cross-env CLIPROAM_ADMIN_PASSWORD=admin node --import tsx --watch src/index.ts",
     "debug": "shx rm -rf debug && tsc -p tsconfig.debug.json",
-    "build": "tsc -p tsconfig.json && shx rm -rf dist/admin && shx cp -r admin dist/admin",
+    "build": "shx rm -rf build dist admin && pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/admin build && tsc -p tsconfig.json && shx cp -r admin build/admin && pnpm --config.node-linker=hoisted --config.package-import-method=copy --filter @cliproam/server deploy --prod --legacy dist",
     "check": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/index.js"
+    "start": "node build/index.js"
   },
   "dependencies": {
     "@cliproam/protocol": "workspace:*",
