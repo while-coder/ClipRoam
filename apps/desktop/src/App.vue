@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isRegistered, register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import type {
   ClipboardEntry,
   ClipboardKind,
@@ -61,6 +60,7 @@ type SyncConfig = {
   username: string;
   sessionToken: string;
   autoUploadLimitMb: number;
+  autoReceiveClipboard: boolean;
 };
 
 type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
@@ -69,6 +69,28 @@ type VirtualFileRequest = {
   fileId: string;
   size: number;
   sourceDeviceId: string;
+};
+
+type PlatformCapabilities = {
+  mobile: boolean;
+  clipboardMonitoring: boolean;
+  globalShortcut: boolean;
+  automaticPaste: boolean;
+  fileClipboard: boolean;
+  imageClipboard: boolean;
+  nativeFileExport: boolean;
+  openDataDirectory: boolean;
+};
+
+const DESKTOP_CAPABILITIES: PlatformCapabilities = {
+  mobile: false,
+  clipboardMonitoring: true,
+  globalShortcut: true,
+  automaticPaste: true,
+  fileClipboard: true,
+  imageClipboard: true,
+  nativeFileExport: true,
+  openDataDirectory: true,
 };
 
 /**
@@ -120,6 +142,9 @@ const selectedIndex = ref(0);
 const connected = ref(false);
 const syncEnabled = ref(false);
 const errorMessage = ref("");
+const statusMessage = ref("");
+const platformCapabilities = ref<PlatformCapabilities>(DESKTOP_CAPABILITIES);
+const isMobile = computed(() => platformCapabilities.value.mobile);
 const initializing = ref(true);
 const setupVisible = ref(false);
 const settingsVisible = ref(false);
@@ -136,6 +161,7 @@ const passwordFieldError = ref("");
 const setupError = ref("");
 const testingConnection = ref(false);
 const autoUploadLimitMb = ref(10);
+const autoReceiveClipboard = ref(true);
 const savingSettings = ref(false);
 const changingPassword = ref(false);
 const settingsError = ref("");
@@ -144,6 +170,7 @@ const currentPassword = ref("");
 const newPassword = ref("");
 const confirmNewPassword = ref("");
 const currentUsername = ref("");
+const capturingClipboard = ref(false);
 const pastingEntryId = ref("");
 const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
@@ -159,6 +186,9 @@ let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
+let globalShortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
+let localClipboardRevision = 0;
+let remoteActivationRevision = 0;
 
 const connectionStatus = computed(() => {
   if (connected.value) {
@@ -296,8 +326,24 @@ async function focusSearch(): Promise<void> {
   searchInput.value?.focus();
 }
 
+async function captureCurrentClipboard(): Promise<void> {
+  if (!runningInTauri || capturingClipboard.value) return;
+  capturingClipboard.value = true;
+  errorMessage.value = "";
+  statusMessage.value = "";
+  try {
+    const captured = await invoke<boolean>("capture_current_clipboard_text");
+    await refreshEntries();
+    statusMessage.value = captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本";
+  } catch (error) {
+    errorMessage.value = `读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    capturingClipboard.value = false;
+  }
+}
+
 async function hideWindow(): Promise<void> {
-  if (runningInTauri) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
+  if (runningInTauri && !isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
 }
 
 /**
@@ -357,8 +403,13 @@ async function ensurePasteReady(entry: LocalClipboardEntry): Promise<LocalClipbo
 async function paste(entry?: LocalClipboardEntry): Promise<void> {
   if (!entry) return;
   errorMessage.value = "";
+  statusMessage.value = "";
   if (!runningInTauri) {
     await navigator.clipboard.writeText(entry.content);
+    return;
+  }
+  if (isMobile.value && entry.kind !== "text") {
+    await saveEntry(entry);
     return;
   }
   if (pastingEntryId.value) return;
@@ -368,6 +419,7 @@ async function paste(entry?: LocalClipboardEntry): Promise<void> {
     // platform must materialize before it can start the paste.
     await ensurePasteReady(entry);
     await invoke("paste_entry", { entryId: entry.id });
+    if (isMobile.value) statusMessage.value = "已复制到系统剪贴板";
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
       await refreshEntries();
@@ -469,18 +521,33 @@ function canSaveEntry(entry: LocalClipboardEntry): boolean {
     && entry.summary.contentCount > 0;
 }
 
+function saveEntryLabel(entry: LocalClipboardEntry): string {
+  if (savingEntryId.value === entry.id) return isMobile.value ? "正在下载…" : "正在另存为…";
+  return isMobile.value ? "下载到本机缓存" : "另存为…";
+}
+
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
   errorMessage.value = "";
+  statusMessage.value = "";
   try {
     const localEntry = await ensureLocalFiles(entry);
-    await invoke("save_entry_files", { entryId: localEntry.id });
+    if (isMobile.value) {
+      statusMessage.value = "内容已下载到应用缓存，可在 ClipRoam 中离线使用";
+    } else {
+      await invoke("save_entry_files", { entryId: localEntry.id });
+    }
   } catch (error) {
-    errorMessage.value = `另存为失败：${error instanceof Error ? error.message : String(error)}`;
+    errorMessage.value = `${isMobile.value ? "下载" : "另存为"}失败：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     savingEntryId.value = "";
   }
+}
+
+function selectOrActivate(entry: LocalClipboardEntry, index: number): void {
+  selectedIndex.value = index;
+  if (isMobile.value) void paste(entry);
 }
 
 async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
@@ -530,7 +597,7 @@ async function clearHistory(): Promise<void> {
 }
 
 async function startWindowDrag(event: MouseEvent): Promise<void> {
-  if (!runningInTauri || event.button !== 0) return;
+  if (!runningInTauri || isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, [role='button']")) return;
   await getCurrentWindow().startDragging();
@@ -589,6 +656,7 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
     autoUploadLimitMb: typeof value.autoUploadLimitMb === "number"
       ? Math.max(0, value.autoUploadLimitMb)
       : 10,
+    autoReceiveClipboard: value.autoReceiveClipboard !== false,
   };
 }
 
@@ -643,6 +711,7 @@ function switchAuthMode(mode: AuthMode): void {
 function openSettings(): void {
   if (!activeSyncConfig) return;
   autoUploadLimitMb.value = activeSyncConfig.autoUploadLimitMb;
+  autoReceiveClipboard.value = activeSyncConfig.autoReceiveClipboard;
   settingsPage.value = "general";
   clearPasswordChangeFields();
   settingsError.value = "";
@@ -702,7 +771,11 @@ async function saveSettings(): Promise<void> {
   savingSettings.value = true;
   settingsError.value = "";
   const previousAutoUploadLimitMb = activeSyncConfig.autoUploadLimitMb;
-  const config = { ...activeSyncConfig, autoUploadLimitMb: autoUploadLimitMb.value };
+  const config = {
+    ...activeSyncConfig,
+    autoUploadLimitMb: autoUploadLimitMb.value,
+    autoReceiveClipboard: autoReceiveClipboard.value,
+  };
   try {
     await persistSyncConfig(config);
     activeSyncConfig = config;
@@ -814,6 +887,7 @@ async function useLocalMode(): Promise<void> {
     username: setupUsername.value.trim(),
     sessionToken: activeSyncConfig?.sessionToken ?? "",
     autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? 10,
+    autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? true,
   };
   setupError.value = "";
   try {
@@ -865,6 +939,7 @@ async function connectAndSave(): Promise<void> {
       username: session.user.username,
       sessionToken: session.sessionToken,
       autoUploadLimitMb: 10,
+      autoReceiveClipboard: true,
     };
     await persistSyncConfig(config);
     activeSyncConfig = config;
@@ -940,6 +1015,46 @@ async function upsertRemote(entry: ClipboardEntry): Promise<void> {
   }
   await invoke("upsert_remote_entry", { entry });
   await refreshEntries();
+}
+
+async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
+  const config = activeSyncConfig;
+  if (
+    !runningInTauri
+    || !config?.autoReceiveClipboard
+    || entry.kind === "files"
+    || (isMobile.value && entry.kind !== "text")
+  ) return;
+
+  const activationRevision = ++remoteActivationRevision;
+  const startingLocalRevision = localClipboardRevision;
+  try {
+    // The activation carries the complete entry so it remains safe even when
+    // its history update and activation messages are handled concurrently.
+    await upsertRemote(entry);
+    let localEntry = entries.value.find((candidate) => candidate.id === entry.id);
+    if (!localEntry) throw new Error("剪贴板记录不存在");
+    if (activeSyncConfig !== config || !config.autoReceiveClipboard) return;
+    if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
+
+    // A newer remote activation or a real local copy wins while an image is
+    // downloading; never replace content the user copied in the meantime.
+    if (
+      activationRevision !== remoteActivationRevision
+      || startingLocalRevision !== localClipboardRevision
+      || activeSyncConfig !== config
+      || !config.autoReceiveClipboard
+    ) return;
+    await invoke("activate_remote_entry", { entryId: localEntry.id });
+  } catch (error) {
+    if (
+      activationRevision === remoteActivationRevision
+      && activeSyncConfig === config
+      && config.autoReceiveClipboard
+    ) {
+      errorMessage.value = `自动接收剪贴板失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
 }
 
 /**
@@ -1039,6 +1154,9 @@ async function startSync(config: SyncConfig): Promise<void> {
           if (runningInTauri) return invoke("acknowledge_entry_update", { entryId: entry.id });
         });
       },
+      onActivation: (entry) => {
+        if (syncClient === client) void activateRemoteClipboard(entry);
+      },
       onDelete: (entryId) => {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
@@ -1102,13 +1220,19 @@ async function applySavedSyncConfig(): Promise<void> {
 }
 
 onMounted(async () => {
+  if (runningInTauri) {
+    platformCapabilities.value = await invoke<PlatformCapabilities>("get_platform_capabilities");
+  }
   await refreshEntries();
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
 
   if (runningInTauri) {
     unlisteners = await Promise.all([
-      listen("cliproam://entry-created", refreshEntries),
+      listen("cliproam://entry-created", () => {
+        localClipboardRevision += 1;
+        void refreshEntries();
+      }),
       // Emitted once every content of an entry has a known id, which for a
       // folder happens after background hashing finishes.
       listen<string>("cliproam://entry-ready", async ({ payload }) => {
@@ -1144,8 +1268,11 @@ onMounted(async () => {
         }
       }),
     ]);
-    if (!isPasteWindow && !(await isRegistered(HOTKEY))) {
-      await register(HOTKEY, (event) => {
+    if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
+      globalShortcutApi = await import("@tauri-apps/plugin-global-shortcut");
+    }
+    if (globalShortcutApi && !(await globalShortcutApi.isRegistered(HOTKEY))) {
+      await globalShortcutApi.register(HOTKEY, (event) => {
         if (event.state === "Pressed") void invoke("open_paste");
       });
     }
@@ -1188,18 +1315,18 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   syncClient?.stop();
-  if (runningInTauri && !isPasteWindow) void unregister(HOTKEY);
+  if (globalShortcutApi && !isPasteWindow) void globalShortcutApi.unregister(HOTKEY);
 });
 </script>
 
 <template>
-  <main v-if="initializing" class="setup-shell setup-loading">
+  <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
     <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
     <strong>ClipRoam</strong>
     <span>正在读取连接配置…</span>
   </main>
 
-  <main v-else-if="setupVisible" class="setup-shell">
+  <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
     <header class="titlebar" @mousedown.left="startWindowDrag">
       <div class="brand">
         <span class="brand-mark"><Clipboard :size="16" /></span>
@@ -1316,8 +1443,8 @@ onBeforeUnmount(() => {
     </footer>
   </main>
 
-  <main v-else class="app-shell" :class="{ 'paste-app': isPasteWindow }">
-    <aside v-if="!isPasteWindow" class="sidebar" aria-label="主导航">
+  <main v-else class="app-shell" :class="{ 'paste-app': isPasteWindow, 'mobile-app': isMobile }">
+    <aside v-if="!isPasteWindow && !isMobile" class="sidebar" aria-label="主导航">
       <header class="sidebar-brand" @mousedown.left="startWindowDrag">
         <span class="brand-mark"><Clipboard :size="17" /></span>
         <span>
@@ -1359,7 +1486,11 @@ onBeforeUnmount(() => {
           <h1>剪贴板历史</h1>
         </div>
         <div class="titlebar-actions">
-          <button class="icon-button" type="button" title="关闭" :aria-label="isPasteWindow ? '关闭粘贴窗口' : '关闭主窗口'" @click="hideWindow">
+          <span v-if="isMobile" class="mobile-connection" :class="connectionStatus.tone">{{ connectionStatus.label }}</span>
+          <button v-if="isMobile && !isPasteWindow" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="openSettings">
+            <Settings2 :size="19" />
+          </button>
+          <button v-else class="icon-button" type="button" title="关闭" :aria-label="isPasteWindow ? '关闭粘贴窗口' : '关闭主窗口'" @click="hideWindow">
             <X :size="17" />
           </button>
         </div>
@@ -1371,6 +1502,11 @@ onBeforeUnmount(() => {
         <input ref="searchInput" v-model="query" type="search" placeholder="搜索剪贴板历史" aria-label="搜索剪贴板历史" />
         <kbd>Enter</kbd>
       </label>
+      <button v-if="isMobile" class="mobile-capture-button" type="button" :disabled="capturingClipboard" @click="captureCurrentClipboard">
+        <LoaderCircle v-if="capturingClipboard" :size="18" class="spin" aria-hidden="true" />
+        <Clipboard v-else :size="18" aria-hidden="true" />
+        {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
+      </button>
       <div class="filter-row" aria-label="剪贴板类型筛选">
         <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
         <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
@@ -1381,6 +1517,7 @@ onBeforeUnmount(() => {
         <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
       </div>
       <p v-if="errorMessage" class="error-banner" role="alert">{{ errorMessage }}</p>
+      <p v-else-if="statusMessage" class="status-banner" role="status">{{ statusMessage }}</p>
       </section>
 
       <section id="history-content" class="history-list" aria-label="剪贴板历史">
@@ -1393,8 +1530,8 @@ onBeforeUnmount(() => {
         :tabindex="pastingEntryId === entry.id ? -1 : 0"
         :aria-disabled="pastingEntryId === entry.id"
         @mouseenter="selectedIndex = index"
-        @dblclick="paste(entry)"
-        @click="selectedIndex = index"
+        @dblclick="!isMobile && paste(entry)"
+        @click="selectOrActivate(entry, index)"
         @keydown.enter.stop="paste(entry)"
         @keydown.space.prevent.stop="paste(entry)"
       >
@@ -1442,8 +1579,8 @@ onBeforeUnmount(() => {
             class="item-action"
             role="button"
             tabindex="0"
-            :title="savingEntryId === entry.id ? '正在另存为…' : '另存为…'"
-            :aria-label="savingEntryId === entry.id ? '正在另存为' : '另存为'"
+            :title="saveEntryLabel(entry)"
+            :aria-label="saveEntryLabel(entry)"
             @click.stop="saveEntry(entry)"
             @keydown.enter.stop="saveEntry(entry)"
           ><LoaderCircle v-if="savingEntryId === entry.id" :size="15" class="spin" /><Download v-else :size="15" /></span>
@@ -1482,14 +1619,15 @@ onBeforeUnmount(() => {
       <div v-if="!filteredEntries.length" class="empty-state">
         <Search :size="28" />
         <strong>没有匹配内容</strong>
-        <span>复制文本后会自动保存到这里</span>
+        <span>{{ isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
       </div>
       </section>
 
       <footer class="footer-hint">
-      <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-      <span><kbd>Enter</kbd> 粘贴</span>
-      <span><kbd>Esc</kbd> 关闭</span>
+      <span v-if="isMobile">点按文本复制，点按文件下载到缓存</span>
+      <span v-else><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+      <span v-if="!isMobile"><kbd>Enter</kbd> 粘贴</span>
+      <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
       </footer>
     </section>
@@ -1517,8 +1655,27 @@ onBeforeUnmount(() => {
             <section v-if="settingsPage === 'general'" id="settings-general-panel" class="settings-page" role="tabpanel" aria-labelledby="general-settings-heading">
               <header class="settings-page-header">
                 <h3 id="general-settings-heading">通用</h3>
-                <p>配置当前设备的文件同步行为。</p>
+                <p>配置当前设备的剪贴板漫游和文件同步行为。</p>
               </header>
+              <section class="settings-section" aria-labelledby="roaming-settings-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><Clipboard :size="18" /></span>
+                  <div>
+                    <h4 id="roaming-settings-heading">剪贴板漫游</h4>
+                    <p>其他在线设备复制内容后，直接更新本机系统剪贴板。</p>
+                  </div>
+                </div>
+                <label class="setting-switch" for="auto-receive-clipboard">
+                  <span class="setting-switch-copy">
+                    <strong>自动接收剪贴板</strong>
+                    <small>{{ isMobile
+                      ? "移动端前台支持文本；图片和文件同步到历史后可手动下载。"
+                      : "支持文本、富文本和图片；文件与文件夹只同步到历史，需手动选择粘贴。" }}</small>
+                  </span>
+                  <input id="auto-receive-clipboard" v-model="autoReceiveClipboard" type="checkbox" role="switch" :disabled="savingSettings" />
+                  <span class="setting-switch-track" aria-hidden="true"></span>
+                </label>
+              </section>
               <section class="settings-section" aria-labelledby="upload-settings-heading">
                 <div class="settings-section-heading">
                   <span class="settings-icon" aria-hidden="true"><FolderOpen :size="18" /></span>
@@ -1596,10 +1753,12 @@ onBeforeUnmount(() => {
                   <span class="settings-icon" aria-hidden="true"><FolderOpen :size="18" /></span>
                   <div>
                     <h4 id="data-settings-heading">本地数据目录</h4>
-                    <p>包含本地剪贴板历史、同步配置和已保存的文件。</p>
+                    <p>{{ isMobile
+                      ? "移动端数据保存在系统应用沙箱中，卸载应用时会一并移除。"
+                      : "包含本地剪贴板历史、同步配置和已保存的文件。" }}</p>
                   </div>
                 </div>
-                <button class="secondary-button" type="button" :disabled="savingSettings || changingPassword" @click="openAppDataDirectory">打开应用数据</button>
+                <button v-if="platformCapabilities.openDataDirectory" class="secondary-button" type="button" :disabled="savingSettings || changingPassword" @click="openAppDataDirectory">打开应用数据</button>
               </section>
             </section>
 

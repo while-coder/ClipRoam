@@ -267,6 +267,9 @@ export class ClipRoamServer {
       case "clipboard.publish":
         this.#publishClipboard(client, message.entry);
         return;
+      case "clipboard.activate":
+        this.#activateClipboard(client, message.entryId);
+        return;
       case "clipboard.delete":
         this.#deleteClipboard(client, message.entryId);
         return;
@@ -328,6 +331,20 @@ export class ClipRoamServer {
     logger.info(`Clipboard entry stored: user=${client.userId} entry=${storedEntry.id} device=${client.device.id}`);
     this.#send(client, { type: "clipboard.created", entry: storedEntry });
     this.#broadcast(client.userId, { type: "clipboard.created", entry: storedEntry }, client);
+  }
+
+  #activateClipboard(client: ClientConnection, entryId: string): void {
+    const [entry] = this.#store.listByIds(client.userId, [entryId]);
+    if (!entry) {
+      this.#send(client, { type: "error", code: "ENTRY_NOT_FOUND", message: "剪贴板记录不存在" });
+      return;
+    }
+    // File-list clipboards are intentionally history-only. Broadcasting them
+    // would make receivers materialize unused directory views and temporary
+    // files before the user has chosen to paste anything.
+    if (entry.kind === "files") return;
+    logger.info(`Clipboard activated: user=${client.userId} entry=${entry.id} device=${client.device.id}`);
+    this.#broadcast(client.userId, { type: "clipboard.activated", entry }, client);
   }
 
   #deleteClipboard(client: ClientConnection, entryId: string): void {

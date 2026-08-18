@@ -15,15 +15,17 @@ use std::{
     fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::Command,
     sync::{mpsc, Condvar, Mutex},
     thread,
-    time::Duration,
 };
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use std::{process::Command, time::Duration};
+use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, State,
+    PhysicalPosition,
 };
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -40,7 +42,9 @@ use store::{
     retain_single_history, save_history, trim_history, write_entry_contents, HistoryData, LOCAL_HISTORY_KEY,
 };
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const TRAY_SHOW_MAIN: &str = "show-main";
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const TRAY_QUIT: &str = "quit";
 const FILE_CHUNK_LIMIT: usize = 128 * 1024;
 const THUMBNAIL_MAX_EDGE: u32 = 64;
@@ -77,6 +81,36 @@ struct SyncConfig {
     session_token: String,
     #[serde(default = "default_auto_upload_limit_mb")]
     auto_upload_limit_mb: u64,
+    #[serde(default = "default_auto_receive_clipboard")]
+    auto_receive_clipboard: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformCapabilities {
+    mobile: bool,
+    clipboard_monitoring: bool,
+    global_shortcut: bool,
+    automatic_paste: bool,
+    file_clipboard: bool,
+    image_clipboard: bool,
+    native_file_export: bool,
+    open_data_directory: bool,
+}
+
+#[tauri::command]
+fn get_platform_capabilities() -> PlatformCapabilities {
+    let mobile = cfg!(any(target_os = "android", target_os = "ios"));
+    PlatformCapabilities {
+        mobile,
+        clipboard_monitoring: !mobile,
+        global_shortcut: !mobile,
+        automatic_paste: !mobile,
+        file_clipboard: !mobile,
+        image_clipboard: !mobile,
+        native_file_export: !mobile,
+        open_data_directory: !mobile,
+    }
 }
 
 fn default_server_protocol() -> String {
@@ -85,6 +119,10 @@ fn default_server_protocol() -> String {
 
 fn default_auto_upload_limit_mb() -> u64 {
     10
+}
+
+fn default_auto_receive_clipboard() -> bool {
+    true
 }
 
 struct AppState {
@@ -553,6 +591,7 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn start_clipboard_monitor(app: AppHandle) {
     thread::spawn(move || loop {
         if let Some(paths) = read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
@@ -564,6 +603,15 @@ fn start_clipboard_monitor(app: AppHandle) {
         }
         thread::sleep(Duration::from_millis(350));
     });
+}
+
+#[tauri::command]
+fn capture_current_clipboard_text(app: AppHandle) -> Result<bool, String> {
+    let Some(rich_text) = read_clipboard_text(&app) else {
+        return Ok(false);
+    };
+    capture_text(&app, rich_text)?;
+    Ok(true)
 }
 
 fn queue_hashing(state: &AppState, entry_id: &str) {
@@ -1026,26 +1074,35 @@ fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncConfig>, Str
 
 #[tauri::command]
 fn open_app_data_dir(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app;
+        return Err("移动端应用数据由系统沙箱管理，不能直接打开数据目录".to_string());
+    }
 
-    #[cfg(target_os = "windows")]
-    Command::new("explorer.exe")
-        .arg(&app_data_dir)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "macos")]
-    Command::new("open")
-        .arg(&app_data_dir)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    #[cfg(all(unix, not(target_os = "macos")))]
-    Command::new("xdg-open")
-        .arg(&app_data_dir)
-        .spawn()
-        .map_err(|error| error.to_string())?;
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+        fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
 
-    Ok(())
+        #[cfg(target_os = "windows")]
+        Command::new("explorer.exe")
+            .arg(&app_data_dir)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
+        Command::new("open")
+            .arg(&app_data_dir)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "linux")]
+        Command::new("xdg-open")
+            .arg(&app_data_dir)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+
+        Ok(())
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1306,6 +1363,7 @@ fn acknowledge_entry_update(state: State<'_, AppState>, entry_id: String) -> Res
 }
 
 #[tauri::command]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn open_paste(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("paste")
@@ -1319,6 +1377,13 @@ fn open_paste(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn open_paste(_app: AppHandle) -> Result<(), String> {
+    Err("移动端不支持全局快速粘贴窗口".to_string())
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -1328,6 +1393,7 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
     window.set_focus().map_err(|error| error.to_string())
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN, "显示主界面", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "退出 ClipRoam", true, None::<&str>)?;
@@ -1357,6 +1423,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn position_history_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     let cursor = window.cursor_position().map_err(|error| error.to_string())?;
     let Some(monitor) = window
@@ -1383,6 +1450,7 @@ fn position_history_window(window: &tauri::WebviewWindow) -> Result<(), String> 
         .map_err(|error| error.to_string())
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn calculate_history_position(
     cursor_x: i32,
     cursor_y: i32,
@@ -1838,6 +1906,7 @@ fn fail_virtual_file_request(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usize, String> {
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let tree = snapshot
@@ -1873,6 +1942,72 @@ fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usiz
     // Real copies: the user owns the destination, and a hard link would let a
     // later edit reach back into the cache.
     rebuild_tree(&destination, tree, &|file_id| snapshot.resolve_content(file_id), false)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn save_entry_files(_state: State<'_, AppState>, _entry_id: String) -> Result<usize, String> {
+    Err("移动端文件已保存在应用缓存中，请使用系统分享或文件导出入口".to_string())
+}
+
+/// Writes a live clipboard activation received from another device without
+/// synthesizing Paste. File-list entries are deliberately excluded: they stay
+/// in history until the user explicitly chooses where to paste or save them.
+#[tauri::command(rename_all = "camelCase")]
+fn activate_remote_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let payload = match snapshot.entry.kind.as_str() {
+        "files" => return Err("文件和文件夹不会自动写入漫游剪贴板".to_string()),
+        "image" => {
+            let file_id = snapshot
+                .entry
+                .files
+                .first()
+                .map(|file| file.file_id.clone())
+                .ok_or_else(|| "图片内容不可用".to_string())?;
+            let path = snapshot
+                .resolve(&file_id)
+                .ok_or_else(|| "图片内容不可用".to_string())?;
+            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
+        }
+        _ => ClipboardPayload::Text(RichText {
+            text: snapshot.entry.content.clone(),
+            html: snapshot.entry.html.clone(),
+            rtf: snapshot.entry.rtf.clone(),
+        }),
+    };
+
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        match &payload {
+            ClipboardPayload::Image(image) => {
+                history.last_image_signature = image_signature(image);
+                history.last_clipboard.clear();
+                history.last_file_signature.clear();
+            }
+            ClipboardPayload::Text(rich_text) => {
+                history.last_clipboard = rich_text_signature(rich_text);
+                history.last_file_signature.clear();
+                history.last_image_signature.clear();
+            }
+            ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
+            #[cfg(target_os = "windows")]
+            ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
+        }
+        save_active_history(&state, &history)?;
+    }
+
+    match payload {
+        ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text),
+        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image),
+        ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
+        #[cfg(target_os = "windows")]
+        ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1982,23 +2117,37 @@ fn paste_entry(
         }
         ClipboardPayload::Image(image) => write_clipboard_image(&app, &image)?,
     }
-    window.hide().map_err(|error| error.to_string())?;
-    thread::sleep(Duration::from_millis(90));
-    if let Err(error) = synthesize_paste() {
-        // The clipboard content is still valid, but the user needs to see why
-        // automatic delivery failed (for example missing Linux helpers or
-        // macOS Accessibility permission).
-        let _ = window.show();
-        return Err(error);
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        // Mobile operating systems do not let a normal app inject a paste into
+        // another app. Keep ClipRoam visible and treat activation as Copy.
+        let _ = window;
+        return Ok(());
     }
-    Ok(())
+
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    {
+        window.hide().map_err(|error| error.to_string())?;
+        thread::sleep(Duration::from_millis(90));
+        if let Err(error) = synthesize_paste() {
+            // The clipboard content is still valid, but the user needs to see why
+            // automatic delivery failed (for example missing Linux helpers or
+            // macOS Accessibility permission).
+            let _ = window.show();
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    let builder = builder
         .setup(|app| {
             #[cfg(target_os = "windows")]
             virtual_files::initialize()?;
@@ -2027,8 +2176,10 @@ pub fn run() {
                 platform_clipboard,
                 hash_queue: Mutex::new(sender),
             });
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             setup_tray(app.handle())?;
             start_hash_worker(app.handle().clone(), receiver);
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             start_clipboard_monitor(app.handle().clone());
 
             // Hashes that were still pending when the app last closed are
@@ -2048,18 +2199,24 @@ pub fn run() {
                 }
             });
             Ok(())
-        })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-            tauri::WindowEvent::Focused(false) if window.label() == "paste" => {
-                let _ = window.hide();
-            }
-            _ => {}
-        })
+        });
+
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    let builder = builder.on_window_event(|window, event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+        tauri::WindowEvent::Focused(false) if window.label() == "paste" => {
+            let _ = window.hide();
+        }
+        _ => {}
+    });
+
+    builder
         .invoke_handler(tauri::generate_handler![
+            get_platform_capabilities,
+            capture_current_clipboard_text,
             list_entries,
             get_entry,
             list_entry_files,
@@ -2092,6 +2249,7 @@ pub fn run() {
             cancel_file_download,
             fail_virtual_file_request,
             save_entry_files,
+            activate_remote_entry,
             paste_entry
         ])
         .run(tauri::generate_context!())
@@ -2102,6 +2260,23 @@ pub fn run() {
 mod tests {
     use super::*;
     use image::{DynamicImage, Rgba, RgbaImage};
+
+    #[test]
+    fn older_sync_config_enables_clipboard_roaming_by_default() {
+        let config: SyncConfig = serde_json::from_str(
+            r#"{
+                "enabled": true,
+                "serverAddress": "127.0.0.1:4810",
+                "serverProtocol": "http",
+                "username": "tester",
+                "sessionToken": "token",
+                "autoUploadLimitMb": 10
+            }"#,
+        )
+        .unwrap();
+
+        assert!(config.auto_receive_clipboard);
+    }
 
     #[test]
     fn screenshot_webp_round_trip_preserves_pixels() {
