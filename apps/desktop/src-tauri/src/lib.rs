@@ -1,5 +1,9 @@
 mod content;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+mod platform_clipboard;
 mod store;
+#[cfg(target_os = "windows")]
+mod virtual_files;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
@@ -12,7 +16,7 @@ use std::{
     io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::{mpsc, Mutex},
+    sync::{mpsc, Condvar, Mutex},
     thread,
     time::Duration,
 };
@@ -21,13 +25,13 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, State,
 };
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use content::{
-    collect_tree, describe_roots, download_path, file_entry_signature, file_signature, hash_bytes, hash_file,
-    local_source_was_lost, new_tree, preserve_local_sources, readable_path, rebuild_entry_files, rebuild_tree,
-    upload_image_path,
+    collect_tree, create_pack, describe_roots, download_path, file_entry_signature, file_signature,
+    hash_bytes, hash_file, local_source_was_lost, new_tree, preserve_local_sources, readable_path,
+    rebuild_entry_files, rebuild_tree, transfer_file_id, unpack_pack, unpacked_file_path, upload_image_path,
     ClipboardEntry, ClipboardFile, ClipboardTreeFile, ClipboardTreeRoot, LocalSources,
 };
 use store::{
@@ -44,6 +48,20 @@ const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
 const HASH_PROGRESS_BATCH: usize = 32;
+/// New large trees keep big contents independent while grouping small contents
+/// into stable hash-prefix buckets. Eight MiB stays below the default 10 MiB
+/// automatic upload threshold.
+const PACK_TREE_FILE_THRESHOLD: usize = 200;
+const PACK_MIN_CONTENTS: usize = 128;
+const PACK_MAX_CONTENT_SIZE: u64 = 1024 * 1024;
+const PACK_TARGET_SIZE: u64 = 8 * 1024 * 1024;
+
+#[derive(Clone)]
+struct PackCandidate {
+    file_id: String,
+    source: PathBuf,
+    size: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,8 +93,78 @@ struct AppState {
     sync_config: Mutex<Option<SyncConfig>>,
     sync_config_path: PathBuf,
     downloads: Mutex<HashMap<String, DownloadState>>,
+    virtual_downloads: VirtualDownloads,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    platform_clipboard: platform_clipboard::PlatformClipboard,
     /// `Sender` is not `Sync`, so managed state has to guard it.
     hash_queue: Mutex<mpsc::Sender<String>>,
+}
+
+#[derive(Default)]
+struct VirtualDownloadStatus {
+    requested: bool,
+    complete: bool,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+struct VirtualDownloads {
+    transfers: Mutex<HashMap<String, VirtualDownloadStatus>>,
+    changed: Condvar,
+    /// Pack extraction has a shared destination per pack id.
+    unpack: Mutex<()>,
+}
+
+impl VirtualDownloads {
+    fn request(&self, file_id: &str) -> bool {
+        let Ok(mut transfers) = self.transfers.lock() else { return false };
+        let status = transfers.entry(file_id.to_string()).or_default();
+        if status.complete {
+            return false;
+        }
+        if status.error.take().is_some() {
+            status.requested = false;
+        }
+        if status.requested {
+            false
+        } else {
+            status.requested = true;
+            true
+        }
+    }
+
+    fn begin(&self, file_id: &str) {
+        if let Ok(mut transfers) = self.transfers.lock() {
+            transfers.insert(file_id.to_string(), VirtualDownloadStatus {
+                requested: true,
+                complete: false,
+                error: None,
+            });
+            self.changed.notify_all();
+        }
+    }
+
+    fn progress(&self) {
+        self.changed.notify_all();
+    }
+
+    fn complete(&self, file_id: &str) {
+        if let Ok(mut transfers) = self.transfers.lock() {
+            let status = transfers.entry(file_id.to_string()).or_default();
+            status.complete = true;
+            status.error = None;
+            self.changed.notify_all();
+        }
+    }
+
+    fn fail(&self, file_id: &str, error: String) {
+        if let Ok(mut transfers) = self.transfers.lock() {
+            let status = transfers.entry(file_id.to_string()).or_default();
+            status.complete = false;
+            status.error = Some(error);
+            self.changed.notify_all();
+        }
+    }
 }
 
 struct DownloadState {
@@ -160,6 +248,7 @@ fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     lightweight
 }
 
+#[cfg(not(target_os = "windows"))]
 fn safe_file_name(name: &str) -> String {
     name.chars()
         .map(|character| {
@@ -174,9 +263,20 @@ fn safe_file_name(name: &str) -> String {
 
 fn rich_text_signature(rich_text: &RichText) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
+    // arboard wraps HTML on macOS to force UTF-8 interpretation. Treat that
+    // transport wrapper as equivalent to the original fragment so paste does
+    // not get captured back as a second history item.
+    const MAC_HTML_PREFIX: &str =
+        "<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>";
+    const MAC_HTML_SUFFIX: &str = "</body></html>";
+    let html = rich_text.html.as_deref().map(|html| {
+        html.strip_prefix(MAC_HTML_PREFIX)
+            .and_then(|html| html.strip_suffix(MAC_HTML_SUFFIX))
+            .unwrap_or(html)
+    });
     for value in [
         Some(rich_text.text.as_str()),
-        rich_text.html.as_deref(),
+        html,
         rich_text.rtf.as_deref(),
     ] {
         for byte in value.unwrap_or_default().bytes().chain(std::iter::once(0)) {
@@ -187,11 +287,23 @@ fn rich_text_signature(rich_text: &RichText) -> String {
 }
 
 fn image_signature(image: &[u8]) -> String {
+    // Clipboard encodings differ by platform (BMP, PNG, TIFF), while pasted
+    // history images are WebP. Hash canonical RGBA pixels so writing an image
+    // does not make the monitor capture the same pixels as a new entry.
+    let canonical = image::load_from_memory(image).ok().map(|decoded| {
+        let rgba = decoded.into_rgba8();
+        let (width, height) = rgba.dimensions();
+        (width, height, rgba.into_raw())
+    });
+    let (prefix, bytes) = match canonical {
+        Some((width, height, pixels)) => (format!("{width}x{height}"), pixels),
+        None => (image.len().to_string(), image.to_vec()),
+    };
     // FNV-1a is sufficient here: this only suppresses repeated reads of the current clipboard.
-    let hash = image.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+    let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
     });
-    format!("{}:{hash:016x}", image.len())
+    format!("{prefix}:{hash:016x}")
 }
 
 /// Entry identity is owned by the capturing device. The NUL separator keeps
@@ -391,6 +503,8 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         tree.files.push(ClipboardTreeFile {
             p: name,
             f: file_id.clone(),
+            s: Some(webp.len() as u64),
+            b: None,
         });
         entry.tree = Some(tree);
         entry.files = vec![ClipboardFile {
@@ -418,11 +532,11 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
 
 fn start_clipboard_monitor(app: AppHandle) {
     thread::spawn(move || loop {
-        if let Some(paths) = read_clipboard_files().filter(|paths| !paths.is_empty()) {
+        if let Some(paths) = read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
             let _ = capture_files(&app, paths);
         } else if let Some(rich_text) = read_clipboard_text(&app) {
             let _ = capture_text(&app, rich_text);
-        } else if let Some(image) = read_clipboard_image() {
+        } else if let Some(image) = read_clipboard_image(&app) {
             let _ = capture_image(&app, image);
         }
         thread::sleep(Duration::from_millis(350));
@@ -507,8 +621,147 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
     let Some(final_entry_id) = apply_hashes(app, &current_entry_id, &batch, true)? else {
         return Ok(());
     };
+    // Packing is a transport optimization. If a source changes during the
+    // extra read, keep the already valid per-file entry publishable.
+    if let Err(error) = pack_small_contents(app, &final_entry_id) {
+        eprintln!("ClipRoam: 打包 {final_entry_id} 的小文件失败，改用单文件传输：{error}");
+    }
     app.emit("cliproam://entry-ready", final_entry_id)
         .map_err(|error| error.to_string())
+}
+
+fn split_pack_candidates(candidates: Vec<PackCandidate>, depth: usize) -> Vec<Vec<PackCandidate>> {
+    let encoded_size = candidates
+        .iter()
+        .map(|candidate| candidate.size + 64 + 8)
+        .sum::<u64>();
+    if encoded_size <= PACK_TARGET_SIZE || candidates.len() <= 1 || depth >= 64 {
+        return vec![candidates];
+    }
+    let mut buckets = vec![Vec::new(); 16];
+    for candidate in candidates {
+        let nibble = match candidate.file_id.as_bytes()[depth] {
+            b'0'..=b'9' => candidate.file_id.as_bytes()[depth] - b'0',
+            b'a'..=b'f' => candidate.file_id.as_bytes()[depth] - b'a' + 10,
+            _ => 0,
+        };
+        buckets[nibble as usize].push(candidate);
+    }
+    buckets
+        .into_iter()
+        .filter(|bucket| !bucket.is_empty())
+        .flat_map(|bucket| split_pack_candidates(bucket, depth + 1))
+        .collect()
+}
+
+/// Replaces the transfer identity of many small contents with bounded packs.
+/// Tree nodes retain their original hashes, so extraction can independently
+/// verify every file and entry identity does not depend on packing policy.
+fn pack_small_contents(app: &AppHandle, entry_id: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (entry, cache_dir, database_path) = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let entry = history
+            .find(entry_id)
+            .cloned()
+            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+        (
+            entry,
+            active_cache_dir(&state, &history),
+            history_path_for_key(&state.histories_dir, &history.active_history),
+        )
+    };
+    let Some(tree) = entry.tree.as_ref() else {
+        return Ok(());
+    };
+    if tree.files.len() < PACK_TREE_FILE_THRESHOLD || tree.files.iter().any(|node| node.b.is_some()) {
+        return Ok(());
+    }
+
+    let mut candidates = entry
+        .sources
+        .files
+        .iter()
+        .filter(|source| source.size <= PACK_MAX_CONTENT_SIZE)
+        .filter_map(|source| {
+            source.file_id.as_ref().map(|file_id| PackCandidate {
+                file_id: file_id.clone(),
+                source: PathBuf::from(&source.source),
+                size: source.size,
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.file_id.cmp(&right.file_id));
+    candidates.dedup_by(|left, right| left.file_id == right.file_id);
+    if candidates.len() < PACK_MIN_CONTENTS {
+        return Ok(());
+    }
+
+    let groups = split_pack_candidates(candidates, 0);
+    let mut member_to_pack = HashMap::new();
+    let mut packed_files = HashMap::new();
+    for group in groups {
+        let temporary = cache_dir
+            .join("download")
+            .join(format!(".pack-{}", uuid::Uuid::new_v4()));
+        let contents = group
+            .iter()
+            .map(|candidate| (candidate.file_id.clone(), candidate.source.clone()))
+            .collect::<Vec<_>>();
+        let (pack_id, pack_size) = create_pack(&temporary, &contents)?;
+        let target = download_path(&cache_dir, &pack_id).ok_or_else(|| "文件包标识不合法".to_string())?;
+        if target.is_file() {
+            fs::remove_file(&temporary).map_err(|error| error.to_string())?;
+        } else {
+            fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
+        }
+        register_cached_file(&database_path, &pack_id, pack_size)?;
+        for candidate in group {
+            member_to_pack.insert(candidate.file_id, pack_id.clone());
+        }
+        packed_files.insert(pack_id.clone(), ClipboardFile {
+            file_id: pack_id,
+            size: pack_size,
+            available: false,
+        });
+    }
+
+    let known = entry
+        .files
+        .iter()
+        .map(|file| (file.file_id.clone(), file.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let Some(current) = history.find_mut(entry_id) else {
+        return Ok(());
+    };
+    let Some(tree) = current.tree.as_mut() else {
+        return Ok(());
+    };
+    for node in &mut tree.files {
+        node.b = member_to_pack.get(&node.f).cloned();
+    }
+    let mut seen = HashSet::new();
+    current.files = tree
+        .files
+        .iter()
+        .filter_map(|node| {
+            let transfer_id = transfer_file_id(node);
+            if !seen.insert(transfer_id.to_string()) {
+                return None;
+            }
+            packed_files.get(transfer_id).cloned().or_else(|| known.get(transfer_id).cloned())
+        })
+        .collect();
+    let connection = open_history_database(&history_path)?;
+    write_entry_contents(&connection, current, true)?;
+    for pack_id in packed_files.keys() {
+        history.cached_files.insert(pack_id.clone());
+    }
+    refresh_entry_summary(&mut history, entry_id, &cache_dir);
+    Ok(())
 }
 
 /// Folds resolved content ids into the entry. Only the final call persists, so
@@ -579,17 +832,22 @@ fn apply_hashes(
 }
 
 #[cfg(target_os = "windows")]
-fn read_clipboard_files() -> Option<Vec<PathBuf>> {
+fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
     clipboard_win::get_clipboard(clipboard_win::formats::FileList).ok()
 }
 
-#[cfg(not(target_os = "windows"))]
-fn read_clipboard_files() -> Option<Vec<PathBuf>> {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn read_clipboard_files(app: &AppHandle) -> Option<Vec<PathBuf>> {
+    app.state::<AppState>().platform_clipboard.read_files()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
     None
 }
 
 #[cfg(target_os = "windows")]
-fn read_clipboard_image() -> Option<Vec<u8>> {
+fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
     use clipboard_win::{formats::Bitmap, Clipboard, Getter};
 
     let _clipboard = Clipboard::new_attempts(10).ok()?;
@@ -598,8 +856,13 @@ fn read_clipboard_image() -> Option<Vec<u8>> {
     (!image.is_empty()).then_some(image)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn read_clipboard_image() -> Option<Vec<u8>> {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn read_clipboard_image(app: &AppHandle) -> Option<Vec<u8>> {
+    app.state::<AppState>().platform_clipboard.read_image_as_bmp()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
     None
 }
 
@@ -638,14 +901,20 @@ fn read_clipboard_text(_app: &AppHandle) -> Option<RichText> {
     Some(RichText { text, html, rtf })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
+    let clipboard = &app.state::<AppState>().platform_clipboard;
+    clipboard.read_text().map(|text| RichText {
+        html: clipboard.read_html(),
+        text,
+        rtf: None,
+    })
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
     app.clipboard().read_text().ok().and_then(|text| {
-        (!text.trim().is_empty()).then_some(RichText {
-            text,
-            html: None,
-            rtf: None,
-        })
+        (!text.trim().is_empty()).then_some(RichText { text, html: None, rtf: None })
     })
 }
 
@@ -684,6 +953,11 @@ fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
 fn list_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     Ok(history.active_entries().iter().map(lightweight_entry).collect())
+}
+
+#[tauri::command]
+fn supports_virtual_file_paste() -> bool {
+    cfg!(target_os = "windows")
 }
 
 /// The full entry, tree included — used when publishing to the server.
@@ -1176,7 +1450,12 @@ fn synthesize_paste() -> Result<(), String> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn synthesize_paste() -> Result<(), String> {
+    platform_clipboard::synthesize_paste()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn synthesize_paste() -> Result<(), String> {
     Ok(())
 }
@@ -1184,11 +1463,13 @@ fn synthesize_paste() -> Result<(), String> {
 enum ClipboardPayload {
     Text(RichText),
     Files(Vec<String>),
+    #[cfg(target_os = "windows")]
+    VirtualFiles(Box<ClipboardEntry>),
     Image(Vec<u8>),
 }
 
 #[cfg(target_os = "windows")]
-fn write_clipboard_files(paths: &[String]) -> Result<(), String> {
+fn write_clipboard_files(_app: &AppHandle, paths: &[String]) -> Result<(), String> {
     use clipboard_win::{formats::FileList, Clipboard, Setter};
 
     let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
@@ -1197,13 +1478,18 @@ fn write_clipboard_files(paths: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn write_clipboard_files(_paths: &[String]) -> Result<(), String> {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn write_clipboard_files(app: &AppHandle, paths: &[String]) -> Result<(), String> {
+    app.state::<AppState>().platform_clipboard.write_files(paths)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn write_clipboard_files(_app: &AppHandle, _paths: &[String]) -> Result<(), String> {
     Err("当前平台暂不支持文件粘贴".to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn write_clipboard_image(image: &[u8]) -> Result<(), String> {
+fn write_clipboard_image(_app: &AppHandle, image: &[u8]) -> Result<(), String> {
     use clipboard_win::{formats::Bitmap, Clipboard, Setter};
 
     let bitmap = decode_image_as_bmp(image)?;
@@ -1213,8 +1499,13 @@ fn write_clipboard_image(image: &[u8]) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn write_clipboard_image(_image: &[u8]) -> Result<(), String> {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn write_clipboard_image(app: &AppHandle, image: &[u8]) -> Result<(), String> {
+    app.state::<AppState>().platform_clipboard.write_image(image)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn write_clipboard_image(_app: &AppHandle, _image: &[u8]) -> Result<(), String> {
     Err("当前平台暂不支持图片粘贴".to_string())
 }
 
@@ -1247,7 +1538,15 @@ fn write_clipboard_text(_app: &AppHandle, rich_text: &RichText) -> Result<(), St
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        _app
+            .state::<AppState>()
+            .platform_clipboard
+            .write_text(&rich_text.text, rich_text.html.as_deref())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         _app.clipboard()
             .write_text(&rich_text.text)
@@ -1280,6 +1579,26 @@ fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, Str
 impl EntrySnapshot {
     fn resolve(&self, file_id: &str) -> Option<PathBuf> {
         readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
+    }
+
+    fn resolve_content(&self, file_id: &str) -> Option<PathBuf> {
+        if let Some(path) = self.resolve(file_id) {
+            return Some(path);
+        }
+        let pack_id = self
+            .entry
+            .tree
+            .as_ref()?
+            .files
+            .iter()
+            .find(|node| node.f == file_id)?
+            .b
+            .as_deref()?;
+        let pack_path = self.resolve(pack_id)?;
+        let target = unpacked_file_path(&self.cache_dir, pack_id, file_id)?;
+        let destination = target.parent()?;
+        unpack_pack(&pack_path, destination).ok()?;
+        target.is_file().then_some(target)
     }
 }
 
@@ -1361,6 +1680,7 @@ fn begin_file_download(
     file_id: String,
     expected_size: u64,
 ) -> Result<(), String> {
+    state.virtual_downloads.begin(&file_id);
     let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         download_path(&active_cache_dir(&state, &history), &file_id)
@@ -1407,7 +1727,9 @@ fn append_file_download(
         .append(true)
         .open(&download.path)
         .and_then(|mut file| file.write_all(&bytes))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state.virtual_downloads.progress();
+    Ok(())
 }
 
 /// A completed download is retained at `files/download/<fileId>` only after
@@ -1422,10 +1744,12 @@ fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         .ok_or_else(|| "文件下载任务不存在".to_string())?;
     if download.received_size != download.expected_size {
         let _ = fs::remove_file(&download.path);
+        state.virtual_downloads.fail(&download.file_id, "文件下载不完整".to_string());
         return Err("文件下载不完整".to_string());
     }
     if content::to_hex(&download.hasher.finalize()) != download.file_id {
         let _ = fs::remove_file(&download.path);
+        state.virtual_downloads.fail(&download.file_id, "文件内容校验失败".to_string());
         return Err("文件内容校验失败".to_string());
     }
 
@@ -1439,12 +1763,17 @@ fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         .lock()
         .map_err(|error| error.to_string())?
         .cached_files
-        .insert(download.file_id);
+        .insert(download.file_id.clone());
+    state.virtual_downloads.complete(&download.file_id);
     Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn cancel_file_download(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
+fn cancel_file_download(
+    state: State<'_, AppState>,
+    transfer_id: String,
+    reason: Option<String>,
+) -> Result<(), String> {
     if let Some(download) = state
         .downloads
         .lock()
@@ -1452,7 +1781,21 @@ fn cancel_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         .remove(&transfer_id)
     {
         let _ = fs::remove_file(download.path);
+        state.virtual_downloads.fail(
+            &download.file_id,
+            reason.unwrap_or_else(|| "文件下载已取消".to_string()),
+        );
     }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn fail_virtual_file_request(
+    state: State<'_, AppState>,
+    file_id: String,
+    message: String,
+) -> Result<(), String> {
+    state.virtual_downloads.fail(&file_id, message);
     Ok(())
 }
 
@@ -1491,7 +1834,7 @@ fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usiz
     };
     // Real copies: the user owns the destination, and a hard link would let a
     // later edit reach back into the cache.
-    rebuild_tree(&destination, tree, &|file_id| snapshot.resolve(file_id), false)
+    rebuild_tree(&destination, tree, &|file_id| snapshot.resolve_content(file_id), false)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1515,18 +1858,25 @@ fn paste_entry(
             let intact = !roots.is_empty()
                 && roots.len() == tree.roots.len()
                 && roots.iter().all(|path| Path::new(path).exists());
-            let paths = if intact {
-                roots.clone()
+            if intact {
+                ClipboardPayload::Files(roots.clone())
             } else {
+                #[cfg(target_os = "windows")]
+                {
+                    ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
                 let view = snapshot.cache_dir.join("views").join(safe_file_name(&snapshot.entry.id));
                 let _ = fs::remove_dir_all(&view);
-                rebuild_tree(&view, tree, &|file_id| snapshot.resolve(file_id), true)?;
-                tree.roots
+                rebuild_tree(&view, tree, &|file_id| snapshot.resolve_content(file_id), true)?;
+                let paths = tree.roots
                     .iter()
                     .map(|root| view.join(&root.name).display().to_string())
-                    .collect()
-            };
-            ClipboardPayload::Files(paths)
+                    .collect();
+                ClipboardPayload::Files(paths)
+                }
+            }
         }
         "image" => {
             let file_id = snapshot
@@ -1556,6 +1906,12 @@ fn paste_entry(
                 history.last_clipboard.clear();
                 history.last_image_signature.clear();
             }
+            #[cfg(target_os = "windows")]
+            ClipboardPayload::VirtualFiles(_) => {
+                history.last_file_signature.clear();
+                history.last_clipboard.clear();
+                history.last_image_signature.clear();
+            }
             ClipboardPayload::Image(image) => {
                 history.last_image_signature = image_signature(image);
                 history.last_clipboard.clear();
@@ -1572,8 +1928,12 @@ fn paste_entry(
 
     match payload {
         ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text)?,
-        ClipboardPayload::Files(paths) => write_clipboard_files(&paths)?,
-        ClipboardPayload::Image(image) => write_clipboard_image(&image)?,
+        ClipboardPayload::Files(paths) => write_clipboard_files(&app, &paths)?,
+        #[cfg(target_os = "windows")]
+        ClipboardPayload::VirtualFiles(entry) => {
+            virtual_files::set_clipboard(&app, window.label(), *entry)?
+        }
+        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image)?,
     }
     window.hide().map_err(|error| error.to_string())?;
     thread::sleep(Duration::from_millis(90));
@@ -1586,6 +1946,8 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            virtual_files::initialize()?;
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
@@ -1598,12 +1960,17 @@ pub fn run() {
             retain_single_history(&mut history, &history_key);
             save_history(&history_path_for_key(&histories_dir, &history_key), &history)?;
             let (sender, receiver) = mpsc::channel::<String>();
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let platform_clipboard = platform_clipboard::PlatformClipboard::new()?;
             app.manage(AppState {
                 history: Mutex::new(history),
                 histories_dir,
                 sync_config: Mutex::new(sync_config),
                 sync_config_path,
                 downloads: Mutex::new(HashMap::new()),
+                virtual_downloads: VirtualDownloads::default(),
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                platform_clipboard,
                 hash_queue: Mutex::new(sender),
             });
             setup_tray(app.handle())?;
@@ -1640,6 +2007,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_entries,
+            supports_virtual_file_paste,
             get_entry,
             list_entry_files,
             get_device,
@@ -1668,6 +2036,7 @@ pub fn run() {
             append_file_download,
             finish_file_download,
             cancel_file_download,
+            fail_virtual_file_request,
             save_entry_files,
             paste_entry
         ])
@@ -1689,8 +2058,9 @@ mod tests {
         DynamicImage::ImageRgba8(source.clone())
             .write_to(&mut bmp, ImageFormat::Bmp)
             .unwrap();
+        let bmp = bmp.into_inner();
 
-        let (webp, width, height, thumbnail) = encode_image_as_webp(&bmp.into_inner()).unwrap();
+        let (webp, width, height, thumbnail) = encode_image_as_webp(&bmp).unwrap();
         assert_eq!((width, height), (16, 12));
         assert!(thumbnail.is_some());
         assert_eq!(image::guess_format(&webp).unwrap(), ImageFormat::WebP);
@@ -1700,6 +2070,7 @@ mod tests {
             .unwrap()
             .to_rgba8();
         assert_eq!(restored, source);
+        assert_eq!(image_signature(&bmp), image_signature(&webp));
     }
 
     #[test]
@@ -1707,6 +2078,24 @@ mod tests {
         assert_eq!(entry_id("same", "device"), entry_id("same", "device"));
         assert_ne!(entry_id("same", "device"), entry_id("other", "device"));
         assert_ne!(entry_id("same", "device"), entry_id("same", "other-device"));
+    }
+
+    #[test]
+    fn macos_html_transport_wrapper_keeps_the_same_signature() {
+        let fragment = RichText {
+            text: "hello".to_string(),
+            html: Some("<b>hello</b>".to_string()),
+            rtf: None,
+        };
+        let wrapped = RichText {
+            text: fragment.text.clone(),
+            html: Some(format!(
+                "<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>",
+                fragment.html.as_deref().unwrap()
+            )),
+            rtf: None,
+        };
+        assert_eq!(rich_text_signature(&fragment), rich_text_signature(&wrapped));
     }
 
     #[test]
@@ -1728,6 +2117,35 @@ mod tests {
                 "fallback",
             ),
             entry_id_for_files(&[second, first], "device", "fallback"),
+        );
+    }
+
+    #[test]
+    fn many_small_contents_are_split_into_bounded_stable_packs() {
+        let candidates = (0..300)
+            .map(|index| PackCandidate {
+                file_id: hash_bytes(format!("file-{index}").as_bytes()),
+                source: PathBuf::from(format!("file-{index}")),
+                size: 100 * 1024,
+            })
+            .collect::<Vec<_>>();
+        let groups = split_pack_candidates(candidates.clone(), 0);
+        let repeated = split_pack_candidates(candidates, 0);
+
+        assert!(groups.len() < 300);
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 300);
+        assert!(groups.iter().all(|group| {
+            group.iter().map(|candidate| candidate.size + 72).sum::<u64>() <= PACK_TARGET_SIZE
+        }));
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.iter().map(|candidate| candidate.file_id.as_str()).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            repeated
+                .iter()
+                .map(|group| group.iter().map(|candidate| candidate.file_id.as_str()).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
         );
     }
 

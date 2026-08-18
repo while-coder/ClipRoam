@@ -193,7 +193,7 @@ export class UserDataStore {
     const referenced = new Set<string>();
     const rows = this.#database.prepare("SELECT extra FROM clipboard_entries").all() as Array<{ extra: string }>;
     for (const row of rows) {
-      for (const node of parseExtra(row.extra).tree?.files ?? []) referenced.add(node.f);
+      for (const node of parseExtra(row.extra).tree?.files ?? []) referenced.add(node.b ?? node.f);
     }
     return referenced;
   }
@@ -201,7 +201,7 @@ export class UserDataStore {
   hasFileReference(entryId: string, fileId: string): boolean {
     const row = this.#database.prepare("SELECT extra FROM clipboard_entries WHERE id = ?")
       .get(entryId) as { extra: string } | undefined;
-    return Boolean(row && parseExtra(row.extra).tree?.files.some((node) => node.f === fileId));
+    return Boolean(row && parseExtra(row.extra).tree?.files.some((node) => (node.b ?? node.f) === fileId));
   }
 
   close(): void { this.#database.close(); }
@@ -227,7 +227,7 @@ export class UserDataStore {
   // The tree is the only record of which contents an entry uses; the pool
   // supplies size and availability for each distinct reference.
   #contentsOf(tree: ClipboardTree | undefined): ClipboardFile[] {
-    return this.files.describe([...new Set((tree?.files ?? []).map((node) => node.f))]);
+    return this.files.describe([...new Set((tree?.files ?? []).map((node) => node.b ?? node.f))]);
   }
 
   #transaction(work: () => void): void {

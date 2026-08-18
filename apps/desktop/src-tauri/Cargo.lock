@@ -563,6 +563,7 @@ dependencies = [
 name = "cliproam"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "base64 0.22.1",
  "chrono",
  "clipboard-win",
@@ -577,6 +578,8 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-global-shortcut",
  "uuid",
+ "windows",
+ "windows-core 0.61.2",
  "windows-sys 0.59.0",
 ]
 

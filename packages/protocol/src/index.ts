@@ -24,7 +24,7 @@ export const ClipboardFileSchema = z.object({
 // one of `roots`, `f` is the content it points at. Directories never occupy a
 // content row, and duplicated content is a repeated `f`, not a repeated blob.
 export const ClipboardTreeSchema = z.object({
-  v: z.literal(1),
+  v: z.union([z.literal(1), z.literal(2)]),
   roots: z.array(z.object({
     name: z.string().min(1).max(255),
     kind: z.enum(["file", "dir"]),
@@ -33,6 +33,11 @@ export const ClipboardTreeSchema = z.object({
   files: z.array(z.object({
     p: z.string().min(1).max(1024),
     f: FileIdSchema,
+    // Original size remains available even when `b` points at a transfer pack.
+    s: z.number().int().nonnegative().optional(),
+    // Version 2 entries may transfer this original content inside a bounded
+    // pack. `f` remains the identity used to restore and verify the file.
+    b: FileIdSchema.optional(),
   })).default([]),
 });
 
