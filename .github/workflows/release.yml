@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      notes: ${{ steps.release.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: release
+        uses: while-coder/workflows/.github/actions/resolve-release-info@main
+        with:
+          tag-prefix: v
+          package-json: package.json
+          changelog: CHANGELOG.md
+
+  prepare-release:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recreate GitHub Release
+        uses: while-coder/workflows/.github/actions/recreate-github-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.check.outputs.tag }}
+          target: ${{ github.sha }}
+          title: ClipRoam v${{ needs.check.outputs.version }}
+          notes: ${{ needs.check.outputs.notes }}
+
+  desktop:
+    needs: [check, prepare-release]
+    uses: while-coder/workflows/.github/workflows/tauri-desktop-release.yml@main
+    with:
+      project-path: apps/app
+      cargo-lock-path: apps/app/src-tauri/Cargo.lock
+      cargo-target-path: apps/app/src-tauri/target
+      tag-name: ${{ needs.check.outputs.tag }}
+      release-name: ClipRoam v${{ needs.check.outputs.version }}
+      release-body: ${{ needs.check.outputs.notes }}
+      release-owner: while-coder
+      release-repo: ClipRoam
+    secrets: inherit
+
+  android:
+    needs: [check, prepare-release]
+    uses: while-coder/workflows/.github/workflows/tauri-android-release.yml@main
+    with:
+      project-path: apps/app
+      cargo-lock-path: apps/app/src-tauri/Cargo.lock
+      cargo-target-path: apps/app/src-tauri/target
+      tag-name: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+      asset-prefix: ClipRoam
+      release-repository: while-coder/ClipRoam
+      init-command: pnpm tauri android init --ci
+      build-command: pnpm tauri android build --apk --aab --ci
+    secrets: inherit
+
+  ios:
+    needs: [check, prepare-release]
+    uses: while-coder/workflows/.github/workflows/tauri-ios-unsigned.yml@main
+    with:
+      project-path: apps/app
+      cargo-lock-path: apps/app/src-tauri/Cargo.lock
+      cargo-target-path: apps/app/src-tauri/target
+      tag-name: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+      asset-prefix: ClipRoam
+      release-repository: while-coder/ClipRoam
+      init-command: pnpm tauri ios init --ci
+      build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
+    secrets: inherit
+
+  docker:
+    needs: [check, prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build server distribution
+        run: pnpm build:server
+
+      - name: Build Docker image
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          docker build \
+            --tag "cliproam-server:$VERSION" \
+            --tag cliproam-server:latest \
+            --file apps/server/Dockerfile \
+            apps/server/dist
+
+      - name: Save Docker image
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: docker save --output cliproam-server.tar "cliproam-server:$VERSION"
+
+      - name: Upload Docker image to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: gh release upload "$TAG" cliproam-server.tar --clobber

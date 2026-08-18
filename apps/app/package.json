@@ -6,6 +6,7 @@
   "scripts": {
     "predev": "pnpm --filter @cliproam/protocol build && node ../../scripts/stop-dev.mjs --port 1430",
     "dev": "vite",
+    "prebuild": "pnpm --filter @cliproam/protocol build",
     "build": "vue-tsc --noEmit && vite build",
     "check": "vue-tsc --noEmit",
     "preview": "vite preview",
