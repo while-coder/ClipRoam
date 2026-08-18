@@ -53,6 +53,7 @@ const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
 const BROWSER_CONFIG_KEY = "cliproam.syncConfig";
 const runningInTauri = "__TAURI_INTERNALS__" in window;
 const isPasteWindow = runningInTauri && getCurrentWindow().label === "paste";
+const supportsVirtualFilePaste = ref(false);
 
 type SyncConfig = {
   enabled: boolean;
@@ -64,6 +65,12 @@ type SyncConfig = {
 };
 
 type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
+type VirtualFileRequest = {
+  entryId: string;
+  fileId: string;
+  size: number;
+  sourceDeviceId: string;
+};
 
 /**
  * Aggregates computed by the backend. A folder can hold thousands of nodes, so
@@ -347,7 +354,11 @@ async function paste(entry?: LocalClipboardEntry): Promise<void> {
   if (pastingEntryId.value) return;
   pastingEntryId.value = entry.id;
   try {
-    await ensureLocalFiles(entry);
+    // Windows file paste exposes virtual files immediately. Explorer then
+    // pulls each stream on demand; images still need their complete payload.
+    if (entry.kind !== "files" || !supportsVirtualFilePaste.value) {
+      await ensureLocalFiles(entry);
+    }
     await invoke("paste_entry", { entryId: entry.id });
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
@@ -1088,6 +1099,7 @@ onMounted(async () => {
   document.addEventListener("keydown", handleKeys);
 
   if (runningInTauri) {
+    supportsVirtualFilePaste.value = await invoke<boolean>("supports_virtual_file_paste");
     unlisteners = await Promise.all([
       listen("cliproam://entry-created", refreshEntries),
       // Emitted once every content of an entry has a known id, which for a
@@ -1104,6 +1116,26 @@ onMounted(async () => {
       listen("cliproam://history-changed", refreshEntries),
       listen("cliproam://focus-search", focusSearch),
       listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
+      listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
+        const client = syncClient;
+        if (!client) {
+          await invoke("fail_virtual_file_request", {
+            fileId: payload.fileId,
+            message: "同步服务未连接，无法获取其他设备的文件",
+          });
+          return;
+        }
+        try {
+          await client.downloadVirtualFile(payload);
+          await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
+          await refreshEntries();
+        } catch (error) {
+          await invoke("fail_virtual_file_request", {
+            fileId: payload.fileId,
+            message: error instanceof Error ? error.message : String(error),
+          }).catch(() => undefined);
+        }
+      }),
     ]);
     if (!isPasteWindow && !(await isRegistered(HOTKEY))) {
       await register(HOTKEY, (event) => {

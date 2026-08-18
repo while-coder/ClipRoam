@@ -478,6 +478,27 @@ export class SyncClient {
   }
 
   async downloadFile(entry: ClipboardEntry, file: ClipboardFile): Promise<void> {
+    return this.#downloadFileReference(entry.id, entry.sourceDeviceId, file);
+  }
+
+  async downloadVirtualFile(request: {
+    entryId: string;
+    fileId: string;
+    size: number;
+    sourceDeviceId: string;
+  }): Promise<void> {
+    return this.#downloadFileReference(request.entryId, request.sourceDeviceId, {
+      fileId: request.fileId,
+      size: request.size,
+      available: true,
+    });
+  }
+
+  async #downloadFileReference(
+    entryId: string,
+    sourceDeviceId: string,
+    file: ClipboardFile,
+  ): Promise<void> {
     const transferId = crypto.randomUUID();
     await invoke("begin_file_download", {
       transferId,
@@ -485,19 +506,22 @@ export class SyncClient {
       expectedSize: file.size,
     });
     try {
-      const completed = this.#waitForTransfer(transferId, entry.id, file);
+      const completed = this.#waitForTransfer(transferId, entryId, file);
       if (!this.#send({
         type: "file.download",
         transferId,
-        entryId: entry.id,
+        entryId,
         fileId: file.fileId,
-        sourceDeviceId: entry.sourceDeviceId,
+        sourceDeviceId,
       })) {
         this.#rejectTransfer(transferId, "同步服务未连接");
       }
       await completed;
     } catch (error) {
-      await invoke("cancel_file_download", { transferId }).catch(() => undefined);
+      await invoke("cancel_file_download", {
+        transferId,
+        reason: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
       throw error;
     }
   }

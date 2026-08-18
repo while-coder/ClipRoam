@@ -15,8 +15,8 @@ use std::{
 use uuid::Uuid;
 
 use crate::content::{
-    cached_file_path, refresh_summary, ClipboardEntry, ClipboardEntryExtra, ClipboardFile, ClipboardTree,
-    LocalSources,
+    cached_file_path, refresh_summary, transfer_file_id, ClipboardEntry, ClipboardEntryExtra,
+    ClipboardFile, ClipboardTree, LocalSources,
 };
 
 pub const SCHEMA_VERSION: i64 = 3;
@@ -559,8 +559,9 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
         entry_ids.insert(entry.id.clone());
         if let Some(tree) = &entry.tree {
             for node in &tree.files {
-                if !node.f.is_empty() {
-                    referenced.insert(node.f.clone());
+                let file_id = transfer_file_id(node);
+                if !file_id.is_empty() {
+                    referenced.insert(file_id.to_string());
                 }
             }
         }
@@ -594,6 +595,13 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
         for view in views.filter_map(Result::ok) {
             if !entry_ids.contains(&view.file_name().to_string_lossy().into_owned()) {
                 let _ = fs::remove_dir_all(view.path());
+            }
+        }
+    }
+    if let Ok(packs) = fs::read_dir(cache_dir.join("unpacked")) {
+        for pack in packs.filter_map(Result::ok) {
+            if !referenced.contains(&pack.file_name().to_string_lossy().into_owned()) {
+                let _ = fs::remove_dir_all(pack.path());
             }
         }
     }
@@ -711,7 +719,7 @@ mod tests {
             v: crate::content::TREE_VERSION,
             roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
             dirs: vec!["bundle".to_string()],
-            files: vec![ClipboardTreeFile { p: "bundle/a.txt".to_string(), f: file_id.to_string() }],
+            files: vec![ClipboardTreeFile { p: "bundle/a.txt".to_string(), f: file_id.to_string(), s: None, b: None }],
         };
         let mut history = HistoryData {
             active_history: LOCAL_HISTORY_KEY.to_string(),
