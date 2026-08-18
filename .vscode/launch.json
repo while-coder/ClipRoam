@@ -20,16 +20,16 @@
       "name": "Launch App · Windows",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam.exe",
-      "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
+      "program": "${workspaceFolder}/apps/app/src-tauri/target/debug/cliproam.exe",
+      "cwd": "${workspaceFolder}/apps/app/src-tauri",
       "preLaunchTask": "tauri:before:dev"
     },
     {
       "name": "Launch App · macOS",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/desktop/src-tauri/target/debug/cliproam",
-      "cwd": "${workspaceFolder}/apps/desktop/src-tauri",
+      "program": "${workspaceFolder}/apps/app/src-tauri/target/debug/cliproam",
+      "cwd": "${workspaceFolder}/apps/app/src-tauri",
       "preLaunchTask": "tauri:before:dev"
     }
   ]

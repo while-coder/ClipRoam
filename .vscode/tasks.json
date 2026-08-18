@@ -34,7 +34,7 @@
       "command": "cargo",
       "args": [
         "build",
-        "--manifest-path=${workspaceFolder}/apps/desktop/src-tauri/Cargo.toml"
+        "--manifest-path=${workspaceFolder}/apps/app/src-tauri/Cargo.toml"
       ],
       "problemMatcher": ["$rustc"],
       "presentation": { "reveal": "silent", "panel": "dedicated" }
@@ -45,7 +45,7 @@
       "isBackground": true,
       "command": "pnpm",
       "args": ["vite", "dev", "--port", "1430"],
-      "options": { "cwd": "${workspaceFolder}/apps/desktop" },
+      "options": { "cwd": "${workspaceFolder}/apps/app" },
       "problemMatcher": {
         "owner": "vite",
         "pattern": { "regexp": ".+" },
