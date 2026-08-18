@@ -45,15 +45,15 @@ pnpm dev
 Android 首次生成工程并构建 APK：
 
 ```powershell
-pnpm --filter @cliproam/desktop android:init
-pnpm --filter @cliproam/desktop android:build
+pnpm --filter @cliproam/app android:init
+pnpm --filter @cliproam/app android:build
 ```
 
 iOS 必须在安装了 Xcode 的 macOS 上执行：
 
 ```bash
-pnpm --filter @cliproam/desktop ios:init
-pnpm --filter @cliproam/desktop ios:build
+pnpm --filter @cliproam/app ios:init
+pnpm --filter @cliproam/app ios:build
 ```
 
 Android debug 构建允许连接开发用 HTTP 服务；release 和 iOS 正式包应连接 HTTPS/WSS 服务。
@@ -84,5 +84,5 @@ pnpm --filter @cliproam/server start
 ```powershell
 pnpm check
 pnpm build
-cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --manifest-path apps/app/src-tauri/Cargo.toml
 ```

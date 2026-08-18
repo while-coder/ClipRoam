@@ -11,6 +11,6 @@ data/
 .vscode/*
 !.vscode/launch.json
 !.vscode/tasks.json
-apps/desktop/src-tauri/gen/
+apps/app/src-tauri/gen/
 apps/server/admin/
 apps/server/debug/

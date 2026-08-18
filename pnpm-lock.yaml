@@ -27,7 +27,7 @@ importers:
         specifier: ^2.1.10
         version: 2.2.12(typescript@5.6.3)
 
-  apps/desktop:
+  apps/app:
     dependencies:
       '@cliproam/protocol':
         specifier: workspace:*
