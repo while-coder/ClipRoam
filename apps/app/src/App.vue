@@ -69,6 +69,7 @@ type SyncConfig = {
 };
 
 type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
+type SavePreparation = { saveId: string; missing: MissingFile[] };
 type VirtualFileRequest = {
   entryId: string;
   fileId: string;
@@ -579,16 +580,58 @@ function saveEntryLabel(entry: LocalClipboardEntry): string {
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
+  let saveId: string | undefined;
   try {
-    const localEntry = await ensureLocalFiles(entry);
     if (isMobile.value) {
+      await ensureLocalFiles(entry);
       showFeedback("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
-      await invoke("save_entry_files", { entryId: localEntry.id });
+      const preparation = await invoke<SavePreparation | null>("prepare_save_entry", {
+        entryId: entry.id,
+      });
+      if (!preparation) return;
+      saveId = preparation.saveId;
+
+      if (preparation.missing.length) {
+        const client = syncClient;
+        if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
+        let finished = 0;
+        const reportProgress = () => {
+          downloadProgressByEntryId.value = {
+            ...downloadProgressByEntryId.value,
+            [entry.id]: { finished, total: preparation.missing.length },
+          };
+        };
+        reportProgress();
+        const results = await mapWithConcurrency(
+          preparation.missing,
+          TRANSFER_CONCURRENCY,
+          async (file) => {
+            await client.downloadFileToSave(entry, {
+              fileId: file.fileId,
+              size: file.size,
+              available: true,
+            }, preparation.saveId);
+            finished += 1;
+            reportProgress();
+          },
+        );
+        const failures = results.filter((result) => result.status === "rejected").length;
+        if (failures) {
+          throw new Error(`有 ${failures} 个文件下载失败（共 ${preparation.missing.length} 个）`);
+        }
+      }
+
+      const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
+      saveId = undefined;
+      if (saved > 0) showFeedback(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
+    if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
     showFeedback(`${isMobile.value ? "下载" : "另存为"}失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
+    const { [entry.id]: _, ...remaining } = downloadProgressByEntryId.value;
+    downloadProgressByEntryId.value = remaining;
     savingEntryId.value = "";
   }
 }
@@ -600,8 +643,13 @@ function selectOrActivate(entry: LocalClipboardEntry): void {
 }
 
 function activateSelectedEntry(entry?: LocalClipboardEntry): void {
+  if (!entry) return;
   if (isPasteWindow) void pasteEntry(entry);
-  else void copyEntry(entry);
+  else if (entry.kind === "files") {
+    showFeedback("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“另存为…”手动下载", "info");
+  } else {
+    void copyEntry(entry);
+  }
 }
 
 function moveSelection(offset: -1 | 1): void {
@@ -1601,7 +1649,7 @@ onBeforeUnmount(() => {
         :tabindex="activatingEntryId === entry.id ? -1 : 0"
         :aria-disabled="activatingEntryId === entry.id"
         @mouseenter="selectedEntryId = entry.id"
-        @dblclick="!isPasteWindow && !isMobile && copyEntry(entry)"
+        @dblclick="!isPasteWindow && !isMobile && activateSelectedEntry(entry)"
         @click="selectOrActivate(entry)"
         @keydown.enter.stop="activateSelectedEntry(entry)"
         @keydown.space.prevent.stop="activateSelectedEntry(entry)"
