@@ -1,6 +1,5 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   ClipboardEntrySchema,
   ClipboardTreeSchema,
@@ -11,6 +10,7 @@ import {
   type ClipboardTree,
   type Device,
 } from "@cliproam/protocol";
+import Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
 import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
 import { userDatabasePath } from "./DataPaths.js";
@@ -33,13 +33,13 @@ type EntryRow = {
 // store only references by id, so a tree is the sole record of which bytes an
 // entry needs.
 export class UserDataStore {
-  readonly #database: DatabaseSync;
+  readonly #database: Database.Database;
 
   constructor(userId: string, readonly files: FileStore) {
     const databasePath = userDatabasePath(userId);
     mkdirSync(dirname(databasePath), { recursive: true });
-    this.#database = new DatabaseSync(databasePath);
-    this.#database.exec("PRAGMA journal_mode = WAL;");
+    this.#database = new Database(databasePath);
+    this.#database.pragma("journal_mode = WAL");
     this.#applySchema();
   }
 

@@ -4,7 +4,7 @@ import type {
   ClipboardManifestEntry,
   Device,
 } from "@cliproam/protocol";
-import { DatabaseSync } from "node:sqlite";
+import Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
 import { AccountStore } from "./AccountStore.js";
 import { filesDatabasePath, filesDirectory } from "./DataPaths.js";
@@ -14,14 +14,14 @@ export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
 export class ClipRoamStore {
   readonly #accounts: AccountStore;
-  readonly #filesDatabase: DatabaseSync;
+  readonly #filesDatabase: Database.Database;
   readonly #files: FileStore;
   readonly #userStores = new Map<string, UserDataStore>();
 
   constructor(databasePath?: string) {
     this.#accounts = new AccountStore(databasePath);
-    this.#filesDatabase = new DatabaseSync(filesDatabasePath);
-    this.#filesDatabase.exec("PRAGMA journal_mode = WAL;");
+    this.#filesDatabase = new Database(filesDatabasePath);
+    this.#filesDatabase.pragma("journal_mode = WAL");
     this.#files = new FileStore(this.#filesDatabase, filesDirectory);
     this.#files.applySchema();
   }

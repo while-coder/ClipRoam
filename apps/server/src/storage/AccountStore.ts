@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
+import Database from "better-sqlite3";
 import { accountsDatabasePath } from "./DataPaths.js";
 
 const scryptAsync = promisify(scrypt);
@@ -21,12 +21,12 @@ export class InvalidCredentialsError extends Error {
 }
 
 export class AccountStore {
-  readonly #database: DatabaseSync;
+  readonly #database: Database.Database;
 
   constructor(databasePath = accountsDatabasePath) {
     const path = resolve(databasePath);
     mkdirSync(dirname(path), { recursive: true });
-    this.#database = new DatabaseSync(path);
+    this.#database = new Database(path);
     this.#database.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
