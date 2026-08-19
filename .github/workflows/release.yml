@@ -56,6 +56,17 @@ jobs:
       release-repo: ClipRoam
     secrets: inherit
 
+  publish-manifest:
+    needs: [check, desktop]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
+    uses: while-coder/workflows/.github/workflows/tauri-updater-manifest.yml@main
+    with:
+      product-prefix: ClipRoam
+      tag-name: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+      release-notes: ${{ needs.check.outputs.notes }}
+    secrets: inherit
+
   android:
     needs: [check, prepare-release]
     uses: while-coder/workflows/.github/workflows/tauri-android-release.yml@main

@@ -6,9 +6,10 @@
   "platforms": ["windows", "macOS", "linux"],
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "process:default",
+    "updater:default"
   ]
 }
