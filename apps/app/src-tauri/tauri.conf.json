@@ -67,6 +67,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons-cliproam/generated-compact/32x32.png",
@@ -75,5 +76,13 @@
       "icons-cliproam/generated-compact/icon.icns",
       "icons-cliproam/generated-compact/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhEN0M3NkIyM0MwRUFEQzYKUldUR3JRNDhzblo4alZ4dVRCUHJzekJPUUgwUG9SaVdJT2hDcytnQStBdkY2UkxhN1FhMUxvN1AK",
+      "endpoints": [
+        "https://github.com/while-coder/ClipRoam/releases/download/updater/latest.json"
+      ]
+    }
   }
 }

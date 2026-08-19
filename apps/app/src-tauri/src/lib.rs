@@ -10,6 +10,8 @@ use chrono::Utc;
 use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -144,6 +146,8 @@ struct AppState {
     platform_clipboard: platform_clipboard::PlatformClipboard,
     /// `Sender` is not `Sync`, so managed state has to guard it.
     hash_queue: Mutex<mpsc::Sender<String>>,
+    #[cfg(target_os = "windows")]
+    paste_drag_focus_guard: Mutex<Option<Instant>>,
 }
 
 #[derive(Default)]
@@ -1417,6 +1421,32 @@ fn open_paste(_app: AppHandle) -> Result<(), String> {
     Err("移动端不支持全局快速粘贴窗口".to_string())
 }
 
+#[tauri::command]
+fn start_window_drag(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    if window.label() == "paste" {
+        let mut guard = state
+            .paste_drag_focus_guard
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *guard = Some(Instant::now() + Duration::from_secs(5));
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = &state;
+
+    if let Err(error) = window.start_dragging() {
+        #[cfg(target_os = "windows")]
+        if let Ok(mut guard) = state.paste_drag_focus_guard.lock() {
+            *guard = None;
+        }
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
@@ -2570,7 +2600,10 @@ fn paste_entry(
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let builder = builder
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+    let builder = tauri_updater_kit::attach_updater(builder);
 
     let builder = builder
         .setup(|app| {
@@ -2601,6 +2634,8 @@ pub fn run() {
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 platform_clipboard,
                 hash_queue: Mutex::new(sender),
+                #[cfg(target_os = "windows")]
+                paste_drag_focus_guard: Mutex::new(None),
             });
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
@@ -2638,8 +2673,42 @@ pub fn run() {
             api.prevent_close();
             let _ = window.hide();
         }
+        tauri::WindowEvent::Focused(true) if window.label() == "paste" => {
+            #[cfg(target_os = "windows")]
+            if let Ok(mut guard) = window.state::<AppState>().paste_drag_focus_guard.lock() {
+                *guard = None;
+            }
+        }
         tauri::WindowEvent::Focused(false) if window.label() == "paste" => {
-            let _ = window.hide();
+            let app = window.app_handle().clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                let Some(window) = app.get_webview_window("paste") else {
+                    return;
+                };
+                #[cfg(target_os = "windows")]
+                {
+                    let state = window.state::<AppState>();
+                    let ignore_drag_focus_loss = state
+                        .paste_drag_focus_guard
+                        .lock()
+                        .map(|mut guard| match *guard {
+                            Some(deadline) if Instant::now() <= deadline => true,
+                            Some(_) => {
+                                *guard = None;
+                                false
+                            }
+                            None => false,
+                        })
+                        .unwrap_or(false);
+                    if ignore_drag_focus_loss {
+                        return;
+                    }
+                }
+                if matches!(window.is_focused(), Ok(false)) {
+                    let _ = window.hide();
+                }
+            });
         }
         _ => {}
     });
@@ -2668,6 +2737,7 @@ pub fn run() {
             acknowledge_entry_deletion,
             acknowledge_entry_update,
             open_paste,
+            start_window_drag,
             hide_paste,
             hide_main,
             show_feedback,

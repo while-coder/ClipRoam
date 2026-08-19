@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 import type {
   ClipboardEntry,
   ClipboardKind,
@@ -25,6 +26,7 @@ import {
   LoaderCircle,
   Monitor,
   Pin,
+  RefreshCw,
   Search,
   Server,
   Settings2,
@@ -45,6 +47,7 @@ import {
   type ServerProtocol,
 } from "./services/syncClient";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./services/concurrency";
+import { useUpdater } from "./useUpdater";
 
 const HOTKEY = "CommandOrControl+Shift+V";
 const CONFIGURED_SERVER_ADDRESS = "127.0.0.1:4810";
@@ -57,6 +60,15 @@ const runningInTauri = "__TAURI_INTERNALS__" in window;
 const isPasteWindow = runningInTauri && getCurrentWindow().label === "paste";
 const isFeedbackWindow = runningInTauri && getCurrentWindow().label === "feedback";
 if (isFeedbackWindow) document.documentElement.classList.add("feedback-window-root");
+
+const {
+  appVersion,
+  updaterSupported,
+  updateStatus,
+  updateStatusText,
+  checkForUpdate,
+  initUpdaterVersion,
+} = useUpdater();
 
 type SyncConfig = {
   enabled: boolean;
@@ -134,7 +146,7 @@ const EMPTY_SUMMARY: EntrySummary = {
   pendingCount: 0,
   pendingSize: 0,
 };
-type SettingsPage = "general" | "account" | "data";
+type SettingsPage = "general" | "account" | "data" | "about";
 type FeedbackTone = "success" | "error" | "info";
 type FeedbackPayload = { message: string; tone: FeedbackTone };
 
@@ -710,7 +722,7 @@ async function startWindowDrag(event: MouseEvent): Promise<void> {
   if (!runningInTauri || isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, [role='button']")) return;
-  await getCurrentWindow().startDragging();
+  await invoke("start_window_drag");
 }
 
 async function getDevice(): Promise<Device> {
@@ -831,6 +843,10 @@ function openSettings(): void {
 function selectSettingsPage(page: SettingsPage): void {
   settingsPage.value = page;
   settingsError.value = "";
+}
+
+async function checkAppUpdate(): Promise<void> {
+  await checkForUpdate({ silent: false });
 }
 
 function closeSettings(): void {
@@ -1337,6 +1353,7 @@ onMounted(async () => {
   if (runningInTauri) {
     platformCapabilities.value = await invoke<PlatformCapabilities>("get_platform_capabilities");
   }
+  if (!isPasteWindow && !isFeedbackWindow) await initUpdaterVersion();
   await refreshEntries();
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
@@ -1770,6 +1787,7 @@ onBeforeUnmount(() => {
             <button :class="{ active: settingsPage === 'general' }" type="button" role="tab" aria-controls="settings-general-panel" :aria-selected="settingsPage === 'general'" @click="selectSettingsPage('general')">通用</button>
             <button :class="{ active: settingsPage === 'account' }" type="button" role="tab" aria-controls="settings-account-panel" :aria-selected="settingsPage === 'account'" @click="selectSettingsPage('account')">账号与安全</button>
             <button :class="{ active: settingsPage === 'data' }" type="button" role="tab" aria-controls="settings-data-panel" :aria-selected="settingsPage === 'data'" @click="selectSettingsPage('data')">应用数据</button>
+            <button :class="{ active: settingsPage === 'about' }" type="button" role="tab" aria-controls="settings-about-panel" :aria-selected="settingsPage === 'about'" @click="selectSettingsPage('about')">关于</button>
           </nav>
 
           <form class="settings-form" @submit.prevent="saveSettings">
@@ -1864,7 +1882,7 @@ onBeforeUnmount(() => {
               </section>
             </section>
 
-            <section v-else id="settings-data-panel" class="settings-page" role="tabpanel" aria-labelledby="data-page-heading">
+            <section v-else-if="settingsPage === 'data'" id="settings-data-panel" class="settings-page" role="tabpanel" aria-labelledby="data-page-heading">
               <header class="settings-page-header">
                 <h3 id="data-page-heading">应用数据</h3>
                 <p>查看当前设备保存的历史和配置文件。</p>
@@ -1883,10 +1901,55 @@ onBeforeUnmount(() => {
               </section>
             </section>
 
+            <section v-else id="settings-about-panel" class="settings-page" role="tabpanel" aria-labelledby="about-page-heading">
+              <header class="settings-page-header">
+                <h3 id="about-page-heading">关于</h3>
+                <p>查看应用版本和更新状态。</p>
+              </header>
+
+              <section class="settings-section about-product" aria-labelledby="about-product-heading">
+                <img class="about-product-mark" src="/cliproam-icon.png" alt="" />
+                <div class="about-product-copy">
+                  <h4 id="about-product-heading">ClipRoam</h4>
+                  <p>让剪贴板内容在你的设备之间安全漫游。</p>
+                </div>
+                <span class="about-version">v{{ appVersion || "…" }}</span>
+              </section>
+
+              <section class="settings-section about-update" aria-labelledby="update-settings-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><RefreshCw :size="18" /></span>
+                  <div>
+                    <h4 id="update-settings-heading">应用更新</h4>
+                    <p>检查 GitHub Release 中是否有可用的新版本。</p>
+                  </div>
+                </div>
+                <p class="about-update-status" :class="{ 'update-error': updateStatus === 'error' }" :role="updateStatus === 'error' ? 'alert' : 'status'" aria-live="polite">
+                  {{ updateStatusText }}
+                </p>
+                <button
+                  class="secondary-button about-update-button"
+                  type="button"
+                  :disabled="!updaterSupported || updateStatus === 'checking' || updateStatus === 'downloading'"
+                  @click="checkAppUpdate"
+                >
+                  <LoaderCircle v-if="updateStatus === 'checking'" :size="17" class="spin" aria-hidden="true" />
+                  <RefreshCw v-else :size="17" aria-hidden="true" />
+                  {{ !updaterSupported
+                    ? "当前平台不支持"
+                    : updateStatus === "checking"
+                      ? "检查中…"
+                      : updateStatus === "downloading"
+                        ? "下载中…"
+                        : "检查更新" }}
+                </button>
+              </section>
+            </section>
+
             <p v-if="settingsError" class="setup-error" role="alert">{{ settingsError }}</p>
 
-            <footer class="settings-actions">
-              <button v-if="settingsPage === 'general'" class="primary-button" type="submit" :disabled="savingSettings || changingPassword">
+            <footer v-if="settingsPage === 'general'" class="settings-actions">
+              <button class="primary-button" type="submit" :disabled="savingSettings || changingPassword">
                 <LoaderCircle v-if="savingSettings" :size="17" class="spin" aria-hidden="true" />
                 <Check v-else :size="17" aria-hidden="true" />
                 {{ savingSettings ? "正在保存…" : "保存设置" }}
@@ -1914,6 +1977,8 @@ onBeforeUnmount(() => {
       </section>
     </div>
   </main>
+
+  <UpdaterDialog v-if="!isPasteWindow && !isFeedbackWindow" locale="zh-CN" />
 
   <Transition name="feedback-toast">
     <aside
