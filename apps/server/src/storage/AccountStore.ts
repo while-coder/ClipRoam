@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
+import { openDatabase } from "../sqlite.js";
 import { accountsDatabasePath } from "./DataPaths.js";
 
 const scryptAsync = promisify(scrypt);
@@ -25,10 +25,8 @@ export class AccountStore {
 
   constructor(databasePath = accountsDatabasePath) {
     const path = resolve(databasePath);
-    mkdirSync(dirname(path), { recursive: true });
-    this.#database = new Database(path);
+    this.#database = openDatabase(path);
     this.#database.exec(`
-      PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
 
       CREATE TABLE IF NOT EXISTS users (

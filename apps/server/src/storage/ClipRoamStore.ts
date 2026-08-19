@@ -4,8 +4,9 @@ import type {
   ClipboardManifestEntry,
   Device,
 } from "@cliproam/protocol";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
+import { openDatabase } from "../sqlite.js";
 import { AccountStore } from "./AccountStore.js";
 import { filesDatabasePath, filesDirectory } from "./DataPaths.js";
 import { UserDataStore } from "./UserDataStore.js";
@@ -20,8 +21,7 @@ export class ClipRoamStore {
 
   constructor(databasePath?: string) {
     this.#accounts = new AccountStore(databasePath);
-    this.#filesDatabase = new Database(filesDatabasePath);
-    this.#filesDatabase.pragma("journal_mode = WAL");
+    this.#filesDatabase = openDatabase(filesDatabasePath);
     this.#files = new FileStore(this.#filesDatabase, filesDirectory);
     this.#files.applySchema();
   }
