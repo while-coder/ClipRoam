@@ -7,6 +7,8 @@ WORKDIR /app
 
 COPY . .
 
+RUN npm rebuild better-sqlite3
+
 VOLUME ["/root/.cliproam"]
 
 EXPOSE 4810

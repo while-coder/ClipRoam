@@ -1,6 +1,6 @@
 # ClipRoam
 
-ClipRoam 是一个本地优先的跨平台剪贴板历史与设备漫游工具。桌面端使用 Tauri 2、Vue 3 和 TypeScript；同步服务使用 TypeScript、Fastify、WebSocket 和 SQLite。
+ClipRoam 是一个本地优先的跨平台剪贴板历史与设备漫游工具。桌面端使用 Tauri 2、Vue 3 和 TypeScript；同步服务使用 TypeScript、Fastify、WebSocket 和 `better-sqlite3`。
 
 ## 当前可运行链路
 
@@ -43,6 +43,8 @@ pnpm dev
 ```powershell
 pnpm docker
 ```
+
+命令会从根 `package.json` 读取版本号，同时生成版本标签与 `latest` 标签；导出的 tar 保留版本标签。
 
 ### Android / iOS
 

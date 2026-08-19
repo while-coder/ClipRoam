@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { ClipboardFile } from "@cliproam/protocol";
+import type Database from "better-sqlite3";
 import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
@@ -16,7 +16,7 @@ type FileRow = { file_id: string; size: number; stored: number };
 // Reclaiming is therefore driven from the outside — see `sweep`.
 export class FileStore {
   constructor(
-    private readonly database: DatabaseSync,
+    private readonly database: Database.Database,
     private readonly directory: string,
   ) {
     mkdirSync(this.directory, { recursive: true });

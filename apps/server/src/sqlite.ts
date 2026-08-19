@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type Database from "better-sqlite3";
 
 // SQLite allows 999 bound parameters by default, and one entry can reference far
 // more contents than that.
@@ -12,7 +12,7 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return batches;
 }
 
-export function withTransaction(database: DatabaseSync, work: () => void): void {
+export function withTransaction(database: Database.Database, work: () => void): void {
   database.exec("BEGIN");
   try {
     work();
