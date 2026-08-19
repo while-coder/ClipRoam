@@ -5,20 +5,12 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "pnpm --filter @cliproam/app tauri dev",
-    "dev:app": "pnpm --filter @cliproam/app dev",
-    "dev:web": "pnpm --filter @cliproam/app dev",
     "dev:server": "pnpm --filter @cliproam/server dev",
     "debug:server": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/server debug",
     "build": "pnpm --filter @cliproam/server build && pnpm --filter @cliproam/app build",
     "build:server": "pnpm --filter @cliproam/server build",
     "docker": "node scripts/docker.js",
-    "build:windows": "pnpm --filter @cliproam/app tauri build",
-    "build:mac": "pnpm --filter @cliproam/app tauri build --target universal-apple-darwin",
-    "build:linux": "pnpm --filter @cliproam/app tauri build",
-    "android:init": "pnpm --filter @cliproam/app android:init",
-    "build:android": "pnpm --filter @cliproam/app tauri android build --apk --aab --ci",
-    "ios:init": "pnpm --filter @cliproam/app ios:init",
-    "build:ios": "pnpm --filter @cliproam/app tauri ios build --target aarch64 --no-sign --ci",
+    "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",
     "check": "pnpm --filter @cliproam/protocol build && pnpm -r check"
   }
