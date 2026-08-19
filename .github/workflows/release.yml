@@ -68,7 +68,8 @@ jobs:
     secrets: inherit
 
   android:
-    needs: [check, prepare-release]
+    needs: [check, desktop]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
     uses: while-coder/workflows/.github/workflows/tauri-android-release.yml@main
     with:
       project-path: apps/app
@@ -83,7 +84,8 @@ jobs:
     secrets: inherit
 
   ios:
-    needs: [check, prepare-release]
+    needs: [check, desktop]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
     uses: while-coder/workflows/.github/workflows/tauri-ios-unsigned.yml@main
     with:
       project-path: apps/app
