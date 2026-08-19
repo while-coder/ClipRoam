@@ -1437,6 +1437,7 @@ fn start_window_drag(
     #[cfg(not(target_os = "windows"))]
     let _ = &state;
 
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     if let Err(error) = window.start_dragging() {
         #[cfg(target_os = "windows")]
         if let Ok(mut guard) = state.paste_drag_focus_guard.lock() {
@@ -1444,6 +1445,8 @@ fn start_window_drag(
         }
         return Err(error.to_string());
     }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = &window;
     Ok(())
 }
 
