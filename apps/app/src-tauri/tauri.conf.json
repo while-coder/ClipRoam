@@ -37,6 +37,21 @@
         "skipTaskbar": true,
         "visible": false,
         "decorations": false
+      },
+      {
+        "label": "feedback",
+        "title": "ClipRoam",
+        "width": 380,
+        "height": 88,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "transparent": true,
+        "shadow": false,
+        "decorations": false
       }
     ],
     "security": {
