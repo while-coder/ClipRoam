@@ -6,6 +6,7 @@ data/
 .env.*
 !.env.example
 *.log
+cliproam-server.tar
 .DS_Store
 .idea/
 .vscode/*
