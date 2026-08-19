@@ -23,7 +23,7 @@ export function loadServerConfig(): ServerConfig {
   };
   const settings = { ...defaults, ...readTransferSettings() };
   return {
-    port: Number(process.env.CLIPROAM_PORT ?? 4810),
+    port: 4810,
     maxStoredFileBytes: settings.maxStoredFileMb * megabyte,
     resumableUploadTtlMs: settings.resumableUploadTtlHours * hour,
   };
