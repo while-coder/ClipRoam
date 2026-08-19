@@ -1,5 +1,3 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import {
   ClipboardEntrySchema,
   ClipboardTreeSchema,
@@ -10,9 +8,9 @@ import {
   type ClipboardTree,
   type Device,
 } from "@cliproam/protocol";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
-import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
+import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
 import { userDatabasePath } from "./DataPaths.js";
 
 // The server-wide content pool changed layout. Older per-user entries are not
@@ -37,9 +35,7 @@ export class UserDataStore {
 
   constructor(userId: string, readonly files: FileStore) {
     const databasePath = userDatabasePath(userId);
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.#database = new Database(databasePath);
-    this.#database.pragma("journal_mode = WAL");
+    this.#database = openDatabase(databasePath);
     this.#applySchema();
   }
 
