@@ -72,7 +72,7 @@ Android debug 构建允许连接开发用 HTTP 服务；release 和 iOS 正式�
 docker run -d --name cliproam-server -p 4810:4810 -e CLIPROAM_ADMIN_PASSWORD="请替换为高强度管理员密码" -v cliproam-data:/root/.cliproam cliproam-server:latest
 ```
 
-容器内部固定监听 `4810`，如需使用其他宿主机端口，只需修改 `-p` 左侧端口，例如 `-p 8080:4810`，无需传入 `CLIPROAM_PORT`。也可单独备份或恢复某个用户目录。不再被任何剪贴板记录引用的内容由后台回收，删除记录累计到一定次数、以及每 6 小时会各触发一次。服务器单文件上限默认 100MB，未完成上传分片默认保留 24 小时；这两项可在管理后台调整。每台客户端可在连接设置中独立选择更小的自动上传阈值。
+容器内部固定监听 `4810`，如需使用其他宿主机端口，只需修改 `-p` 左侧端口，例如 `-p 8080:4810`。也可单独备份或恢复某个用户目录。不再被任何剪贴板记录引用的内容由后台回收，删除记录累计到一定次数、以及每 6 小时会各触发一次。服务器单文件上限默认 100MB，未完成上传分片默认保留 24 小时；这两项可在管理后台调整。每台客户端可在连接设置中独立选择更小的自动上传阈值。
 
 ## HTTPS 与管理后台
 
@@ -83,7 +83,7 @@ $env:CLIPROAM_ADMIN_PASSWORD = "请替换为高强度管理员密码"
 pnpm --filter @cliproam/server start
 ```
 
-`CLIPROAM_PORT` 和 `CLIPROAM_ADMIN_PASSWORD` 可以由启动环境传入。
+`CLIPROAM_ADMIN_PASSWORD` 可以由启动环境传入。服务固定监听 `4810`；需要更换对外端口时，请通过 Docker 端口映射或反向代理完成。
 
 从 `src/` 启动的开发模式（VS Code 的 `Launch Server`、`pnpm dev:server`）默认管理员密码为 `admin`；编译后的正常 `start` 不提供默认密码。
 

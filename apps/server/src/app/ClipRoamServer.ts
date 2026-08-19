@@ -47,6 +47,8 @@ export class ClipRoamServer {
     );
   }
 
+  get port(): number { return this.config.port; }
+
   get adminUrl(): string {
     const protocol = this.#tls.status.enabled ? "https" : "http";
     return `${protocol}://localhost:${this.config.port}/admin`;
