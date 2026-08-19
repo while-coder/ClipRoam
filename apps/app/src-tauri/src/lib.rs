@@ -138,6 +138,7 @@ struct AppState {
     sync_config: Mutex<Option<SyncConfig>>,
     sync_config_path: PathBuf,
     downloads: Mutex<HashMap<String, DownloadState>>,
+    save_sessions: Mutex<HashMap<String, SaveSession>>,
     virtual_downloads: VirtualDownloads,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     platform_clipboard: platform_clipboard::PlatformClipboard,
@@ -218,6 +219,25 @@ struct DownloadState {
     expected_size: u64,
     received_size: u64,
     hasher: Sha256,
+    target: DownloadTarget,
+}
+
+enum DownloadTarget {
+    Cache,
+    Save {
+        save_id: String,
+        completed_path: PathBuf,
+    },
+}
+
+struct SaveSession {
+    entry_id: String,
+    destination: PathBuf,
+    staging_dir: PathBuf,
+    single_file: bool,
+    expected: HashMap<String, u64>,
+    in_progress: HashSet<String>,
+    downloaded: HashSet<String>,
 }
 
 #[derive(Serialize)]
@@ -226,6 +246,13 @@ struct MissingFile {
     file_id: String,
     size: u64,
     source_device_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavePreparation {
+    save_id: String,
+    missing: Vec<MissingFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -1954,17 +1981,51 @@ fn begin_file_download(
     transfer_id: String,
     file_id: String,
     expected_size: u64,
+    save_id: Option<String>,
 ) -> Result<(), String> {
-    state.virtual_downloads.begin(&file_id);
-    let path = {
+    let (path, target) = if let Some(save_id) = save_id {
+        let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
+        let session = sessions
+            .get_mut(&save_id)
+            .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
+        let expected = session
+            .expected
+            .get(&file_id)
+            .ok_or_else(|| "文件不属于当前另存为任务".to_string())?;
+        if *expected != expected_size {
+            return Err("文件大小与另存为任务不一致".to_string());
+        }
+        if session.downloaded.contains(&file_id) || !session.in_progress.insert(file_id.clone()) {
+            return Err("文件正在下载或已经下载".to_string());
+        }
+        let completed_path = session.staging_dir.join(&file_id);
+        (
+            session.staging_dir.join(format!("{file_id}.part")),
+            DownloadTarget::Save {
+                save_id,
+                completed_path,
+            },
+        )
+    } else {
+        state.virtual_downloads.begin(&file_id);
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        download_path(&active_cache_dir(&state, &history), &file_id)
-            .ok_or_else(|| "内容标识不合法".to_string())?
+        (
+            download_path(&active_cache_dir(&state, &history), &file_id)
+                .ok_or_else(|| "内容标识不合法".to_string())?,
+            DownloadTarget::Cache,
+        )
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let prepared = (|| {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::File::create(&path).map_err(|error| error.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = prepared {
+        clear_download_target(&state, &target, &file_id, &error);
+        return Err(error);
     }
-    fs::File::create(&path).map_err(|error| error.to_string())?;
     state
         .downloads
         .lock()
@@ -1977,6 +2038,7 @@ fn begin_file_download(
                 expected_size,
                 received_size: 0,
                 hasher: Sha256::new(),
+                target,
             },
         );
     Ok(())
@@ -2003,12 +2065,15 @@ fn append_file_download(
         .open(&download.path)
         .and_then(|mut file| file.write_all(&bytes))
         .map_err(|error| error.to_string())?;
-    state.virtual_downloads.progress();
+    if matches!(download.target, DownloadTarget::Cache) {
+        state.virtual_downloads.progress();
+    }
     Ok(())
 }
 
-/// A completed download is retained at `files/download/<fileId>` only after
-/// its digest matches the id used by history and sync.
+/// A completed cache download is registered only after digest verification.
+/// Direct-save downloads stay inside the user-selected destination's staging
+/// directory and never enter the application cache or its database.
 #[tauri::command(rename_all = "camelCase")]
 fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
     let download = state
@@ -2019,28 +2084,64 @@ fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Resu
         .ok_or_else(|| "文件下载任务不存在".to_string())?;
     if download.received_size != download.expected_size {
         let _ = fs::remove_file(&download.path);
-        state.virtual_downloads.fail(&download.file_id, "文件下载不完整".to_string());
+        fail_download_target(&state, &download, "文件下载不完整");
         return Err("文件下载不完整".to_string());
     }
-    if content::to_hex(&download.hasher.finalize()) != download.file_id {
+    if content::to_hex(&download.hasher.clone().finalize()) != download.file_id {
         let _ = fs::remove_file(&download.path);
-        state.virtual_downloads.fail(&download.file_id, "文件内容校验失败".to_string());
+        fail_download_target(&state, &download, "文件内容校验失败");
         return Err("文件内容校验失败".to_string());
     }
 
-    let database_path = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        history_path_for_key(&state.histories_dir, &history.active_history)
-    };
-    register_cached_file(&database_path, &download.file_id, download.expected_size)?;
-    state
-        .history
-        .lock()
-        .map_err(|error| error.to_string())?
-        .cached_files
-        .insert(download.file_id.clone());
-    state.virtual_downloads.complete(&download.file_id);
+    match &download.target {
+        DownloadTarget::Cache => {
+            let database_path = {
+                let history = state.history.lock().map_err(|error| error.to_string())?;
+                history_path_for_key(&state.histories_dir, &history.active_history)
+            };
+            register_cached_file(&database_path, &download.file_id, download.expected_size)?;
+            state
+                .history
+                .lock()
+                .map_err(|error| error.to_string())?
+                .cached_files
+                .insert(download.file_id.clone());
+            state.virtual_downloads.complete(&download.file_id);
+        }
+        DownloadTarget::Save {
+            save_id,
+            completed_path,
+        } => {
+            if completed_path.exists() {
+                fs::remove_file(completed_path).map_err(|error| error.to_string())?;
+            }
+            fs::rename(&download.path, completed_path).map_err(|error| error.to_string())?;
+            let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
+            let session = sessions
+                .get_mut(save_id)
+                .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
+            session.in_progress.remove(&download.file_id);
+            session.downloaded.insert(download.file_id.clone());
+        }
+    }
     Ok(())
+}
+
+fn fail_download_target(state: &AppState, download: &DownloadState, message: &str) {
+    clear_download_target(state, &download.target, &download.file_id, message);
+}
+
+fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, message: &str) {
+    match target {
+        DownloadTarget::Cache => state.virtual_downloads.fail(file_id, message.to_string()),
+        DownloadTarget::Save { save_id, .. } => {
+            if let Ok(mut sessions) = state.save_sessions.lock() {
+                if let Some(session) = sessions.get_mut(save_id) {
+                    session.in_progress.remove(file_id);
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2049,16 +2150,17 @@ fn cancel_file_download(
     transfer_id: String,
     reason: Option<String>,
 ) -> Result<(), String> {
-    if let Some(download) = state
+    let download = state
         .downloads
         .lock()
         .map_err(|error| error.to_string())?
-        .remove(&transfer_id)
-    {
-        let _ = fs::remove_file(download.path);
-        state.virtual_downloads.fail(
-            &download.file_id,
-            reason.unwrap_or_else(|| "文件下载已取消".to_string()),
+        .remove(&transfer_id);
+    if let Some(download) = download {
+        let _ = fs::remove_file(&download.path);
+        fail_download_target(
+            &state,
+            &download,
+            &reason.unwrap_or_else(|| "文件下载已取消".to_string()),
         );
     }
     Ok(())
@@ -2076,7 +2178,10 @@ fn fail_virtual_file_request(
 
 #[tauri::command(rename_all = "camelCase")]
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usize, String> {
+fn prepare_save_entry(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<Option<SavePreparation>, String> {
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let tree = snapshot
         .entry
@@ -2087,36 +2192,158 @@ fn save_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<usiz
         return Err("该记录不包含可另存的文件".to_string());
     }
 
-    if tree.roots.len() == 1 && tree.roots[0].kind == "file" {
-        let node = tree.files.first().ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
-        let source = snapshot
-            .resolve(&node.f)
-            .ok_or_else(|| format!("文件内容不可用：{}", tree.roots[0].name))?;
+    let single_file = tree.roots.len() == 1 && tree.roots[0].kind == "file";
+    let destination = if single_file {
         let Some(destination) = rfd::FileDialog::new()
             .set_file_name(&tree.roots[0].name)
             .save_file()
         else {
-            return Ok(0);
+            return Ok(None);
         };
-        if fs::canonicalize(&source).ok() == fs::canonicalize(&destination).ok() {
-            return Ok(0);
-        }
-        fs::copy(&source, &destination).map_err(|error| format!("无法保存文件：{error}"))?;
-        return Ok(1);
-    }
-
-    let Some(destination) = rfd::FileDialog::new().pick_folder() else {
-        return Ok(0);
+        destination
+    } else {
+        let Some(destination) = rfd::FileDialog::new().pick_folder() else {
+            return Ok(None);
+        };
+        destination
     };
-    // Real copies: the user owns the destination, and a hard link would let a
-    // later edit reach back into the cache.
-    rebuild_tree(&destination, tree, &|file_id| snapshot.resolve_content(file_id), false)
+
+    let save_id = uuid::Uuid::new_v4().to_string();
+    let staging_parent = if single_file {
+        destination
+            .parent()
+            .ok_or_else(|| "无法确定目标目录".to_string())?
+            .to_path_buf()
+    } else {
+        destination.clone()
+    };
+    let staging_dir = staging_parent.join(format!(".cliproam-save-{save_id}"));
+    fs::create_dir_all(&staging_dir).map_err(|error| format!("无法准备目标目录：{error}"))?;
+
+    let missing = missing_files(&snapshot);
+    let expected = missing
+        .iter()
+        .map(|file| (file.file_id.clone(), file.size))
+        .collect();
+    state
+        .save_sessions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(
+            save_id.clone(),
+            SaveSession {
+                entry_id,
+                destination,
+                staging_dir,
+                single_file,
+                expected,
+                in_progress: HashSet::new(),
+                downloaded: HashSet::new(),
+            },
+        );
+    Ok(Some(SavePreparation { save_id, missing }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn save_entry_files(_state: State<'_, AppState>, _entry_id: String) -> Result<usize, String> {
+fn prepare_save_entry(
+    _state: State<'_, AppState>,
+    _entry_id: String,
+) -> Result<Option<SavePreparation>, String> {
     Err("移动端文件已保存在应用缓存中，请使用系统分享或文件导出入口".to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> Result<(), String> {
+    let session = state
+        .save_sessions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&save_id);
+    if let Some(session) = session {
+        let mut downloads = state.downloads.lock().map_err(|error| error.to_string())?;
+        let transfer_ids = downloads
+            .iter()
+            .filter_map(|(transfer_id, download)| match &download.target {
+                DownloadTarget::Save { save_id: target_id, .. } if target_id == &save_id => {
+                    Some(transfer_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for transfer_id in transfer_ids {
+            if let Some(download) = downloads.remove(&transfer_id) {
+                let _ = fs::remove_file(download.path);
+            }
+        }
+        drop(downloads);
+        let _ = fs::remove_dir_all(session.staging_dir);
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usize, String> {
+    let session = state
+        .save_sessions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&save_id)
+        .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
+    let result = (|| {
+        if !session.in_progress.is_empty() || session.downloaded.len() != session.expected.len() {
+            return Err("另存为所需文件尚未下载完成".to_string());
+        }
+        let snapshot = snapshot_entry(&state, &session.entry_id)?;
+        let tree = snapshot
+            .entry
+            .tree
+            .as_ref()
+            .ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+
+        let mut resolved = HashMap::<String, PathBuf>::new();
+        for node in &tree.files {
+            if resolved.contains_key(&node.f) {
+                continue;
+            }
+            if let Some(pack_id) = node.b.as_deref() {
+                let pack_path = if session.downloaded.contains(pack_id) {
+                    Some(session.staging_dir.join(pack_id))
+                } else {
+                    snapshot.resolve(pack_id)
+                }
+                .ok_or_else(|| format!("文件内容不可用：{}", node.p))?;
+                let unpacked = session.staging_dir.join("unpacked").join(pack_id);
+                unpack_pack(&pack_path, &unpacked)?;
+                resolved.insert(node.f.clone(), unpacked.join(&node.f));
+            } else if session.downloaded.contains(&node.f) {
+                resolved.insert(node.f.clone(), session.staging_dir.join(&node.f));
+            } else {
+                let source = snapshot
+                    .resolve(&node.f)
+                    .ok_or_else(|| format!("文件内容不可用：{}", node.p))?;
+                resolved.insert(node.f.clone(), source);
+            }
+        }
+
+        if session.single_file {
+            let node = tree.files.first().ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+            let source = resolved
+                .get(&node.f)
+                .ok_or_else(|| format!("文件内容不可用：{}", tree.roots[0].name))?;
+            if fs::canonicalize(source).ok() == fs::canonicalize(&session.destination).ok() {
+                return Ok(0);
+            }
+            fs::copy(source, &session.destination).map_err(|error| format!("无法保存文件：{error}"))?;
+            Ok(1)
+        } else {
+            // Real copies: the user owns the destination, and a hard link would
+            // let a later edit reach back into the source or cache.
+            rebuild_tree(&session.destination, tree, &|file_id| resolved.get(file_id).cloned(), false)
+        }
+    })();
+    let _ = fs::remove_dir_all(&session.staging_dir);
+    result
 }
 
 /// Writes a live clipboard activation received from another device without
@@ -2369,6 +2596,7 @@ pub fn run() {
                 sync_config: Mutex::new(sync_config),
                 sync_config_path,
                 downloads: Mutex::new(HashMap::new()),
+                save_sessions: Mutex::new(HashMap::new()),
                 virtual_downloads: VirtualDownloads::default(),
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 platform_clipboard,
@@ -2447,13 +2675,15 @@ pub fn run() {
             refresh_entry,
             prepare_entry_files,
             prepare_paste_entry,
+            prepare_save_entry,
             read_file_chunk,
             begin_file_download,
             append_file_download,
             finish_file_download,
             cancel_file_download,
+            cancel_save_entry,
+            finish_save_entry,
             fail_virtual_file_request,
-            save_entry_files,
             activate_remote_entry,
             copy_entry,
             paste_entry

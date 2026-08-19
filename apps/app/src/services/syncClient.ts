@@ -488,6 +488,14 @@ export class SyncClient {
     return this.#downloadFileReference(entry.id, entry.sourceDeviceId, file);
   }
 
+  async downloadFileToSave(
+    entry: ClipboardEntry,
+    file: ClipboardFile,
+    saveId: string,
+  ): Promise<void> {
+    return this.#downloadFileReference(entry.id, entry.sourceDeviceId, file, saveId);
+  }
+
   async downloadVirtualFile(request: {
     entryId: string;
     fileId: string;
@@ -505,12 +513,14 @@ export class SyncClient {
     entryId: string,
     sourceDeviceId: string,
     file: ClipboardFile,
+    saveId?: string,
   ): Promise<void> {
     const transferId = crypto.randomUUID();
     await invoke("begin_file_download", {
       transferId,
       fileId: file.fileId,
       expectedSize: file.size,
+      saveId,
     });
     try {
       const completed = this.#waitForTransfer(transferId, entryId, file);
