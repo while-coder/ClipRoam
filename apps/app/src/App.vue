@@ -11,6 +11,8 @@ import type {
 } from "@cliproam/protocol";
 import {
   Check,
+  CircleAlert,
+  CircleCheck,
   Clipboard,
   Cloud,
   CloudOff,
@@ -19,6 +21,7 @@ import {
   FileText,
   FolderOpen,
   Image,
+  Info,
   LoaderCircle,
   Monitor,
   Pin,
@@ -52,6 +55,8 @@ const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
 const BROWSER_CONFIG_KEY = "cliproam.syncConfig";
 const runningInTauri = "__TAURI_INTERNALS__" in window;
 const isPasteWindow = runningInTauri && getCurrentWindow().label === "paste";
+const isFeedbackWindow = runningInTauri && getCurrentWindow().label === "feedback";
+if (isFeedbackWindow) document.documentElement.classList.add("feedback-window-root");
 
 type SyncConfig = {
   enabled: boolean;
@@ -129,6 +134,8 @@ const EMPTY_SUMMARY: EntrySummary = {
   pendingSize: 0,
 };
 type SettingsPage = "general" | "account" | "data";
+type FeedbackTone = "success" | "error" | "info";
+type FeedbackPayload = { message: string; tone: FeedbackTone };
 
 const entries = ref<LocalClipboardEntry[]>([]);
 const syncedEntryIds = ref(new Set<string>());
@@ -141,8 +148,7 @@ const filter = ref<"all" | ClipboardKind | "pending-upload">("all");
 const selectedEntryId = ref("");
 const connected = ref(false);
 const syncEnabled = ref(false);
-const errorMessage = ref("");
-const statusMessage = ref("");
+const feedbackToast = ref<FeedbackPayload>();
 const platformCapabilities = ref<PlatformCapabilities>(DESKTOP_CAPABILITIES);
 const isMobile = computed(() => platformCapabilities.value.mobile);
 const initializing = ref(true);
@@ -186,6 +192,8 @@ let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
+let feedbackTimer: number | undefined;
+let feedbackWindowHideTimer: number | undefined;
 let globalShortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
 let localClipboardRevision = 0;
 let remoteActivationRevision = 0;
@@ -249,6 +257,33 @@ const selectedIndex = computed(() => {
   const index = filteredEntries.value.findIndex((entry) => entry.id === selectedEntryId.value);
   return index >= 0 ? index : 0;
 });
+
+function displayFeedback(payload: FeedbackPayload): void {
+  if (feedbackTimer !== undefined) window.clearTimeout(feedbackTimer);
+  if (feedbackWindowHideTimer !== undefined) window.clearTimeout(feedbackWindowHideTimer);
+  feedbackToast.value = payload;
+  feedbackTimer = window.setTimeout(() => {
+    feedbackToast.value = undefined;
+    feedbackTimer = undefined;
+    if (isFeedbackWindow) {
+      feedbackWindowHideTimer = window.setTimeout(() => {
+        void invoke("hide_feedback");
+        feedbackWindowHideTimer = undefined;
+      }, 180);
+    }
+  }, payload.tone === "error" ? 5_000 : 3_200);
+}
+
+function showFeedback(message: string, tone: FeedbackTone = "info"): void {
+  const normalized = message.trim();
+  if (!normalized) return;
+  const payload = { message: normalized, tone };
+  if (!runningInTauri) {
+    displayFeedback(payload);
+    return;
+  }
+  void invoke("show_feedback", payload).catch(() => displayFeedback(payload));
+}
 
 function formatAge(createdAt: string): string {
   const elapsed = Math.max(0, currentTime.value - new Date(createdAt).getTime());
@@ -337,14 +372,12 @@ async function focusSearch(): Promise<void> {
 async function captureCurrentClipboard(): Promise<void> {
   if (!runningInTauri || capturingClipboard.value) return;
   capturingClipboard.value = true;
-  errorMessage.value = "";
-  statusMessage.value = "";
   try {
     const captured = await invoke<boolean>("capture_current_clipboard_text");
     await refreshEntries();
-    statusMessage.value = captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本";
+    showFeedback(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
   } catch (error) {
-    errorMessage.value = `读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`;
+    showFeedback(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     capturingClipboard.value = false;
   }
@@ -413,11 +446,9 @@ async function activateEntry(
   command: "copy_entry" | "paste_entry",
 ): Promise<void> {
   if (!entry) return;
-  errorMessage.value = "";
-  statusMessage.value = "";
   if (!runningInTauri) {
     await navigator.clipboard.writeText(entry.content);
-    statusMessage.value = "已复制到系统剪贴板";
+    showFeedback("已复制到系统剪贴板", "success");
     return;
   }
   if (isMobile.value && entry.kind !== "text") {
@@ -431,13 +462,13 @@ async function activateEntry(
     // platform must materialize before it can copy or paste the entry.
     await ensurePasteReady(entry);
     await invoke(command, { entryId: entry.id });
-    if (command === "copy_entry") statusMessage.value = "已复制到系统剪贴板";
+    showFeedback(command === "copy_entry" ? "已复制到系统剪贴板" : "已粘贴到当前应用", "success");
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
       await refreshEntries();
       return;
     }
-    errorMessage.value = String(error);
+    showFeedback(String(error), "error");
   } finally {
     activatingEntryId.value = "";
   }
@@ -491,17 +522,16 @@ function canManualUpload(entry: LocalClipboardEntry): boolean {
 
 async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
   if (!syncClient) {
-    errorMessage.value = "同步服务未连接，无法上传文件";
+    showFeedback("同步服务未连接，无法上传文件", "error");
     return;
   }
   if (uploadingEntryId.value || uploadProgressByEntryId.value[entry.id] || !canManualUpload(entry)) return;
   uploadingEntryId.value = entry.id;
-  errorMessage.value = "";
   try {
     // Publishing needs the tree, which the rendered list does not carry.
     await syncClient.upload(await fullEntry(entry));
   } catch (error) {
-    errorMessage.value = `上传失败：${error instanceof Error ? error.message : String(error)}`;
+    showFeedback(`上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     await refreshEntries();
     uploadingEntryId.value = "";
@@ -528,7 +558,7 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
       await client.publish(await fullEntry(entry));
     } catch (error) {
       if (syncClient === client) {
-        errorMessage.value = `自动上传失败：${error instanceof Error ? error.message : String(error)}`;
+        showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
       }
     }
   }
@@ -549,17 +579,15 @@ function saveEntryLabel(entry: LocalClipboardEntry): string {
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
-  errorMessage.value = "";
-  statusMessage.value = "";
   try {
     const localEntry = await ensureLocalFiles(entry);
     if (isMobile.value) {
-      statusMessage.value = "内容已下载到应用缓存，可在 ClipRoam 中离线使用";
+      showFeedback("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
       await invoke("save_entry_files", { entryId: localEntry.id });
     }
   } catch (error) {
-    errorMessage.value = `${isMobile.value ? "下载" : "另存为"}失败：${error instanceof Error ? error.message : String(error)}`;
+    showFeedback(`${isMobile.value ? "下载" : "另存为"}失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     savingEntryId.value = "";
   }
@@ -588,7 +616,6 @@ function moveSelection(offset: -1 | 1): void {
 async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
   if (isPasteWindow || previewLoading.value) return;
   previewLoading.value = true;
-  errorMessage.value = "";
   try {
     const localEntry = await ensureLocalFiles(entry);
     if (!imageSource(localEntry)) throw new Error("图片文件不可用");
@@ -596,7 +623,7 @@ async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
     await nextTick();
     previewDialog.value?.focus();
   } catch (error) {
-    errorMessage.value = `无法预览图片：${error instanceof Error ? error.message : String(error)}`;
+    showFeedback(`无法预览图片：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     previewLoading.value = false;
   }
@@ -934,7 +961,6 @@ async function useLocalMode(): Promise<void> {
     syncClient = undefined;
     connected.value = false;
     syncEnabled.value = false;
-    errorMessage.value = "";
     setupVisible.value = false;
     await refreshEntries();
     await nextTick();
@@ -1087,7 +1113,7 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
       && activeSyncConfig === config
       && config.autoReceiveClipboard
     ) {
-      errorMessage.value = `自动接收剪贴板失败：${error instanceof Error ? error.message : String(error)}`;
+      showFeedback(`自动接收剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
     }
   }
 }
@@ -1158,7 +1184,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     await refreshEntries();
   } catch (error) {
     if (syncClient === client) {
-      errorMessage.value = `同步历史失败：${error instanceof Error ? error.message : String(error)}`;
+      showFeedback(`同步历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
     }
   }
 }
@@ -1177,7 +1203,6 @@ async function startSync(config: SyncConfig): Promise<void> {
     {
       onConnected: (value) => {
         connected.value = value;
-        if (value) errorMessage.value = "";
       },
       onManifest: (manifest, devices) => {
         rememberDevices(devices);
@@ -1217,7 +1242,7 @@ async function startSync(config: SyncConfig): Promise<void> {
         const { [entryId]: _, ...remaining } = uploadProgressByEntryId.value;
         uploadProgressByEntryId.value = remaining;
       },
-      onError: (message) => { errorMessage.value = message; },
+      onError: (message) => { showFeedback(message, "error"); },
       onAuthenticationFailed: (message) => {
         if (syncClient !== client) return;
         client.stop();
@@ -1255,6 +1280,12 @@ async function applySavedSyncConfig(): Promise<void> {
 }
 
 onMounted(async () => {
+  if (isFeedbackWindow) {
+    unlisteners = [await listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
+      displayFeedback(payload);
+    })];
+    return;
+  }
   if (runningInTauri) {
     platformCapabilities.value = await invoke<PlatformCapabilities>("get_platform_capabilities");
   }
@@ -1264,6 +1295,9 @@ onMounted(async () => {
 
   if (runningInTauri) {
     unlisteners = await Promise.all([
+      listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
+        displayFeedback(payload);
+      }),
       listen("cliproam://entry-created", () => {
         localClipboardRevision += 1;
         void refreshEntries();
@@ -1276,7 +1310,7 @@ onMounted(async () => {
         try {
           await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
         } catch (error) {
-          errorMessage.value = `自动上传失败：${error instanceof Error ? error.message : String(error)}`;
+          showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
         }
       }),
       listen("cliproam://history-changed", refreshEntries),
@@ -1347,6 +1381,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
+  if (feedbackTimer !== undefined) window.clearTimeout(feedbackTimer);
+  if (feedbackWindowHideTimer !== undefined) window.clearTimeout(feedbackWindowHideTimer);
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   syncClient?.stop();
@@ -1355,7 +1391,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
+  <main v-if="isFeedbackWindow" class="feedback-window-shell" aria-hidden="true"></main>
+
+  <main v-else-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
     <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
     <strong>ClipRoam</strong>
     <span>正在读取连接配置…</span>
@@ -1551,8 +1589,6 @@ onBeforeUnmount(() => {
         <span class="result-count">{{ filteredEntries.length }} 条</span>
         <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
       </div>
-      <p v-if="errorMessage" class="error-banner" role="alert">{{ errorMessage }}</p>
-      <p v-else-if="statusMessage" class="status-banner" role="status">{{ statusMessage }}</p>
       </section>
 
       <section id="history-content" class="history-list" aria-label="剪贴板历史">
@@ -1830,4 +1866,22 @@ onBeforeUnmount(() => {
       </section>
     </div>
   </main>
+
+  <Transition name="feedback-toast">
+    <aside
+      v-if="feedbackToast"
+      class="feedback-toast-layer"
+      :class="[`feedback-${feedbackToast.tone}`, { 'tray-feedback': isFeedbackWindow }]"
+      :role="feedbackToast.tone === 'error' ? 'alert' : 'status'"
+      :aria-live="feedbackToast.tone === 'error' ? 'assertive' : 'polite'"
+      aria-atomic="true"
+    >
+      <span class="feedback-toast-card">
+        <CircleCheck v-if="feedbackToast.tone === 'success'" :size="17" aria-hidden="true" />
+        <CircleAlert v-else-if="feedbackToast.tone === 'error'" :size="17" aria-hidden="true" />
+        <Info v-else :size="17" aria-hidden="true" />
+        <span>{{ feedbackToast.message }}</span>
+      </span>
+    </aside>
+  </Transition>
 </template>
