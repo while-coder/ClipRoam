@@ -2010,12 +2010,12 @@ fn activate_remote_entry(
     }
 }
 
-#[tauri::command(rename_all = "camelCase")]
-fn paste_entry(
+fn apply_clipboard_entry(
     window: tauri::WebviewWindow,
     app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
+    synthesize: bool,
 ) -> Result<(), String> {
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let payload = match snapshot.entry.kind.as_str() {
@@ -2123,11 +2123,15 @@ fn paste_entry(
         // Mobile operating systems do not let a normal app inject a paste into
         // another app. Keep ClipRoam visible and treat activation as Copy.
         let _ = window;
+        let _ = synthesize;
         return Ok(());
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
+        if !synthesize {
+            return Ok(());
+        }
         window.hide().map_err(|error| error.to_string())?;
         thread::sleep(Duration::from_millis(90));
         if let Err(error) = synthesize_paste() {
@@ -2139,6 +2143,31 @@ fn paste_entry(
         }
         Ok(())
     }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn copy_entry(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    apply_clipboard_entry(window, app, state, entry_id, false)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn paste_entry(
+    window: tauri::WebviewWindow,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    if window.label() != "paste" {
+        return Err("只有快捷粘贴窗口可以执行自动粘贴".to_string());
+    }
+
+    apply_clipboard_entry(window, app, state, entry_id, true)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2250,6 +2279,7 @@ pub fn run() {
             fail_virtual_file_request,
             save_entry_files,
             activate_remote_entry,
+            copy_entry,
             paste_entry
         ])
         .run(tauri::generate_context!())

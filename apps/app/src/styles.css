@@ -463,6 +463,9 @@ button.image-thumbnail { cursor: zoom-in; }
     var(--color-background);
 }
 .workspace-titlebar { padding-inline: 20px; }
+.paste-app .workspace-titlebar { cursor: grab; }
+.paste-app .workspace-titlebar:active { cursor: grabbing; }
+.paste-app .workspace-titlebar button { cursor: pointer; }
 .page-title { display: grid; gap: 1px; }
 .page-title > span {
   color: #64748b;

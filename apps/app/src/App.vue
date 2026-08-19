@@ -138,7 +138,7 @@ const devicesById = ref<Record<string, Device>>({
 const currentTime = ref(Date.now());
 const query = ref("");
 const filter = ref<"all" | ClipboardKind | "pending-upload">("all");
-const selectedIndex = ref(0);
+const selectedEntryId = ref("");
 const connected = ref(false);
 const syncEnabled = ref(false);
 const errorMessage = ref("");
@@ -171,7 +171,7 @@ const newPassword = ref("");
 const confirmNewPassword = ref("");
 const currentUsername = ref("");
 const capturingClipboard = ref(false);
-const pastingEntryId = ref("");
+const activatingEntryId = ref("");
 const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
@@ -239,8 +239,15 @@ const filteredEntries = computed(() => {
   });
 });
 
-watch(filteredEntries, () => {
-  selectedIndex.value = Math.min(selectedIndex.value, Math.max(filteredEntries.value.length - 1, 0));
+watch(filteredEntries, (nextEntries) => {
+  if (!nextEntries.some((entry) => entry.id === selectedEntryId.value)) {
+    selectedEntryId.value = nextEntries[0]?.id ?? "";
+  }
+});
+
+const selectedIndex = computed(() => {
+  const index = filteredEntries.value.findIndex((entry) => entry.id === selectedEntryId.value);
+  return index >= 0 ? index : 0;
 });
 
 function formatAge(createdAt: string): string {
@@ -321,7 +328,8 @@ function formatFileSize(bytes: number): string {
 
 async function focusSearch(): Promise<void> {
   query.value = "";
-  selectedIndex.value = 0;
+  if (isPasteWindow) filter.value = "all";
+  selectedEntryId.value = filteredEntries.value[0]?.id ?? "";
   await nextTick();
   searchInput.value?.focus();
 }
@@ -400,26 +408,30 @@ async function ensurePasteReady(entry: LocalClipboardEntry): Promise<LocalClipbo
   return downloadRequiredFiles(entry, "prepare_paste_entry");
 }
 
-async function paste(entry?: LocalClipboardEntry): Promise<void> {
+async function activateEntry(
+  entry: LocalClipboardEntry | undefined,
+  command: "copy_entry" | "paste_entry",
+): Promise<void> {
   if (!entry) return;
   errorMessage.value = "";
   statusMessage.value = "";
   if (!runningInTauri) {
     await navigator.clipboard.writeText(entry.content);
+    statusMessage.value = "已复制到系统剪贴板";
     return;
   }
   if (isMobile.value && entry.kind !== "text") {
     await saveEntry(entry);
     return;
   }
-  if (pastingEntryId.value) return;
-  pastingEntryId.value = entry.id;
+  if (activatingEntryId.value) return;
+  activatingEntryId.value = entry.id;
   try {
     // Rust selects the native strategy. This downloads only what the current
-    // platform must materialize before it can start the paste.
+    // platform must materialize before it can copy or paste the entry.
     await ensurePasteReady(entry);
-    await invoke("paste_entry", { entryId: entry.id });
-    if (isMobile.value) statusMessage.value = "已复制到系统剪贴板";
+    await invoke(command, { entryId: entry.id });
+    if (command === "copy_entry") statusMessage.value = "已复制到系统剪贴板";
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
       await refreshEntries();
@@ -427,8 +439,16 @@ async function paste(entry?: LocalClipboardEntry): Promise<void> {
     }
     errorMessage.value = String(error);
   } finally {
-    pastingEntryId.value = "";
+    activatingEntryId.value = "";
   }
+}
+
+function copyEntry(entry?: LocalClipboardEntry): Promise<void> {
+  return activateEntry(entry, "copy_entry");
+}
+
+function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
+  return activateEntry(entry, "paste_entry");
 }
 
 function isHashing(entry: LocalClipboardEntry): boolean {
@@ -545,9 +565,24 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   }
 }
 
-function selectOrActivate(entry: LocalClipboardEntry, index: number): void {
-  selectedIndex.value = index;
-  if (isMobile.value) void paste(entry);
+function selectOrActivate(entry: LocalClipboardEntry): void {
+  selectedEntryId.value = entry.id;
+  if (isPasteWindow) void pasteEntry(entry);
+  else if (isMobile.value) void copyEntry(entry);
+}
+
+function activateSelectedEntry(entry?: LocalClipboardEntry): void {
+  if (isPasteWindow) void pasteEntry(entry);
+  else void copyEntry(entry);
+}
+
+function moveSelection(offset: -1 | 1): void {
+  if (!filteredEntries.value.length) return;
+  const index = Math.min(
+    Math.max(selectedIndex.value + offset, 0),
+    filteredEntries.value.length - 1,
+  );
+  selectedEntryId.value = filteredEntries.value[index].id;
 }
 
 async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
@@ -994,13 +1029,13 @@ function handleKeys(event: KeyboardEvent): void {
     void hideWindow();
   } else if (event.key === "ArrowDown") {
     event.preventDefault();
-    selectedIndex.value = Math.min(selectedIndex.value + 1, filteredEntries.value.length - 1);
+    moveSelection(1);
   } else if (event.key === "ArrowUp") {
     event.preventDefault();
-    selectedIndex.value = Math.max(selectedIndex.value - 1, 0);
+    moveSelection(-1);
   } else if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    void paste(filteredEntries.value[selectedIndex.value]);
+    activateSelectedEntry(filteredEntries.value[selectedIndex.value]);
   }
 }
 
@@ -1522,18 +1557,18 @@ onBeforeUnmount(() => {
 
       <section id="history-content" class="history-list" aria-label="剪贴板历史">
       <div
-        v-for="(entry, index) in filteredEntries"
+        v-for="entry in filteredEntries"
         :key="entry.id"
         class="history-item"
-        :class="{ selected: selectedIndex === index, 'image-entry': entry.kind === 'image' }"
+        :class="{ selected: selectedEntryId === entry.id, 'image-entry': entry.kind === 'image' }"
         role="button"
-        :tabindex="pastingEntryId === entry.id ? -1 : 0"
-        :aria-disabled="pastingEntryId === entry.id"
-        @mouseenter="selectedIndex = index"
-        @dblclick="!isMobile && paste(entry)"
-        @click="selectOrActivate(entry, index)"
-        @keydown.enter.stop="paste(entry)"
-        @keydown.space.prevent.stop="paste(entry)"
+        :tabindex="activatingEntryId === entry.id ? -1 : 0"
+        :aria-disabled="activatingEntryId === entry.id"
+        @mouseenter="selectedEntryId = entry.id"
+        @dblclick="!isPasteWindow && !isMobile && copyEntry(entry)"
+        @click="selectOrActivate(entry)"
+        @keydown.enter.stop="activateSelectedEntry(entry)"
+        @keydown.space.prevent.stop="activateSelectedEntry(entry)"
       >
         <button
           v-if="entry.kind === 'image' && !isPasteWindow && thumbnailSource(entry)"
@@ -1548,7 +1583,7 @@ onBeforeUnmount(() => {
           <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
         </span>
         <span v-else class="kind-icon">
-          <LoaderCircle v-if="pastingEntryId === entry.id" :size="18" class="spin" />
+          <LoaderCircle v-if="activatingEntryId === entry.id" :size="18" class="spin" />
           <FileText v-else-if="entry.kind === 'text'" :size="18" />
           <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
           <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />
@@ -1625,8 +1660,10 @@ onBeforeUnmount(() => {
 
       <footer class="footer-hint">
       <span v-if="isMobile">点按文本复制，点按文件下载到缓存</span>
-      <span v-else><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-      <span v-if="!isMobile"><kbd>Enter</kbd> 粘贴</span>
+      <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
+      <span v-else>单击选择，双击复制</span>
+      <span v-if="!isMobile"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+      <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
       </footer>
