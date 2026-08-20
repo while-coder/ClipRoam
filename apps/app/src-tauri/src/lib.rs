@@ -43,7 +43,7 @@ use content::{
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
     load_history, open_history_database, refresh_entry_summary, register_cached_file, remember_hash,
-    retain_single_history, save_history, trim_history, write_entry_contents, HistoryData, LOCAL_HISTORY_KEY,
+    retain_single_history, save_history, trim_history, write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
 };
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -970,7 +970,7 @@ fn pack_small_contents(app: &AppHandle, entry_id: &str) -> Result<(), String> {
         })
         .collect();
     let connection = open_history_database(&history_path)?;
-    write_entry_contents(&connection, current, true)?;
+    write_entry_data(&connection, current)?;
     for pack_id in packed_files.keys() {
         history.cached_files.insert(pack_id.clone());
     }
@@ -1305,11 +1305,11 @@ fn upsert_remote_entry(
         trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
         save_active_history(&state, &history)?;
-        // The entry row must exist before its contents can be replaced: the
-        // latter has a foreign key to `entries`.
+        // Existing rows keep their large data during the general history save;
+        // a remote update replaces it explicitly here.
         if let Some(entry) = history.find(&entry_id) {
             let connection = open_history_database(&history_path)?;
-            write_entry_contents(&connection, entry, true)?;
+            write_entry_data(&connection, entry)?;
         }
     }
     app.emit("cliproam://history-changed", ())
@@ -1338,7 +1338,7 @@ fn mark_files_uploaded(
                 }
             }
             let connection = open_history_database(&history_path)?;
-            write_entry_contents(&connection, entry, true)?;
+            write_entry_data(&connection, entry)?;
         }
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
     }
@@ -1386,7 +1386,7 @@ fn mark_file_available(
             .collect::<Vec<_>>();
         let connection = open_history_database(&history_path)?;
         for entry in &changed_entries {
-            write_entry_contents(&connection, entry, true)?;
+            write_entry_data(&connection, entry)?;
             refresh_entry_summary(&mut history, &entry.id, &cache_dir);
         }
     }

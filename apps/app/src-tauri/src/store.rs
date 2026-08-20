@@ -1,9 +1,9 @@
 //! Local persistence for the clipboard history.
 //!
-//! Entry rows stay small and are rewritten freely; trees, content lists and
-//! local sources live in `entry_contents` and are only written at the three
-//! points that actually change them (capture, hashing, remote upsert), so
-//! pinning or pasting never rewrites megabytes of tree JSON.
+//! Entry metadata, trees and local sources share one row. General history saves
+//! patch only presentation fields, while capture, hashing and remote upsert
+//! explicitly replace the full entry data. Content availability and local-cache
+//! state live once in `files`, keyed by content hash.
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::{
@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use crate::content::{
     cached_file_path, refresh_summary, transfer_file_id, ClipboardEntry, ClipboardEntryExtra,
-    ClipboardFile, ClipboardTree, LocalSources,
+    ClipboardFile, ClipboardTree,
 };
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 6;
 pub const MAX_UNPINNED_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
@@ -146,7 +146,63 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|error| error.to_string())?;
-    if version != SCHEMA_VERSION {
+    if matches!(version, 3 | 4 | 5) {
+        // Merge the one-to-one entry_contents table into entries. File status
+        // becomes content-scoped, matching the server's content pool, while
+        // sources remain local-only entry data.
+        connection
+            .execute_batch(
+                "
+                DROP TABLE IF EXISTS entries_fts;
+                DROP TABLE IF EXISTS entry_tags;
+                DROP TABLE IF EXISTS tags;
+
+                ALTER TABLE entries ADD COLUMN sources TEXT NOT NULL DEFAULT '{}';
+                UPDATE entries
+                SET extra = json_set(
+                    CASE WHEN json_valid(extra) THEN extra ELSE '{}' END,
+                    '$.tree',
+                    json((SELECT tree FROM entry_contents WHERE entry_id = entries.id))
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM entry_contents
+                    WHERE entry_id = entries.id AND tree IS NOT NULL
+                );
+                UPDATE entries
+                SET sources = COALESCE(
+                    (SELECT sources FROM entry_contents WHERE entry_id = entries.id),
+                    '{}'
+                );
+                ALTER TABLE entries DROP COLUMN client_id;
+
+                ALTER TABLE files ADD COLUMN available INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE files ADD COLUMN cached INTEGER NOT NULL DEFAULT 1;
+                INSERT OR IGNORE INTO files (file_id, size, created_at, available, cached)
+                SELECT
+                    json_extract(value, '$.fileId'),
+                    COALESCE(json_extract(value, '$.size'), 0),
+                    datetime('now'),
+                    COALESCE(json_extract(value, '$.available'), 0),
+                    0
+                FROM entry_contents, json_each(COALESCE(entry_contents.files, '[]'))
+                WHERE COALESCE(json_extract(value, '$.fileId'), '') <> '';
+                UPDATE files
+                SET available = 1
+                WHERE file_id IN (
+                    SELECT json_extract(value, '$.fileId')
+                    FROM entry_contents, json_each(COALESCE(entry_contents.files, '[]'))
+                    WHERE COALESCE(json_extract(value, '$.available'), 0) = 1
+                );
+                DROP TABLE entry_contents;
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        if matches!(version, 3 | 4) {
+            connection
+                .execute_batch("DROP TABLE IF EXISTS hash_cache;")
+                .map_err(|error| error.to_string())?;
+        }
+    } else if version != SCHEMA_VERSION {
         connection
             .execute_batch(
                 "
@@ -175,51 +231,31 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             );
             CREATE TABLE IF NOT EXISTS entries (
                 id TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 content TEXT NOT NULL,
                 extra TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 pinned INTEGER NOT NULL,
                 source_device_id TEXT NOT NULL,
-                source_app TEXT NOT NULL DEFAULT ''
+                source_app TEXT NOT NULL DEFAULT '',
+                sources TEXT NOT NULL DEFAULT '{}'
             );
             CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
             CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
             CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
-            CREATE TABLE IF NOT EXISTS entry_contents (
-                entry_id TEXT PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
-                tree TEXT,
-                files TEXT,
-                sources TEXT
-            );
             CREATE TABLE IF NOT EXISTS files (
                 file_id TEXT PRIMARY KEY,
                 size INTEGER NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                available INTEGER NOT NULL DEFAULT 0,
+                cached INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS hash_cache (
                 source TEXT NOT NULL,
                 size INTEGER NOT NULL,
                 modified_at INTEGER NOT NULL,
-                file_id TEXT NOT NULL,
-                used_at INTEGER NOT NULL,
+                hash TEXT NOT NULL,
                 PRIMARY KEY (source, size, modified_at)
-            );
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE COLLATE NOCASE
-            );
-            CREATE TABLE IF NOT EXISTS entry_tags (
-                entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-                PRIMARY KEY (entry_id, tag_id)
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-                entry_id UNINDEXED,
-                content,
-                file_names,
-                pinyin
             );
             ",
         )
@@ -263,7 +299,7 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
 
     let mut entries = Vec::new();
     if let Ok(mut statement) = connection.prepare(
-        "SELECT id, kind, content, extra, source_device_id, created_at, pinned FROM entries ORDER BY pinned DESC, created_at DESC",
+        "SELECT id, kind, content, extra, source_device_id, created_at, pinned, sources FROM entries ORDER BY pinned DESC, created_at DESC",
     ) {
         if let Ok(rows) = statement.query_map([], |row| {
             let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
@@ -274,49 +310,44 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                 html: extra.html,
                 rtf: extra.rtf,
                 thumbnail: extra.thumbnail,
-                tree: None,
+                tree: extra.tree,
                 files: Vec::new(),
                 source_device_id: row.get("source_device_id")?,
                 created_at: row.get("created_at")?,
                 pinned: row.get::<_, i64>("pinned")? != 0,
                 summary: Default::default(),
-                sources: LocalSources::default(),
+                sources: serde_json::from_str(&row.get::<_, String>("sources")?).unwrap_or_default(),
             })
         }) {
             entries.extend(rows.flatten());
         }
     }
 
-    let mut contents = HashMap::new();
-    if let Ok(mut statement) = connection.prepare("SELECT entry_id, tree, files, sources FROM entry_contents") {
+    let mut known_files = HashMap::new();
+    let mut cached_files = HashSet::new();
+    if let Ok(mut statement) = connection.prepare("SELECT file_id, size, available, cached FROM files") {
         if let Ok(rows) = statement.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>("file_id")?,
+                row.get::<_, u64>("size")?,
+                row.get::<_, i64>("available")? != 0,
+                row.get::<_, i64>("cached")? != 0,
             ))
         }) {
-            for (entry_id, tree, files, sources) in rows.flatten() {
-                contents.insert(entry_id, (tree, files, sources));
+            for (file_id, size, available, cached) in rows.flatten() {
+                known_files.insert(file_id.clone(), ClipboardFile { file_id: file_id.clone(), size, available });
+                if cached {
+                    cached_files.insert(file_id);
+                }
             }
         }
     }
     for entry in &mut entries {
-        let Some((tree, files, sources)) = contents.remove(&entry.id) else {
-            continue;
-        };
-        entry.tree = tree.and_then(|raw| serde_json::from_str::<ClipboardTree>(&raw).ok());
-        entry.files = files
-            .and_then(|raw| serde_json::from_str::<Vec<ClipboardFile>>(&raw).ok())
-            .unwrap_or_default();
-        entry.sources = sources
-            .and_then(|raw| serde_json::from_str::<LocalSources>(&raw).ok())
-            .unwrap_or_default();
+        entry.files = files_for_tree(entry.tree.as_ref(), &known_files);
     }
 
     let cache_dir = cache_dir_for_path(path);
-    history.cached_files = load_cached_files(&connection)
+    history.cached_files = cached_files
         .into_iter()
         .filter(|file_id| cached_file_path(&cache_dir, file_id).is_some())
         .collect();
@@ -325,20 +356,34 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
     history
 }
 
+fn files_for_tree(
+    tree: Option<&ClipboardTree>,
+    known_files: &HashMap<String, ClipboardFile>,
+) -> Vec<ClipboardFile> {
+    let Some(tree) = tree else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    tree.files
+        .iter()
+        .filter_map(|node| {
+            let file_id = transfer_file_id(node);
+            if file_id.is_empty() || !seen.insert(file_id.to_string()) {
+                return None;
+            }
+            Some(known_files.get(file_id).cloned().unwrap_or_else(|| ClipboardFile {
+                file_id: file_id.to_string(),
+                size: node.b.as_ref().map_or_else(|| node.s.unwrap_or_default(), |_| 0),
+                available: false,
+            }))
+        })
+        .collect()
+}
+
 pub fn cache_dir_for_path(path: &Path) -> PathBuf {
     path.parent()
         .expect("history file always has a parent directory")
         .join("files")
-}
-
-fn load_cached_files(connection: &Connection) -> HashSet<String> {
-    let Ok(mut statement) = connection.prepare("SELECT file_id FROM files") else {
-        return HashSet::new();
-    };
-    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
-        return HashSet::new();
-    };
-    rows.flatten().collect()
 }
 
 pub fn refresh_summaries(history: &mut HistoryData, cache_dir: &Path) {
@@ -374,14 +419,12 @@ pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_di
     }
 }
 
-/// Writes the small entry rows plus metadata. Contents are inserted only when
-/// missing — callers that changed a tree must persist it explicitly.
+/// Writes small entry fields plus metadata. Existing trees, local sources and
+/// content rows are changed only by `write_entry_data`, so pinning or trimming
+/// cannot overwrite work completed by the background hash worker.
 pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
     let mut connection = open_history_database(path)?;
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
-    transaction
-        .execute("DELETE FROM entries_fts", [])
-        .map_err(|error| error.to_string())?;
     let entry_ids = history
         .active_entries()
         .iter()
@@ -405,13 +448,20 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             html: entry.html.clone(),
             rtf: entry.rtf.clone(),
             thumbnail: entry.thumbnail.clone(),
+            tree: entry.tree.clone(),
         })
         .map_err(|error| error.to_string())?;
-        transaction
+        let presentation = serde_json::to_string(&serde_json::json!({
+            "html": entry.html,
+            "rtf": entry.rtf,
+            "thumbnail": entry.thumbnail,
+        }))
+        .map_err(|error| error.to_string())?;
+        let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
+        let inserted = transaction
             .execute(
-                "INSERT INTO entries (id, client_id, kind, content, extra, created_at, pinned, source_device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET client_id = excluded.client_id, kind = excluded.kind, content = excluded.content, extra = excluded.extra, created_at = excluded.created_at, pinned = excluded.pinned, source_device_id = excluded.source_device_id",
+                "INSERT OR IGNORE INTO entries (id, kind, content, extra, created_at, pinned, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
-                    entry.id,
                     entry.id,
                     entry.kind,
                     entry.content,
@@ -419,16 +469,27 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
                     entry.created_at,
                     entry.pinned,
                     entry.source_device_id,
+                    sources,
                 ],
             )
             .map_err(|error| error.to_string())?;
-        write_entry_contents(&transaction, entry, false)?;
         transaction
             .execute(
-                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, '')",
-                params![entry.id, entry.content, searchable_names(entry)],
+                "UPDATE entries SET kind = ?, content = ?, extra = json_patch(extra, ?), created_at = ?, pinned = ?, source_device_id = ? WHERE id = ?",
+                params![
+                    entry.kind,
+                    entry.content,
+                    presentation,
+                    entry.created_at,
+                    entry.pinned,
+                    entry.source_device_id,
+                    entry.id,
+                ],
             )
             .map_err(|error| error.to_string())?;
+        if inserted != 0 {
+            write_entry_files(&transaction, entry)?;
+        }
     }
     for (key, value) in [
         ("last_clipboard", history.last_clipboard.as_str()),
@@ -459,43 +520,33 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
-fn searchable_names(entry: &ClipboardEntry) -> String {
-    entry
-        .tree
-        .as_ref()
-        .map(|tree| {
-            tree.roots
-                .iter()
-                .map(|root| root.name.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default()
-}
-
-pub fn write_entry_contents(connection: &Connection, entry: &ClipboardEntry, overwrite: bool) -> Result<(), String> {
-    if entry.tree.is_none() && entry.files.is_empty() && entry.sources.files.is_empty() {
-        return Ok(());
-    }
-    let tree = entry
-        .tree
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|error| error.to_string())?;
-    let files = serde_json::to_string(&entry.files).map_err(|error| error.to_string())?;
+pub fn write_entry_data(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
+    let extra = serde_json::to_string(&ClipboardEntryExtra {
+        html: entry.html.clone(),
+        rtf: entry.rtf.clone(),
+        thumbnail: entry.thumbnail.clone(),
+        tree: entry.tree.clone(),
+    })
+    .map_err(|error| error.to_string())?;
     let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
-    let conflict = if overwrite {
-        "ON CONFLICT(entry_id) DO UPDATE SET tree = excluded.tree, files = excluded.files, sources = excluded.sources"
-    } else {
-        "ON CONFLICT(entry_id) DO NOTHING"
-    };
     connection
         .execute(
-            &format!("INSERT INTO entry_contents (entry_id, tree, files, sources) VALUES (?, ?, ?, ?) {conflict}"),
-            params![entry.id, tree, files, sources],
+            "UPDATE entries SET extra = ?, sources = ? WHERE id = ?",
+            params![extra, sources, entry.id],
         )
         .map_err(|error| error.to_string())?;
+    write_entry_files(connection, entry)
+}
+
+fn write_entry_files(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
+    for file in &entry.files {
+        connection
+            .execute(
+                "INSERT INTO files (file_id, size, created_at, available, cached) VALUES (?, ?, ?, ?, 0) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size, available = MAX(files.available, excluded.available)",
+                params![file.file_id, file.size, now_rfc3339(), file.available],
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -509,7 +560,7 @@ pub fn register_cached_file(
     let connection = open_history_database(database_path)?;
     connection
         .execute(
-            "INSERT INTO files (file_id, size, created_at) VALUES (?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size",
+            "INSERT INTO files (file_id, size, created_at, available, cached) VALUES (?, ?, ?, 0, 1) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size, cached = 1",
             params![file_id, size, now_rfc3339()],
         )
         .map_err(|error| error.to_string())?;
@@ -517,33 +568,28 @@ pub fn register_cached_file(
 }
 
 pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
-    let file_id = connection
+    connection
         .query_row(
-            "SELECT file_id FROM hash_cache WHERE source = ? AND size = ? AND modified_at = ?",
+            "SELECT hash FROM hash_cache WHERE source = ? AND size = ? AND modified_at = ?",
             params![source, size, modified_at],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, String>("hash"),
         )
         .optional()
         .ok()
-        .flatten()?;
-    let _ = connection.execute(
-        "UPDATE hash_cache SET used_at = ? WHERE source = ? AND size = ? AND modified_at = ?",
-        params![now_millis() as i64, source, size, modified_at],
-    );
-    Some(file_id)
+        .flatten()
 }
 
-pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, file_id: &str) {
+pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, hash: &str) {
     let _ = connection.execute(
-        "INSERT INTO hash_cache (source, size, modified_at, file_id, used_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, size, modified_at) DO UPDATE SET file_id = excluded.file_id, used_at = excluded.used_at",
-        params![source, size, modified_at, file_id, now_millis() as i64],
+        "INSERT INTO hash_cache (source, size, modified_at, hash) VALUES (?, ?, ?, ?) ON CONFLICT(source, size, modified_at) DO UPDATE SET hash = excluded.hash",
+        params![source, size, modified_at, hash],
     );
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM hash_cache", [], |row| row.get(0))
         .unwrap_or_default();
     if count > HASH_CACHE_LIMIT {
         let _ = connection.execute(
-            "DELETE FROM hash_cache WHERE rowid IN (SELECT rowid FROM hash_cache ORDER BY used_at ASC LIMIT ?)",
+            "DELETE FROM hash_cache WHERE rowid IN (SELECT rowid FROM hash_cache ORDER BY rowid ASC LIMIT ?)",
             params![count / 2],
         );
     }
@@ -625,15 +671,32 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
             }
         }
     }
-    if !removed.is_empty() {
+    {
         let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         for chunk in removed.chunks(500) {
             let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(", ");
             transaction
                 .execute(
-                    &format!("DELETE FROM files WHERE file_id IN ({placeholders})"),
+                    &format!("UPDATE files SET cached = 0 WHERE file_id IN ({placeholders})"),
                     params_from_iter(chunk.iter()),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if referenced.is_empty() {
+            transaction
+                .execute("DELETE FROM files WHERE cached = 0", [])
+                .map_err(|error| error.to_string())?;
+        } else {
+            let referenced = referenced.iter().collect::<Vec<_>>();
+            let placeholders = std::iter::repeat("?")
+                .take(referenced.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            transaction
+                .execute(
+                    &format!("DELETE FROM files WHERE cached = 0 AND file_id NOT IN ({placeholders})"),
+                    params_from_iter(referenced),
                 )
                 .map_err(|error| error.to_string())?;
         }
@@ -680,26 +743,140 @@ mod tests {
     use super::*;
 
     #[test]
-    fn history_database_supports_full_text_search() {
-        let directory = std::env::temp_dir().join(format!("cliproam-history-test-{}", Uuid::new_v4()));
+    fn version_three_cleanup_preserves_history_and_rebuilds_hash_cache() {
+        let directory = std::env::temp_dir().join(format!("cliproam-schema-cleanup-test-{}", Uuid::new_v4()));
         let path = directory.join("history.sqlite");
-        let connection = open_history_database(&path).expect("create history database");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let connection = Connection::open(&path).expect("create version three database");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE entries (
+                    id TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    extra TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    pinned INTEGER NOT NULL,
+                    source_device_id TEXT NOT NULL,
+                    source_app TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE entry_contents (
+                    entry_id TEXT PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+                    tree TEXT,
+                    files TEXT,
+                    sources TEXT
+                );
+                CREATE TABLE files (file_id TEXT PRIMARY KEY, size INTEGER NOT NULL, created_at TEXT NOT NULL);
+                CREATE TABLE hash_cache (
+                    source TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL,
+                    file_id TEXT NOT NULL,
+                    used_at INTEGER NOT NULL,
+                    PRIMARY KEY (source, size, modified_at)
+                );
+                CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+                CREATE TABLE entry_tags (
+                    entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+                    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (entry_id, tag_id)
+                );
+                CREATE VIRTUAL TABLE entries_fts USING fts5(entry_id UNINDEXED, content, file_names, pinyin);
+                INSERT INTO entries (
+                    id, client_id, kind, content, extra, created_at, pinned, source_device_id
+                ) VALUES ('kept', 'kept', 'text', 'history', '{}', '', 0, 'device');
+                PRAGMA user_version = 3;
+                ",
+            )
+            .expect("create version three schema");
         connection
             .execute(
-                "INSERT INTO entries_fts (entry_id, content, file_names, pinyin) VALUES (?, ?, ?, ?)",
-                params!["entry-1", "ClipRoam local history", "note.txt", "cliproam"],
+                "INSERT INTO entry_contents (entry_id, tree, files, sources) VALUES (?, ?, ?, ?)",
+                params![
+                    "kept",
+                    r#"{"v":2,"roots":[{"name":"a.txt","kind":"file"}],"dirs":[],"files":[{"p":"a.txt","f":"hash","s":7}]}"#,
+                    r#"[{"fileId":"hash","size":7,"available":true}]"#,
+                    r#"{"roots":["C:/a.txt"],"files":[]}"#,
+                ],
             )
-            .expect("insert search entry");
-        let matches: i64 = connection
+            .expect("store legacy entry contents");
+        drop(connection);
+
+        let connection = open_history_database(&path).expect("upgrade history database");
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count retained entries");
+        let unused: i64 = connection
             .query_row(
-                "SELECT COUNT(*) FROM entries_fts WHERE entries_fts MATCH 'cliproam'",
+                "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('tags', 'entry_tags', 'entries_fts') OR name GLOB 'entries_fts_*'",
                 [],
                 |row| row.get(0),
             )
-            .expect("query full text index");
+            .expect("count unused tables");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read schema version");
+        let hash_cache_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(hash_cache)")
+                .expect("inspect hash cache");
+            statement
+                .query_map([], |row| row.get::<_, String>("name"))
+                .expect("read hash cache columns")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect hash cache columns")
+        };
+        let entries_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(entries)")
+                .expect("inspect entries");
+            statement
+                .query_map([], |row| row.get::<_, String>("name"))
+                .expect("read entries columns")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect entries columns")
+        };
+        let files_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(files)")
+                .expect("inspect files");
+            statement
+                .query_map([], |row| row.get::<_, String>("name"))
+                .expect("read files columns")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect files columns")
+        };
+        let merged: (String, String, i64, i64) = connection
+            .query_row(
+                "SELECT entries.extra, entries.sources, files.available, files.cached FROM entries JOIN files ON files.file_id = 'hash' WHERE entries.id = 'kept'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read merged entry data");
+        let legacy_contents: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'entry_contents'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("check legacy entry contents table");
         drop(connection);
         fs::remove_dir_all(&directory).expect("remove temporary history database");
-        assert_eq!(matches, 1);
+
+        assert_eq!(remaining, 1);
+        assert_eq!(unused, 0);
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(hash_cache_columns, ["source", "size", "modified_at", "hash"]);
+        assert!(!entries_columns.iter().any(|column| column == "client_id"));
+        assert!(entries_columns.iter().any(|column| column == "sources"));
+        assert_eq!(files_columns, ["file_id", "size", "created_at", "available", "cached"]);
+        assert!(merged.0.contains("\"tree\""));
+        assert!(merged.1.contains("C:/a.txt"));
+        assert_eq!((merged.2, merged.3), (1, 0));
+        assert_eq!(legacy_contents, 0);
     }
 
     #[test]
@@ -709,7 +886,7 @@ mod tests {
         let connection = open_history_database(&path).expect("create history database");
         connection
             .execute(
-                "INSERT INTO entries (id, client_id, kind, content, created_at, pinned, source_device_id) VALUES ('a', 'a', 'text', 'kept', '', 0, 'd')",
+                "INSERT INTO entries (id, kind, content, created_at, pinned, source_device_id) VALUES ('a', 'text', 'kept', '', 0, 'd')",
                 [],
             )
             .expect("insert entry");
@@ -759,7 +936,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
             pinned: false,
             summary: Default::default(),
-            sources: LocalSources::default(),
+            sources: crate::content::LocalSources::default(),
         });
         save_history(&path, &history).expect("store history");
 
@@ -770,7 +947,7 @@ mod tests {
             let connection = open_history_database(&path).expect("reopen database");
             let mut updated = history.active_entries()[0].clone();
             updated.tree = Some(tree(&hashed));
-            write_entry_contents(&connection, &updated, true).expect("persist hashed tree");
+            write_entry_data(&connection, &updated).expect("persist hashed tree");
         }
         history.active_entries_mut()[0].pinned = true;
         save_history(&path, &history).expect("store history again");

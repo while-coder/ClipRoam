@@ -149,6 +149,7 @@ type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
 type UploadProgress = { uploadedBytes: number; totalBytes: number };
 type DownloadProgress = { finished: number; total: number };
 type EntryFilter = "all" | ClipboardKind | "pinned" | "pending-upload";
+type TimeFilter = "all" | "today" | "7-days" | "30-days" | "custom";
 
 const EMPTY_SUMMARY: EntrySummary = {
   rootKind: "",
@@ -176,6 +177,9 @@ const devicesById = ref<Record<string, Device>>({
 const currentTime = ref(Date.now());
 const query = ref("");
 const filter = ref<EntryFilter>("all");
+const timeFilter = ref<TimeFilter>("all");
+const startDate = ref("");
+const endDate = ref("");
 const selectedEntryId = ref("");
 const connected = ref(false);
 const syncEnabled = ref(false);
@@ -269,6 +273,22 @@ const demoEntries: LocalClipboardEntry[] = [
 
 const filteredEntries = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
+  const timeRange = (() => {
+    if (timeFilter.value === "all") return {};
+    if (timeFilter.value === "custom") {
+      return {
+        start: parseLocalDate(startDate.value)?.getTime(),
+        end: parseLocalDate(endDate.value, true)?.getTime(),
+      };
+    }
+    if (timeFilter.value === "today") {
+      const today = new Date(currentTime.value);
+      today.setHours(0, 0, 0, 0);
+      return { start: today.getTime() };
+    }
+    const days = timeFilter.value === "7-days" ? 7 : 30;
+    return { start: currentTime.value - days * 24 * 60 * 60 * 1_000 };
+  })();
   return entries.value.filter((entry) => {
     const matchesType = filter.value === "all"
       || (filter.value === "pinned" && entry.pinned)
@@ -277,8 +297,24 @@ const filteredEntries = computed(() => {
     const matchesQuery = !needle
       || entry.content.toLocaleLowerCase().includes(needle)
       || deviceName(entry).toLocaleLowerCase().includes(needle);
-    return matchesType && matchesQuery;
+    const createdAt = new Date(entry.createdAt).getTime();
+    const matchesTime = (timeRange.start === undefined || createdAt >= timeRange.start)
+      && (timeRange.end === undefined || createdAt <= timeRange.end);
+    return matchesType && matchesQuery && matchesTime;
   });
+});
+
+const showsEmptyPinnedState = computed(() => (
+  filter.value === "pinned" && timeFilter.value === "all" && !query.value.trim()
+));
+
+watch(timeFilter, (value) => {
+  if (value !== "custom" || startDate.value || endDate.value) return;
+  const end = new Date(currentTime.value);
+  const start = new Date(end);
+  start.setDate(start.getDate() - 6);
+  startDate.value = formatDateInput(start);
+  endDate.value = formatDateInput(end);
 });
 
 watch(filteredEntries, (nextEntries) => {
@@ -329,6 +365,19 @@ function formatAge(createdAt: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(createdAt));
+}
+
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(value: string, endOfDay = false): Date | undefined {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return undefined;
+  return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
 }
 
 async function refreshEntries(): Promise<void> {
@@ -397,7 +446,10 @@ function formatFileSize(bytes: number): string {
 
 async function focusSearch(): Promise<void> {
   query.value = "";
-  if (isPasteWindow) filter.value = "all";
+  if (isPasteWindow) {
+    filter.value = "all";
+    timeFilter.value = "all";
+  }
   selectedEntryId.value = filteredEntries.value[0]?.id ?? "";
   await nextTick();
   searchInput.value?.focus();
@@ -1884,6 +1936,26 @@ onBeforeUnmount(() => {
         <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
         <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
         <button :class="{ active: filter === 'pending-upload' }" type="button" @click="filter = 'pending-upload'">未上传</button>
+        <label class="time-filter">
+          <span>时间</span>
+          <select v-model="timeFilter" aria-label="按时间筛选剪贴板历史">
+            <option value="all">不限</option>
+            <option value="today">今天</option>
+            <option value="7-days">近 7 天</option>
+            <option value="30-days">近 30 天</option>
+            <option value="custom">自定义区间</option>
+          </select>
+        </label>
+        <span v-if="timeFilter === 'custom'" class="date-range-filter" aria-label="自定义时间区间">
+          <label class="date-field">
+            <span>从</span>
+            <input v-model="startDate" type="date" :max="endDate || undefined" aria-label="开始日期" />
+          </label>
+          <label class="date-field">
+            <span>至</span>
+            <input v-model="endDate" type="date" :min="startDate || undefined" aria-label="结束日期" />
+          </label>
+        </span>
         <span class="result-count">{{ filteredEntries.length }} 条</span>
         <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
       </div>
@@ -1994,8 +2066,8 @@ onBeforeUnmount(() => {
 
       <div v-if="!filteredEntries.length" class="empty-state">
         <Search :size="28" />
-        <strong>{{ filter === "pinned" && !query.trim() ? "还没有固定内容" : "没有匹配内容" }}</strong>
-        <span>{{ filter === "pinned" && !query.trim() ? "固定常用条目后，可在这里集中查看" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
+        <strong>{{ showsEmptyPinnedState ? "还没有固定内容" : "没有匹配内容" }}</strong>
+        <span>{{ showsEmptyPinnedState ? "固定常用条目后，可在这里集中查看" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
       </div>
       </section>
 
