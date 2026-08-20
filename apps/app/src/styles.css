@@ -339,13 +339,20 @@ kbd {
 }
 .filter-row {
   min-width: 0;
-  gap: 4px;
+  gap: 8px;
   margin-top: 9px;
+}
+.filter-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
 }
-.filter-row::-webkit-scrollbar, .date-range-row::-webkit-scrollbar { display: none; }
-.filter-row button {
+.filter-scroll::-webkit-scrollbar { display: none; }
+.filter-scroll > button, .clear-button {
   flex: 0 0 auto;
   height: 27px;
   padding: 0 9px;
@@ -357,84 +364,20 @@ kbd {
   white-space: nowrap;
   cursor: pointer;
 }
-.filter-row button:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.05); }
-.filter-row button.active { color: #dbeafe; background: #1e3a5f; border-color: rgba(147, 197, 253, 0.18); }
-.time-filter {
+.filter-scroll > button:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.05); }
+.filter-scroll > button.active { color: #dbeafe; background: #1e3a5f; border-color: rgba(147, 197, 253, 0.18); }
+.filter-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  height: 27px;
-  gap: 5px;
-  margin-left: 5px;
-  padding-left: 9px;
-  color: #64748b;
-  border-left: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 11px;
-  white-space: nowrap;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(148, 163, 184, 0.14);
 }
-.time-filter select {
-  height: 27px;
-  padding: 0 22px 0 8px;
-  color: #cbd5e1;
-  color-scheme: dark;
-  background-color: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  outline: 0;
-  font-size: 11px;
-  cursor: pointer;
-}
-.time-filter select:hover { color: #e2e8f0; background-color: rgba(255, 255, 255, 0.07); }
-.time-filter select:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
-.time-filter option {
-  color: #cbd5e1;
-  background: #111c31;
-}
-.time-filter option:checked {
-  color: #f8fafc;
-  background: #1e3a5f;
-}
-.date-range-row, .date-range-filter, .date-field { display: flex; align-items: center; }
-.date-range-row {
-  min-width: 0;
-  min-height: 36px;
-  gap: 10px;
-  margin-top: 7px;
-  padding: 4px 9px;
-  overflow-x: auto;
-  color: #94a3b8;
-  background: rgba(15, 23, 42, 0.58);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 7px;
-  scrollbar-width: none;
-}
-.date-range-title {
-  flex: 0 0 auto;
-  padding-right: 9px;
-  border-right: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.date-range-filter { gap: 6px; }
-.date-field { gap: 4px; color: #64748b; font-size: 11px; white-space: nowrap; }
-.date-field input {
-  width: 116px;
-  height: 27px;
-  padding: 0 6px;
-  color: #cbd5e1;
-  color-scheme: dark;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  outline: 0;
-  font-size: 11px;
-}
-.date-field input:hover { background-color: rgba(255, 255, 255, 0.07); }
-.date-field input:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
-.result-count { flex: 0 0 auto; margin-left: 5px; color: #64748b; font-size: 11px; white-space: nowrap; }
-.filter-row .clear-button { margin-left: auto; color: #64748b; }
-.filter-row .clear-button:hover { color: #fca5a5; }
+.result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.result-summary.error { color: #fca5a5; }
+.clear-button { color: #64748b; }
+.clear-button:hover:not(:disabled) { color: #fca5a5; background: rgba(220, 38, 38, 0.08); }
 
 .feedback-window-shell { width: 100%; height: 100%; background: transparent; }
 .feedback-toast-layer {
@@ -595,6 +538,8 @@ button.image-thumbnail { cursor: zoom-in; }
   font-size: 12px;
 }
 .empty-state strong { color: #cbd5e1; font-size: 13px; }
+.empty-filter-reset { min-height: 32px; margin-top: 4px; padding: 0 11px; color: #bfdbfe; background: rgba(37, 99, 235, 0.14); border: 1px solid rgba(96, 165, 250, 0.24); border-radius: 7px; font-size: 11px; cursor: pointer; }
+.empty-filter-reset:hover { background: rgba(37, 99, 235, 0.22); }
 .footer-hint {
   gap: 16px;
   color: #64748b;
@@ -714,6 +659,47 @@ button.image-thumbnail { cursor: zoom-in; }
 .history-content .toolbar { padding: 14px 20px 10px; }
 .history-content .history-list { padding: 2px 14px 8px; }
 .history-content .footer-hint { padding-inline: 20px; }
+
+.confirm-backdrop {
+  position: absolute;
+  z-index: 25;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.66);
+}
+.confirm-dialog {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: min(100%, 390px);
+  gap: 12px;
+  padding: 20px;
+  background: #111c31;
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  border-radius: 11px;
+  box-shadow: 0 18px 56px rgba(2, 6, 23, 0.58);
+}
+.confirm-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.14);
+  border-radius: 9px;
+}
+.confirm-copy { min-width: 0; }
+.confirm-copy h2 { margin: 1px 0 0; color: #f8fafc; font-size: 15px; line-height: 1.35; }
+.confirm-copy p { margin: 6px 0 0; color: #94a3b8; font-size: 12px; line-height: 1.55; }
+.confirm-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 5px;
+}
+.confirm-actions .secondary-button, .confirm-actions .danger-button { min-width: 96px; min-height: 40px; padding-inline: 14px; }
 
 .settings-backdrop {
   position: absolute;
@@ -1047,17 +1033,16 @@ button:focus-visible, [role="button"]:focus-visible {
   gap: 8px;
   padding-bottom: 2px;
 }
-.mobile-app .filter-row button { min-height: 44px; padding-inline: 14px; white-space: nowrap; }
-.mobile-app .time-filter { height: 44px; margin-left: 0; padding-left: 12px; }
-.mobile-app .time-filter select { height: 44px; padding-inline: 12px 28px; font-size: 13px; }
-.mobile-app .date-range-row { min-height: 52px; gap: 12px; padding: 4px 12px; }
-.mobile-app .date-range-title { padding-right: 12px; font-size: 13px; }
-.mobile-app .date-range-filter { gap: 8px; }
-.mobile-app .date-field { gap: 6px; font-size: 13px; }
-.mobile-app .date-field input { width: 148px; height: 44px; padding-inline: 10px; font-size: 16px; }
-.mobile-app .filter-row .result-count { margin-left: 0; white-space: nowrap; }
-.mobile-app .filter-row .clear-button { margin-left: 0; }
+.mobile-app .filter-scroll { gap: 8px; }
+.mobile-app .filter-scroll > button, .mobile-app .clear-button { min-height: 44px; padding-inline: 14px; }
+.mobile-app .filter-actions { gap: 8px; padding-left: 8px; }
+.mobile-app .result-summary { max-width: 92px; }
+.mobile-app .empty-filter-reset { min-height: 44px; padding-inline: 14px; font-size: 13px; }
 .mobile-app .history-list { padding: 4px 8px 12px; }
+.mobile-app .confirm-backdrop { padding: 16px; }
+.mobile-app .confirm-dialog { width: 100%; padding: 18px; }
+.mobile-app .confirm-actions .secondary-button,
+.mobile-app .confirm-actions .danger-button { flex: 1; min-height: 44px; }
 .mobile-app .history-item,
 .mobile-app .history-item.image-entry {
   grid-template-columns: 44px minmax(0, 1fr);
