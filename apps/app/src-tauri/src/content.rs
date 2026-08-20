@@ -145,6 +145,7 @@ pub struct ClipboardEntryExtra {
     pub html: Option<String>,
     pub rtf: Option<String>,
     pub thumbnail: Option<String>,
+    pub tree: Option<ClipboardTree>,
 }
 
 pub struct CollectedTree {
