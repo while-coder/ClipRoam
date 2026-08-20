@@ -70,11 +70,11 @@
     "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
-      "icons-cliproam/generated-compact/32x32.png",
-      "icons-cliproam/generated-compact/128x128.png",
-      "icons-cliproam/generated-compact/128x128@2x.png",
-      "icons-cliproam/generated-compact/icon.icns",
-      "icons-cliproam/generated-compact/icon.ico"
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ]
   },
   "plugins": {
