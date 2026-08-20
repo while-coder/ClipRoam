@@ -62,6 +62,7 @@ import {
   saveQuickPasteShortcut,
 } from "./services/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
+import TimeFilterControl from "./components/TimeFilterControl.vue";
 
 const CONFIGURED_SERVER_ADDRESS = "127.0.0.1:4810";
 const CONFIGURED_SERVER_PROTOCOL = "http";
@@ -181,6 +182,8 @@ const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
 const endDate = ref("");
 const selectedEntryId = ref("");
+const clearHistoryConfirmVisible = ref(false);
+const clearingHistory = ref(false);
 const connected = ref(false);
 const syncEnabled = ref(false);
 const feedbackToast = ref<FeedbackPayload>();
@@ -223,6 +226,9 @@ const previewImage = ref<LocalClipboardEntry>();
 const previewLoading = ref(false);
 const previewDialog = ref<HTMLElement>();
 const searchInput = ref<HTMLInputElement>();
+const clearHistoryButton = ref<HTMLButtonElement>();
+const clearHistoryCancelButton = ref<HTMLButtonElement>();
+const clearHistoryConfirmButton = ref<HTMLButtonElement>();
 const serverInput = ref<HTMLInputElement>();
 const accountPasswordInput = ref<HTMLInputElement>();
 let activeSyncConfig: SyncConfig | undefined;
@@ -271,24 +277,44 @@ const demoEntries: LocalClipboardEntry[] = [
   },
 ];
 
+const timeRangeError = computed(() => {
+  if (timeFilter.value !== "custom") return "";
+  if (!startDate.value || !endDate.value) return "请选择完整的开始和结束日期";
+  if (startDate.value > endDate.value) return "开始日期不能晚于结束日期";
+  return "";
+});
+
+const activeTimeRange = computed<{ start?: number; end?: number }>(() => {
+  if (timeFilter.value === "all") return {};
+  if (timeFilter.value === "custom") {
+    if (timeRangeError.value) return {};
+    return {
+      start: parseLocalDate(startDate.value)?.getTime(),
+      end: parseLocalDate(endDate.value, true)?.getTime(),
+    };
+  }
+  const start = new Date(currentTime.value);
+  start.setHours(0, 0, 0, 0);
+  if (timeFilter.value === "7-days") start.setDate(start.getDate() - 6);
+  if (timeFilter.value === "30-days") start.setDate(start.getDate() - 29);
+  const end = new Date(currentTime.value);
+  end.setHours(23, 59, 59, 999);
+  return { start: start.getTime(), end: end.getTime() };
+});
+
+const timeFilterSummary = computed(() => {
+  if (timeFilter.value === "all") return "";
+  if (timeFilter.value === "today") return "今天";
+  if (timeFilter.value === "7-days") return "近 7 天";
+  if (timeFilter.value === "30-days") return "近 30 天";
+  if (!startDate.value || !endDate.value) return "自定义区间";
+  return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
+});
+
 const filteredEntries = computed(() => {
+  if (timeRangeError.value) return [];
   const needle = query.value.trim().toLocaleLowerCase();
-  const timeRange = (() => {
-    if (timeFilter.value === "all") return {};
-    if (timeFilter.value === "custom") {
-      return {
-        start: parseLocalDate(startDate.value)?.getTime(),
-        end: parseLocalDate(endDate.value, true)?.getTime(),
-      };
-    }
-    if (timeFilter.value === "today") {
-      const today = new Date(currentTime.value);
-      today.setHours(0, 0, 0, 0);
-      return { start: today.getTime() };
-    }
-    const days = timeFilter.value === "7-days" ? 7 : 30;
-    return { start: currentTime.value - days * 24 * 60 * 60 * 1_000 };
-  })();
+  const timeRange = activeTimeRange.value;
   return entries.value.filter((entry) => {
     const matchesType = filter.value === "all"
       || (filter.value === "pinned" && entry.pinned)
@@ -308,14 +334,15 @@ const showsEmptyPinnedState = computed(() => (
   filter.value === "pinned" && timeFilter.value === "all" && !query.value.trim()
 ));
 
-watch(timeFilter, (value) => {
-  if (value !== "custom" || startDate.value || endDate.value) return;
-  const end = new Date(currentTime.value);
-  const start = new Date(end);
-  start.setDate(start.getDate() - 6);
-  startDate.value = formatDateInput(start);
-  endDate.value = formatDateInput(end);
+const filterResultSummary = computed(() => {
+  if (timeRangeError.value) return "日期有误";
+  const count = `${filteredEntries.value.length} 条`;
+  return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
 });
+
+const clearableEntryCount = computed(() => (
+  entries.value.reduce((count, entry) => count + Number(!entry.pinned), 0)
+));
 
 watch(filteredEntries, (nextEntries) => {
   if (!nextEntries.some((entry) => entry.id === selectedEntryId.value)) {
@@ -367,11 +394,15 @@ function formatAge(createdAt: string): string {
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(createdAt));
 }
 
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function formatExactDateTime(createdAt: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(createdAt));
 }
 
 function parseLocalDate(value: string, endOfDay = false): Date | undefined {
@@ -820,10 +851,44 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
   await refreshEntries();
 }
 
+async function requestClearHistory(): Promise<void> {
+  if (!clearableEntryCount.value) return;
+  clearHistoryConfirmVisible.value = true;
+  await nextTick();
+  clearHistoryCancelButton.value?.focus();
+}
+
+function resetTimeFilter(): void {
+  timeFilter.value = "all";
+  startDate.value = "";
+  endDate.value = "";
+}
+
+async function closeClearHistoryConfirm(): Promise<void> {
+  if (clearingHistory.value) return;
+  clearHistoryConfirmVisible.value = false;
+  await nextTick();
+  clearHistoryButton.value?.focus();
+}
+
 async function clearHistory(): Promise<void> {
-  if (runningInTauri) await invoke("clear_history");
-  else entries.value = entries.value.filter((entry) => entry.pinned);
-  await refreshEntries();
+  if (clearingHistory.value || !clearableEntryCount.value) return;
+  const clearedCount = clearableEntryCount.value;
+  clearingHistory.value = true;
+  try {
+    if (runningInTauri) await invoke("clear_history");
+    else entries.value = entries.value.filter((entry) => entry.pinned);
+    await refreshEntries();
+    clearHistoryConfirmVisible.value = false;
+    showFeedback(`已清除 ${clearedCount} 条未固定记录`, "success");
+    await nextTick();
+    searchInput.value?.focus();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    showFeedback(`清除历史失败：${message}`, "error");
+  } finally {
+    clearingHistory.value = false;
+  }
 }
 
 async function startWindowDrag(event: MouseEvent): Promise<void> {
@@ -1265,6 +1330,21 @@ async function connectAndSave(): Promise<void> {
 }
 
 function handleKeys(event: KeyboardEvent): void {
+  if (!isPasteWindow && clearHistoryConfirmVisible.value) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void closeClearHistoryConfirm();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      const cancelButton = clearHistoryCancelButton.value;
+      const confirmButton = clearHistoryConfirmButton.value;
+      const focusConfirm = event.shiftKey
+        ? document.activeElement === cancelButton
+        : document.activeElement !== confirmButton;
+      (focusConfirm ? confirmButton : cancelButton)?.focus();
+    }
+    return;
+  }
   if (!isPasteWindow && previewImage.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -1930,37 +2010,32 @@ onBeforeUnmount(() => {
         {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
       </button>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
-        <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
-        <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
-        <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
-        <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
-        <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
-        <button :class="{ active: filter === 'pending-upload' }" type="button" @click="filter = 'pending-upload'">未上传</button>
-        <label class="time-filter">
-          <span>时间</span>
-          <select v-model="timeFilter" aria-label="按时间筛选剪贴板历史">
-            <option value="all">不限</option>
-            <option value="today">今天</option>
-            <option value="7-days">近 7 天</option>
-            <option value="30-days">近 30 天</option>
-            <option value="custom">自定义区间</option>
-          </select>
-        </label>
-        <span class="result-count">{{ filteredEntries.length }} 条</span>
-        <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
-      </div>
-      <div v-if="timeFilter === 'custom'" class="date-range-row" role="group" aria-label="自定义时间区间">
-        <span class="date-range-title">时间区间</span>
-        <span class="date-range-filter">
-          <label class="date-field">
-            <span>从</span>
-            <input v-model="startDate" type="date" :max="endDate || undefined" aria-label="开始日期" />
-          </label>
-          <label class="date-field">
-            <span>至</span>
-            <input v-model="endDate" type="date" :min="startDate || undefined" aria-label="结束日期" />
-          </label>
-        </span>
+        <div class="filter-scroll">
+          <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
+          <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
+          <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
+          <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
+          <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
+          <button :class="{ active: filter === 'pending-upload' }" type="button" @click="filter = 'pending-upload'">未上传</button>
+          <TimeFilterControl
+            v-model="timeFilter"
+            v-model:start-date="startDate"
+            v-model:end-date="endDate"
+            :error="timeRangeError"
+          />
+        </div>
+        <div class="filter-actions">
+          <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
+          <button
+            v-if="!isPasteWindow"
+            ref="clearHistoryButton"
+            class="clear-button"
+            type="button"
+            :disabled="!clearableEntryCount"
+            :title="clearableEntryCount ? `清除 ${clearableEntryCount} 条未固定记录` : '没有可清除的未固定记录'"
+            @click="requestClearHistory"
+          >清除未固定</button>
+        </div>
       </div>
       </section>
 
@@ -2007,7 +2082,7 @@ onBeforeUnmount(() => {
           <span class="entry-meta">
             <Monitor :size="12" /> {{ deviceName(entry) }}
             <span>·</span>
-            <span>{{ formatAge(entry.createdAt) }}</span>
+            <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
             <template v-if="entry.pinned">
               <span>·</span>
               <span class="pinned-status"><Pin :size="11" aria-hidden="true" />已固定</span>
@@ -2069,8 +2144,9 @@ onBeforeUnmount(() => {
 
       <div v-if="!filteredEntries.length" class="empty-state">
         <Search :size="28" />
-        <strong>{{ showsEmptyPinnedState ? "还没有固定内容" : "没有匹配内容" }}</strong>
-        <span>{{ showsEmptyPinnedState ? "固定常用条目后，可在这里集中查看" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
+        <strong>{{ timeRangeError ? "日期区间无效" : showsEmptyPinnedState ? "还没有固定内容" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
+        <span>{{ timeRangeError || (showsEmptyPinnedState ? "固定常用条目后，可在这里集中查看" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <button v-if="timeFilter !== 'all'" class="empty-filter-reset" type="button" @click="resetTimeFilter">清除时间筛选</button>
       </div>
       </section>
 
@@ -2084,6 +2160,24 @@ onBeforeUnmount(() => {
       <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
       </footer>
     </section>
+
+    <div v-if="!isPasteWindow && clearHistoryConfirmVisible" class="confirm-backdrop" @mousedown.self="closeClearHistoryConfirm">
+      <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="clear-history-heading" aria-describedby="clear-history-description">
+        <span class="confirm-icon danger" aria-hidden="true"><Trash2 :size="20" /></span>
+        <div class="confirm-copy">
+          <h2 id="clear-history-heading">清除未固定记录？</h2>
+          <p id="clear-history-description">将永久删除 {{ clearableEntryCount }} 条未固定的剪贴板记录。已固定记录会保留，此操作无法撤销。</p>
+        </div>
+        <footer class="confirm-actions">
+          <button ref="clearHistoryCancelButton" class="secondary-button" type="button" :disabled="clearingHistory" @click="closeClearHistoryConfirm">取消</button>
+          <button ref="clearHistoryConfirmButton" class="danger-button" type="button" :disabled="clearingHistory || !clearableEntryCount" @click="clearHistory">
+            <LoaderCircle v-if="clearingHistory" :size="17" class="spin" aria-hidden="true" />
+            <Trash2 v-else :size="17" aria-hidden="true" />
+            {{ clearingHistory ? "正在清除…" : "确认清除" }}
+          </button>
+        </footer>
+      </section>
+    </div>
 
     <div v-if="!isPasteWindow && settingsVisible" class="settings-backdrop" @mousedown.self="closeSettings">
       <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
