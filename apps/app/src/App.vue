@@ -1905,14 +1905,17 @@ onBeforeUnmount(() => {
         @keydown.space.prevent.stop="activateSelectedEntry(entry)"
       >
         <button
-          v-if="entry.kind === 'image' && !isPasteWindow && thumbnailSource(entry)"
+          v-if="entry.kind === 'image' && !isPasteWindow"
           class="image-thumbnail"
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
           @click.stop="openImagePreview(entry)"
           @dblclick.stop
-        ><img :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" /></button>
+        >
+          <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
+          <Image v-else :size="18" aria-hidden="true" />
+        </button>
         <span v-else-if="entry.kind === 'image' && thumbnailSource(entry)" class="image-thumbnail" aria-hidden="true">
           <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
         </span>

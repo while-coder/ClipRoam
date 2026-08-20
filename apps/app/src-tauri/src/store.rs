@@ -266,19 +266,19 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         "SELECT id, kind, content, extra, source_device_id, created_at, pinned FROM entries ORDER BY pinned DESC, created_at DESC",
     ) {
         if let Ok(rows) = statement.query_map([], |row| {
-            let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>(4)?).unwrap_or_default();
+            let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
             Ok(ClipboardEntry {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                content: row.get(2)?,
+                id: row.get("id")?,
+                kind: row.get("kind")?,
+                content: row.get("content")?,
                 html: extra.html,
                 rtf: extra.rtf,
                 thumbnail: extra.thumbnail,
                 tree: None,
                 files: Vec::new(),
-                source_device_id: row.get(4)?,
-                created_at: row.get(5)?,
-                pinned: row.get::<_, i64>(6)? != 0,
+                source_device_id: row.get("source_device_id")?,
+                created_at: row.get("created_at")?,
+                pinned: row.get::<_, i64>("pinned")? != 0,
                 summary: Default::default(),
                 sources: LocalSources::default(),
             })
@@ -749,9 +749,9 @@ mod tests {
             id: "entry".to_string(),
             kind: "files".to_string(),
             content: "bundle".to_string(),
-            html: None,
-            rtf: None,
-            thumbnail: None,
+            html: Some("<b>bundle</b>".to_string()),
+            rtf: Some("{\\rtf1 bundle}".to_string()),
+            thumbnail: Some("thumbnail".to_string()),
             // Hashing has not run yet, so the content id is still empty.
             tree: Some(tree("")),
             files: Vec::new(),
@@ -779,6 +779,9 @@ mod tests {
         let entry = &reloaded.active_entries()[0];
         fs::remove_dir_all(&directory).expect("remove temporary database");
         assert!(entry.pinned);
+        assert_eq!(entry.html.as_deref(), Some("<b>bundle</b>"));
+        assert_eq!(entry.rtf.as_deref(), Some("{\\rtf1 bundle}"));
+        assert_eq!(entry.thumbnail.as_deref(), Some("thumbnail"));
         assert_eq!(entry.tree.as_ref().expect("tree").files[0].f, hashed);
     }
 
