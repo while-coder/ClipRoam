@@ -53,14 +53,18 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   grid-template-rows: 44px minmax(0, 1fr) 38px;
 }
 .setup-loading {
-  place-items: center;
-  align-content: center;
-  grid-template-rows: auto;
-  gap: 9px;
+  grid-template-rows: 44px minmax(0, 1fr);
   color: var(--color-secondary-text);
   font-size: 12px;
 }
-.setup-loading strong { color: var(--color-foreground); font-size: 15px; }
+.setup-loading-content {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+}
+.setup-loading-content strong { color: var(--color-foreground); font-size: 15px; }
+.setup-loading.mobile-shell { grid-template-rows: minmax(0, 1fr); }
 .setup-content {
   display: grid;
   align-content: start;
@@ -218,8 +222,12 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
   user-select: none;
 }
+.titlebar:active { cursor: grabbing; }
+.titlebar button { cursor: pointer; }
+.startup-titlebar { width: 100%; }
 .brand, .titlebar-actions, .connection, .entry-meta, .footer-hint, .filter-row {
   display: flex;
   align-items: center;
@@ -244,7 +252,30 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   border-radius: 5px;
   font-size: 10px;
 }
-.titlebar-actions { gap: 8px; }
+.titlebar-actions { align-self: stretch; gap: 8px; }
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  height: 100%;
+  margin-right: -14px;
+}
+.workspace-titlebar .window-controls { margin-right: -20px; }
+.window-control {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 42px;
+  padding: 0;
+  color: #cbd5e1;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.window-control:hover { color: #f8fafc; background: rgba(255, 255, 255, 0.09); }
+.window-control:active { background: rgba(255, 255, 255, 0.14); }
+.window-control.close:hover,
+.window-control.close:active { color: #fff; background: #c42b1c; }
 .connection { gap: 5px; color: #94a3b8; font-size: 11px; }
 .connection.online { color: #4ade80; }
 .connection-button {
@@ -689,6 +720,48 @@ button.image-thumbnail { cursor: zoom-in; }
 .settings-icon { display: grid; flex: 0 0 auto; place-items: center; width: 32px; height: 32px; color: #93c5fd; background: #183152; border-radius: 7px; }
 .settings-section h4 { margin: 0; color: #e2e8f0; font-size: 13px; }
 .settings-section p { margin: 3px 0 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
+.shortcut-setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 58px;
+  padding: 8px 10px;
+  background: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+}
+.shortcut-setting-row > div { display: grid; gap: 3px; }
+.shortcut-setting-row strong { color: #e2e8f0; font-size: 12px; }
+.shortcut-setting-row small { color: #64748b; font-size: 11px; line-height: 1.45; }
+.shortcut-recorder {
+  min-width: 170px;
+  min-height: 40px;
+  padding: 0 12px;
+  color: #dbeafe;
+  background: #183152;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.shortcut-recorder:hover:not(:disabled) { background: #1e3a5f; border-color: rgba(96, 165, 250, 0.55); }
+.shortcut-recorder.recording { color: #bbf7d0; border-color: rgba(74, 222, 128, 0.62); }
+.shortcut-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.shortcut-presets > span { margin-right: 2px; color: #64748b; font-size: 11px; }
+.shortcut-presets button {
+  min-height: 32px;
+  padding: 0 10px;
+  color: #94a3b8;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.shortcut-presets button:hover:not(:disabled),
+.shortcut-presets button.active { color: #dbeafe; background: rgba(37, 99, 235, 0.16); border-color: rgba(96, 165, 250, 0.42); }
+.settings-section .shortcut-status { margin: 2px 0 0; color: #94a3b8; }
+.settings-section .shortcut-status.ok { color: #86efac; }
+.settings-section .shortcut-status.error { color: #fca5a5; }
 .about-product { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .about-product-mark {
   width: 46px;
@@ -822,7 +895,7 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 @media (max-width: 640px) {
   .settings-layout { grid-template-columns: 1fr; }
-  .settings-nav { grid-template-columns: repeat(4, minmax(96px, 1fr)); padding: 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+  .settings-nav { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(96px, 1fr); padding: 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
   .settings-nav button { padding-inline: 8px; text-align: center; }
   .settings-nav button.active { box-shadow: inset 0 -3px #60a5fa; }
   .settings-form { padding: 18px; }

@@ -11,6 +11,7 @@ import type {
   Device,
 } from "@cliproam/protocol";
 import {
+  ArrowLeft,
   Check,
   CircleAlert,
   CircleCheck,
@@ -23,14 +24,17 @@ import {
   FolderOpen,
   Image,
   Info,
+  KeyRound,
   LoaderCircle,
   Monitor,
+  Minus,
   Pin,
   RefreshCw,
   Search,
   Server,
   Settings2,
   ShieldCheck,
+  Square,
   Trash2,
   Upload,
   X,
@@ -47,9 +51,18 @@ import {
   type ServerProtocol,
 } from "./services/syncClient";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./services/concurrency";
+import {
+  displayShortcut,
+  disposeQuickPasteShortcut,
+  initializeQuickPasteShortcut,
+  quickPasteShortcut,
+  quickPasteShortcutRefreshing,
+  quickPasteShortcutStatus,
+  resetQuickPasteShortcutDraft,
+  saveQuickPasteShortcut,
+} from "./services/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
 
-const HOTKEY = "CommandOrControl+Shift+V";
 const CONFIGURED_SERVER_ADDRESS = "127.0.0.1:4810";
 const CONFIGURED_SERVER_PROTOCOL = "http";
 const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
@@ -148,7 +161,7 @@ const EMPTY_SUMMARY: EntrySummary = {
   pendingCount: 0,
   pendingSize: 0,
 };
-type SettingsPage = "general" | "account" | "data" | "about";
+type SettingsPage = "general" | "shortcuts" | "account" | "data" | "about";
 type FeedbackTone = "success" | "error" | "info";
 type FeedbackPayload = { message: string; tone: FeedbackTone };
 type ShareReceiverEvent = { id?: string; error?: string };
@@ -186,6 +199,7 @@ const testingConnection = ref(false);
 const autoUploadLimitMb = ref(10);
 const autoReceiveClipboard = ref(true);
 const savingSettings = ref(false);
+const recordingQuickPasteShortcut = ref(false);
 const changingPassword = ref(false);
 const settingsError = ref("");
 const passwordChangeError = ref("");
@@ -212,7 +226,6 @@ let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
 let feedbackTimer: number | undefined;
 let feedbackWindowHideTimer: number | undefined;
-let globalShortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
 let shareReceiverListener: PluginListener | undefined;
 let localClipboardRevision = 0;
 let remoteActivationRevision = 0;
@@ -428,6 +441,17 @@ async function consumeMobileShares(): Promise<void> {
 
 async function hideWindow(): Promise<void> {
   if (runningInTauri && !isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
+}
+
+async function minimizeWindow(): Promise<void> {
+  if (runningInTauri && !isMobile.value) await invoke("minimize_window");
+}
+
+async function toggleWindowMaximize(event?: MouseEvent): Promise<void> {
+  if (!runningInTauri || isMobile.value) return;
+  const target = event?.target as HTMLElement | undefined;
+  if (target?.closest("button, input, [role='button']")) return;
+  await invoke("toggle_window_maximize");
 }
 
 /**
@@ -864,6 +888,8 @@ function openSettings(): void {
   if (!activeSyncConfig) return;
   autoUploadLimitMb.value = activeSyncConfig.autoUploadLimitMb;
   autoReceiveClipboard.value = activeSyncConfig.autoReceiveClipboard;
+  resetQuickPasteShortcutDraft();
+  recordingQuickPasteShortcut.value = false;
   settingsPage.value = "general";
   clearPasswordChangeFields();
   settingsError.value = "";
@@ -872,7 +898,60 @@ function openSettings(): void {
 
 function selectSettingsPage(page: SettingsPage): void {
   settingsPage.value = page;
+  recordingQuickPasteShortcut.value = false;
   settingsError.value = "";
+}
+
+function shortcutKeyToken(event: KeyboardEvent): string {
+  const { code } = event;
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (/^F\d{1,2}$/.test(code)) return code;
+  const tokens: Record<string, string> = {
+    Space: "Space",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backquote: "`",
+    Minus: "-",
+    Equal: "=",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+  };
+  return tokens[code] ?? "";
+}
+
+function recordQuickPasteShortcut(event: KeyboardEvent): void {
+  if (!recordingQuickPasteShortcut.value) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.code === "Escape") {
+    recordingQuickPasteShortcut.value = false;
+    return;
+  }
+  const token = shortcutKeyToken(event);
+  if (!token) return;
+
+  const modifiers: string[] = [];
+  if (event.ctrlKey || event.metaKey) modifiers.push("CommandOrControl");
+  if (event.shiftKey) modifiers.push("Shift");
+  if (event.altKey) modifiers.push("Alt");
+  if (!modifiers.length && !/^F\d{1,2}$/.test(token)) {
+    quickPasteShortcutStatus.value = {
+      state: "error",
+      message: "请至少按住 Ctrl、Alt 或 Command，再按一个主键",
+    };
+    return;
+  }
+  quickPasteShortcut.value = [...modifiers, token].join("+");
+  quickPasteShortcutStatus.value = { state: "idle", message: "点击保存后生效" };
+  recordingQuickPasteShortcut.value = false;
+}
+
+function selectQuickPasteShortcut(shortcut: string): void {
+  quickPasteShortcut.value = shortcut;
+  quickPasteShortcutStatus.value = { state: "idle", message: "点击保存后生效" };
 }
 
 async function checkAppUpdate(): Promise<void> {
@@ -933,6 +1012,15 @@ async function saveSettings(): Promise<void> {
     autoReceiveClipboard: autoReceiveClipboard.value,
   };
   try {
+    if (
+      runningInTauri
+      && platformCapabilities.value.globalShortcut
+      && settingsPage.value === "shortcuts"
+      && !(await saveQuickPasteShortcut())
+    ) {
+      settingsError.value = quickPasteShortcutStatus.value.message;
+      return;
+    }
     await persistSyncConfig(config);
     activeSyncConfig = config;
     if (config.enabled && config.username && config.sessionToken) await startSync(config);
@@ -1373,69 +1461,79 @@ async function applySavedSyncConfig(): Promise<void> {
   }
 }
 
-onMounted(async () => {
-  if (isFeedbackWindow) {
-    unlisteners = [await listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
-      displayFeedback(payload);
-    })];
-    return;
-  }
-  if (runningInTauri) {
-    platformCapabilities.value = await invoke<PlatformCapabilities>("get_platform_capabilities");
-  }
-  if (!isPasteWindow && !isFeedbackWindow) await initUpdaterVersion();
-  await refreshEntries();
-  ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
-  document.addEventListener("keydown", handleKeys);
+function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), 5_000);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
-  if (runningInTauri) {
-    unlisteners = await Promise.all([
-      listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
-        displayFeedback(payload);
-      }),
-      listen("cliproam://entry-created", () => {
-        localClipboardRevision += 1;
-        void refreshEntries();
-      }),
-      // Emitted once every content of an entry has a known id, which for a
-      // folder happens after background hashing finishes.
-      listen<string>("cliproam://entry-ready", async ({ payload }) => {
+async function initializeTauriServices(): Promise<void> {
+  const listenerResults = await Promise.allSettled([
+    listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
+      displayFeedback(payload);
+    }),
+    listen("cliproam://entry-created", () => {
+      localClipboardRevision += 1;
+      void refreshEntries();
+    }),
+    // Emitted once every content of an entry has a known id, which for a
+    // folder happens after background hashing finishes.
+    listen<string>("cliproam://entry-ready", async ({ payload }) => {
+      await refreshEntries();
+      if (isPasteWindow || !syncClient) return;
+      try {
+        await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
+      } catch (error) {
+        showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    }),
+    listen("cliproam://history-changed", refreshEntries),
+    listen("cliproam://focus-search", focusSearch),
+    listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
+    listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
+      const client = syncClient;
+      if (!client) {
+        await invoke("fail_virtual_file_request", {
+          fileId: payload.fileId,
+          message: "同步服务未连接，无法获取其他设备的文件",
+        });
+        return;
+      }
+      try {
+        await client.downloadVirtualFile(payload);
+        await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
         await refreshEntries();
-        if (isPasteWindow || !syncClient) return;
-        try {
-          await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
-        } catch (error) {
-          showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
-        }
-      }),
-      listen("cliproam://history-changed", refreshEntries),
-      listen("cliproam://focus-search", focusSearch),
-      listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
-      listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
-        const client = syncClient;
-        if (!client) {
-          await invoke("fail_virtual_file_request", {
-            fileId: payload.fileId,
-            message: "同步服务未连接，无法获取其他设备的文件",
-          });
-          return;
-        }
-        try {
-          await client.downloadVirtualFile(payload);
-          await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
-          await refreshEntries();
-        } catch (error) {
-          await invoke("fail_virtual_file_request", {
-            fileId: payload.fileId,
-            message: error instanceof Error ? error.message : String(error),
-          }).catch(() => undefined);
-        }
-      }),
-    ]);
-    if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
-      globalShortcutApi = await import("@tauri-apps/plugin-global-shortcut");
-    }
-    if (!isPasteWindow && platformCapabilities.value.shareReceiver) {
+      } catch (error) {
+        await invoke("fail_virtual_file_request", {
+          fileId: payload.fileId,
+          message: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+      }
+    }),
+  ]);
+  unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+  const listenerError = listenerResults.find((result) => result.status === "rejected");
+  if (listenerError?.status === "rejected") {
+    showFeedback(`部分后台事件监听初始化失败：${String(listenerError.reason)}`, "error");
+  }
+
+  if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
+    const registered = await initializeQuickPasteShortcut();
+    if (!registered) showFeedback(quickPasteShortcutStatus.value.message, "error");
+  }
+
+  if (!isPasteWindow && platformCapabilities.value.shareReceiver) {
+    try {
       shareReceiverListener = await addPluginListener<ShareReceiverEvent>(
         "cliproam-share-receiver",
         "received",
@@ -1448,42 +1546,77 @@ onMounted(async () => {
         },
       );
       await consumeMobileShares();
-    }
-    if (globalShortcutApi && !(await globalShortcutApi.isRegistered(HOTKEY))) {
-      await globalShortcutApi.register(HOTKEY, (event) => {
-        if (event.state === "Pressed") void invoke("open_paste");
-      });
+    } catch (error) {
+      showFeedback(`系统分享接收初始化失败：${error instanceof Error ? error.message : String(error)}`, "error");
     }
   }
+}
 
-  let config: SyncConfig | null = null;
-  try {
-    config = await loadSyncConfig();
-  } catch (error) {
-    setupError.value = `无法读取连接设置：${error instanceof Error ? error.message : String(error)}`;
-  }
-  initializing.value = false;
-  if (!config) {
-    if (isPasteWindow) return;
-    setupVisible.value = true;
-    await nextTick();
-    serverInput.value?.focus();
+onMounted(async () => {
+  if (isFeedbackWindow) {
+    unlisteners = [await listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
+      displayFeedback(payload);
+    })];
     return;
   }
 
-  activeSyncConfig = config;
-  syncEnabled.value = config.enabled;
-  currentUsername.value = config.username;
-  hasSavedSyncConfig.value = true;
-  setSetupFields(config);
-  if (config.enabled && config.username && config.sessionToken) {
-    await startSync(config);
-    await focusSearch();
-  } else if (config.enabled) {
-    setupVisible.value = true;
+  ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
+  document.addEventListener("keydown", handleKeys);
+
+  let config: SyncConfig | null = null;
+  let startupWarning = "";
+  const platformPromise = runningInTauri
+    ? withStartupTimeout(
+        invoke<PlatformCapabilities>("get_platform_capabilities"),
+        "读取平台能力超时",
+      )
+    : Promise.resolve(DESKTOP_CAPABILITIES);
+  const [capabilitiesResult, configResult] = await Promise.allSettled([
+    platformPromise,
+    withStartupTimeout(loadSyncConfig(), "读取连接配置超时"),
+  ]);
+  if (capabilitiesResult.status === "fulfilled") {
+    platformCapabilities.value = capabilitiesResult.value;
+  } else {
+    startupWarning = `平台能力读取失败：${String(capabilitiesResult.reason)}`;
+  }
+  if (configResult.status === "fulfilled") {
+    config = configResult.value;
+  } else {
+    setupError.value = `无法读取连接设置：${String(configResult.reason)}`;
+    startupWarning = setupError.value;
+  }
+
+  if (!config) {
+    if (!isPasteWindow) setupVisible.value = true;
+  } else {
+    activeSyncConfig = config;
+    syncEnabled.value = config.enabled;
+    currentUsername.value = config.username;
+    hasSavedSyncConfig.value = true;
+    setSetupFields(config);
+    if (config.enabled && (!config.username || !config.sessionToken)) setupVisible.value = true;
+  }
+  initializing.value = false;
+
+  if (startupWarning) showFeedback(startupWarning, "error");
+  if (!isPasteWindow) void initUpdaterVersion();
+  void refreshEntries().catch((error) => {
+    showFeedback(`剪贴板历史读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+  });
+  if (runningInTauri) void initializeTauriServices();
+
+  if (setupVisible.value) {
     await nextTick();
     serverInput.value?.focus();
-  } else {
+  } else if (config?.enabled && config.username && config.sessionToken) {
+    try {
+      await startSync(config);
+    } catch (error) {
+      showFeedback(`同步初始化失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+    await focusSearch();
+  } else if (config) {
     await focusSearch();
   }
 });
@@ -1496,7 +1629,7 @@ onBeforeUnmount(() => {
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();
   syncClient?.stop();
-  if (globalShortcutApi && !isPasteWindow) void globalShortcutApi.unregister(HOTKEY);
+  if (!isPasteWindow) void disposeQuickPasteShortcut();
 });
 </script>
 
@@ -1504,28 +1637,60 @@ onBeforeUnmount(() => {
   <main v-if="isFeedbackWindow" class="feedback-window-shell" aria-hidden="true"></main>
 
   <main v-else-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
-    <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
-    <strong>ClipRoam</strong>
-    <span>正在读取连接配置…</span>
-  </main>
-
-  <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
-    <header class="titlebar" @mousedown.left="startWindowDrag">
+    <header v-if="!isMobile" class="titlebar startup-titlebar" @mousedown.left="startWindowDrag" @dblclick.left="toggleWindowMaximize">
       <div class="brand">
         <span class="brand-mark"><Clipboard :size="16" /></span>
         <strong>ClipRoam</strong>
       </div>
-      <button
-        v-if="hasSavedSyncConfig"
-        class="icon-button"
-        type="button"
-        title="返回剪贴板历史"
-        aria-label="返回剪贴板历史"
-        :disabled="testingConnection"
-        @click="closeSetup"
-      >
-        <X :size="17" />
-      </button>
+      <div v-if="runningInTauri" class="window-controls" aria-label="窗口控制">
+        <button class="window-control" type="button" title="最小化" aria-label="最小化窗口" @click="minimizeWindow">
+          <Minus :size="16" aria-hidden="true" />
+        </button>
+        <button class="window-control" type="button" title="最大化或还原" aria-label="最大化或还原窗口" @click="toggleWindowMaximize()">
+          <Square :size="13" aria-hidden="true" />
+        </button>
+        <button class="window-control close" type="button" title="关闭到托盘" aria-label="关闭窗口到托盘" @click="hideWindow">
+          <X :size="17" aria-hidden="true" />
+        </button>
+      </div>
+    </header>
+    <section class="setup-loading-content" role="status" aria-live="polite">
+      <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
+      <strong>ClipRoam</strong>
+      <span>正在读取连接配置…</span>
+    </section>
+  </main>
+
+  <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
+    <header class="titlebar" @mousedown.left="startWindowDrag" @dblclick.left="toggleWindowMaximize">
+      <div class="brand">
+        <span class="brand-mark"><Clipboard :size="16" /></span>
+        <strong>ClipRoam</strong>
+      </div>
+      <div class="titlebar-actions">
+        <button
+          v-if="hasSavedSyncConfig"
+          class="icon-button"
+          type="button"
+          title="返回剪贴板历史"
+          aria-label="返回剪贴板历史"
+          :disabled="testingConnection"
+          @click="closeSetup"
+        >
+          <ArrowLeft :size="17" aria-hidden="true" />
+        </button>
+        <div v-if="runningInTauri && !isMobile" class="window-controls" aria-label="窗口控制">
+          <button class="window-control" type="button" title="最小化" aria-label="最小化窗口" @click="minimizeWindow">
+            <Minus :size="16" aria-hidden="true" />
+          </button>
+          <button class="window-control" type="button" title="最大化或还原" aria-label="最大化或还原窗口" @click="toggleWindowMaximize()">
+            <Square :size="13" aria-hidden="true" />
+          </button>
+          <button class="window-control close" type="button" title="关闭到托盘" aria-label="关闭窗口到托盘" @click="hideWindow">
+            <X :size="17" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
     </header>
 
     <section class="setup-content">
@@ -1658,7 +1823,7 @@ onBeforeUnmount(() => {
     </aside>
 
     <section class="app-content history-content">
-      <header class="titlebar workspace-titlebar" @mousedown.left="startWindowDrag">
+      <header class="titlebar workspace-titlebar" @mousedown.left="startWindowDrag" @dblclick.left="toggleWindowMaximize">
         <div v-if="isPasteWindow" class="brand">
           <span class="brand-mark"><Clipboard :size="16" /></span>
           <strong>ClipRoam</strong>
@@ -1673,9 +1838,17 @@ onBeforeUnmount(() => {
           <button v-if="isMobile && !isPasteWindow" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="openSettings">
             <Settings2 :size="19" />
           </button>
-          <button v-else class="icon-button" type="button" title="关闭" :aria-label="isPasteWindow ? '关闭粘贴窗口' : '关闭主窗口'" @click="hideWindow">
-            <X :size="17" />
-          </button>
+          <div v-else-if="runningInTauri" class="window-controls" aria-label="窗口控制">
+            <button class="window-control" type="button" title="最小化" :aria-label="isPasteWindow ? '最小化粘贴窗口' : '最小化主窗口'" @click="minimizeWindow">
+              <Minus :size="16" aria-hidden="true" />
+            </button>
+            <button class="window-control" type="button" title="最大化或还原" :aria-label="isPasteWindow ? '最大化或还原粘贴窗口' : '最大化或还原主窗口'" @click="toggleWindowMaximize()">
+              <Square :size="13" aria-hidden="true" />
+            </button>
+            <button class="window-control close" type="button" title="关闭到托盘" :aria-label="isPasteWindow ? '关闭粘贴窗口' : '关闭主窗口到托盘'" @click="hideWindow">
+              <X :size="17" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1834,6 +2007,7 @@ onBeforeUnmount(() => {
         <div class="settings-layout">
           <nav class="settings-nav" aria-label="设置分类" role="tablist">
             <button :class="{ active: settingsPage === 'general' }" type="button" role="tab" aria-controls="settings-general-panel" :aria-selected="settingsPage === 'general'" @click="selectSettingsPage('general')">通用</button>
+            <button v-if="runningInTauri && platformCapabilities.globalShortcut" :class="{ active: settingsPage === 'shortcuts' }" type="button" role="tab" aria-controls="settings-shortcuts-panel" :aria-selected="settingsPage === 'shortcuts'" @click="selectSettingsPage('shortcuts')">快捷键</button>
             <button :class="{ active: settingsPage === 'account' }" type="button" role="tab" aria-controls="settings-account-panel" :aria-selected="settingsPage === 'account'" @click="selectSettingsPage('account')">账号与安全</button>
             <button :class="{ active: settingsPage === 'data' }" type="button" role="tab" aria-controls="settings-data-panel" :aria-selected="settingsPage === 'data'" @click="selectSettingsPage('data')">应用数据</button>
             <button :class="{ active: settingsPage === 'about' }" type="button" role="tab" aria-controls="settings-about-panel" :aria-selected="settingsPage === 'about'" @click="selectSettingsPage('about')">关于</button>
@@ -1884,6 +2058,56 @@ onBeforeUnmount(() => {
                   <option :value="100">小于 100 MB</option>
                 </select>
                 <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
+              </section>
+            </section>
+
+            <section v-else-if="settingsPage === 'shortcuts'" id="settings-shortcuts-panel" class="settings-page" role="tabpanel" aria-labelledby="shortcuts-page-heading">
+              <header class="settings-page-header">
+                <h3 id="shortcuts-page-heading">快捷键</h3>
+                <p>配置当前设备的全局快捷操作，不会同步到其他设备。</p>
+              </header>
+              <section class="settings-section" aria-labelledby="quick-paste-shortcut-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><KeyRound :size="18" /></span>
+                  <div>
+                    <h4 id="quick-paste-shortcut-heading">快捷粘贴</h4>
+                    <p>在其他应用中按下快捷键，打开 ClipRoam 快捷粘贴窗口。</p>
+                  </div>
+                </div>
+                <div class="shortcut-setting-row">
+                  <div>
+                    <strong>全局快捷键</strong>
+                    <small>点击右侧按钮，然后按下新的组合键；Esc 取消录制。</small>
+                  </div>
+                  <button
+                    class="shortcut-recorder"
+                    :class="{ recording: recordingQuickPasteShortcut }"
+                    type="button"
+                    :disabled="savingSettings || quickPasteShortcutRefreshing"
+                    :aria-label="recordingQuickPasteShortcut ? '正在录制快捷粘贴快捷键' : `当前快捷键 ${displayShortcut(quickPasteShortcut)}`"
+                    @click="recordingQuickPasteShortcut = true"
+                    @blur="recordingQuickPasteShortcut = false"
+                    @keydown="recordQuickPasteShortcut"
+                  >
+                    {{ recordingQuickPasteShortcut ? "按下组合键…" : displayShortcut(quickPasteShortcut) }}
+                  </button>
+                </div>
+                <div class="shortcut-presets" aria-label="快捷键预设">
+                  <span>预设</span>
+                  <button
+                    v-for="preset in ['CommandOrControl+Shift+V', 'CommandOrControl+Alt+V', 'CommandOrControl+Shift+Space']"
+                    :key="preset"
+                    type="button"
+                    :class="{ active: quickPasteShortcut === preset }"
+                    :disabled="savingSettings || quickPasteShortcutRefreshing"
+                    @click="selectQuickPasteShortcut(preset)"
+                  >
+                    {{ displayShortcut(preset) }}
+                  </button>
+                </div>
+                <p v-if="quickPasteShortcutStatus.message" class="shortcut-status" :class="quickPasteShortcutStatus.state" :role="quickPasteShortcutStatus.state === 'error' ? 'alert' : 'status'" aria-live="polite">
+                  {{ quickPasteShortcutStatus.message }}
+                </p>
               </section>
             </section>
 
@@ -1997,7 +2221,7 @@ onBeforeUnmount(() => {
 
             <p v-if="settingsError" class="setup-error" role="alert">{{ settingsError }}</p>
 
-            <footer v-if="settingsPage === 'general'" class="settings-actions">
+            <footer v-if="settingsPage === 'general' || settingsPage === 'shortcuts'" class="settings-actions">
               <button class="primary-button" type="submit" :disabled="savingSettings || changingPassword">
                 <LoaderCircle v-if="savingSettings" :size="17" class="spin" aria-hidden="true" />
                 <Check v-else :size="17" aria-hidden="true" />

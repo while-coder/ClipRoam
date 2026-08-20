@@ -1828,6 +1828,21 @@ fn hide_main(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_maximized().map_err(|error| error.to_string())? {
+        window.unmaximize()
+    } else {
+        window.maximize()
+    }
+    .map_err(|error| error.to_string())
+}
+
 #[cfg(target_os = "windows")]
 fn synthesize_paste() -> Result<(), String> {
     use std::mem::size_of;
@@ -2850,6 +2865,8 @@ pub fn run() {
             acknowledge_entry_update,
             open_paste,
             start_window_drag,
+            minimize_window,
+            toggle_window_maximize,
             hide_paste,
             hide_main,
             show_feedback,
