@@ -1829,11 +1829,19 @@ fn hide_main(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
     window.minimize().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn minimize_window(_window: tauri::WebviewWindow) -> Result<(), String> {
+    Err("移动端不支持最小化窗口".to_string())
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.is_maximized().map_err(|error| error.to_string())? {
         window.unmaximize()
@@ -1841,6 +1849,12 @@ fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
         window.maximize()
     }
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn toggle_window_maximize(_window: tauri::WebviewWindow) -> Result<(), String> {
+    Err("移动端不支持最大化窗口".to_string())
 }
 
 #[cfg(target_os = "windows")]
