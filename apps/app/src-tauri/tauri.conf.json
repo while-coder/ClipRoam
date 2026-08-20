@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "ClipRoam",
         "width": 960,
         "height": 700,
@@ -26,6 +27,7 @@
       },
       {
         "label": "paste",
+        "create": false,
         "title": "ClipRoam - 快速粘贴",
         "width": 560,
         "height": 640,
@@ -40,6 +42,7 @@
       },
       {
         "label": "feedback",
+        "create": false,
         "title": "ClipRoam",
         "width": 380,
         "height": 88,
