@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { addPluginListener, convertFileSrc, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
@@ -98,6 +98,7 @@ type PlatformCapabilities = {
   imageClipboard: boolean;
   nativeFileExport: boolean;
   openDataDirectory: boolean;
+  shareReceiver: boolean;
 };
 
 const DESKTOP_CAPABILITIES: PlatformCapabilities = {
@@ -109,6 +110,7 @@ const DESKTOP_CAPABILITIES: PlatformCapabilities = {
   imageClipboard: true,
   nativeFileExport: true,
   openDataDirectory: true,
+  shareReceiver: false,
 };
 
 /**
@@ -149,6 +151,8 @@ const EMPTY_SUMMARY: EntrySummary = {
 type SettingsPage = "general" | "account" | "data" | "about";
 type FeedbackTone = "success" | "error" | "info";
 type FeedbackPayload = { message: string; tone: FeedbackTone };
+type ShareReceiverEvent = { id?: string; error?: string };
+type ShareImportSummary = { shares: number; texts: number; images: number; files: number };
 
 const entries = ref<LocalClipboardEntry[]>([]);
 const syncedEntryIds = ref(new Set<string>());
@@ -190,6 +194,7 @@ const newPassword = ref("");
 const confirmNewPassword = ref("");
 const currentUsername = ref("");
 const capturingClipboard = ref(false);
+const importingShare = ref(false);
 const activatingEntryId = ref("");
 const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
@@ -208,6 +213,7 @@ let ageRefreshTimer: number | undefined;
 let feedbackTimer: number | undefined;
 let feedbackWindowHideTimer: number | undefined;
 let globalShortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
+let shareReceiverListener: PluginListener | undefined;
 let localClipboardRevision = 0;
 let remoteActivationRevision = 0;
 
@@ -393,6 +399,30 @@ async function captureCurrentClipboard(): Promise<void> {
     showFeedback(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     capturingClipboard.value = false;
+  }
+}
+
+function shareImportMessage(summary: ShareImportSummary): string {
+  const parts = [
+    summary.texts ? `${summary.texts} 条文字` : "",
+    summary.images ? `${summary.images} 张图片` : "",
+    summary.files ? `${summary.files} 个文件` : "",
+  ].filter(Boolean);
+  return parts.length ? `已接收${parts.join("、")}` : "";
+}
+
+async function consumeMobileShares(): Promise<void> {
+  if (!runningInTauri || !platformCapabilities.value.shareReceiver || importingShare.value) return;
+  importingShare.value = true;
+  try {
+    const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
+    if (!summary.shares) return;
+    await refreshEntries();
+    showFeedback(shareImportMessage(summary), "success");
+  } catch (error) {
+    showFeedback(`接收系统分享失败：${error instanceof Error ? error.message : String(error)}，请重新分享`, "error");
+  } finally {
+    importingShare.value = false;
   }
 }
 
@@ -1405,6 +1435,20 @@ onMounted(async () => {
     if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
       globalShortcutApi = await import("@tauri-apps/plugin-global-shortcut");
     }
+    if (!isPasteWindow && platformCapabilities.value.shareReceiver) {
+      shareReceiverListener = await addPluginListener<ShareReceiverEvent>(
+        "cliproam-share-receiver",
+        "received",
+        (payload) => {
+          if (payload.error) {
+            showFeedback(`接收系统分享失败：${payload.error}，请重新分享`, "error");
+          } else {
+            void consumeMobileShares();
+          }
+        },
+      );
+      await consumeMobileShares();
+    }
     if (globalShortcutApi && !(await globalShortcutApi.isRegistered(HOTKEY))) {
       await globalShortcutApi.register(HOTKEY, (event) => {
         if (event.state === "Pressed") void invoke("open_paste");
@@ -1450,6 +1494,7 @@ onBeforeUnmount(() => {
   if (feedbackWindowHideTimer !== undefined) window.clearTimeout(feedbackWindowHideTimer);
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
+  if (shareReceiverListener) void shareReceiverListener.unregister();
   syncClient?.stop();
   if (globalShortcutApi && !isPasteWindow) void globalShortcutApi.unregister(HOTKEY);
 });
@@ -1635,6 +1680,10 @@ onBeforeUnmount(() => {
       </header>
 
       <section class="toolbar">
+      <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
+        <LoaderCircle :size="18" class="spin" aria-hidden="true" />
+        <span>正在接收系统分享…</span>
+      </div>
       <label class="search-field">
         <Search :size="17" aria-hidden="true" />
         <input ref="searchInput" v-model="query" type="search" placeholder="搜索剪贴板历史" aria-label="搜索剪贴板历史" />

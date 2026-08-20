@@ -850,6 +850,20 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-app .search-field { min-height: 46px; }
 .mobile-app .search-field input { min-width: 0; font-size: 16px; }
 .mobile-app .search-field kbd { display: none; }
+.mobile-share-status {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 12px;
+  color: #dbeafe;
+  background: rgba(30, 58, 95, 0.72);
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
 .mobile-capture-button {
   display: flex;
   align-items: center;
