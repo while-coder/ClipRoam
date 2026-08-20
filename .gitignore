@@ -12,7 +12,8 @@ cliproam-server.tar
 .vscode/*
 !.vscode/launch.json
 !.vscode/tasks.json
-apps/app/src-tauri/gen/
+apps/app/src-tauri/gen/*
+!apps/app/src-tauri/gen/android/
 apps/server/admin/
 apps/server/build/
 apps/server/debug/
