@@ -476,6 +476,13 @@ button.image-thumbnail { cursor: zoom-in; }
   -webkit-line-clamp: 2;
 }
 .entry-meta { gap: 5px; color: #64748b; font-size: 10.5px; }
+.pinned-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #4ade80;
+  font-weight: 600;
+}
 .sync-status { display: inline-block; width: 1.25em; line-height: 1; text-align: center; }
 .upload-status { color: #fbbf24; }
 .upload-status.uploaded { color: #4ade80; }

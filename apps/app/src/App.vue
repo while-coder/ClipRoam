@@ -148,6 +148,7 @@ type EntrySummary = {
 type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
 type UploadProgress = { uploadedBytes: number; totalBytes: number };
 type DownloadProgress = { finished: number; total: number };
+type EntryFilter = "all" | ClipboardKind | "pinned" | "pending-upload";
 
 const EMPTY_SUMMARY: EntrySummary = {
   rootKind: "",
@@ -174,7 +175,7 @@ const devicesById = ref<Record<string, Device>>({
 });
 const currentTime = ref(Date.now());
 const query = ref("");
-const filter = ref<"all" | ClipboardKind | "pending-upload">("all");
+const filter = ref<EntryFilter>("all");
 const selectedEntryId = ref("");
 const connected = ref(false);
 const syncEnabled = ref(false);
@@ -270,6 +271,7 @@ const filteredEntries = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   return entries.value.filter((entry) => {
     const matchesType = filter.value === "all"
+      || (filter.value === "pinned" && entry.pinned)
       || (filter.value === "pending-upload" && entry.summary.uploadedCount < entry.summary.contentCount)
       || entry.kind === filter.value;
     const matchesQuery = !needle
@@ -1477,6 +1479,14 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
   });
 }
 
+function readableStartupError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("state not managed for field `state`")) {
+    return "应用初始化尚未完成，请从托盘退出 ClipRoam 后重新启动";
+  }
+  return message || "未知错误";
+}
+
 async function initializeTauriServices(): Promise<void> {
   const listenerResults = await Promise.allSettled([
     listen<FeedbackPayload>("cliproam://feedback", ({ payload }) => {
@@ -1578,12 +1588,12 @@ onMounted(async () => {
   if (capabilitiesResult.status === "fulfilled") {
     platformCapabilities.value = capabilitiesResult.value;
   } else {
-    startupWarning = `平台能力读取失败：${String(capabilitiesResult.reason)}`;
+    startupWarning = `平台能力读取失败：${readableStartupError(capabilitiesResult.reason)}`;
   }
   if (configResult.status === "fulfilled") {
     config = configResult.value;
   } else {
-    setupError.value = `无法读取连接设置：${String(configResult.reason)}`;
+    setupError.value = `无法读取连接设置：${readableStartupError(configResult.reason)}`;
     startupWarning = setupError.value;
   }
 
@@ -1869,6 +1879,7 @@ onBeforeUnmount(() => {
       </button>
       <div class="filter-row" aria-label="剪贴板类型筛选">
         <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
+        <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
         <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
         <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
         <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
@@ -1919,6 +1930,10 @@ onBeforeUnmount(() => {
             <Monitor :size="12" /> {{ deviceName(entry) }}
             <span>·</span>
             <span>{{ formatAge(entry.createdAt) }}</span>
+            <template v-if="entry.pinned">
+              <span>·</span>
+              <span class="pinned-status"><Pin :size="11" aria-hidden="true" />已固定</span>
+            </template>
             <span>·</span>
             <span class="sync-status" role="img" :title="syncStatusLabel(entry)" :aria-label="syncStatusLabel(entry)">{{ isEntrySynced(entry) ? "☁️" : "⏳" }}</span>
             <template v-if="fileEntrySummary(entry)">
@@ -1976,8 +1991,8 @@ onBeforeUnmount(() => {
 
       <div v-if="!filteredEntries.length" class="empty-state">
         <Search :size="28" />
-        <strong>没有匹配内容</strong>
-        <span>{{ isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
+        <strong>{{ filter === "pinned" && !query.trim() ? "还没有固定内容" : "没有匹配内容" }}</strong>
+        <span>{{ filter === "pinned" && !query.trim() ? "固定常用条目后，可在这里集中查看" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里" }}</span>
       </div>
       </section>
 

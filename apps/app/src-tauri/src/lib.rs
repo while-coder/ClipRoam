@@ -22,7 +22,7 @@ use std::{
 };
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::{process::Command, time::Duration};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 #[cfg(target_os = "android")]
 use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -2748,6 +2748,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "windows")]
             virtual_files::initialize()?;
+            let window_configs = app.config().app.windows.clone();
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
@@ -2777,6 +2778,13 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 paste_drag_focus_guard: Mutex::new(None),
             });
+
+            // Tauri normally creates configured webviews before this setup
+            // callback. Create them here instead, after managed state exists,
+            // so startup commands cannot race AppState registration.
+            for window_config in window_configs {
+                WebviewWindowBuilder::from_config(app.handle(), &window_config)?.build()?;
+            }
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
                 setup_tray(app.handle())?;
