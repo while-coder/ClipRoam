@@ -4,8 +4,5 @@
   "description": "Least-privilege capability for the ClipRoam mobile window",
   "windows": ["main"],
   "platforms": ["android", "iOS"],
-  "permissions": [
-    "core:default",
-    "cliproam-share-receiver:default"
-  ]
+  "permissions": ["core:default"]
 }
