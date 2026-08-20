@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-cliproam-share-receiver"
+version = "0.1.0"
+edition = "2021"
+links = "tauri-plugin-cliproam-share-receiver"
+
+[lib]
+name = "tauri_plugin_cliproam_share_receiver"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", default-features = false }
+thiserror = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

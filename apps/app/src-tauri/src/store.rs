@@ -553,10 +553,20 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
 /// that are gone. Incomplete downloads expire after one day.
 pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) -> Result<usize, String> {
     let cache_dir = cache_dir_for(histories_dir, &history.active_history);
+    let share_dir = cache_dir.join("share");
     let mut referenced = HashSet::new();
     let mut entry_ids = HashSet::new();
+    let mut referenced_share_requests = HashSet::new();
     for entry in history.active_entries() {
         entry_ids.insert(entry.id.clone());
+        for root in &entry.sources.roots {
+            let path = PathBuf::from(root);
+            if let Ok(relative) = path.strip_prefix(&share_dir) {
+                if let Some(component) = relative.components().next() {
+                    referenced_share_requests.insert(component.as_os_str().to_owned());
+                }
+            }
+        }
         if let Some(tree) = &entry.tree {
             for node in &tree.files {
                 let file_id = transfer_file_id(node);
@@ -605,6 +615,16 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
             }
         }
     }
+    let mut removed_share_requests = 0usize;
+    if let Ok(requests) = fs::read_dir(&share_dir) {
+        for request in requests.filter_map(Result::ok) {
+            if !referenced_share_requests.contains(&request.file_name())
+                && fs::remove_dir_all(request.path()).is_ok()
+            {
+                removed_share_requests += 1;
+            }
+        }
+    }
     if !removed.is_empty() {
         let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
@@ -622,7 +642,7 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
             history.cached_files.remove(file_id);
         }
     }
-    Ok(removed.len())
+    Ok(removed.len() + removed_share_requests)
 }
 
 pub fn trim_history(entries: &mut Vec<ClipboardEntry>) {

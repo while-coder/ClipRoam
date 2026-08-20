@@ -5,6 +5,7 @@
   "windows": ["main"],
   "platforms": ["android", "iOS"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "cliproam-share-receiver:default"
   ]
 }
