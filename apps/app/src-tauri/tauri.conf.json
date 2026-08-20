@@ -78,7 +78,8 @@
     ],
     "windows": {
       "nsis": {
-        "languages": ["SimpChinese", "English"],
+        "installMode": "both",
+        "languages": ["SimpChinese", "English", "TradChinese"],
         "displayLanguageSelector": true
       }
     }
