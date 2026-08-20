@@ -1929,7 +1929,7 @@ onBeforeUnmount(() => {
         <Clipboard v-else :size="18" aria-hidden="true" />
         {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
       </button>
-      <div class="filter-row" aria-label="剪贴板类型筛选">
+      <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
         <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
         <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
@@ -1946,7 +1946,12 @@ onBeforeUnmount(() => {
             <option value="custom">自定义区间</option>
           </select>
         </label>
-        <span v-if="timeFilter === 'custom'" class="date-range-filter" aria-label="自定义时间区间">
+        <span class="result-count">{{ filteredEntries.length }} 条</span>
+        <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
+      </div>
+      <div v-if="timeFilter === 'custom'" class="date-range-row" role="group" aria-label="自定义时间区间">
+        <span class="date-range-title">时间区间</span>
+        <span class="date-range-filter">
           <label class="date-field">
             <span>从</span>
             <input v-model="startDate" type="date" :max="endDate || undefined" aria-label="开始日期" />
@@ -1956,8 +1961,6 @@ onBeforeUnmount(() => {
             <input v-model="endDate" type="date" :min="startDate || undefined" aria-label="结束日期" />
           </label>
         </span>
-        <span class="result-count">{{ filteredEntries.length }} 条</span>
-        <button v-if="!isPasteWindow" class="clear-button" type="button" @click="clearHistory">清除未固定</button>
       </div>
       </section>
 

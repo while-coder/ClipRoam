@@ -337,8 +337,16 @@ kbd {
   border-radius: 4px;
   font: 10px/1.2 Inter, sans-serif;
 }
-.filter-row { gap: 4px; margin-top: 9px; }
+.filter-row {
+  min-width: 0;
+  gap: 4px;
+  margin-top: 9px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.filter-row::-webkit-scrollbar, .date-range-row::-webkit-scrollbar { display: none; }
 .filter-row button {
+  flex: 0 0 auto;
   height: 27px;
   padding: 0 9px;
   color: #94a3b8;
@@ -346,12 +354,14 @@ kbd {
   border: 1px solid transparent;
   border-radius: 6px;
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .filter-row button:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.05); }
 .filter-row button.active { color: #dbeafe; background: #1e3a5f; border-color: rgba(147, 197, 253, 0.18); }
 .time-filter {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   height: 27px;
   gap: 5px;
@@ -376,7 +386,36 @@ kbd {
 }
 .time-filter select:hover { color: #e2e8f0; background-color: rgba(255, 255, 255, 0.07); }
 .time-filter select:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
-.date-range-filter, .date-field { display: flex; align-items: center; }
+.time-filter option {
+  color: #cbd5e1;
+  background: #111c31;
+}
+.time-filter option:checked {
+  color: #f8fafc;
+  background: #1e3a5f;
+}
+.date-range-row, .date-range-filter, .date-field { display: flex; align-items: center; }
+.date-range-row {
+  min-width: 0;
+  min-height: 36px;
+  gap: 10px;
+  margin-top: 7px;
+  padding: 4px 9px;
+  overflow-x: auto;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 7px;
+  scrollbar-width: none;
+}
+.date-range-title {
+  flex: 0 0 auto;
+  padding-right: 9px;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .date-range-filter { gap: 6px; }
 .date-field { gap: 4px; color: #64748b; font-size: 11px; white-space: nowrap; }
 .date-field input {
@@ -393,7 +432,7 @@ kbd {
 }
 .date-field input:hover { background-color: rgba(255, 255, 255, 0.07); }
 .date-field input:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
-.result-count { margin-left: 5px; color: #64748b; font-size: 11px; }
+.result-count { flex: 0 0 auto; margin-left: 5px; color: #64748b; font-size: 11px; white-space: nowrap; }
 .filter-row .clear-button { margin-left: auto; color: #64748b; }
 .filter-row .clear-button:hover { color: #fca5a5; }
 
@@ -1005,19 +1044,17 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-capture-button:active:not(:disabled) { background: #1e3a5f; }
 .mobile-app .filter-row {
-  flex-wrap: nowrap;
   gap: 8px;
   padding-bottom: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.mobile-app .filter-row::-webkit-scrollbar { display: none; }
 .mobile-app .filter-row button { min-height: 44px; padding-inline: 14px; white-space: nowrap; }
 .mobile-app .time-filter { height: 44px; margin-left: 0; padding-left: 12px; }
 .mobile-app .time-filter select { height: 44px; padding-inline: 12px 28px; font-size: 13px; }
+.mobile-app .date-range-row { min-height: 52px; gap: 12px; padding: 4px 12px; }
+.mobile-app .date-range-title { padding-right: 12px; font-size: 13px; }
 .mobile-app .date-range-filter { gap: 8px; }
 .mobile-app .date-field { gap: 6px; font-size: 13px; }
-.mobile-app .date-field input { width: 132px; height: 44px; padding-inline: 10px; font-size: 13px; }
+.mobile-app .date-field input { width: 148px; height: 44px; padding-inline: 10px; font-size: 16px; }
 .mobile-app .filter-row .result-count { margin-left: 0; white-space: nowrap; }
 .mobile-app .filter-row .clear-button { margin-left: 0; }
 .mobile-app .history-list { padding: 4px 8px 12px; }
