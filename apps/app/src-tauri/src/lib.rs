@@ -22,14 +22,14 @@ use std::{
 };
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::{process::Command, time::Duration};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "android")]
 use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
-    PhysicalPosition, Position, Size,
+    PhysicalPosition, Position, Size, WebviewWindowBuilder,
 };
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -2748,6 +2748,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "windows")]
             virtual_files::initialize()?;
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             let window_configs = app.config().app.windows.clone();
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
@@ -2779,9 +2780,10 @@ pub fn run() {
                 paste_drag_focus_guard: Mutex::new(None),
             });
 
-            // Tauri normally creates configured webviews before this setup
-            // callback. Create them here instead, after managed state exists,
-            // so startup commands cannot race AppState registration.
+            // Desktop windows use `create: false`, so create them after managed
+            // state exists. Android already creates its main webview before
+            // this hook and rebuilding it would fail with a duplicate label.
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             for window_config in window_configs {
                 WebviewWindowBuilder::from_config(app.handle(), &window_config)?.build()?;
             }
