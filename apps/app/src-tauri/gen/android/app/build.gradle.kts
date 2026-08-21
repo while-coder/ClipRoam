@@ -31,7 +31,9 @@ android {
     compileSdk = 36
     namespace = "com.cliproam.mobile"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        // 客户端支持直连局域网 HTTP 服务器（syncClient.ts 默认 http://ip:port），
+        // release 也必须放行明文流量，否则 Android 9+ 拦截 http/ws 请求。
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "com.cliproam.mobile"
         minSdk = 24
         targetSdk = 36
