@@ -2,7 +2,7 @@
 name = "cliproam"
 version = "0.1.0"
 description = "A private, cross-platform clipboard history and roaming client"
-authors = ["ClipRoam contributors"]
+authors = ["while"]
 edition = "2021"
 
 [lib]

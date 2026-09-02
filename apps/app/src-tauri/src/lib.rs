@@ -339,9 +339,13 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
 /// The frontend renders lists of hundreds of entries; shipping their trees
 /// would mean tens of thousands of nodes per refresh.
 fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
+    // html/rtf can be hundreds of kilobytes per rich-text entry and the list
+    // never renders them, so they stay behind `get_entry`.
     let mut lightweight = ClipboardEntry {
         tree: None,
         files: Vec::new(),
+        html: None,
+        rtf: None,
         sources: LocalSources::default(),
         ..entry.clone()
     };
@@ -1310,6 +1314,53 @@ fn upsert_remote_entry(
         if let Some(entry) = history.find(&entry_id) {
             let connection = open_history_database(&history_path)?;
             write_entry_data(&connection, entry)?;
+        }
+    }
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())
+}
+
+/// Reconciling a fresh install can deliver hundreds of remote entries at once;
+/// a single lock, save and event keeps that from locking up the windows.
+#[tauri::command(rename_all = "camelCase")]
+fn upsert_remote_entries(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    entries: Vec<ClipboardEntry>,
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let mut upserted_ids = Vec::with_capacity(entries.len());
+        {
+            let slot = history.active_entries_mut();
+            for mut entry in entries {
+                if let Some(local) = slot.iter().find(|item| item.id == entry.id) {
+                    preserve_local_sources(&mut entry, local);
+                }
+                let entry_id = entry.id.clone();
+                slot.retain(|item| item.id != entry.id);
+                slot.push(entry);
+                upserted_ids.push(entry_id);
+            }
+            slot.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            trim_history(slot);
+        }
+        for entry_id in &upserted_ids {
+            refresh_entry_summary(&mut history, entry_id, &cache_dir);
+        }
+        save_active_history(&state, &history)?;
+        // Existing rows keep their large data during the general history save;
+        // a remote update replaces it explicitly here.
+        let connection = open_history_database(&history_path)?;
+        for entry_id in &upserted_ids {
+            if let Some(entry) = history.find(entry_id) {
+                write_entry_data(&connection, entry)?;
+            }
         }
     }
     app.emit("cliproam://history-changed", ())
@@ -2877,6 +2928,7 @@ pub fn run() {
             open_app_data_dir,
             save_sync_config,
             upsert_remote_entry,
+            upsert_remote_entries,
             mark_files_uploaded,
             mark_file_available,
             set_pinned,
