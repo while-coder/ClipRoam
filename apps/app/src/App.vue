@@ -419,6 +419,64 @@ async function refreshEntries(): Promise<void> {
   entries.value = await invoke<LocalClipboardEntry[]>("list_entries");
 }
 
+let refreshEntriesTimer: number | undefined;
+
+/**
+ * Background events (hashing, remote upserts, file availability) arrive in
+ * bursts. Each `list_entries` round-trip re-serializes the whole history, so a
+ * burst coalesces into one refresh instead of one per event.
+ */
+function scheduleRefreshEntries(): void {
+  if (refreshEntriesTimer !== undefined) return;
+  refreshEntriesTimer = window.setTimeout(() => {
+    refreshEntriesTimer = undefined;
+    void refreshEntries().catch((error) => {
+      showFeedback(`剪贴板历史读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    });
+  }, 200);
+}
+
+const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
+let remoteUpsertFlush: Promise<void> | undefined;
+
+/**
+ * Remote entry echoes arrive one per published entry, but each write rewrites
+ * the durable history. Queue them so a burst becomes a single batch command.
+ */
+function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
+  pendingRemoteUpserts.set(entry.id, entry);
+  if (remoteUpsertFlush) return remoteUpsertFlush;
+  remoteUpsertFlush = new Promise<void>((resolve) => {
+    window.setTimeout(() => {
+      const batch = [...pendingRemoteUpserts.values()];
+      pendingRemoteUpserts.clear();
+      remoteUpsertFlush = undefined;
+      void applyRemoteUpserts(batch).finally(resolve);
+    }, 200);
+  });
+  return remoteUpsertFlush;
+}
+
+async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
+  for (const entry of batch) markEntrySynced(entry);
+  if (!runningInTauri) {
+    for (const entry of batch) {
+      entries.value = [
+        { ...entry, summary: EMPTY_SUMMARY },
+        ...entries.value.filter((item) => item.id !== entry.id),
+      ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+    return;
+  }
+  try {
+    await invoke("upsert_remote_entries", { entries: batch });
+  } catch (error) {
+    showFeedback(`写入同步记录失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
+  }
+  scheduleRefreshEntries();
+}
+
 function rememberDevices(devices: Device[]): void {
   devicesById.value = {
     ...devicesById.value,
@@ -1467,9 +1525,10 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       .map((entry) => entry.id);
     const remoteEntries = await client.fetchEntries(remoteOnlyEntryIds);
 
-    for (const entry of remoteEntries) {
-      if (syncClient !== client) return;
-      await upsertRemote(entry);
+    // One batch write for the whole gap instead of a full history rewrite and
+    // list refresh per entry.
+    if (remoteEntries.length && syncClient === client) {
+      await applyRemoteUpserts(remoteEntries);
     }
 
     for (const entry of localEntries) {
@@ -1506,6 +1565,9 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
 }
 
 async function startSync(config: SyncConfig): Promise<void> {
+  // The quick-paste window only reads local history; broadcasts from the main
+  // window keep it fresh, and a second socket would double every sync task.
+  if (isPasteWindow) return;
   syncClient?.stop();
   connected.value = false;
   syncEnabled.value = true;
@@ -1526,7 +1588,7 @@ async function startSync(config: SyncConfig): Promise<void> {
       },
       onDevicePresence: (device) => { rememberDevices([device]); },
       onEntry: (entry) => {
-        void upsertRemote(entry).then(() => {
+        void queueRemoteUpsert(entry).then(() => {
           if (runningInTauri) return invoke("acknowledge_entry_update", { entryId: entry.id });
         });
       },
@@ -1541,7 +1603,7 @@ async function startSync(config: SyncConfig): Promise<void> {
           void Promise.all([
             invoke("acknowledge_entry_deletion", { entryId }),
             invoke("remove_remote_entry", { entryId }),
-          ]).then(refreshEntries);
+          ]).then(scheduleRefreshEntries);
         }
         else entries.value = entries.value.filter((entry) => entry.id !== entryId);
       },
@@ -1626,12 +1688,12 @@ async function initializeTauriServices(): Promise<void> {
     }),
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
-      void refreshEntries();
+      scheduleRefreshEntries();
     }),
     // Emitted once every content of an entry has a known id, which for a
     // folder happens after background hashing finishes.
     listen<string>("cliproam://entry-ready", async ({ payload }) => {
-      await refreshEntries();
+      scheduleRefreshEntries();
       if (isPasteWindow || !syncClient) return;
       try {
         await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
@@ -1639,7 +1701,7 @@ async function initializeTauriServices(): Promise<void> {
         showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
       }
     }),
-    listen("cliproam://history-changed", refreshEntries),
+    listen("cliproam://history-changed", scheduleRefreshEntries),
     listen("cliproam://focus-search", focusSearch),
     listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
     listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
@@ -1654,7 +1716,7 @@ async function initializeTauriServices(): Promise<void> {
       try {
         await client.downloadVirtualFile(payload);
         await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
-        await refreshEntries();
+        scheduleRefreshEntries();
       } catch (error) {
         await invoke("fail_virtual_file_request", {
           fileId: payload.fileId,
@@ -1767,6 +1829,11 @@ onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
   if (feedbackTimer !== undefined) window.clearTimeout(feedbackTimer);
   if (feedbackWindowHideTimer !== undefined) window.clearTimeout(feedbackWindowHideTimer);
+  if (refreshEntriesTimer !== undefined) window.clearTimeout(refreshEntriesTimer);
+  if (pendingRemoteUpserts.size) {
+    void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
+    pendingRemoteUpserts.clear();
+  }
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();

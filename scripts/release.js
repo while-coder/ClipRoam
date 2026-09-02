@@ -197,13 +197,14 @@ async function main() {
     .join("、");
 
   if (existsLocally || existsRemotely) {
-    const answer = await ask(`⚠ tag ${tag} 已存在（${locations}）。删除后重新发布？[y/N] `);
+    console.log(`  tag 状态:  已存在（${locations}）→ 将删除后重打`);
+    const answer = await ask(`⚠ tag ${tag} 已存在（${locations}）。删除后重新打 tag 并推送？[y/N] `);
     if (answer?.trim().toLowerCase() !== "y") {
-      throw new Error("已取消，未修改版本文件或 tag");
+      throw new Error("已取消，未删除任何 tag，发版中止");
     }
   } else {
-    const answer = await ask("回车确认发版，Ctrl+C 取消...");
-    if (answer === undefined) throw new Error("已取消发版");
+    console.log("  tag 状态:  新建");
+    await ask("回车确认发版，Ctrl+C 取消...");
   }
 
   if (versionChanged) {
@@ -218,7 +219,7 @@ async function main() {
   run(`git push origin "${branch}"`);
   run(`git push origin "${tag}"`);
 
-  console.log(`✓ ${tag} 已发布，GitHub Actions 将构建 App 与 Server 产物`);
+  console.log(`✓ 发版完成！tag ${tag} 已推送 — GitHub Actions 将构建 App 与 Server 产物`);
   console.log("  https://github.com/while-coder/ClipRoam/actions");
 }
 
