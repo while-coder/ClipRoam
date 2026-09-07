@@ -1,22 +1,20 @@
 import {
   ClipboardEntrySchema,
-  ClipboardTreeSchema,
+  FileInfoSchema,
+  ImageInfoSchema,
   DeviceSchema,
+  entryContents,
   type ClipboardEntry,
-  type ClipboardFile,
   type ClipboardManifestEntry,
-  type ClipboardTree,
   type Device,
   type EntryManifestQuery,
+  type FileInfo,
+  type ImageInfo,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
 import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
 import { userDatabasePath } from "../DataPaths.js";
-
-// The server-wide content pool changed layout. Older per-user entries are not
-// retained because their content metadata belongs to the discarded pool.
-const SCHEMA_VERSION = 4;
 
 type EntryRow = {
   id: string;
@@ -41,15 +39,6 @@ export class UserDataStore {
   }
 
   #applySchema(): void {
-    const version = (this.#database.prepare("PRAGMA user_version").get() as
-      { user_version: number } | undefined)?.user_version ?? 0;
-    if (version !== SCHEMA_VERSION) {
-      this.#database.exec(`
-        DROP TABLE IF EXISTS clipboard_entries;
-        DROP TABLE IF EXISTS files;
-        DROP TABLE IF EXISTS upload_sessions;
-      `);
-    }
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS clipboard_entries (
         id TEXT PRIMARY KEY,
@@ -72,7 +61,6 @@ export class UserDataStore {
         updated_at TEXT NOT NULL
       );
     `);
-    this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
   // Offset pagination over entry identities with optional keyword and UTC
@@ -164,16 +152,16 @@ export class UserDataStore {
         JSON.stringify({
           html: storedEntry.html,
           rtf: storedEntry.rtf,
-          thumbnail: storedEntry.thumbnail,
-          tree: storedEntry.tree,
+          fileInfo: storedEntry.fileInfo,
+          imageInfo: storedEntry.imageInfo,
         }),
         storedEntry.sourceDeviceId,
         storedEntry.createdAt,
         Number(storedEntry.pinned),
       );
-      this.files.register(storedEntry.files);
+      this.files.register(entryContents(storedEntry));
     });
-    return { ...storedEntry, files: this.#contentsOf(storedEntry.tree) };
+    return { ...storedEntry, missing: this.#missingOf(storedEntry.kind, storedEntry) };
   }
 
   // Content is shared across entries, so deletion only drops the reference.
@@ -186,17 +174,18 @@ export class UserDataStore {
   // so ClipRoamStore can union it with every other account before sweeping.
   referencedFileIds(): Set<string> {
     const referenced = new Set<string>();
-    const rows = this.#database.prepare("SELECT extra FROM clipboard_entries").all() as Array<{ extra: string }>;
+    const rows = this.#database.prepare("SELECT kind, extra FROM clipboard_entries").all() as Array<{ kind: string; extra: string }>;
     for (const row of rows) {
-      for (const node of parseExtra(row.extra).tree?.files ?? []) referenced.add(node.f);
+      for (const { fileId } of entryContents({ kind: row.kind, ...parseExtra(row.extra) })) referenced.add(fileId);
     }
     return referenced;
   }
 
-  hasFileReference(entryId: string, fileId: string): boolean {
-    const row = this.#database.prepare("SELECT extra FROM clipboard_entries WHERE id = ?")
-      .get(entryId) as { extra: string } | undefined;
-    return Boolean(row && parseExtra(row.extra).tree?.files.some((node) => node.f === fileId));
+  hasFileReference(entryId: string, downloadId: string): boolean {
+    const row = this.#database.prepare("SELECT kind, extra FROM clipboard_entries WHERE id = ?")
+      .get(entryId) as { kind: string; extra: string } | undefined;
+    return Boolean(row && entryContents({ kind: row.kind, ...parseExtra(row.extra) })
+      .some(({ fileId }) => fileId === downloadId));
   }
 
   close(): void { this.#database.close(); }
@@ -206,12 +195,12 @@ export class UserDataStore {
     const result = ClipboardEntrySchema.safeParse({
       html: extra.html,
       rtf: extra.rtf,
-      thumbnail: extra.thumbnail,
-      tree: extra.tree,
+      fileInfo: extra.fileInfo,
+      imageInfo: extra.imageInfo,
       id: row.id,
       kind: row.kind,
       content: row.content,
-      files: this.#contentsOf(extra.tree),
+      missing: this.#missingOf(row.kind, extra),
       sourceDeviceId: row.source_device_id,
       createdAt: row.created_at,
       pinned: Boolean(row.pinned),
@@ -219,10 +208,11 @@ export class UserDataStore {
     return result.success ? result.data : undefined;
   }
 
-  // The tree is the only record of which contents an entry uses; the pool
-  // supplies size and availability for each distinct reference.
-  #contentsOf(tree: ClipboardTree | undefined): ClipboardFile[] {
-    return this.files.describe([...new Set((tree?.files ?? []).map((node) => node.f))]);
+  // The stored extra is the only record of which contents an entry uses; the
+  // pool supplies availability so responses always carry fresh state.
+  #missingOf(kind: string, extra: { fileInfo?: FileInfo; imageInfo?: ImageInfo }): string[] {
+    const described = this.files.describe(entryContents({ kind, ...extra }).map(({ fileId }) => fileId));
+    return described.filter(({ available }) => !available).map(({ fileId }) => fileId);
   }
 
   #transaction(work: () => void): void {
@@ -236,20 +226,19 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
-function parseExtra(extra: string): { html?: string; rtf?: string; thumbnail?: string; tree?: ClipboardTree } {
-  let raw: { html?: unknown; rtf?: unknown; thumbnail?: unknown; tree?: unknown };
+function parseExtra(extra: string): { html?: string; rtf?: string; fileInfo?: FileInfo; imageInfo?: ImageInfo } {
+  let raw: { html?: unknown; rtf?: unknown; fileInfo?: unknown; imageInfo?: unknown };
   try {
     raw = JSON.parse(extra) as typeof raw;
   } catch {
     return {};
   }
-  const tree = raw.tree === undefined ? undefined : ClipboardTreeSchema.safeParse(raw.tree);
+  const fileInfo = raw.fileInfo === undefined ? undefined : FileInfoSchema.safeParse(raw.fileInfo);
+  const imageInfo = raw.imageInfo === undefined ? undefined : ImageInfoSchema.safeParse(raw.imageInfo);
   return {
     html: typeof raw.html === "string" ? raw.html : undefined,
     rtf: typeof raw.rtf === "string" ? raw.rtf : undefined,
-    thumbnail: typeof raw.thumbnail === "string" && raw.thumbnail.length <= 96 * 1024
-      ? raw.thumbnail
-      : undefined,
-    tree: tree?.success ? tree.data : undefined,
+    fileInfo: fileInfo?.success ? fileInfo.data : undefined,
+    imageInfo: imageInfo?.success ? imageInfo.data : undefined,
   };
 }

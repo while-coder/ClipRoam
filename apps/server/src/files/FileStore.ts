@@ -1,15 +1,17 @@
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ClipboardFile } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { filesDatabasePath, filesDirectory } from "../DataPaths.js";
 import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
-const SCHEMA_VERSION = 3;
 
 type FileRow = { file_id: string; size: number; stored: number };
+
+// A pool answer for one content id: the size the first registering entry
+// reported, and whether the bytes are actually on disk.
+type FileStatus = { fileId: string; size: number; available: boolean };
 
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
@@ -23,9 +25,6 @@ export class FileStore {
     this.database = openDatabase(filesDatabasePath);
     this.directory = filesDirectory;
     mkdirSync(this.directory, { recursive: true });
-    const version = (this.database.prepare("PRAGMA user_version").get() as
-      { user_version: number } | undefined)?.user_version ?? 0;
-    if (version !== SCHEMA_VERSION) this.reset();
     this.database.exec(`
       -- Rows describe bytes, never entries: 'stored' says whether the server
       -- actually holds them, while size is known as soon as an entry refers to
@@ -46,25 +45,12 @@ export class FileStore {
         bitmap BLOB NOT NULL,
         updated_at TEXT NOT NULL
       );
-      PRAGMA user_version = ${SCHEMA_VERSION};
     `);
   }
 
   close(): void { this.database.close(); }
 
-  // Content addressing has no migration path from older layouts, so a schema
-  // change discards the pool along with the tables that referenced it.
-  reset(): void {
-    this.database.exec(`
-      DROP TABLE IF EXISTS files;
-      DROP TABLE IF EXISTS upload_sessions;
-      DROP TABLE IF EXISTS upload_parts;
-    `);
-    rmSync(this.directory, { recursive: true, force: true });
-    mkdirSync(this.directory, { recursive: true });
-  }
-
-  path(fileId: string): string {
+  private path(fileId: string): string {
     if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid file ID for storage path");
     return join(this.directory, fileId.slice(0, 2), fileId);
   }
@@ -85,9 +71,7 @@ export class FileStore {
   }
 
   has(fileId: string): boolean {
-    return Boolean(this.database
-      .prepare("SELECT 1 FROM files WHERE file_id = ? AND stored = 1")
-      .get(fileId));
+    return this.get(fileId) !== undefined;
   }
 
   get(fileId: string): { path: string; size: number } | undefined {
@@ -122,7 +106,7 @@ export class FileStore {
 
   // Marks one chunk written and reports whether the ledger is now full. Returns
   // undefined when the sweep removed the row while the request was in flight.
-  markChunkWritten(fileId: string, index: number, chunkCount: number): { bitmap: Buffer; full: boolean } | undefined {
+  markChunkWritten(fileId: string, index: number): { bitmap: Buffer; full: boolean } | undefined {
     return withTransaction(this.database, () => {
       const ledger = this.uploadLedger(fileId);
       if (!ledger) return undefined;
@@ -131,7 +115,7 @@ export class FileStore {
       this.database
         .prepare("UPDATE upload_parts SET bitmap = ?, updated_at = ? WHERE file_id = ?")
         .run(bitmap, new Date().toISOString(), fileId);
-      return { bitmap, full: isBitmapFull(bitmap, chunkCount) };
+      return { bitmap, full: isBitmapFull(bitmap, ledger.chunkCount) };
     });
   }
 
@@ -141,20 +125,20 @@ export class FileStore {
 
   // Registers contents an entry refers to but the server may not hold yet, so
   // that peers can see sizes before the upload happens.
-  register(files: readonly ClipboardFile[]): void {
+  register(contents: ReadonlyArray<{ fileId: string; size: number }>): void {
     const insert = this.database.prepare(`
       INSERT INTO files (file_id, size, stored, created_at)
       VALUES (?, ?, 0, ?)
       ON CONFLICT(file_id) DO NOTHING
     `);
     const now = new Date().toISOString();
-    for (const file of files) {
-      if (FILE_ID_PATTERN.test(file.fileId)) insert.run(file.fileId, file.size, now);
+    for (const content of contents) {
+      if (FILE_ID_PATTERN.test(content.fileId)) insert.run(content.fileId, content.size, now);
     }
   }
 
   // Fills in size and availability for a list of content ids.
-  describe(fileIds: readonly string[]): ClipboardFile[] {
+  describe(fileIds: readonly string[]): FileStatus[] {
     if (fileIds.length === 0) return [];
     const known = new Map<string, FileRow>();
     for (const batch of chunk(fileIds, QUERY_BATCH)) {
@@ -170,7 +154,7 @@ export class FileStore {
         fileId,
         size: file?.size ?? 0,
         available: Boolean(file?.stored),
-      };
+      } satisfies FileStatus;
     });
   }
 
@@ -192,20 +176,26 @@ export class FileStore {
     const removeLedger = this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?");
     for (const bucket of readDirectorySafely(this.directory)) {
       const bucketPath = join(this.directory, bucket);
-      for (const name of readDirectorySafely(bucketPath)) {
+      const names = readDirectorySafely(bucketPath);
+      let remaining = names.length;
+      for (const name of names) {
         const path = join(bucketPath, name);
         const partial = name.endsWith(PARTIAL_SUFFIX);
         const fileId = partial ? name.slice(0, -PARTIAL_SUFFIX.length) : name;
-        // A .part belongs to an upload in flight; only age retires it.
-        if (partial ? !isExpired(path, partialTtlMs) : referenced.has(fileId)) continue;
-        removedBytes += sizeOf(path);
+        // One stat answers both questions — whether a .part has aged out and
+        // how many bytes retiring it reclaims. A stat failure keeps the file
+        // for the next sweep to look at.
+        const stats = statsOf(path);
+        if (!stats || (partial ? !isExpired(stats.mtimeMs, partialTtlMs) : referenced.has(fileId))) continue;
+        removedBytes += stats.size;
         rmSync(path, { force: true });
         // The ledger must not outlive the bytes it describes, or a later `begin`
         // would report chunks that no longer exist.
         if (partial) removeLedger.run(fileId);
         removedFiles += 1;
+        remaining -= 1;
       }
-      if (readDirectorySafely(bucketPath).length === 0) rmSync(bucketPath, { recursive: true, force: true });
+      if (remaining === 0) rmSync(bucketPath, { recursive: true, force: true });
     }
     return { removedFiles, removedBytes };
   }
@@ -248,19 +238,15 @@ export function countWrittenChunks(bitmap: Buffer): number {
   return count;
 }
 
-function sizeOf(path: string): number {
+function statsOf(path: string): Stats | undefined {
   try {
-    return statSync(path).size;
+    return statSync(path);
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
-function isExpired(path: string, ttlMs: number): boolean {
+function isExpired(mtimeMs: number, ttlMs: number): boolean {
   if (ttlMs === 0) return true;
-  try {
-    return Date.now() - statSync(path).mtimeMs > ttlMs;
-  } catch {
-    return false;
-  }
+  return Date.now() - mtimeMs > ttlMs;
 }

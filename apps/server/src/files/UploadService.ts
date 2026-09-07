@@ -111,7 +111,7 @@ export class UploadService {
     } finally {
       closeSync(descriptor);
     }
-    const marked = this.files.markChunkWritten(fileId, index, ledger.chunkCount);
+    const marked = this.files.markChunkWritten(fileId, index);
     if (!marked) throw new UploadHttpError(404, "上传不存在或已被清理");
     if (marked.full) {
       this.#promote(fileId, ledger.size);

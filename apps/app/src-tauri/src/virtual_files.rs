@@ -6,7 +6,7 @@
 //! transfer is still streaming in.
 
 use crate::{
-    content::{is_file_id, ClipboardEntry, ClipboardTreeFile},
+    content::{is_file_id, ClipboardEntry, FileInfo, TreeNode},
     download_path, snapshot_entry, AppState,
 };
 use serde::Serialize;
@@ -106,51 +106,47 @@ fn normalize_descriptor_path(path: &str) -> Result<String, String> {
     Ok(path)
 }
 
-fn file_item(node: &ClipboardTreeFile) -> Result<VirtualItem, String> {
-    if !is_file_id(&node.f) {
-        return Err(format!("文件内容尚未准备好：{}", node.p));
+fn file_item(path: &str, f: &str, size: u64) -> Result<VirtualItem, String> {
+    if !is_file_id(f) {
+        return Err(format!("文件内容尚未准备好：{path}"));
     }
     Ok(VirtualItem {
-        relative_path: normalize_descriptor_path(&node.p)?,
-        file_id: Some(node.f.clone()),
-        size: node.s,
+        relative_path: normalize_descriptor_path(path)?,
+        file_id: Some(f.to_string()),
+        size: Some(size),
         is_dir: false,
     })
 }
 
 fn virtual_items(entry: &ClipboardEntry) -> Result<Vec<VirtualItem>, String> {
-    let tree = entry
-        .tree
+    let file_info = entry
+        .file_info
         .as_ref()
         .ok_or_else(|| "该记录不包含文件".to_string())?;
-    let mut items = Vec::with_capacity(tree.dirs.len() + tree.files.len());
-    for path in &tree.dirs {
-        items.push(VirtualItem {
-            relative_path: normalize_descriptor_path(path)?,
-            file_id: None,
-            size: Some(0),
-            is_dir: true,
-        });
-    }
-    for node in &tree.files {
-        let mut item = file_item(node)?;
-        if item.size.is_none() {
-            item.size = entry
-                .files
-                .iter()
-                .find(|file| file.file_id == node.f)
-                .map(|file| file.size)
-                .or_else(|| {
-                    entry
-                        .sources
-                        .files
-                        .iter()
-                        .find(|source| source.path == node.p)
-                        .map(|source| source.size)
-                });
+    let mut items = Vec::new();
+    fn walk(dir: &FileInfo, prefix: &str, items: &mut Vec<VirtualItem>) -> Result<(), String> {
+        for (name, node) in dir {
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match node {
+                TreeNode::File { f, s } => items.push(file_item(&path, f, *s)?),
+                TreeNode::Dir(children) => {
+                    items.push(VirtualItem {
+                        relative_path: normalize_descriptor_path(&path)?,
+                        file_id: None,
+                        size: Some(0),
+                        is_dir: true,
+                    });
+                    walk(children, &path, items)?;
+                }
+            }
         }
-        items.push(item);
+        Ok(())
     }
+    walk(file_info, "", &mut items)?;
     if items.is_empty() {
         return Err("该记录不包含文件".to_string());
     }
@@ -246,14 +242,7 @@ impl VirtualFileStream {
         let state = self.app.state::<AppState>();
         let should_emit = state.virtual_downloads.request(&self.file_id);
         if should_emit {
-            let transfer_size = snapshot_entry(&state, &self.entry_id)?
-                .entry
-                .files
-                .iter()
-                .find(|file| file.file_id == self.file_id)
-                .map(|file| file.size)
-                .or(self.size)
-                .unwrap_or_default();
+            let transfer_size = self.size.unwrap_or_default();
             self.app
                 .emit_to(
                     &self.window_label,
