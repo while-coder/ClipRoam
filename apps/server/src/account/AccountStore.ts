@@ -45,11 +45,6 @@ export class AccountStore {
       CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
     `);
-    const sessionColumns = this.#database.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
-    if (!sessionColumns.some((column) => column.name === "device_id")) {
-      this.#database.exec("ALTER TABLE sessions ADD COLUMN device_id TEXT NOT NULL DEFAULT ''");
-      this.#database.exec("DELETE FROM sessions WHERE device_id = ''");
-    }
     this.#database.exec("CREATE UNIQUE INDEX IF NOT EXISTS sessions_user_device_id ON sessions(user_id, device_id)");
     this.#removeExpiredSessions(new Date());
   }

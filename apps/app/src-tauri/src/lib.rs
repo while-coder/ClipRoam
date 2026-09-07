@@ -42,7 +42,7 @@ use content::{
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, migrate_packed_contents, open_history_database, refresh_entry_summary,
+    load_history, open_history_database, refresh_entry_summary,
     register_cached_file, remember_hash, retain_single_history, save_history, trim_history,
     write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
 };
@@ -2691,14 +2691,6 @@ pub fn run() {
                 let state = handle.state::<AppState>();
                 let pending = match state.history.lock() {
                     Ok(mut history) => {
-                        let cache_dir = active_cache_dir(&state, &history);
-                        let database_path =
-                            history_path_for_key(&state.histories_dir, &history.active_history);
-                        match migrate_packed_contents(&cache_dir, &database_path, &mut history) {
-                            Ok(0) => {}
-                            Ok(count) => eprintln!("ClipRoam: 已将 {count} 条记录的文件包迁移为独立内容"),
-                            Err(error) => eprintln!("ClipRoam: 迁移旧文件包失败：{error}"),
-                        }
                         let _ = collect_local_garbage(&state.histories_dir, &mut history);
                         pending_entry_ids(&history)
                     }

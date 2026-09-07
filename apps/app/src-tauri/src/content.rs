@@ -10,15 +10,13 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
-use uuid::Uuid;
 
 pub const HASH_READ_BUFFER: usize = 512 * 1024;
 pub const TREE_VERSION: u32 = 2;
-const PACK_MAGIC: &[u8] = b"CLIPROAM-PACK-1\n";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardTreeRoot {
@@ -177,82 +175,6 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..count]);
     }
     Ok(to_hex(&hasher.finalize()))
-}
-
-/// Whether the file begins with the transfer-pack magic. Only the legacy
-/// migration reads packs; everything else treats contents as plain files.
-pub fn is_pack_file(path: &Path) -> bool {
-    fs::File::open(path)
-        .and_then(|mut file| {
-            let mut magic = vec![0u8; PACK_MAGIC.len()];
-            file.read_exact(&mut magic)?;
-            Ok(magic == PACK_MAGIC)
-        })
-        .unwrap_or(false)
-}
-
-/// Expands a pack into an id-only directory. No archived path is trusted, and
-/// every member is verified against its own content id before it is exposed.
-pub fn unpack_pack(pack_path: &Path, destination: &Path) -> Result<(), String> {
-    if destination.join(".complete").is_file() {
-        return Ok(());
-    }
-    let temporary = destination.with_extension(format!("tmp-{}", Uuid::new_v4()));
-    let result = (|| {
-        fs::create_dir_all(&temporary).map_err(|error| error.to_string())?;
-        let mut input = fs::File::open(pack_path).map_err(|error| error.to_string())?;
-        let mut magic = vec![0u8; PACK_MAGIC.len()];
-        input.read_exact(&mut magic).map_err(|error| error.to_string())?;
-        if magic != PACK_MAGIC {
-            return Err("文件包格式不受支持".to_string());
-        }
-        let mut count_bytes = [0u8; 4];
-        input.read_exact(&mut count_bytes).map_err(|error| error.to_string())?;
-        let count = u32::from_le_bytes(count_bytes);
-        if count > 1_000_000 {
-            return Err("文件包项目过多".to_string());
-        }
-        for _ in 0..count {
-            let mut id_bytes = [0u8; 64];
-            input.read_exact(&mut id_bytes).map_err(|error| error.to_string())?;
-            let file_id = std::str::from_utf8(&id_bytes).map_err(|error| error.to_string())?;
-            if !is_file_id(file_id) {
-                return Err("文件包内容标识不合法".to_string());
-            }
-            let mut size_bytes = [0u8; 8];
-            input.read_exact(&mut size_bytes).map_err(|error| error.to_string())?;
-            let size = u64::from_le_bytes(size_bytes);
-            let target = temporary.join(file_id);
-            let mut output = fs::File::create(&target).map_err(|error| error.to_string())?;
-            let mut remaining = size;
-            let mut hasher = Sha256::new();
-            let mut buffer = vec![0u8; HASH_READ_BUFFER];
-            while remaining > 0 {
-                let requested = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
-                input.read_exact(&mut buffer[..requested]).map_err(|error| error.to_string())?;
-                hasher.update(&buffer[..requested]);
-                output.write_all(&buffer[..requested]).map_err(|error| error.to_string())?;
-                remaining -= requested as u64;
-            }
-            if to_hex(&hasher.finalize()) != file_id {
-                return Err("文件包内容校验失败".to_string());
-            }
-        }
-        let mut trailing = [0u8; 1];
-        if input.read(&mut trailing).map_err(|error| error.to_string())? != 0 {
-            return Err("文件包包含多余数据".to_string());
-        }
-        fs::write(temporary.join(".complete"), b"").map_err(|error| error.to_string())?;
-        if destination.exists() {
-            fs::remove_dir_all(destination).map_err(|error| error.to_string())?;
-        }
-        fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&temporary);
-    }
-    result
 }
 
 pub fn is_file_id(value: &str) -> bool {
@@ -730,38 +652,6 @@ mod tests {
             fs::read_to_string(destination.join("bundle").join("sub").join("second.bin")).unwrap(),
             "shared"
         );
-    }
-
-    #[test]
-    fn unpack_pack_verifies_and_restores_each_legacy_content() {
-        let directory = TemporaryDirectory::new("pack");
-        let hash = |payload: &[u8]| {
-            let mut hasher = Sha256::new();
-            hasher.update(payload);
-            to_hex(&hasher.finalize())
-        };
-        let first_id = hash(b"first payload");
-        let second_id = hash(b"second payload");
-        let members = [(first_id.as_str(), "first payload".as_bytes()), (second_id.as_str(), b"second payload")];
-        let mut pack = PACK_MAGIC.to_vec();
-        pack.extend_from_slice(&(members.len() as u32).to_le_bytes());
-        for (file_id, payload) in members {
-            let mut id_bytes = [0u8; 64];
-            id_bytes[..file_id.len()].copy_from_slice(file_id.as_bytes());
-            pack.extend_from_slice(&id_bytes);
-            pack.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-            pack.extend_from_slice(payload);
-        }
-        let pack_path = directory.0.join("contents.pack");
-        fs::write(&pack_path, &pack).expect("write pack");
-        assert!(is_pack_file(&pack_path));
-        assert!(!is_pack_file(&directory.0.join("missing.bin")));
-
-        let unpacked = directory.0.join("unpacked");
-        unpack_pack(&pack_path, &unpacked).expect("unpack");
-        assert_eq!(fs::read(unpacked.join(first_id)).expect("read first"), b"first payload");
-        assert_eq!(fs::read(unpacked.join(second_id)).expect("read second"), b"second payload");
-        assert!(unpacked.join(".complete").is_file());
     }
 
     /// Mirrors `MAX_MESSAGE_BYTES` in `@cliproam/protocol`: a whole folder has to
