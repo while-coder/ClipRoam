@@ -26,7 +26,7 @@ macOS 首次自动粘贴时需要在“系统设置 → 隐私与安全性 → �
 
 - `apps/server/src/index.ts`：进程入口，只启动服务。
 - `app/`：`ClipRoamServer`、运行配置与 WebSocket 连接类型。
-- `files/`：内容寻址的文件子系统，与剪贴板记录相互独立。`FileStore` 是按用户隔离的内容池（落盘路径、内容索引、回收），`FileTransferService` 只做协议分发，`FileUploadService`（秒传、续传、内容校验）与 `FileDownloadService`（服务器直发或中继到源设备）各管一半生命周期。这一层不认识条目，只认识内容标识。
+- `files/`：内容寻址的文件子系统，与剪贴板记录相互独立。`FileStore` 是按用户隔离的内容池（落盘路径、内容索引、回收），`UploadService`（秒传、分块账本续传、内容校验）与 `FileDownloadService`（下载需求登记）各管一半生命周期。文件字节与下载编排全部走 HTTP：`PUT /upload/:fileId` 上传、`GET /files/:entryId/:fileId` 下载（内容缺失时登记需求并立即返回 `NOT_STORED`，客户端重试）、`GET /files/requests` 供持有内容的设备长轮询领取需求并推送；WebSocket 只负责剪贴板同步。这一层不认识条目，只认识内容标识。
 - `services/`：`AuthService`（账号和限流）、`AdminService` 与 `TlsCertificateService`。
 - `storage/`：`AccountStore`、`UserDataStore`（剪贴板记录与设备）、`ClipRoamStore` 与数据路径。
 

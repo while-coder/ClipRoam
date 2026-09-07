@@ -1,100 +1,83 @@
-import { createReadStream } from "node:fs";
-import { FILE_CHUNK_SIZE, type ClientMessage } from "@cliproam/protocol";
-import type { ClientConnection, SendMessage } from "../app/Connection.js";
-import type { FileStore } from "./FileStore.js";
+// A download demand: a device asked for content the pool does not hold, and
+// some other device of the same account may be able to push it up.
+type PullRequest = {
+  fileId: string;
+  entryId: string;
+  size: number;
+  createdAt: number;
+};
 
-type DownloadRequest = Extract<ClientMessage, { type: "file.download" }>;
-type Relay = { source: ClientConnection; target: ClientConnection; userId: string };
+// A demand nobody serves should not haunt the pollers forever.
+const REQUEST_TTL_MS = 10 * 60_000;
+// A runaway client must not be able to grow the ledger without bound.
+const MAX_REQUESTS_PER_USER = 50;
 
+// Downloads pull raw bytes over HTTP (`GET /files/:entryId/:fileId`). This
+// service only tracks what is missing: a failed download records its demand
+// and fails immediately — the client retries — while any device of the
+// account long-polls `pending` and serves what it actually holds through the
+// upload routes. No socket is involved — a device that can serve simply does.
 export class FileDownloadService {
-  #relays = new Map<string, Relay>();
+  #requests = new Map<string, Map<string, PullRequest>>();
+  #pollWaiters = new Map<string, Set<() => void>>();
 
-  constructor(
-    private readonly files: FileStore,
-    private readonly canRead: (userId: string, entryId: string, fileId: string) => boolean,
-    private readonly send: SendMessage,
-  ) {}
+  // Records a demand and wakes every device polling for this account's work.
+  request(userId: string, fileId: string, entryId: string, size: number): void {
+    this.#prune();
+    const requests = this.#requests.get(userId) ?? new Map<string, PullRequest>();
+    if (!requests.has(fileId)) {
+      if (requests.size >= MAX_REQUESTS_PER_USER) return;
+      requests.set(fileId, { fileId, entryId, size, createdAt: Date.now() });
+      this.#requests.set(userId, requests);
+    }
+    this.#wake(this.#pollWaiters.get(userId));
+  }
 
-  async download(
-    client: ClientConnection,
-    message: DownloadRequest,
-    clients: ReadonlySet<ClientConnection>,
-  ): Promise<void> {
-    if (!this.canRead(client.userId, message.entryId, message.fileId)) {
-      this.send(client, { type: "file.failed", transferId: message.transferId, message: "文件不属于该剪贴板记录" });
-      return;
-    }
-    const stored = this.files.get(message.fileId);
-    if (stored) {
-      try {
-        for await (const chunk of createReadStream(stored.path, { highWaterMark: FILE_CHUNK_SIZE })) {
-          this.send(client, {
-            type: "file.chunk",
-            transferId: message.transferId,
-            data: Buffer.from(chunk).toString("base64"),
-          });
-        }
-        this.send(client, { type: "file.complete", transferId: message.transferId });
-      } catch {
-        this.send(client, { type: "file.failed", transferId: message.transferId, message: "服务器文件已不可用" });
-      }
-      return;
-    }
+  // The demand list a serving device long-polls for.
+  pending(userId: string): PullRequest[] {
+    this.#prune();
+    return [...(this.#requests.get(userId)?.values() ?? [])];
+  }
 
-    const source = [...clients].find((candidate) =>
-      candidate.userId === client.userId && candidate.device.id === message.sourceDeviceId);
-    if (!source) {
-      this.send(client, { type: "file.failed", transferId: message.transferId, message: "源设备不在线，无法获取此文件" });
-      return;
-    }
-    this.#relays.set(message.transferId, { source, target: client, userId: client.userId });
-    this.send(source, {
-      type: "file.source.request",
-      transferId: message.transferId,
-      entryId: message.entryId,
-      fileId: message.fileId,
+  // Resolves as soon as the account gains a new demand, or after `timeoutMs`.
+  waitForRequests(userId: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let wake: () => void;
+      const timer = setTimeout(() => wake(), timeoutMs);
+      timer.unref();
+      wake = () => {
+        clearTimeout(timer);
+        const waiters = this.#pollWaiters.get(userId);
+        waiters?.delete(wake);
+        if (waiters && waiters.size === 0) this.#pollWaiters.delete(userId);
+        resolve();
+      };
+      const waiters = this.#pollWaiters.get(userId) ?? new Set<() => void>();
+      waiters.add(wake);
+      this.#pollWaiters.set(userId, waiters);
     });
   }
 
-  receiveChunk(client: ClientConnection, transferId: string, encodedData: string): boolean {
-    const relay = this.#relays.get(transferId);
-    if (relay?.source !== client || relay.userId !== client.userId) return false;
-    if (Buffer.from(encodedData, "base64").length > FILE_CHUNK_SIZE) {
-      this.#failRelay(transferId, "文件分块超过限制");
-      return true;
+  // The upload routes just promoted this content: the demand is served, so
+  // it drops out of every poller's list.
+  notifyAvailable(fileId: string): void {
+    for (const [userId, requests] of this.#requests) {
+      if (requests.delete(fileId) && requests.size === 0) this.#requests.delete(userId);
     }
-    this.send(relay.target, { type: "file.chunk", transferId, data: encodedData });
-    return true;
   }
 
-  complete(client: ClientConnection, transferId: string): boolean {
-    const relay = this.#relays.get(transferId);
-    if (relay?.source !== client || relay.userId !== client.userId) return false;
-    this.send(relay.target, { type: "file.complete", transferId });
-    this.#relays.delete(transferId);
-    return true;
+  #wake(waiters: Set<() => void> | undefined): void {
+    if (!waiters) return;
+    for (const wake of [...waiters]) wake();
   }
 
-  fail(client: ClientConnection, transferId: string, message: string): boolean {
-    const relay = this.#relays.get(transferId);
-    if (!relay || (relay.source !== client && relay.target !== client)) return false;
-    this.#failRelay(transferId, message, client);
-    return true;
-  }
-
-  handleClientClose(client: ClientConnection): void {
-    for (const [transferId, relay] of this.#relays) {
-      if (relay.source === client || relay.target === client) {
-        this.#failRelay(transferId, "文件传输设备已离线", client);
+  #prune(): void {
+    const cutoff = Date.now() - REQUEST_TTL_MS;
+    for (const [userId, requests] of this.#requests) {
+      for (const [fileId, request] of requests) {
+        if (request.createdAt < cutoff) requests.delete(fileId);
       }
+      if (requests.size === 0) this.#requests.delete(userId);
     }
-  }
-
-  #failRelay(transferId: string, message: string, sender?: ClientConnection): void {
-    const relay = this.#relays.get(transferId);
-    if (!relay) return;
-    const target = sender === relay.source ? relay.target : relay.source;
-    this.send(target, { type: "file.failed", transferId, message });
-    this.#relays.delete(transferId);
   }
 }

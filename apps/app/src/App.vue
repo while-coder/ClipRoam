@@ -899,13 +899,13 @@ async function togglePin(entry: ClipboardEntry): Promise<void> {
   await invoke("set_pinned", { entryId: entry.id, pinned: !entry.pinned });
   await refreshEntries();
   const client = syncClient;
-  if (client) client.publishMetadata(await fullEntry(entry as LocalClipboardEntry));
+  if (client) void client.publishMetadata(await fullEntry(entry as LocalClipboardEntry)).catch(() => undefined);
 }
 
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
   if (runningInTauri) await invoke("delete_entry", { entryId: entry.id });
   else entries.value = entries.value.filter((item) => item.id !== entry.id);
-  syncClient?.delete(entry.id);
+  void syncClient?.delete(entry.id).catch(() => undefined);
   await refreshEntries();
 }
 
@@ -1509,7 +1509,9 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     const pendingDeletions = runningInTauri
       ? new Set(await invoke<string[]>("list_pending_deletions"))
       : new Set<string>();
-    for (const entryId of pendingDeletions) client.delete(entryId);
+    // Best effort: a failed delete keeps the id in the pending list and the
+    // next reconcile retries it.
+    for (const entryId of pendingDeletions) await client.delete(entryId).catch(() => undefined);
     syncedEntryIds.value = new Set(
       manifest.filter((entry) => !pendingDeletions.has(entry.id)).map((entry) => entry.id),
     );
@@ -1550,7 +1552,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       for (const entryId of pendingUpdates) {
         if (pendingDeletions.has(entryId) || syncClient !== client) continue;
         try {
-          client.publishMetadata(await fullEntry({ id: entryId }));
+          await client.publishMetadata(await fullEntry({ id: entryId }));
         } catch (error) {
           if (!String(error).includes("剪贴板记录不存在")) throw error;
         }

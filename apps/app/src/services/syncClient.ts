@@ -1,8 +1,14 @@
 import {
   AuthResponseSchema,
   DEFAULT_AUTO_UPLOAD_LIMIT,
-  ENTRY_FETCH_BATCH,
+  DOWNLOAD_NOT_STORED_CODE,
+  ENTRY_QUERY_BATCH,
   FILE_CHUNK_SIZE,
+  EntryActivateResponseSchema,
+  EntryListResponseSchema,
+  EntryPublishResponseSchema,
+  EntryQueryResponseSchema,
+  FileRequestsResponseSchema,
   ServerMessageSchema,
   UploadBeginResponseSchema,
   UploadChunkResponseSchema,
@@ -12,6 +18,11 @@ import {
   type ClipboardFile,
   type ClipboardManifestEntry,
   type Device,
+  type EntryActivateRequest,
+  type EntryListResponse,
+  type EntryPublishRequest,
+  type EntryQueryRequest,
+  type FileRequest,
   type UploadBeginRequest,
   type UploadBeginResponse,
   type UploadChunkResponse,
@@ -24,6 +35,11 @@ export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
+const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const DOWNLOAD_RETRY_MS = 3_000;
+const POLL_REQUESTS_TIMEOUT_MS = 35_000;
+const SERVE_RETRY_BACKOFF_MS = 60_000;
+const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -191,24 +207,10 @@ export class SyncClient {
     reject: (error: Error) => void;
     timer: number;
   }>();
-  #pending = new Map<string, {
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timer: number;
-    writeChain?: Promise<void>;
-    entryId?: string;
-    file?: ClipboardFile;
-  }>();
-  #publishConfirmations = new Map<string, {
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timer: number;
-  }>();
-  #entryFetches = new Map<string, {
-    resolve: (entries: ClipboardEntry[]) => void;
-    reject: (error: Error) => void;
-    timer: number;
-  }>();
+  #downloadAborts = new Set<AbortController>();
+  #pollingRequests = false;
+  #servingFiles = new Set<string>();
+  #failedServes = new Map<string, number>();
   #entryUploads = new Map<string, Promise<void>>();
 
   constructor(
@@ -230,7 +232,10 @@ export class SyncClient {
     this.#connected = false;
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#socket?.close();
-    this.#rejectActiveTransfers("同步连接已断开");
+    // Downloads ride HTTP, so they outlive a socket blip — only an explicit
+    // stop ends them.
+    for (const abort of this.#downloadAborts) abort.abort();
+    this.#downloadAborts.clear();
     for (const waiter of this.#connectionWaiters) {
       window.clearTimeout(waiter.timer);
       waiter.reject(new Error("同步连接已断开"));
@@ -238,63 +243,64 @@ export class SyncClient {
     this.#connectionWaiters.clear();
   }
 
-  #rejectActiveTransfers(message: string): void {
-    for (const transfer of this.#pending.values()) {
-      window.clearTimeout(transfer.timer);
-      transfer.reject(new Error(message));
-    }
-    this.#pending.clear();
-    for (const confirmation of this.#publishConfirmations.values()) {
-      window.clearTimeout(confirmation.timer);
-      confirmation.reject(new Error(message));
-    }
-    this.#publishConfirmations.clear();
-    for (const fetch of this.#entryFetches.values()) {
-      window.clearTimeout(fetch.timer);
-      fetch.reject(new Error(message));
-    }
-    this.#entryFetches.clear();
-  }
+  // Nothing waits on socket echoes anymore: entry writes confirm through
+  // their HTTP responses and downloads ride HTTP fetches that carry their own
+  // abort controllers.
 
   async publish(entry: ClipboardEntry): Promise<void> {
     // Publish the metadata first. Other devices can then retrieve the original
     // from this online device while the server copy is still uploading.
-    const published = this.#publishEntry(entry);
+    await this.#publishEntry(entry);
     // Only a fresh OS clipboard capture calls publish(). Restores, uploads and
     // metadata edits use separate paths, so they can never overwrite another
     // device's clipboard. File lists stay history-only to avoid eager caches.
-    if (published && entry.kind !== "files") {
-      this.#send({ type: "clipboard.activate", entryId: entry.id });
+    if (entry.kind !== "files") {
+      await this.activate(entry.id).catch(() => undefined);
     }
     await this.#uploadEntry(entry, this.autoUploadLimit, false);
   }
 
   /** Sends an existing entry update (such as pinning) without re-uploading files. */
-  publishMetadata(entry: ClipboardEntry): boolean {
-    return this.#publishEntry(entry);
+  async publishMetadata(entry: ClipboardEntry): Promise<void> {
+    await this.#publishEntry(entry);
   }
 
   async restore(entry: ClipboardEntry): Promise<void> {
-    // A snapshot can show that the server no longer has this entry. Do not
-    // treat a WebSocket send as success: retain the local entry until the
-    // server echoes it back, then re-upload whatever it is missing.
-    await this.#publishAndConfirm(entry);
+    // A snapshot can show that the server no longer has this entry. The HTTP
+    // response confirms the write directly, so the socket echo-wait becomes a
+    // bounded retry around an ordinary publish.
+    await this.#publishWithRetry(entry);
     await this.#uploadEntry(entry, this.autoUploadLimit, false, true);
+  }
+
+  // A reconcile pass must not spin while the server is unreachable, so each
+  // failed attempt backs off like the upload retry loop does.
+  async #publishWithRetry(entry: ClipboardEntry): Promise<void> {
+    for (let attempt = 0; attempt < 3 && !this.#stopped; attempt++) {
+      try {
+        await this.#publishEntry(entry);
+        return;
+      } catch (error) {
+        if (!this.#isRecoverableUploadError(error)) throw error;
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      }
+    }
+    if (!this.#stopped) await this.#publishEntry(entry);
   }
 
   async upload(entry: ClipboardEntry): Promise<void> {
     // A manual upload can be the first time the server learns about this entry.
     // Without the reference, garbage collection would reclaim the contents that
     // were just uploaded.
-    this.#publishEntry(entry);
+    await this.#publishEntry(entry);
     await this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, true);
   }
 
   async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     const entries: ClipboardEntry[] = [];
-    for (let index = 0; index < entryIds.length; index += ENTRY_FETCH_BATCH) {
+    for (let index = 0; index < entryIds.length; index += ENTRY_QUERY_BATCH) {
       entries.push(
-        ...await this.#fetchEntryBatch(entryIds.slice(index, index + ENTRY_FETCH_BATCH)),
+        ...await this.#fetchEntryBatch(entryIds.slice(index, index + ENTRY_QUERY_BATCH)),
       );
     }
     return entries;
@@ -381,12 +387,13 @@ export class SyncClient {
     }
   }
 
-  #publishEntry(entry: ClipboardEntry): boolean {
-    return this.#send({
-        type: "clipboard.publish",
-        entry: {
-          id: entry.id,
-          kind: entry.kind,
+  // The HTTP response is the confirmation the socket echo used to be.
+  async #publishEntry(entry: ClipboardEntry): Promise<ClipboardEntry> {
+    const request: EntryPublishRequest = {
+      deviceId: this.device.id,
+      entry: {
+        id: entry.id,
+        kind: entry.kind,
         content: entry.content,
         html: entry.html,
         rtf: entry.rtf,
@@ -401,87 +408,76 @@ export class SyncClient {
         createdAt: entry.createdAt,
         pinned: entry.pinned,
       },
+    };
+    const response = await this.#httpFetch("POST", "/entries", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
     });
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = EntryPublishResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的发布响应");
+    return parsed.data.entry;
   }
 
-  async #publishAndConfirm(entry: ClipboardEntry): Promise<void> {
-    while (!this.#stopped) {
-      await this.#waitForConnection();
-      try {
-        await this.#waitForPublishConfirmation(entry);
-        return;
-      } catch (error) {
-        if (!this.#isRecoverableUploadError(error)) throw error;
-      }
-    }
-    throw new Error("同步连接已断开");
+  // Adds an entry to the live clipboard of every other device. The response
+  // also confirms the entry exists, so reconcile can treat 404 as "gone".
+  async activate(entryId: string): Promise<ClipboardEntry> {
+    const request: EntryActivateRequest = { deviceId: this.device.id };
+    const response = await this.#httpFetch(
+      "POST",
+      `/entries/${encodeURIComponent(entryId)}/activate`,
+      {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+        signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
+      },
+    );
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = EntryActivateResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的激活响应");
+    return parsed.data.entry;
   }
 
-  #waitForPublishConfirmation(entry: ClipboardEntry): Promise<void> {
-    const entryId = entry.id;
-    return new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(
-        () => this.#rejectPublishConfirmation(entryId, "剪贴板同步确认超时"),
-        30_000,
-      );
-      this.#publishConfirmations.set(entryId, { resolve, reject, timer });
-      if (!this.#publishEntry(entry)) {
-        this.#rejectPublishConfirmation(entryId, "同步服务未连接");
-      }
+  // Fetches a page of history snapshot-style. Only admin/debug tooling
+  // consumes pagination today; the client UI keeps its local full list.
+  async listEntries(cursor?: string, limit = 100): Promise<EntryListResponse> {
+    const query = new URLSearchParams();
+    if (cursor) query.set("cursor", cursor);
+    if (limit !== 100) query.set("limit", String(limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const response = await this.#httpFetch("GET", `/entries${suffix}`, {
+      signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
     });
-  }
-
-  #resolvePublishConfirmation(entry: ClipboardEntry): void {
-    const entryId = entry.id;
-    const confirmation = this.#publishConfirmations.get(entryId);
-    if (!confirmation) return;
-    window.clearTimeout(confirmation.timer);
-    this.#publishConfirmations.delete(entryId);
-    confirmation.resolve();
-  }
-
-  #rejectPublishConfirmation(entryId: string, message: string): void {
-    const confirmation = this.#publishConfirmations.get(entryId);
-    if (!confirmation) return;
-    window.clearTimeout(confirmation.timer);
-    this.#publishConfirmations.delete(entryId);
-    confirmation.reject(new Error(message));
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = EntryListResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的列表响应");
+    return parsed.data;
   }
 
   async #fetchEntryBatch(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
-    if (!entryIds.length) return [];
-    await this.#waitForConnection();
-    const requestId = crypto.randomUUID();
-    return new Promise<ClipboardEntry[]>((resolve, reject) => {
-      const timer = window.setTimeout(
-        () => this.#rejectEntryFetch(requestId, "获取远端历史超时"),
-        30_000,
-      );
-      this.#entryFetches.set(requestId, { resolve, reject, timer });
-      if (!this.#send({ type: "clipboard.fetch", requestId, entryIds: [...entryIds] })) {
-        this.#rejectEntryFetch(requestId, "同步服务未连接");
-      }
+    const request: EntryQueryRequest = { entryIds: [...entryIds] };
+    const response = await this.#httpFetch("POST", "/entries/query", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
     });
-  }
-
-  #resolveEntryFetch(requestId: string, entries: ClipboardEntry[]): void {
-    const fetch = this.#entryFetches.get(requestId);
-    if (!fetch) return;
-    window.clearTimeout(fetch.timer);
-    this.#entryFetches.delete(requestId);
-    fetch.resolve(entries);
-  }
-
-  #rejectEntryFetch(requestId: string, message: string): void {
-    const fetch = this.#entryFetches.get(requestId);
-    if (!fetch) return;
-    window.clearTimeout(fetch.timer);
-    this.#entryFetches.delete(requestId);
-    fetch.reject(new Error(message));
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = EntryQueryResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的查询响应");
+    return parsed.data.entries;
   }
 
   async downloadFile(entry: ClipboardEntry, file: ClipboardFile): Promise<void> {
-    return this.#downloadFileReference(entry.id, entry.sourceDeviceId, file);
+    return this.#downloadFileReference(entry.id, file);
   }
 
   async downloadFileToSave(
@@ -489,7 +485,7 @@ export class SyncClient {
     file: ClipboardFile,
     saveId: string,
   ): Promise<void> {
-    return this.#downloadFileReference(entry.id, entry.sourceDeviceId, file, saveId);
+    return this.#downloadFileReference(entry.id, file, saveId);
   }
 
   async downloadVirtualFile(request: {
@@ -498,7 +494,7 @@ export class SyncClient {
     size: number;
     sourceDeviceId: string;
   }): Promise<void> {
-    return this.#downloadFileReference(request.entryId, request.sourceDeviceId, {
+    return this.#downloadFileReference(request.entryId, {
       fileId: request.fileId,
       size: request.size,
       available: true,
@@ -507,7 +503,6 @@ export class SyncClient {
 
   async #downloadFileReference(
     entryId: string,
-    sourceDeviceId: string,
     file: ClipboardFile,
     saveId?: string,
   ): Promise<void> {
@@ -518,29 +513,82 @@ export class SyncClient {
       expectedSize: file.size,
       saveId,
     });
+    const abort = new AbortController();
+    this.#downloadAborts.add(abort);
     try {
-      const completed = this.#waitForTransfer(transferId, entryId, file);
-      if (!this.#send({
-        type: "file.download",
-        transferId,
-        entryId,
-        fileId: file.fileId,
-        sourceDeviceId,
-      })) {
-        this.#rejectTransfer(transferId, "同步服务未连接");
-      }
-      await completed;
+      await this.#fetchStoredFile(transferId, entryId, file, abort);
     } catch (error) {
       await invoke("cancel_file_download", {
         transferId,
         reason: error instanceof Error ? error.message : String(error),
       }).catch(() => undefined);
       throw error;
+    } finally {
+      this.#downloadAborts.delete(abort);
     }
   }
 
-  delete(entryId: string): void {
-    this.#send({ type: "clipboard.delete", entryId });
+  // Downloads pull raw bytes over HTTP. A 404 `NOT_STORED` means the content
+  // has not landed yet: the server recorded the demand, so a device holding
+  // the bytes will push them up through the upload routes — keep retrying
+  // until the deadline runs out.
+  async #fetchStoredFile(
+    transferId: string,
+    entryId: string,
+    file: ClipboardFile,
+    abort: AbortController,
+  ): Promise<void> {
+    const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
+    for (;;) {
+      const response = await this.#httpFetch(
+        "GET",
+        `/files/${entryId}/${file.fileId}`,
+        { signal: abort.signal },
+      );
+      if (response.status === 401) throw new Error("登录已失效，请重新登录");
+      if (response.status === 404) {
+        // NOT_STORED just means the content has not landed yet — retry.
+        // Any other 404 (no access, bad parameters) is a real refusal.
+        const body = await response.json().catch(() => undefined) as unknown;
+        if ((body as { code?: unknown } | null | undefined)?.code !== DOWNLOAD_NOT_STORED_CODE) {
+          throw new Error(this.#uploadErrorMessage(body, response.status));
+        }
+        if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
+        await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
+        continue;
+      }
+      // Error bodies are JSON; the success body is the file itself, so it must
+      // stay unread until the streaming loop below.
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined) as unknown;
+        throw new Error(this.#uploadErrorMessage(body, response.status));
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("服务器未返回文件内容");
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await invoke("append_file_download", { transferId, data: bytesToBase64(value) });
+      }
+      await invoke("finish_file_download", { transferId });
+      return;
+    }
+  }
+
+  // A 404 is not a failure: another device may have deleted the entry first,
+  // and the outcome every device converges on is the same.
+  async delete(entryId: string): Promise<void> {
+    const response = await this.#httpFetch(
+      "DELETE",
+      `/entries/${encodeURIComponent(entryId)}`,
+      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+    );
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    if (response.status === 404) return;
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined) as unknown;
+      throw new Error(this.#uploadErrorMessage(body, response.status));
+    }
   }
 
   #send(message: ClientMessage): boolean {
@@ -579,6 +627,7 @@ export class SyncClient {
       waiter.resolve();
     }
     this.#connectionWaiters.clear();
+    this.#startRequestPolling();
   }
 
   async #uploadFile(
@@ -588,7 +637,7 @@ export class SyncClient {
   ): Promise<void> {
     while (!this.#stopped) {
       try {
-        await this.#uploadFileOnce(entry, file, onProgress);
+        await this.#uploadContent(entry.id, file, onProgress);
         return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
@@ -605,8 +654,8 @@ export class SyncClient {
   // already stored or hands back the server's chunk ledger, then raw-byte PUTs
   // that each answer with the authoritative ledger. No socket correlation and
   // no ordering constraint — a chunk only needs its index.
-  async #uploadFileOnce(
-    entry: ClipboardEntry,
+  async #uploadContent(
+    entryId: string,
     file: ClipboardFile,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
@@ -634,7 +683,7 @@ export class SyncClient {
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
         const data = await invoke<string>("read_file_chunk", {
-          entryId: entry.id, fileId: file.fileId, offset, length,
+          entryId, fileId: file.fileId, offset, length,
         });
         if (!data) throw new Error("本机文件内容不可用");
         // A concurrent upload may store the same content mid-transfer; the
@@ -670,7 +719,7 @@ export class SyncClient {
       fileId: file.fileId,
       size: file.size,
     };
-    const response = await this.#uploadFetch("POST", "/upload/begin", {
+    const response = await this.#httpFetch("POST", "/upload/begin", {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(UPLOAD_BEGIN_TIMEOUT_MS),
@@ -686,7 +735,7 @@ export class SyncClient {
   // Returns undefined when the server no longer knows this upload — its
   // ledger was swept or discarded; the caller re-begins to pick up the new one.
   async #uploadChunk(fileId: string, index: number, chunk: Uint8Array): Promise<UploadChunkResponse | undefined> {
-    const response = await this.#uploadFetch("PUT", `/upload/${fileId}?index=${index}`, {
+    const response = await this.#httpFetch("PUT", `/upload/${fileId}?index=${index}`, {
       headers: { "Content-Type": "application/octet-stream" },
       body: chunk,
       signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
@@ -699,9 +748,10 @@ export class SyncClient {
     return parsed.data;
   }
 
-  // Network-level failures surface as a disconnected sync so the caller's
-  // retry loop can pick the upload back up once the connection returns.
-  async #uploadFetch(method: string, path: string, init: RequestInit): Promise<Response> {
+  // HTTP is shared by uploads and downloads. Network-level failures surface as
+  // a disconnected sync so the caller's retry loop can pick the transfer back
+  // up once the connection returns.
+  async #httpFetch(method: string, path: string, init: RequestInit): Promise<Response> {
     try {
       return await fetch(`${this.httpUrl}${path}`, {
         ...init,
@@ -722,48 +772,98 @@ export class SyncClient {
       : `服务器返回错误 ${status}`;
   }
 
-  #waitForTransfer(transferId: string, entryId?: string, file?: ClipboardFile): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(
-        () => this.#rejectTransfer(transferId, "文件传输超时"),
-        5 * 60_000,
-      );
-      this.#pending.set(transferId, {
-        resolve, reject, timer, writeChain: Promise.resolve(), entryId, file,
-      });
-    });
+  #startRequestPolling(): void {
+    if (this.#pollingRequests) return;
+    this.#pollingRequests = true;
+    void this.#pollRequestsLoop();
   }
 
-  #resolveTransfer(transferId: string): void {
-    const transfer = this.#pending.get(transferId);
-    if (!transfer) return;
-    window.clearTimeout(transfer.timer);
-    this.#pending.delete(transferId);
-    transfer.resolve();
-  }
-
-  #rejectTransfer(transferId: string, message: string): void {
-    const transfer = this.#pending.get(transferId);
-    if (!transfer) return;
-    window.clearTimeout(transfer.timer);
-    this.#pending.delete(transferId);
-    transfer.reject(new Error(message));
-  }
-
-  async #serveSourceFile(transferId: string, entryId: string, fileId: string): Promise<void> {
-    try {
-      for (let offset = 0; ; offset += FILE_CHUNK_SIZE) {
-        const data = await invoke<string>("read_file_chunk", {
-          entryId, fileId, offset, length: FILE_CHUNK_SIZE,
+  // This device may hold content other devices are waiting for. The loop is
+  // plain HTTP: one long-poll that returns the account's outstanding download
+  // demands, served by pushing the bytes through the regular upload routes.
+  // It rides the connection state but never the socket itself.
+  async #pollRequestsLoop(): Promise<void> {
+    while (!this.#stopped && this.#connected) {
+      try {
+        const response = await this.#httpFetch("GET", "/files/requests?wait=25", {
+          signal: AbortSignal.timeout(POLL_REQUESTS_TIMEOUT_MS),
         });
-        if (!data) break;
-        if (!this.#send({ type: "file.chunk", transferId, data })) return;
+        if (response.status === 401) {
+          this.#pollingRequests = false;
+          this.handlers.onAuthenticationFailed("登录已失效，请重新登录");
+          return;
+        }
+        const body = await response.json().catch(() => undefined) as unknown;
+        if (!response.ok) {
+          await this.#pausePolling(5_000);
+          continue;
+        }
+        const parsed = FileRequestsResponseSchema.safeParse(body);
+        if (!parsed.success) {
+          await this.#pausePolling(5_000);
+          continue;
+        }
+        for (const request of parsed.data.requests) {
+          await this.#servePullRequest(request);
+        }
+      } catch {
+        // Network-level failure: the socket's reconnect loop owns the
+        // connection state, so just back off and re-check it.
+        if (!this.#stopped && this.#connected) await this.#pausePolling(2_000);
       }
-      this.#send({ type: "file.complete", transferId });
-    } catch (error) {
-      const message = `无法读取源文件：${error instanceof Error ? error.message : String(error)}`;
-      this.#send({ type: "file.abort", transferId, message });
-      this.handlers.onError(message);
+    }
+    this.#pollingRequests = false;
+  }
+
+  async #pausePolling(ms: number): Promise<void> {
+    await new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  // Serving a demand is just an upload — same routes, ledger and hash checks
+  // as any other push. Devices without the bytes stay quiet and let the demand
+  // expire; a short backoff keeps one unfillable demand from being probed on
+  // every poll.
+  async #servePullRequest(request: FileRequest): Promise<void> {
+    if (this.#servingFiles.has(request.fileId)) return;
+    const failedAt = this.#failedServes.get(request.fileId);
+    if (failedAt !== undefined && Date.now() - failedAt < SERVE_RETRY_BACKOFF_MS) return;
+    // Probing the first byte first: a `begin` from a device that cannot
+    // actually provide the content would discard a live upload ledger another
+    // device may be filling for the same bytes.
+    if (request.size > 0) {
+      const probe = await invoke<string>("read_file_chunk", {
+        entryId: request.entryId,
+        fileId: request.fileId,
+        offset: 0,
+        length: 1,
+      });
+      if (!probe) {
+        this.#rememberFailedServe(request.fileId);
+        return;
+      }
+    }
+    this.#servingFiles.add(request.fileId);
+    try {
+      await this.#uploadContent(request.entryId, {
+        fileId: request.fileId,
+        size: request.size,
+        available: true,
+      }, () => undefined);
+      this.#failedServes.delete(request.fileId);
+    } catch {
+      this.#rememberFailedServe(request.fileId);
+    } finally {
+      this.#servingFiles.delete(request.fileId);
+    }
+  }
+
+  #rememberFailedServe(fileId: string): void {
+    this.#failedServes.set(fileId, Date.now());
+    if (this.#failedServes.size > 100) {
+      const cutoff = Date.now() - SERVE_RETRY_BACKOFF_MS;
+      for (const [id, at] of this.#failedServes) {
+        if (at < cutoff) this.#failedServes.delete(id);
+      }
     }
   }
 
@@ -775,43 +875,12 @@ export class SyncClient {
       case "file.available":
         this.handlers.onFileAvailable(message.fileId);
         return;
-      case "file.failed":
-        this.#rejectTransfer(message.transferId, message.message);
-        return;
-      case "file.source.request":
-        await this.#serveSourceFile(message.transferId, message.entryId, message.fileId);
-        return;
-      case "file.chunk": {
-        const transfer = this.#pending.get(message.transferId);
-        if (!transfer?.entryId || !transfer.file) return;
-        transfer.writeChain = transfer.writeChain?.then(() => invoke("append_file_download", {
-          transferId: message.transferId,
-          data: message.data,
-        }));
-        return;
-      }
-      case "file.complete": {
-        const transfer = this.#pending.get(message.transferId);
-        if (!transfer?.entryId || !transfer.file) return;
-        try {
-          await transfer.writeChain;
-          await invoke("finish_file_download", { transferId: message.transferId });
-          this.#resolveTransfer(message.transferId);
-        } catch (error) {
-          this.#rejectTransfer(message.transferId, String(error));
-        }
-        return;
-      }
       case "auth.ack":
         this.#markConnected();
         this.handlers.onConnected(true);
         this.handlers.onManifest(message.manifest, message.devices);
         return;
-      case "clipboard.entries":
-        this.#resolveEntryFetch(message.requestId, message.entries);
-        return;
       case "clipboard.created":
-        this.#resolvePublishConfirmation(message.entry);
         this.handlers.onEntry(message.entry);
         return;
       case "clipboard.activated":
@@ -854,7 +923,6 @@ export class SyncClient {
     socket.addEventListener("close", () => {
       if (this.#socket !== socket) return;
       this.#connected = false;
-      this.#rejectActiveTransfers("同步连接已断开");
       this.handlers.onConnected(false);
       if (!this.#stopped) {
         this.#reconnectTimer = window.setTimeout(() => this.#open(), 2500);
@@ -866,12 +934,24 @@ export class SyncClient {
 }
 
 // The Tauri command reads chunks as base64 (its WebSocket-era shape); uploads
-// now send raw bytes, so decode before handing them to fetch.
+// now send raw bytes, so decode before handing them to fetch. The append
+// command keeps that base64 signature, so downloads re-encode each read.
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;
+}
+
+// `String.fromCharCode` blows the call stack past ~64K arguments, so the bytes
+// go in bounded slices.
+function bytesToBase64(bytes: Uint8Array): string {
+  const sliceSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += sliceSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + sliceSize));
+  }
+  return btoa(binary);
 }
 
 // Mirrors the server's ledger layout: bit `i` of byte `i >> 3`, least
