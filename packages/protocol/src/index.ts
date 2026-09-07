@@ -119,14 +119,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string().uuid(),
     entryIds: z.array(z.string()).min(1).max(ENTRY_FETCH_BATCH),
   }),
-  // Uploads are addressed purely by content, so the server needs no entry
-  // context: it either already holds these bytes (instant) or it does not.
-  z.object({
-    type: z.literal("file.upload.begin"),
-    transferId: z.string().uuid(),
-    fileId: FileIdSchema,
-    size: z.number().int().nonnegative(),
-  }),
+  // Uploads no longer travel over this socket: they run as HTTP requests, where
+  // request/response pairing needs no correlation id and chunks can be raw
+  // bytes. Only downloads and their device-to-server relays remain here.
   z.object({
     type: z.literal("file.download"),
     transferId: z.string().uuid(),
@@ -179,18 +174,6 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     device: DeviceSchema,
     online: z.boolean(),
   }),
-  z.object({
-    type: z.literal("file.upload.ready"),
-    transferId: z.string().uuid(),
-    offset: z.number().int().nonnegative(),
-  }),
-  // Also sent instead of `file.upload.ready` when the server already holds the
-  // content, which lets the client skip the transfer entirely.
-  z.object({
-    type: z.literal("file.uploaded"),
-    transferId: z.string().uuid(),
-    fileId: FileIdSchema,
-  }),
   // A file may become available after its entry was already synced to another
   // device. Keep that per-file state current without re-sending the entry.
   z.object({
@@ -225,6 +208,39 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+// Uploads run over HTTP instead of the WebSocket. The request/response pairing
+// correlates each handshake for free, so the server issues the session id and
+// `stored` answers (content it already holds) ride in ordinary response bodies.
+export const UploadBeginRequestSchema = z.object({
+  fileId: FileIdSchema,
+  size: z.number().int().nonnegative(),
+  deviceId: z.string().min(1).max(100),
+});
+
+export const UploadBeginResponseSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("stored"), fileId: FileIdSchema }),
+  z.object({
+    status: z.literal("ready"),
+    sessionId: z.string().uuid(),
+    offset: z.number().int().nonnegative(),
+  }),
+]);
+
+export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("stored"), fileId: FileIdSchema }),
+  z.object({
+    status: z.literal("accepted"),
+    received: z.number().int().nonnegative(),
+  }),
+]);
+
+// Body of a 409 reply when the client's offset no longer matches the session.
+export const UploadConflictResponseSchema = z.object({
+  offset: z.number().int().nonnegative(),
+});
+
+export const UploadCompleteResponseSchema = z.object({ fileId: FileIdSchema });
+
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
 export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
 export type ClipboardTree = z.infer<typeof ClipboardTreeSchema>;
@@ -234,5 +250,10 @@ export type ClipboardManifestEntry = z.infer<typeof ClipboardManifestEntrySchema
 export type Device = z.infer<typeof DeviceSchema>;
 export type AuthCredentials = z.infer<typeof AuthCredentialsSchema>;
 export type AuthResponse = z.infer<typeof AuthResponseSchema>;
+export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
+export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
+export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
+export type UploadConflictResponse = z.infer<typeof UploadConflictResponseSchema>;
+export type UploadCompleteResponse = z.infer<typeof UploadCompleteResponseSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
