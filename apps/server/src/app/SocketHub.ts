@@ -2,7 +2,6 @@ import type { WebSocket } from "@fastify/websocket";
 import {
   ClientMessageSchema,
   type ClientMessage,
-  type ClipboardManifestEntry,
   type Device,
   type ServerMessage,
 } from "@cliproam/protocol";
@@ -16,9 +15,6 @@ const logger = getLogger("SocketHub");
 export type SocketHubDeps = {
   authenticateSession: (token: string) => { id: string } | undefined;
   registerDevice: (userId: string, device: Device) => void;
-  // The payload of the connection-time `auth.ack`: the manifest and device
-  // list a freshly connected device reconciles against.
-  connectionState: (userId: string) => { manifest: ClipboardManifestEntry[]; devices: Device[] };
 };
 
 // Authenticated sockets only ever send auth and ping: every other
@@ -110,8 +106,9 @@ export class SocketHub {
     this.#clients.add(client);
     this.deps.registerDevice(user.id, device);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
-    const { manifest, devices } = this.deps.connectionState(user.id);
-    this.#send(client, { type: "auth.ack", manifest, devices });
+    // A bare confirmation; the client pulls the manifest and device list over
+    // HTTP (`GET /entries/manifest`) once it sees this.
+    this.#send(client, { type: "auth.ack" });
     this.broadcast(user.id, { type: "device.presence", device, online: true });
     return client;
   }

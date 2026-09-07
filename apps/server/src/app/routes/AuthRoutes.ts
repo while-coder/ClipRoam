@@ -30,8 +30,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   });
 }
 
-// Shared by every route that authenticates a Bearer header, including the
-// server-side sessionUser helper handed to the other route modules.
+// Shared by every place that authenticates a Bearer header, including the
+// server-wide `onRequest` hook that fills `request.sessionUser`.
 export function readBearerToken(header: string | undefined): string | undefined {
   const match = header?.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || undefined;

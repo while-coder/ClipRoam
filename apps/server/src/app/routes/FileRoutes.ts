@@ -1,32 +1,34 @@
 import { createReadStream } from "node:fs";
+import { PassThrough } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import {
-  DOWNLOAD_NOT_STORED_CODE,
   FILE_CHUNK_SIZE,
   FileIdSchema,
-  FileRequestCreateSchema,
   UploadBeginRequestSchema,
 } from "@cliproam/protocol";
-import type { FileDownloadService } from "../../files/FileDownloadService.js";
+import type { ServerMessage } from "@cliproam/protocol";
+import type { FileRelayService } from "../../files/FileRelayService.js";
 import { UploadHttpError, type UploadService } from "../../files/UploadService.js";
 import type { ClipRoamStore } from "../../storage/ClipRoamStore.js";
+import { requireSessionUser } from "./SessionUser.js";
 
 export type FileRouteDeps = {
-  sessionUser: (request: { headers: { authorization?: string } }) => { id: string } | undefined;
   uploads: Pick<UploadService, "begin" | "uploadPart">;
-  downloads: Pick<FileDownloadService, "request" | "pending" | "waitForRequests">;
+  relays: FileRelayService;
+  broadcast: (userId: string, message: ServerMessage) => void;
   store: Pick<ClipRoamStore, "files" | "canReadFile">;
 };
 
 // Content bytes never touch the WebSocket: uploads run as chunked PUTs against
-// a preallocated file plus a per-chunk ledger, and downloads stream straight
-// from the content pool as raw bytes.
+// a preallocated file plus a per-chunk ledger, downloads stream straight from
+// the content pool as raw bytes, and content the pool does not hold is piped
+// online from a device that has it — never landing on the server's disk.
 export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): void {
-  const { sessionUser, uploads, downloads, store } = deps;
+  const { uploads, relays, broadcast, store } = deps;
 
   app.post("/upload/begin", async (request, reply) => {
-    const user = sessionUser(request);
-    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
     const parsed = UploadBeginRequestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ message: "上传参数无效" });
     try {
@@ -37,8 +39,8 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   });
 
   app.put("/upload/:fileId", { bodyLimit: FILE_CHUNK_SIZE + 4096 }, async (request, reply) => {
-    const user = sessionUser(request);
-    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
     const { fileId } = request.params as { fileId: string };
     const index = Number((request.query as { index?: string }).index);
     const chunk = request.body;
@@ -54,14 +56,17 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     }
   });
 
-  // Downloads stream straight from the content pool as raw bytes and are
-  // side-effect free: content that is missing simply fails with
-  // `NOT_STORED`, and a client that wants the relay to kick in declares the
-  // demand via `POST /files/requests`. The entry scopes the permission
-  // check: a content id alone says nothing about who may read it.
+  // One GET for every download. Content the pool holds streams straight off
+  // disk; content it does not hold parks the requester: the response body
+  // becomes a live pipe, devices holding the bytes are told via
+  // `file.requested`, and the first one streams them through
+  // `PUT /files/relay/:sessionId`. Nothing is buffered — when the requester
+  // hangs up the pipe is destroyed and the sender's next PUT fails. The entry
+  // scopes the permission check: a content id alone says nothing about who
+  // may read it.
   app.get("/files/:entryId/:fileId", async (request, reply) => {
-    const user = sessionUser(request);
-    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
     const { entryId, fileId } = request.params as { entryId: string; fileId: string };
     if (!FileIdSchema.safeParse(fileId).success || !entryId) {
       return reply.code(400).send({ message: "下载参数无效" });
@@ -70,40 +75,63 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
       return reply.code(404).send({ message: "文件不存在或无权访问" });
     }
     const stored = store.files().get(fileId);
-    if (!stored) {
-      return reply.code(404).send({ code: DOWNLOAD_NOT_STORED_CODE, message: "文件尚未同步到服务器" });
+    if (stored) {
+      return reply.header("Content-Type", "application/octet-stream")
+        .header("Content-Length", String(stored.size))
+        .send(createReadStream(stored.path));
     }
-    return reply.header("Content-Type", "application/octet-stream")
-      .header("Content-Length", String(stored.size))
-      .send(createReadStream(stored.path));
+    const size = store.files().describe([fileId])[0]?.size ?? 0;
+    // Park the requester: the response body is a live pipe fed by whichever
+    // device streams the bytes into the session. The response is hijacked so
+    // the headers flush immediately and Fastify stays out of the byte path —
+    // this connection may stay open for minutes.
+    const stream = new PassThrough();
+    const session = relays.create(user.id, entryId, fileId, size, stream);
+    reply.hijack();
+    reply.raw.writeHead(200, { "Content-Type": "application/octet-stream" });
+    stream.pipe(reply.raw);
+    // The response's close (not the request's — an empty-body GET "closes" as
+    // soon as it is fully received) means the requester hung up.
+    reply.raw.on("close", () => relays.abandon(session.id));
+    broadcast(user.id, {
+      type: "file.requested",
+      sessionId: session.id,
+      fileId,
+      entryId,
+      size,
+    });
   });
 
-  // A client that got `NOT_STORED` posts here to declare its demand; serving
-  // devices long-poll the same URL to pick it up. Registration is the
-  // client's explicit choice, so the download route above stays pure.
-  app.post("/files/requests", { bodyLimit: 4 * 1024 }, async (request, reply) => {
-    const user = sessionUser(request);
-    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
-    const parsed = FileRequestCreateSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ message: "中转参数无效" });
-    if (!store.canReadFile(user.id, parsed.data.entryId, parsed.data.fileId)) {
-      return reply.code(404).send({ message: "文件不存在或无权访问" });
+
+  // One chunk of an online relay. The first PUT claims the session (a second
+  // sender gets 409), the requester's backpressure gates the response, and a
+  // 410 tells the sender the requester is gone. `?end=1` closes the pipe
+  // cleanly after the final chunk.
+  app.put("/files/relay/:sessionId", { bodyLimit: FILE_CHUNK_SIZE + 4096 }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const { sessionId } = request.params as { sessionId: string };
+    const chunk = request.body;
+    if (!sessionId || !Buffer.isBuffer(chunk)) {
+      return reply.code(400).send({ message: "中转参数无效" });
     }
-    downloads.request(user.id, parsed.data.fileId, parsed.data.entryId, parsed.data.size);
+    const session = relays.get(sessionId);
+    if (!session || session.stream.destroyed) {
+      return reply.code(410).send({ message: "中转会话已结束" });
+    }
+    if (session.userId !== user.id) {
+      return reply.code(404).send({ message: "中转会话不存在" });
+    }
+    if (!relays.claim(sessionId)) {
+      return reply.code(409).send({ message: "中转会话已被其他设备认领" });
+    }
+    if (!(await relays.push(sessionId, chunk))) {
+      return reply.code(410).send({ message: "请求端已断开" });
+    }
+    if ((request.query as { end?: string }).end === "1") {
+      relays.end(sessionId);
+    }
     return reply.code(204).send();
-  });
-
-  // Devices long-poll here for missing content they might hold. The list is
-  // the whole account's demand: whoever actually has the bytes pushes them
-  // through the upload routes, so no dedicated source device is needed.
-  app.get("/files/requests", async (request, reply) => {
-    const user = sessionUser(request);
-    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
-    const waitSeconds = clampWait((request.query as { wait?: string }).wait);
-    if (waitSeconds > 0 && downloads.pending(user.id).length === 0) {
-      await downloads.waitForRequests(user.id, waitSeconds * 1000);
-    }
-    return { requests: downloads.pending(user.id) };
   });
 }
 
@@ -112,12 +140,4 @@ function uploadError(reply: { code: (statusCode: number) => { send: (payload: un
     return reply.code(error.status).send({ message: error.message });
   }
   throw error;
-}
-
-// The client's long-poll wait in seconds, capped so a hung peer cannot pin a
-// server request forever.
-function clampWait(value: string | undefined): number {
-  const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
-  return Math.min(Math.floor(seconds), 30);
 }

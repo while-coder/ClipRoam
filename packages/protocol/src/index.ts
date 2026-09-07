@@ -11,7 +11,6 @@ export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 // real bound, not the request.
 export const ENTRY_QUERY_BATCH = 100;
 export const ENTRY_PAGE_DEFAULT_LIMIT = 100;
-export const ENTRY_PAGE_MAX_LIMIT = 200;
 
 export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
 
@@ -122,20 +121,29 @@ export const EntryQueryRequestSchema = z.object({
 // Ids the server does not know are simply absent, not an error.
 export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
-// Keyset pagination: `nextCursor` feeds straight back into the next request,
-// and null means the last page was reached.
-export const EntryListResponseSchema = z.object({
-  entries: z.array(ClipboardEntrySchema),
-  nextCursor: z.string().nullable(),
+// Offset pagination over entry identities: keyword filter on entry content, an
+// inclusive UTC date range, and a 1-based page. Page size is the server's choice.
+export const EntryManifestQuerySchema = z.object({
+  search: z.string().trim().min(1).max(100).optional(),
+  dateStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateStart 必须是 YYYY-MM-DD").optional(),
+  dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateEnd 必须是 YYYY-MM-DD").optional(),
+  page: z.coerce.number().int().min(1).max(100000).optional(),
 });
+
+// One page of the identity listing. It doubles as the connection-time
+// reconciliation snapshot: a client pages through with no filters until
+// hasMore turns false. Details arrive through POST /entries/query.
+export const EntryManifestResponseSchema = z.object({
+  manifest: z.array(ClipboardManifestEntrySchema),
+  // False means the caller just walked past the last row.
+  hasMore: z.boolean(),
+});
+
+export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema) });
 
 export const EntryActivateRequestSchema = z.object({ deviceId: DeviceIdSchema });
 
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
-
-// Opaque to clients: the server encodes the last entry of a page and expects
-// the same token back on the next request.
-export type EntryCursor = { createdAt: string; id: string };
 
 // The socket only authenticates the connection and carries server-push
 // notifications. Every request/response exchange — listing, querying,
@@ -151,11 +159,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("auth.ack"),
-    manifest: z.array(ClipboardManifestEntrySchema),
-    devices: z.array(DeviceSchema),
-  }),
+  // A bare confirmation: the manifest and device list it used to carry ride
+  // HTTP instead (see `EntryManifestResponseSchema`).
+  z.object({ type: z.literal("auth.ack") }),
   z.object({
     type: z.literal("clipboard.created"),
     entry: ClipboardEntrySchema,
@@ -178,6 +184,16 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("file.available"),
     fileId: FileIdSchema,
+  }),
+  // A device wants bytes the pool does not hold. The session's held GET is
+  // the demand itself: the first device that actually holds the content
+  // streams it through `PUT /files/relay/:sessionId`.
+  z.object({
+    type: z.literal("file.requested"),
+    sessionId: z.string().min(1),
+    fileId: FileIdSchema,
+    entryId: z.string(),
+    size: z.number().int().nonnegative(),
   }),
   z.object({ type: z.literal("pong") }),
   z.object({
@@ -225,31 +241,6 @@ export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
-// Body of a `GET /files/:entryId/:fileId` 404 reply when the content is not
-// on the server (yet). Any other 404 is a real refusal reported verbatim; a
-// client that receives this code simply retries while the demand is served.
-export const DOWNLOAD_NOT_STORED_CODE = "NOT_STORED";
-
-// Body of `POST /files/requests`: a client fetched content the pool does not
-// hold and explicitly declares the demand, so devices holding the bytes can
-// push them up through the upload routes.
-export const FileRequestCreateSchema = z.object({
-  entryId: z.string().min(1),
-  fileId: FileIdSchema,
-  size: z.number().int().nonnegative(),
-});
-
-// Body of a `GET /files/requests` long-poll: the account's outstanding download
-// demands. A device that holds the listed content pushes it up through the
-// upload routes; demands nobody serves simply expire on the server.
-export const FileRequestsResponseSchema = z.object({
-  requests: z.array(z.object({
-    fileId: FileIdSchema,
-    entryId: z.string(),
-    size: z.number().int().nonnegative(),
-  })),
-});
-
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
 export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
 export type ClipboardTree = z.infer<typeof ClipboardTreeSchema>;
@@ -263,14 +254,16 @@ export type EntryPublishRequest = z.infer<typeof EntryPublishRequestSchema>;
 export type EntryPublishResponse = z.infer<typeof EntryPublishResponseSchema>;
 export type EntryQueryRequest = z.infer<typeof EntryQueryRequestSchema>;
 export type EntryQueryResponse = z.infer<typeof EntryQueryResponseSchema>;
-export type EntryListResponse = z.infer<typeof EntryListResponseSchema>;
 export type EntryActivateResponse = z.infer<typeof EntryActivateResponseSchema>;
+export type EntryManifestQuery = z.infer<typeof EntryManifestQuerySchema>;
+export type EntryManifestResponse = z.infer<typeof EntryManifestResponseSchema>;
+export type DeviceListResponse = z.infer<typeof DeviceListResponseSchema>;
 export type EntryActivateRequest = z.infer<typeof EntryActivateRequestSchema>;
 export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
 export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
 export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
-export type FileRequest = z.infer<typeof FileRequestsResponseSchema>["requests"][number];
-export type FileRequestCreate = z.infer<typeof FileRequestCreateSchema>;
-export type FileRequestsResponse = z.infer<typeof FileRequestsResponseSchema>;
+// The demand message itself: the requester's held GET created a relay session
+// and the holder streams bytes into it via `PUT /files/relay/:sessionId`.
+export type FileRelayRequest = Extract<ServerMessage, { type: "file.requested" }>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

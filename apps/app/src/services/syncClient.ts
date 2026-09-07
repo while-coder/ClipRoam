@@ -1,15 +1,13 @@
 import {
   AuthResponseSchema,
   DEFAULT_AUTO_UPLOAD_LIMIT,
-  DOWNLOAD_NOT_STORED_CODE,
   ENTRY_QUERY_BATCH,
   FILE_CHUNK_SIZE,
   EntryActivateResponseSchema,
-  EntryListResponseSchema,
+  EntryManifestResponseSchema,
+  DeviceListResponseSchema,
   EntryPublishResponseSchema,
   EntryQueryResponseSchema,
-  FileRequestCreate,
-  FileRequestsResponseSchema,
   ServerMessageSchema,
   UploadBeginResponseSchema,
   UploadChunkResponseSchema,
@@ -20,10 +18,9 @@ import {
   type ClipboardManifestEntry,
   type Device,
   type EntryActivateRequest,
-  type EntryListResponse,
   type EntryPublishRequest,
   type EntryQueryRequest,
-  type FileRequest,
+  type FileRelayRequest,
   type UploadBeginRequest,
   type UploadBeginResponse,
   type UploadChunkResponse,
@@ -38,7 +35,6 @@ const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const DOWNLOAD_RETRY_MS = 3_000;
-const POLL_REQUESTS_TIMEOUT_MS = 35_000;
 const SERVE_RETRY_BACKOFF_MS = 60_000;
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
@@ -209,7 +205,6 @@ export class SyncClient {
     timer: number;
   }>();
   #downloadAborts = new Set<AbortController>();
-  #pollingRequests = false;
   #servingFiles = new Set<string>();
   #failedServes = new Map<string, number>();
   #entryUploads = new Map<string, Promise<void>>();
@@ -444,22 +439,36 @@ export class SyncClient {
     return parsed.data.entry;
   }
 
-  // Fetches a page of history snapshot-style. Only admin/debug tooling
-  // consumes pagination today; the client UI keeps its local full list.
-  async listEntries(cursor?: string, limit = 100): Promise<EntryListResponse> {
-    const query = new URLSearchParams();
-    if (cursor) query.set("cursor", cursor);
-    if (limit !== 100) query.set("limit", String(limit));
-    const suffix = query.toString() ? `?${query.toString()}` : "";
-    const response = await this.#httpFetch("GET", `/entries${suffix}`, {
+  // Pulls the reconciliation snapshot after the socket's bare `auth.ack`: the
+  // full identity manifest (paged, unfiltered) plus the account's devices.
+  // Details of missing entries follow through fetchEntries().
+  async #fetchConnectionState(): Promise<void> {
+    const manifest: ClipboardManifestEntry[] = [];
+    for (let page = 1; ; page++) {
+      const response = await this.#httpFetch("GET", `/entries/manifest?page=${page}`, {
+        signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
+      });
+      if (response.status === 401) throw new Error("登录已失效，请重新登录");
+      const body = await response.json().catch(() => undefined) as unknown;
+      if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+      const parsed = EntryManifestResponseSchema.safeParse(body);
+      if (!parsed.success) throw new Error("服务器返回了不兼容的连接状态响应");
+      manifest.push(...parsed.data.manifest);
+      if (!parsed.data.hasMore) break;
+    }
+    this.handlers.onManifest(manifest, await this.#fetchDevices());
+  }
+
+  async #fetchDevices(): Promise<Device[]> {
+    const response = await this.#httpFetch("GET", "/devices", {
       signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
     });
     if (response.status === 401) throw new Error("登录已失效，请重新登录");
     const body = await response.json().catch(() => undefined) as unknown;
     if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
-    const parsed = EntryListResponseSchema.safeParse(body);
-    if (!parsed.success) throw new Error("服务器返回了不兼容的列表响应");
-    return parsed.data;
+    const parsed = DeviceListResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的设备列表响应");
+    return parsed.data.devices;
   }
 
   async #fetchEntryBatch(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
@@ -529,9 +538,11 @@ export class SyncClient {
     }
   }
 
-  // Downloads pull raw bytes over HTTP. A 404 `NOT_STORED` means the content
-  // has not landed yet: declare the demand once, then keep retrying while a
-  // device holding the bytes pushes them up through the upload routes.
+  // Downloads pull raw bytes over one HTTP GET: the server streams stored
+  // bytes straight off the pool, and content it does not hold parks the
+  // request on a live relay pipe that a device holding the bytes fills through
+  // `PUT /files/relay/:sessionId`. A pipe that breaks (or its session expires)
+  // simply falls back to the next retry — until the deadline.
   async #fetchStoredFile(
     transferId: string,
     entryId: string,
@@ -539,62 +550,58 @@ export class SyncClient {
     abort: AbortController,
   ): Promise<void> {
     const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
-    let declared = false;
+    let offset = 0;
     for (;;) {
-      const response = await this.#httpFetch(
-        "GET",
-        `/files/${entryId}/${file.fileId}`,
-        { signal: abort.signal },
-      );
-      if (response.status === 401) throw new Error("登录已失效，请重新登录");
-      if (response.status === 404) {
-        // NOT_STORED just means the content has not landed yet — declare the
-        // demand once, then retry. Any other 404 (no access, bad parameters)
-        // is a real refusal.
-        const body = await response.json().catch(() => undefined) as unknown;
-        if ((body as { code?: unknown } | null | undefined)?.code !== DOWNLOAD_NOT_STORED_CODE) {
-          throw new Error(this.#uploadErrorMessage(body, response.status));
-        }
-        if (!declared) {
-          declared = true;
-          await this.#declareRequest(entryId, file).catch(() => undefined);
-        }
-        if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
+      if (offset >= file.size) {
+        await invoke("finish_file_download", { transferId });
+        return;
+      }
+      if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
+      try {
+        offset = await this.#pullOnce(transferId, entryId, file, offset, abort);
+      } catch (error) {
+        if (abort.signal.aborted) throw error;
+        // Broken pipe, expired session, network hiccup: back off and retry.
         await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
-        continue;
       }
-      // Error bodies are JSON; the success body is the file itself, so it must
-      // stay unread until the streaming loop below.
-      if (!response.ok) {
-        const body = await response.json().catch(() => undefined) as unknown;
-        throw new Error(this.#uploadErrorMessage(body, response.status));
-      }
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("服务器未返回文件内容");
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        await invoke("append_file_download", { transferId, data: bytesToBase64(value) });
-      }
-      await invoke("finish_file_download", { transferId });
-      return;
     }
   }
 
-  // The download route fails without side effects, so a client that wants the
-  // relay declares its demand here; serving devices long-poll the same list.
-  async #declareRequest(entryId: string, file: ClipboardFile): Promise<void> {
-    const response = await this.#httpFetch("POST", "/files/requests", {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        { entryId, fileId: file.fileId, size: file.size } satisfies FileRequestCreate,
-      ),
-    });
+  // One pull attempt: the single download GET either streams stored bytes or
+  // parks on the relay pipe until a holder fills it. Returns the offset the
+  // transfer has advanced to; completion is the caller's check.
+  async #pullOnce(
+    transferId: string,
+    entryId: string,
+    file: ClipboardFile,
+    offset: number,
+    abort: AbortController,
+  ): Promise<number> {
+    const response = await this.#httpFetch(
+      "GET",
+      `/files/${entryId}/${file.fileId}`,
+      { signal: abort.signal },
+    );
     if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    // Error bodies are JSON; the success body is the file itself, so it must
+    // stay unread until the streaming loop below.
     if (!response.ok) {
       const body = await response.json().catch(() => undefined) as unknown;
       throw new Error(this.#uploadErrorMessage(body, response.status));
     }
+    return this.#drainIntoTransfer(transferId, response, offset);
+  }
+
+  async #drainIntoTransfer(transferId: string, response: Response, offset: number): Promise<number> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("服务器未返回文件内容");
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await invoke("append_file_download", { transferId, data: bytesToBase64(value) });
+      offset += value.byteLength;
+    }
+    return offset;
   }
 
   // A 404 is not a failure: another device may have deleted the entry first,
@@ -649,7 +656,6 @@ export class SyncClient {
       waiter.resolve();
     }
     this.#connectionWaiters.clear();
-    this.#startRequestPolling();
   }
 
   async #uploadFile(
@@ -794,64 +800,17 @@ export class SyncClient {
       : `服务器返回错误 ${status}`;
   }
 
-  #startRequestPolling(): void {
-    if (this.#pollingRequests) return;
-    this.#pollingRequests = true;
-    void this.#pollRequestsLoop();
-  }
-
-  // This device may hold content other devices are waiting for. The loop is
-  // plain HTTP: one long-poll that returns the account's outstanding download
-  // demands, served by pushing the bytes through the regular upload routes.
-  // It rides the connection state but never the socket itself.
-  async #pollRequestsLoop(): Promise<void> {
-    while (!this.#stopped && this.#connected) {
-      try {
-        const response = await this.#httpFetch("GET", "/files/requests?wait=25", {
-          signal: AbortSignal.timeout(POLL_REQUESTS_TIMEOUT_MS),
-        });
-        if (response.status === 401) {
-          this.#pollingRequests = false;
-          this.handlers.onAuthenticationFailed("登录已失效，请重新登录");
-          return;
-        }
-        const body = await response.json().catch(() => undefined) as unknown;
-        if (!response.ok) {
-          await this.#pausePolling(5_000);
-          continue;
-        }
-        const parsed = FileRequestsResponseSchema.safeParse(body);
-        if (!parsed.success) {
-          await this.#pausePolling(5_000);
-          continue;
-        }
-        for (const request of parsed.data.requests) {
-          await this.#servePullRequest(request);
-        }
-      } catch {
-        // Network-level failure: the socket's reconnect loop owns the
-        // connection state, so just back off and re-check it.
-        if (!this.#stopped && this.#connected) await this.#pausePolling(2_000);
-      }
-    }
-    this.#pollingRequests = false;
-  }
-
-  async #pausePolling(ms: number): Promise<void> {
-    await new Promise((resolve) => window.setTimeout(resolve, ms));
-  }
-
-  // Serving a demand is just an upload — same routes, ledger and hash checks
-  // as any other push. Devices without the bytes stay quiet and let the demand
-  // expire; a short backoff keeps one unfillable demand from being probed on
-  // every poll.
-  async #servePullRequest(request: FileRequest): Promise<void> {
-    if (this.#servingFiles.has(request.fileId)) return;
+  // This device may hold the content a `file.requested` push is asking for.
+  // Serving it is a loop of local reads streamed as chunked PUTs into the
+  // requester's parked relay pipe. Devices without the bytes stay quiet; the
+  // sender's own failure backoff is keyed by content so a file we cannot
+  // provide is not re-probed per session.
+  async #serveRelayRequest(request: FileRelayRequest): Promise<void> {
+    if (this.#servingFiles.has(request.sessionId)) return;
     const failedAt = this.#failedServes.get(request.fileId);
     if (failedAt !== undefined && Date.now() - failedAt < SERVE_RETRY_BACKOFF_MS) return;
-    // Probing the first byte first: a `begin` from a device that cannot
-    // actually provide the content would discard a live upload ledger another
-    // device may be filling for the same bytes.
+    // Probing the first byte first: a device that cannot actually provide the
+    // content stays quiet instead of poisoning the session for another holder.
     if (request.size > 0) {
       const probe = await invoke<string>("read_file_chunk", {
         entryId: request.entryId,
@@ -864,18 +823,43 @@ export class SyncClient {
         return;
       }
     }
-    this.#servingFiles.add(request.fileId);
+    this.#servingFiles.add(request.sessionId);
     try {
-      await this.#uploadContent(request.entryId, {
-        fileId: request.fileId,
-        size: request.size,
-        available: true,
-      }, () => undefined);
-      this.#failedServes.delete(request.fileId);
+      let offset = 0;
+      for (;;) {
+        const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
+        const data = await invoke<string>("read_file_chunk", {
+          entryId: request.entryId,
+          fileId: request.fileId,
+          offset,
+          length,
+        });
+        if (!data) throw new Error("本机文件内容不可用");
+        const bytes = base64ToBytes(data);
+        const last = offset + bytes.byteLength >= request.size;
+        const put = await this.#httpFetch(
+          "PUT",
+          `/files/relay/${request.sessionId}${last ? "?end=1" : ""}`,
+          {
+            headers: { "Content-Type": "application/octet-stream" },
+            body: bytes,
+            signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
+          },
+        );
+        // 410: the requester hung up or the session expired — nothing to serve.
+        if (put.status === 410 || put.status === 409) return;
+        if (put.status === 401) throw new Error("登录已失效，请重新登录");
+        if (!put.ok) {
+          const body = await put.json().catch(() => undefined) as unknown;
+          throw new Error(this.#uploadErrorMessage(body, put.status));
+        }
+        offset += bytes.byteLength;
+        if (last) return;
+      }
     } catch {
       this.#rememberFailedServe(request.fileId);
     } finally {
-      this.#servingFiles.delete(request.fileId);
+      this.#servingFiles.delete(request.sessionId);
     }
   }
 
@@ -897,10 +881,19 @@ export class SyncClient {
       case "file.available":
         this.handlers.onFileAvailable(message.fileId);
         return;
+      case "file.requested":
+        // Fire-and-forget: serving streams a whole file and must not block
+        // the socket's message pump.
+        void this.#serveRelayRequest(message).catch(() => undefined);
+        return;
       case "auth.ack":
         this.#markConnected();
         this.handlers.onConnected(true);
-        this.handlers.onManifest(message.manifest, message.devices);
+        // The socket only confirms the session; the manifest and device list
+        // ride HTTP. A reconnect re-acks and so re-runs this fetch.
+        void this.#fetchConnectionState().catch((error: unknown) => {
+          this.handlers.onError(`获取同步历史失败：${error instanceof Error ? error.message : String(error)}`);
+        });
         return;
       case "clipboard.created":
         this.handlers.onEntry(message.entry);
