@@ -37,8 +37,8 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use content::{
     collect_tree, describe_roots, download_path, file_entry_signature, file_signature,
     hash_bytes, hash_file, local_source_was_lost, preserve_local_sources, readable_path,
-    rebuild_tree, tree_node_at_path, tree_contents, upload_image_path,
-    ClipboardEntry, FileInfo, ImageInfo, LocalSources,
+    rebuild_tree, tree_contents, tree_parent_at_path, upload_image_path,
+    ClipboardEntry, FileInfo, ImageInfo, LocalSources, TreeNode,
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
@@ -399,10 +399,11 @@ fn image_signature(image: &[u8]) -> String {
     format!("{prefix}:{hash:016x}")
 }
 
-/// Entry identity is owned by the capturing device. The NUL separator keeps
-/// the two variable-length inputs unambiguous while preserving the requested
-/// `sha256(content + deviceId)` identity model.
-fn entry_id(content: &str, device_id: &str) -> String {
+/// Local, pre-publish entry identity. The server assigns the real id when the
+/// entry is first published and dedupes by content, so this value only has to
+/// stay stable until `apply_published_entry` swaps it out. The NUL separator
+/// keeps the two variable-length inputs unambiguous.
+fn entry_id_for(content: &str, device_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hasher.update([0]);
@@ -422,19 +423,18 @@ fn entry_id_for_file_info(file_info: &FileInfo, device_id: &str, fallback: &str)
     } else {
         file_ids.join("\n")
     };
-    entry_id(&identity, device_id)
+    entry_id_for(&identity, device_id)
 }
 
 fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
     ClipboardEntry {
-        id: entry_id(&content, &device_id),
+        id: entry_id_for(&content, &device_id),
         kind: kind.to_string(),
         content,
         html: None,
         rtf: None,
         file_info: None,
         image_info: None,
-        missing: None,
         source_device_id: device_id,
         created_at: Utc::now().to_rfc3339(),
         pinned: false,
@@ -582,13 +582,12 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         history.last_file_signature.clear();
 
         let device_id = history.device_id.clone();
-        let name = format!("{}.webp", &file_id[..16]);
         let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id.clone());
-        entry.id = entry_id(&file_id, &device_id);
+        entry.id = entry_id_for(&file_id, &device_id);
         entry.image_info = Some(ImageInfo {
             file_id,
             size: webp.len() as u64,
-            thumbnail,
+            thumbnail: thumbnail.unwrap_or_default(),
         });
         let entry_id = entry.id.clone();
         let entries = history.active_entries_mut();
@@ -849,6 +848,10 @@ fn apply_hashes(
         .active_entries()
         .iter()
         .position(|entry| entry.id == entry_id);
+    let hashes = resolved
+        .iter()
+        .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
+        .collect::<HashMap<_, _>>();
     let final_entry_id = {
         let Some(entry) = history.find_mut(entry_id) else {
             return Ok(None);
@@ -872,24 +875,18 @@ fn apply_hashes(
                 }
             }
         }
-        entry.sources.files.retain_mut(|source| {
-            match resolved
-                .iter()
-                .find(|(path, _)| path == &source.path)
-                .and_then(|(_, file_id)| file_id.as_deref())
-            {
-                Some(file_id) => {
-                    source.file_id = Some(file_id.to_string());
-                    true
-                }
-                // Only paths this batch resolved disappear; unknown paths stay.
-                None => !resolved.iter().any(|(path, _)| path == &source.path),
+        entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
+            Some(Some(file_id)) => {
+                source.file_id = Some((*file_id).to_string());
+                true
             }
+            Some(None) => false,
+            None => true,
         });
         if persist {
             entry.id = match entry.file_info.as_ref() {
                 Some(file_info) => entry_id_for_file_info(file_info, &device_id, &entry.content),
-                None => entry_id(&entry.content, &device_id),
+                None => entry_id_for(&entry.content, &device_id),
             };
         }
         entry.id.clone()
@@ -1047,13 +1044,46 @@ fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEn
         .ok_or_else(|| "剪贴板记录不存在".to_string())
 }
 
+/// Every content an entry references, whichever kind carries it.
+fn entry_contents_of(entry: &ClipboardEntry) -> Vec<(String, u64)> {
+    match (&entry.file_info, &entry.image_info) {
+        (Some(file_info), _) => tree_contents(file_info),
+        (None, Some(image)) => vec![(image.file_id.clone(), image.size)],
+        (None, None) => Vec::new(),
+    }
+}
+
+fn entry_references(entry: &ClipboardEntry, file_id: &str) -> bool {
+    entry_contents_of(entry)
+        .into_iter()
+        .any(|(id, _)| id == file_id)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EntryFileCandidate {
+    file_id: String,
+    size: u64,
+    uploaded: bool,
+}
+
 #[tauri::command(rename_all = "camelCase")]
-fn list_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<ClipboardFile>, String> {
+fn list_entry_files(
+    state: State<'_, AppState>,
+    entry_id: String,
+) -> Result<Vec<EntryFileCandidate>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    history
+    let entry = history
         .find(&entry_id)
-        .map(|entry| entry.files.clone())
-        .ok_or_else(|| "剪贴板记录不存在".to_string())
+        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+    Ok(entry_contents_of(entry)
+        .into_iter()
+        .map(|(file_id, size)| EntryFileCandidate {
+            uploaded: history.uploaded_files.contains(&file_id),
+            file_id,
+            size,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1157,11 +1187,20 @@ fn upsert_remote_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     mut entry: ClipboardEntry,
+    available_file_ids: Vec<String>,
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        // The caller pre-queried which contents the server's pool holds
+        // (POST /files/query). Those need no re-upload from this device, and
+        // the availability row makes the state survive a restart.
+        let available: Vec<String> = entry_contents_of(&entry)
+            .into_iter()
+            .map(|(file_id, _)| file_id)
+            .filter(|file_id| available_file_ids.contains(file_id))
+            .collect();
         let entries = history.active_entries_mut();
         if let Some(local) = entries.iter().find(|item| item.id == entry.id) {
             preserve_local_sources(&mut entry, local);
@@ -1178,6 +1217,7 @@ fn upsert_remote_entry(
         if let Some(entry) = history.find(&entry_id) {
             let connection = open_history_database(&history_path)?;
             write_entry_data(&connection, entry)?;
+            store::mark_files_uploaded(&connection, &available);
         }
     }
     app.emit("cliproam://history-changed", ())
@@ -1191,6 +1231,7 @@ fn upsert_remote_entries(
     app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<ClipboardEntry>,
+    available_file_ids: Vec<String>,
 ) -> Result<(), String> {
     if entries.is_empty() {
         return Ok(());
@@ -1200,6 +1241,16 @@ fn upsert_remote_entries(
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let mut upserted_ids = Vec::with_capacity(entries.len());
+        // The caller pre-queried which contents the server's pool holds
+        // (POST /files/query). Those need no re-upload from this device, and
+        // the availability rows make the state survive a restart.
+        let available: HashSet<String> = entries
+            .iter()
+            .flat_map(entry_contents_of)
+            .map(|(file_id, _)| file_id)
+            .filter(|file_id| available_file_ids.contains(file_id))
+            .collect();
+        history.uploaded_files.extend(available.iter().cloned());
         {
             let slot = history.active_entries_mut();
             for mut entry in entries {
@@ -1226,9 +1277,61 @@ fn upsert_remote_entries(
                 write_entry_data(&connection, entry)?;
             }
         }
+        let available_vec = available.into_iter().collect::<Vec<_>>();
+        store::mark_files_uploaded(&connection, &available_vec);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
+}
+
+/// Adopts the server's record for a locally captured entry: the local
+/// content-hash id is swapped for the server-assigned one so local history,
+/// the pending sets and every entryId command share the server's key space.
+/// Returns false when the entry was deleted locally while the publish was in
+/// flight — the caller must then delete the server row itself.
+#[tauri::command(rename_all = "camelCase")]
+fn apply_published_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    local_entry_id: String,
+    mut entry: ClipboardEntry,
+) -> Result<bool, String> {
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        if history.pending_deletions.remove(&local_entry_id) {
+            save_active_history(&state, &history)?;
+            return Ok(false);
+        }
+        let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        if let Some(local) = history.find(&local_entry_id) {
+            preserve_local_sources(&mut entry, local);
+        }
+        // The WS echo may have inserted the server id before the publish
+        // response arrived; drop both keys so only one row survives.
+        let entries = history.active_entries_mut();
+        entries.retain(|item| item.id != local_entry_id && item.id != entry.id);
+        let entry_id = entry.id.clone();
+        entries.push(entry);
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        trim_history(entries);
+        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
+        // A pending pin/unpin recorded under the local key moves to the
+        // server key so the next replay publishes the right entry.
+        if history.pending_entry_updates.remove(&local_entry_id) {
+            history.pending_entry_updates.insert(entry_id.clone());
+        }
+        // The id changed, so the save's INSERT OR IGNORE writes a fresh row
+        // and the mark-sweep deletes the old one.
+        save_active_history(&state, &history)?;
+        if let Some(entry) = history.find(&entry_id) {
+            let connection = open_history_database(&history_path)?;
+            write_entry_data(&connection, entry)?;
+        }
+    }
+    app.emit("cliproam://history-changed", ())
+        .map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1242,19 +1345,10 @@ fn mark_files_uploaded(
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let uploaded = file_ids.into_iter().collect::<HashSet<_>>();
-        {
-            let Some(entry) = history.find_mut(&entry_id) else {
-                return Ok(());
-            };
-            for file in entry.files.iter_mut() {
-                if uploaded.contains(&file.file_id) {
-                    file.available = true;
-                }
-            }
-            let connection = open_history_database(&history_path)?;
-            write_entry_data(&connection, entry)?;
-        }
+        let uploaded = file_ids.into_iter().collect::<Vec<_>>();
+        history.uploaded_files.extend(uploaded.iter().cloned());
+        let connection = open_history_database(&history_path)?;
+        store::mark_files_uploaded(&connection, &uploaded);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
     }
     app.emit("cliproam://history-changed", ())
@@ -1274,35 +1368,20 @@ fn mark_file_available(
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let changed_ids = {
-            let entries = history.active_entries_mut();
-            entries
-                .iter_mut()
-                .filter_map(|entry| {
-                    let mut changed = false;
-                    for file in entry.files.iter_mut() {
-                        if file.file_id == file_id && !file.available {
-                            file.available = true;
-                            changed = true;
-                        }
-                    }
-                    changed.then(|| entry.id.clone())
-                })
-                .collect::<HashSet<_>>()
-        };
-        if changed_ids.is_empty() {
+        if history.uploaded_files.contains(&file_id) {
             return Ok(());
         }
-        let changed_entries = history
+        let changed_ids = history
             .active_entries()
             .iter()
-            .filter(|entry| changed_ids.contains(&entry.id))
-            .cloned()
+            .filter(|entry| entry_references(entry, &file_id))
+            .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
+        history.uploaded_files.insert(file_id.clone());
         let connection = open_history_database(&history_path)?;
-        for entry in &changed_entries {
-            write_entry_data(&connection, entry)?;
-            refresh_entry_summary(&mut history, &entry.id, &cache_dir);
+        store::mark_files_uploaded(&connection, &[file_id]);
+        for entry_id in &changed_ids {
+            refresh_entry_summary(&mut history, entry_id, &cache_dir);
         }
     }
     app.emit("cliproam://history-changed", ())
@@ -1947,14 +2026,12 @@ impl EntrySnapshot {
 }
 
 fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
-    snapshot
-        .entry
-        .files
-        .iter()
-        .filter(|file| snapshot.resolve(&file.file_id).is_none())
-        .map(|file| MissingFile {
-            file_id: file.file_id.clone(),
-            size: file.size,
+    entry_contents_of(&snapshot.entry)
+        .into_iter()
+        .filter(|(file_id, _)| snapshot.resolve(file_id).is_none())
+        .map(|(file_id, size)| MissingFile {
+            file_id,
+            size,
             source_device_id: snapshot.entry.source_device_id.clone(),
         })
         .collect()
@@ -2245,19 +2322,21 @@ fn prepare_save_entry(
     entry_id: String,
 ) -> Result<Option<SavePreparation>, String> {
     let snapshot = snapshot_entry(&state, &entry_id)?;
-    let tree = snapshot
+    let file_info = snapshot
         .entry
-        .tree
+        .file_info
         .as_ref()
         .ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
-    if tree.roots.is_empty() {
+    if file_info.is_empty() {
         return Err("该记录不包含可另存的文件".to_string());
     }
 
-    let single_file = tree.roots.len() == 1 && tree.roots[0].kind == "file";
+    let single_file = file_info.len() == 1
+        && matches!(file_info.values().next(), Some(TreeNode::File { .. }));
     let destination = if single_file {
+        let name = file_info.keys().next().expect("count is one");
         let Some(destination) = rfd::FileDialog::new()
-            .set_file_name(&tree.roots[0].name)
+            .set_file_name(name)
             .save_file()
         else {
             return Ok(None);
@@ -2357,32 +2436,38 @@ fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usiz
             return Err("另存为所需文件尚未下载完成".to_string());
         }
         let snapshot = snapshot_entry(&state, &session.entry_id)?;
-        let tree = snapshot
+        let file_info = snapshot
             .entry
-            .tree
+            .file_info
             .as_ref()
             .ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
 
         let mut resolved = HashMap::<String, PathBuf>::new();
-        for node in &tree.files {
-            if resolved.contains_key(&node.f) {
+        for (file_id, _) in tree_contents(file_info) {
+            if resolved.contains_key(&file_id) {
                 continue;
             }
-            if session.downloaded.contains(&node.f) {
-                resolved.insert(node.f.clone(), session.staging_dir.join(&node.f));
+            if session.downloaded.contains(&file_id) {
+                resolved.insert(file_id.clone(), session.staging_dir.join(&file_id));
             } else {
                 let source = snapshot
-                    .resolve(&node.f)
-                    .ok_or_else(|| format!("文件内容不可用：{}", node.p))?;
-                resolved.insert(node.f.clone(), source);
+                    .resolve(&file_id)
+                    .ok_or_else(|| format!("文件内容不可用：{file_id}"))?;
+                resolved.insert(file_id.clone(), source);
             }
         }
 
         if session.single_file {
-            let node = tree.files.first().ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+            let (name, node) = file_info
+                .iter()
+                .next()
+                .ok_or_else(|| "该记录不包含可另存的文件".to_string())?;
+            let TreeNode::File { f, .. } = node else {
+                return Err("该记录不包含可另存的文件".to_string());
+            };
             let source = resolved
-                .get(&node.f)
-                .ok_or_else(|| format!("文件内容不可用：{}", tree.roots[0].name))?;
+                .get(f)
+                .ok_or_else(|| format!("文件内容不可用：{name}"))?;
             if fs::canonicalize(source).ok() == fs::canonicalize(&session.destination).ok() {
                 return Ok(0);
             }
@@ -2391,7 +2476,7 @@ fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usiz
         } else {
             // Real copies: the user owns the destination, and a hard link would
             // let a later edit reach back into the source or cache.
-            rebuild_tree(&session.destination, tree, &|file_id| resolved.get(file_id).cloned(), false)
+            rebuild_tree(&session.destination, file_info, &|file_id| resolved.get(file_id).cloned(), false)
         }
     })();
     let _ = fs::remove_dir_all(&session.staging_dir);
@@ -2413,9 +2498,9 @@ fn activate_remote_entry(
         "image" => {
             let file_id = snapshot
                 .entry
-                .files
-                .first()
-                .map(|file| file.file_id.clone())
+                .image_info
+                .as_ref()
+                .map(|image| image.file_id.clone())
                 .ok_or_else(|| "图片内容不可用".to_string())?;
             let path = snapshot
                 .resolve(&file_id)
@@ -2468,16 +2553,16 @@ fn apply_clipboard_entry(
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let payload = match snapshot.entry.kind.as_str() {
         "files" => {
-            let tree = snapshot
+            let file_info = snapshot
                 .entry
-                .tree
+                .file_info
                 .as_ref()
                 .ok_or_else(|| "该记录不包含文件".to_string())?;
             let roots = &snapshot.entry.sources.roots;
             // Copying and pasting on the same machine should not duplicate a
             // single byte, so the original paths are reused when still intact.
             let intact = !roots.is_empty()
-                && roots.len() == tree.roots.len()
+                && roots.len() == file_info.len()
                 && roots.iter().all(|path| Path::new(path).exists());
             if intact {
                 ClipboardPayload::Files(roots.clone())
@@ -2497,11 +2582,10 @@ fn apply_clipboard_entry(
                             .join("views")
                             .join(safe_file_name(&snapshot.entry.id));
                         let _ = fs::remove_dir_all(&view);
-                        rebuild_tree(&view, tree, &|file_id| snapshot.resolve(file_id), true)?;
-                        let paths = tree
-                            .roots
-                            .iter()
-                            .map(|root| view.join(&root.name).display().to_string())
+                        rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), true)?;
+                        let paths = file_info
+                            .keys()
+                            .map(|root| view.join(root).display().to_string())
                             .collect();
                         ClipboardPayload::Files(paths)
                     }
@@ -2511,9 +2595,9 @@ fn apply_clipboard_entry(
         "image" => {
             let file_id = snapshot
                 .entry
-                .files
-                .first()
-                .map(|file| file.file_id.clone())
+                .image_info
+                .as_ref()
+                .map(|image| image.file_id.clone())
                 .ok_or_else(|| "图片内容不可用".to_string())?;
             let path = snapshot
                 .resolve(&file_id)
@@ -2763,6 +2847,7 @@ pub fn run() {
             save_sync_config,
             upsert_remote_entry,
             upsert_remote_entries,
+            apply_published_entry,
             mark_files_uploaded,
             mark_file_available,
             set_pinned,
@@ -2849,9 +2934,9 @@ mod tests {
 
     #[test]
     fn entry_id_is_stable_per_content_and_device() {
-        assert_eq!(entry_id("same", "device"), entry_id("same", "device"));
-        assert_ne!(entry_id("same", "device"), entry_id("other", "device"));
-        assert_ne!(entry_id("same", "device"), entry_id("same", "other-device"));
+        assert_eq!(entry_id_for("same", "device"), entry_id_for("same", "device"));
+        assert_ne!(entry_id_for("same", "device"), entry_id_for("other", "device"));
+        assert_ne!(entry_id_for("same", "device"), entry_id_for("same", "other-device"));
     }
 
     #[test]
@@ -2886,23 +2971,22 @@ mod tests {
 
     #[test]
     fn file_entry_id_is_order_independent_and_deduplicated() {
-        let first = ClipboardFile {
-            file_id: hash_bytes(b"first"),
-            size: 1,
-            available: false,
-        };
-        let second = ClipboardFile {
-            file_id: hash_bytes(b"second"),
-            size: 2,
-            available: false,
-        };
+        let first_id = hash_bytes(b"first");
+        let second_id = hash_bytes(b"second");
+        let mut forward = FileInfo::new();
+        forward.insert("a.txt".to_string(), TreeNode::File { f: first_id.clone(), s: 1 });
+        forward.insert("b.txt".to_string(), TreeNode::File { f: second_id.clone(), s: 2 });
+        let mut backward = FileInfo::new();
+        backward.insert("b.txt".to_string(), TreeNode::File { f: second_id.clone(), s: 2 });
+        backward.insert("a.txt".to_string(), TreeNode::File { f: first_id.clone(), s: 1 });
         assert_eq!(
-            entry_id_for_files(
-                &[first.clone(), second.clone(), first.clone()],
-                "device",
-                "fallback",
-            ),
-            entry_id_for_files(&[second, first], "device", "fallback"),
+            entry_id_for_file_info(&forward, "device", "fallback"),
+            entry_id_for_file_info(&backward, "device", "fallback"),
+        );
+        // Nothing hashed yet falls back to the plain content identity.
+        assert_eq!(
+            entry_id_for_file_info(&FileInfo::new(), "device", "bundle"),
+            entry_id_for("bundle", "device"),
         );
     }
 

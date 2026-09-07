@@ -228,7 +228,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                 rtf: extra.rtf,
                 file_info: extra.file_info,
                 image_info: extra.image_info,
-                missing: None,
                 source_device_id: row.get("source_device_id")?,
                 created_at: row.get("created_at")?,
                 pinned: row.get::<_, i64>("pinned")? != 0,
@@ -654,7 +653,6 @@ mod tests {
             // Hashing has not run yet, so the content id is still empty.
             file_info: Some(tree("")),
             image_info: None,
-            missing: None,
             source_device_id: "device".to_string(),
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
             pinned: false,
@@ -681,11 +679,14 @@ mod tests {
         assert!(entry.pinned);
         assert_eq!(entry.html.as_deref(), Some("<b>bundle</b>"));
         assert_eq!(entry.rtf.as_deref(), Some("{\\rtf1 bundle}"));
-        let crate::content::TreeNode::File { f, .. } = &entry.file_info.as_ref().expect("file info")["bundle"]
+        let crate::content::TreeNode::Dir(bundle) = &entry.file_info.as_ref().expect("file info")["bundle"]
         else {
-            panic!("expected a file node under bundle/a.txt");
+            panic!("bundle should be a directory");
         };
-        assert_eq!(f, hashed);
+        let crate::content::TreeNode::File { f, .. } = &bundle["a.txt"] else {
+            panic!("a.txt should be a file");
+        };
+        assert_eq!(f, &hashed);
     }
 
     #[test]

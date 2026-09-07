@@ -4,6 +4,7 @@ import type {
   Device,
   EntryManifestQuery,
   EntryManifestResponse,
+  EntryPublishInput,
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
 import { FileStore } from "../files/FileStore.js";
@@ -61,7 +62,7 @@ export class ClipRoamStore {
   }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
-  upsert(userId: string, entry: ClipboardEntry): ClipboardEntry {
+  upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
     return this.#userStore(userId).upsert(entry);
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
@@ -74,7 +75,7 @@ export class ClipRoamStore {
     for (const userId of this.#accounts.listUserIds()) {
       for (const fileId of this.#userStore(userId).referencedFileIds()) referenced.add(fileId);
     }
-    return this.#files.sweep(referenced, partialTtlMs);
+    return this.#files.reclaimUnreferenced(referenced, partialTtlMs);
   }
   close(): void {
     clearInterval(this.#sweepTimer);

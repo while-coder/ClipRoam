@@ -10,6 +10,7 @@ import type {
   ClipboardManifestEntry,
   Device,
 } from "@cliproam/protocol";
+import { entryContents } from "@cliproam/protocol";
 import {
   ArrowLeft,
   Check,
@@ -268,8 +269,6 @@ const demoEntries: LocalClipboardEntry[] = [
     id: "welcome",
     kind: "text",
     content: "ClipRoam 已准备好。复制一段文字，它会自动出现在这里。",
-    tree: undefined,
-    files: [],
     sourceDeviceId: "browser",
     createdAt: new Date().toISOString(),
     pinned: true,
@@ -457,6 +456,26 @@ function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
   return remoteUpsertFlush;
 }
 
+/**
+ * Which of a batch's contents the server's pool holds. This replaces the
+ * per-entry `missing` list the protocol dropped: one query per upsert batch,
+ * and a failure degrades to "nothing is uploaded" — re-beginning an upload of
+ * content the server actually has costs one cheap `stored` answer.
+ */
+async function serverAvailableFileIds(batch: ClipboardEntry[]): Promise<string[]> {
+  const client = syncClient;
+  if (!client) return [];
+  const fileIds = [...new Set(batch.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId)))];
+  if (!fileIds.length) return [];
+  try {
+    const statuses = await client.fetchFileStatuses(fileIds);
+    return statuses.filter((file) => file.stored).map((file) => file.fileId);
+  } catch (error) {
+    showFeedback(`查询服务器文件状态失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    return [];
+  }
+}
+
 async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
   for (const entry of batch) markEntrySynced(entry);
   if (!runningInTauri) {
@@ -469,7 +488,8 @@ async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
     return;
   }
   try {
-    await invoke("upsert_remote_entries", { entries: batch });
+    const availableFileIds = await serverAvailableFileIds(batch);
+    await invoke("upsert_remote_entries", { entries: batch, availableFileIds });
   } catch (error) {
     showFeedback(`写入同步记录失败：${error instanceof Error ? error.message : String(error)}`, "error");
     return;
@@ -477,8 +497,24 @@ async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
   scheduleRefreshEntries();
 }
 
-function rememberDevices(devices: Device[]): void {
-  devicesById.value = {
+/**
+ * A publish response carries the server's identity: its id and timestamp
+ * replace the local content-hash id so every later operation keys on the
+ * server's space. Returns false when the entry was deleted locally while the
+ * publish was in flight — the just-created server row must then follow it.
+ */
+async function adoptPublishedEntry(localEntryId: string, entry: ClipboardEntry): Promise<void> {
+  if (!runningInTauri) return;
+  try {
+    const adopted = await invoke<boolean>("apply_published_entry", { localEntryId, entry });
+    if (!adopted) await syncClient?.delete(entry.id).catch(() => undefined);
+  } catch (error) {
+    // Local and server keys can only re-converge through the next reconcile.
+    showFeedback(`同步本地记录失败：${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+function rememberDevices(devices: Device[]): void {  devicesById.value = {
     ...devicesById.value,
     ...Object.fromEntries(devices.map((device) => [device.id, device])),
   };
@@ -512,7 +548,9 @@ function imageSource(entry: LocalClipboardEntry): string | undefined {
 }
 
 function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
-  return entry.thumbnail ? `data:image/webp;base64,${entry.thumbnail}` : undefined;
+  return entry.imageInfo?.thumbnail
+    ? `data:image/webp;base64,${entry.imageInfo.thumbnail}`
+    : undefined;
 }
 
 function fileEntrySummary(entry: LocalClipboardEntry): string | undefined {
@@ -625,7 +663,6 @@ async function downloadRequiredFiles(
       await client.downloadFile(entry, {
         fileId: file.fileId,
         size: file.size,
-        available: true,
       });
       finished += 1;
       reportProgress();
@@ -739,7 +776,8 @@ async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
   uploadingEntryId.value = entry.id;
   try {
     // Publishing needs the tree, which the rendered list does not carry.
-    await syncClient.upload(await fullEntry(entry));
+    const stored = await syncClient.upload(await fullEntry(entry));
+    await adoptPublishedEntry(entry.id, stored);
   } catch (error) {
     showFeedback(`上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
@@ -765,7 +803,8 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
   for (const entry of candidates) {
     if (syncClient !== client) return;
     try {
-      await client.publish(await fullEntry(entry));
+      const stored = await client.publish(await fullEntry(entry));
+      await adoptPublishedEntry(entry.id, stored);
     } catch (error) {
       if (syncClient === client) {
         showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -819,7 +858,6 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
             await client.downloadFileToSave(entry, {
               fileId: file.fileId,
               size: file.size,
-              available: true,
             }, preparation.saveId);
             finished += 1;
             reportProgress();
@@ -899,7 +937,11 @@ async function togglePin(entry: ClipboardEntry): Promise<void> {
   await invoke("set_pinned", { entryId: entry.id, pinned: !entry.pinned });
   await refreshEntries();
   const client = syncClient;
-  if (client) void client.publishMetadata(await fullEntry(entry as LocalClipboardEntry)).catch(() => undefined);
+  if (client) {
+    void client.publishMetadata(await fullEntry(entry as LocalClipboardEntry))
+      .then((stored) => adoptPublishedEntry(entry.id, stored))
+      .catch(() => undefined);
+  }
 }
 
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
@@ -1448,7 +1490,8 @@ async function upsertRemote(entry: ClipboardEntry): Promise<void> {
     ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return;
   }
-  await invoke("upsert_remote_entry", { entry });
+  const availableFileIds = await serverAvailableFileIds([entry]);
+  await invoke("upsert_remote_entry", { entry, availableFileIds });
   await refreshEntries();
 }
 
@@ -1539,7 +1582,8 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       // yet; `entry-ready` publishes it once they exist.
       if (isHashing(entry)) continue;
       try {
-        await client.restore(await fullEntry(entry));
+        const stored = await client.restore(await fullEntry(entry));
+        await adoptPublishedEntry(entry.id, stored);
       } catch (error) {
         // Another window can delete or replace this record after list_entries()
         // captured its snapshot. It no longer needs restoring.
@@ -1552,7 +1596,8 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       for (const entryId of pendingUpdates) {
         if (pendingDeletions.has(entryId) || syncClient !== client) continue;
         try {
-          await client.publishMetadata(await fullEntry({ id: entryId }));
+          const stored = await client.publishMetadata(await fullEntry({ id: entryId }));
+          await adoptPublishedEntry(entryId, stored);
         } catch (error) {
           if (!String(error).includes("剪贴板记录不存在")) throw error;
         }
@@ -1699,7 +1744,12 @@ async function initializeTauriServices(): Promise<void> {
       scheduleRefreshEntries();
       if (isPasteWindow || !syncClient) return;
       try {
-        await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
+        const stored = await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
+        await adoptPublishedEntry(payload, stored);
+        // Only a fresh OS clipboard capture reaches this path. Restores, uploads
+        // and metadata edits use separate entry keys, so they can never overwrite
+        // another device's clipboard. File lists stay history-only.
+        if (stored.kind !== "files") await syncClient.activate(stored.id).catch(() => undefined);
       } catch (error) {
         showFeedback(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
       }

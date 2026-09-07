@@ -4,9 +4,10 @@ import type { FastifyInstance } from "fastify";
 import {
   FILE_CHUNK_SIZE,
   FileIdSchema,
+  FileQueryRequestSchema,
   UploadBeginRequestSchema,
 } from "@cliproam/protocol";
-import type { ServerMessage } from "@cliproam/protocol";
+import type { FileQueryResponse, ServerMessage } from "@cliproam/protocol";
 import type { FileRelayService } from "../../files/FileRelayService.js";
 import { UploadHttpError, type UploadService } from "../../files/UploadService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
@@ -105,6 +106,19 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     });
   });
 
+
+  // Batch availability for content ids — the pool-level state the per-entry
+  // `missing` list used to inline. The pool is content-addressed and the
+  // download route already answers "do you hold sha256(x)?" for any published
+  // entry, so a bare availability read leaks nothing new; ids still validate
+  // against the content-hash shape.
+  app.post("/files/query", { bodyLimit: 64 * 1024 }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const parsed = FileQueryRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: "查询参数无效" });
+    return { files: store.files().describe(parsed.data.fileIds) } satisfies FileQueryResponse;
+  });
 
   // One chunk of an online relay. The first PUT claims the session (a second
   // sender gets 409), the requester's backpressure gates the response, and a

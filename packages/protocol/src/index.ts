@@ -49,9 +49,6 @@ export const ClipboardEntrySchema = z.object({
   // `files`, the single blob reference for `image`.
   fileInfo: FileInfoSchema.optional(),
   imageInfo: ImageInfoSchema.optional(),
-  // Content ids the server's pool does not hold yet. Server responses fill it
-  // in fresh on every read; clients ignore it when publishing.
-  missing: FileIdSchema.array().optional(),
   sourceDeviceId: z.string(),
   createdAt: z.string(),
   pinned: z.boolean().default(false),
@@ -125,15 +122,17 @@ export const AuthResponseSchema = z.object({
 
 // Entries run over HTTP. The publish response is the sender's confirmation —
 // the socket echo the WebSocket flow once waited for no longer exists.
+// Identity belongs to the server: it assigns the id (arrival order) and the
+// timestamp, and deduplicates by content hash. A client may still send its
+// local id and clock time; the server drops both.
+export const EntryPublishInputSchema = ClipboardEntrySchema.extend({
+  id: z.string().optional(),
+  createdAt: z.string().optional(),
+});
+
 export const EntryPublishRequestSchema = z.object({
   deviceId: DeviceIdSchema,
-  // The keyset cursor orders on `createdAt`, so it must be a fixed-width
-  // ISO-8601 UTC string: a client-supplied non-ISO value would break
-  // pagination even though it would otherwise store fine.
-  entry: ClipboardEntrySchema.refine(
-    (value) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(value.createdAt),
-    { message: "createdAt 必须是 ISO-8601 UTC 时间" },
-  ),
+  entry: EntryPublishInputSchema,
 });
 
 export const EntryPublishResponseSchema = z.object({ entry: ClipboardEntrySchema });
@@ -144,6 +143,21 @@ export const EntryQueryRequestSchema = z.object({
 
 // Ids the server does not know are simply absent, not an error.
 export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
+
+// Whether the pool holds the bytes for a batch of content ids — the state the
+// per-entry `missing` list used to inline. Size rides along so callers can
+// render totals for contents the pool has registered but not received yet.
+export const FileStatusSchema = z.object({
+  fileId: FileIdSchema,
+  size: z.number().int().nonnegative(),
+  stored: z.boolean(),
+});
+
+export const FileQueryRequestSchema = z.object({
+  fileIds: z.array(FileIdSchema).min(1).max(ENTRY_QUERY_BATCH),
+});
+
+export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchema) });
 
 // Offset pagination over entry identities: keyword filter on entry content, an
 // inclusive UTC date range, and a 1-based page. Page size is the server's choice.
@@ -240,7 +254,8 @@ export const UploadStatus = {
 // Uploads run over HTTP instead of the WebSocket. There is no session: the
 // server tracks an upload as one preallocated file plus a per-chunk ledger, so
 // `begin` reports what is already on disk and every PUT answers with the same
-// ledger. `missing` is a base64 bitmap over chunk indices where bit 1 means
+// ledger. `missingChunks` is a base64 bitmap over chunk indices where bit 1
+// means
 // that chunk still has to be sent.
 export const UploadBeginRequestSchema = z.object({
   fileId: FileIdSchema,
@@ -251,7 +266,7 @@ export const UploadBeginResponseSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
   z.object({
     status: z.literal(UploadStatus.ready),
-    missing: z.string(),
+    missingChunks: z.string(),
     receivedBytes: z.number().int().nonnegative(),
   }),
 ]);
@@ -260,7 +275,7 @@ export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
   z.object({
     status: z.literal(UploadStatus.accepted),
-    missing: z.string(),
+    missingChunks: z.string(),
     receivedBytes: z.number().int().nonnegative(),
   }),
 ]);
@@ -276,10 +291,14 @@ export type ClipboardManifestEntry = z.infer<typeof ClipboardManifestEntrySchema
 export type Device = z.infer<typeof DeviceSchema>;
 export type AuthCredentials = z.infer<typeof AuthCredentialsSchema>;
 export type AuthResponse = z.infer<typeof AuthResponseSchema>;
+export type EntryPublishInput = z.infer<typeof EntryPublishInputSchema>;
 export type EntryPublishRequest = z.infer<typeof EntryPublishRequestSchema>;
 export type EntryPublishResponse = z.infer<typeof EntryPublishResponseSchema>;
 export type EntryQueryRequest = z.infer<typeof EntryQueryRequestSchema>;
 export type EntryQueryResponse = z.infer<typeof EntryQueryResponseSchema>;
+export type FileStatus = z.infer<typeof FileStatusSchema>;
+export type FileQueryRequest = z.infer<typeof FileQueryRequestSchema>;
+export type FileQueryResponse = z.infer<typeof FileQueryResponseSchema>;
 export type EntryActivateResponse = z.infer<typeof EntryActivateResponseSchema>;
 export type EntryManifestQuery = z.infer<typeof EntryManifestQuerySchema>;
 export type EntryManifestResponse = z.infer<typeof EntryManifestResponseSchema>;
