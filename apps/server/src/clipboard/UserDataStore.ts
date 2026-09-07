@@ -63,7 +63,6 @@ export class UserDataStore {
       -- The list endpoint orders on the (created_at, id) pair; id being the
       -- primary key makes the order total. SQLite satisfies
       -- ORDER BY ... DESC by scanning this backwards.
-      DROP INDEX IF EXISTS clipboard_entries_created_at;
       CREATE INDEX IF NOT EXISTS clipboard_entries_order
         ON clipboard_entries(created_at, id);
 
@@ -73,12 +72,6 @@ export class UserDataStore {
         updated_at TEXT NOT NULL
       );
     `);
-    const deviceColumns = this.#database.prepare("PRAGMA table_info(devices)")
-      .all() as Array<{ name: string }>;
-    if (deviceColumns.some((column) => column.name === "payload")
-      && !deviceColumns.some((column) => column.name === "device_info")) {
-      this.#database.exec("ALTER TABLE devices RENAME COLUMN payload TO device_info");
-    }
     this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 

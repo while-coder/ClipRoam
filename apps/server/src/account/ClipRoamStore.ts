@@ -5,20 +5,34 @@ import type {
   EntryManifestQuery,
   EntryManifestResponse,
 } from "@cliproam/protocol";
+import { getLogger } from "../app/Logger.js";
 import { FileStore } from "../files/FileStore.js";
 import { AccountStore } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
+// Each UserDataStore holds an open SQLite connection, so stores left behind by
+// users who have gone quiet are swept after this much inactivity. Reopening on
+// the next request only costs an openDatabase plus a schema check.
+const USER_STORE_IDLE_MS = 10 * 60 * 1_000;
+const USER_STORE_SWEEP_INTERVAL_MS = 60 * 1_000;
+
+const logger = getLogger("ClipRoamStore");
+
+type TrackedUserStore = { store: UserDataStore; lastUsedAt: number };
+
 export class ClipRoamStore {
   readonly #accounts: AccountStore;
   readonly #files: FileStore;
-  readonly #userStores = new Map<string, UserDataStore>();
+  readonly #userStores = new Map<string, TrackedUserStore>();
+  readonly #sweepTimer: NodeJS.Timeout;
 
   constructor() {
     this.#accounts = new AccountStore();
     this.#files = new FileStore();
+    this.#sweepTimer = setInterval(() => this.#sweepIdleStores(), USER_STORE_SWEEP_INTERVAL_MS);
+    this.#sweepTimer.unref();
   }
 
   async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
@@ -63,19 +77,35 @@ export class ClipRoamStore {
     return this.#files.sweep(referenced, partialTtlMs);
   }
   close(): void {
+    clearInterval(this.#sweepTimer);
     this.#accounts.close();
     this.#files.close();
-    this.#userStores.forEach((store) => store.close());
+    this.#userStores.forEach((tracked) => tracked.store.close());
     this.#userStores.clear();
   }
 
-  #userStore(userId: string): UserDataStore {
-    let store = this.#userStores.get(userId);
-    if (!store) {
-      store = new UserDataStore(userId, this.#files);
-      this.#userStores.set(userId, store);
+  // better-sqlite3 is synchronous, so closing a store mid-request is not a
+  // race: the sweeper only runs between requests on the event loop.
+  #sweepIdleStores(): void {
+    const now = Date.now();
+    let swept = 0;
+    for (const [userId, tracked] of this.#userStores) {
+      if (now - tracked.lastUsedAt < USER_STORE_IDLE_MS) continue;
+      tracked.store.close();
+      this.#userStores.delete(userId);
+      swept += 1;
     }
-    return store;
+    if (swept > 0) logger.info(`Closed ${swept} idle user stores`);
+  }
+
+  #userStore(userId: string): UserDataStore {
+    let tracked = this.#userStores.get(userId);
+    if (!tracked) {
+      tracked = { store: new UserDataStore(userId, this.#files), lastUsedAt: 0 };
+      this.#userStores.set(userId, tracked);
+    }
+    tracked.lastUsedAt = Date.now();
+    return tracked.store;
   }
 
 }
