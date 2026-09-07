@@ -1,9 +1,9 @@
 import type {
   AuthResponse,
   ClipboardEntry,
-  ClipboardManifestEntry,
   Device,
-  EntryCursor,
+  EntryManifestQuery,
+  EntryManifestResponse,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
@@ -45,13 +45,12 @@ export class ClipRoamStore {
     return this.#accounts.authenticateSession(token);
   }
 
-  listPage(userId: string, cursor: EntryCursor | undefined, limit: number): ClipboardEntry[] {
-    return this.#userStore(userId).listPage(cursor, limit);
+  listManifestPage(userId: string, query: EntryManifestQuery, limit: number): EntryManifestResponse {
+    return this.#userStore(userId).listManifestPage(query, limit);
   }
   listByIds(userId: string, entryIds: readonly string[]): ClipboardEntry[] {
     return this.#userStore(userId).listByIds(entryIds);
   }
-  listManifest(userId: string): ClipboardManifestEntry[] { return this.#userStore(userId).listManifest(); }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
   upsert(userId: string, entry: ClipboardEntry): ClipboardEntry {

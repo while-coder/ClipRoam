@@ -6,11 +6,12 @@ import { AdminService } from "../services/AdminService.js";
 import { getLogger } from "./Logger.js";
 import { SocketHub } from "./SocketHub.js";
 import { registerAuthRoutes } from "./routes/AuthRoutes.js";
+import { registerDeviceRoutes } from "./routes/DeviceRoutes.js";
 import { registerEntryRoutes } from "./routes/EntryRoutes.js";
 import { registerFileRoutes } from "./routes/FileRoutes.js";
 import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
-import { FileDownloadService } from "../files/FileDownloadService.js";
+import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
 import { loadServerConfig, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../storage/ClipRoamStore.js";
@@ -26,7 +27,7 @@ export class ClipRoamServer {
   readonly #auth = new AuthService(this.#store);
   readonly #admin = new AdminService();
   readonly #sockets: SocketHub;
-  readonly #downloads: FileDownloadService;
+  readonly #relays: FileRelayService;
   readonly #uploads: UploadService;
   #collectionTimer?: NodeJS.Timeout;
 
@@ -34,12 +35,8 @@ export class ClipRoamServer {
     this.#sockets = new SocketHub({
       authenticateSession: (token) => this.#auth.authenticateSession(token),
       registerDevice: (userId, device) => this.#store.upsertDevice(userId, device),
-      connectionState: (userId) => ({
-        manifest: this.#store.listManifest(userId),
-        devices: this.#store.listDevices(userId),
-      }),
     });
-    this.#downloads = new FileDownloadService();
+    this.#relays = new FileRelayService();
     this.#uploads = new UploadService(
       this.#store.files(),
       config,
@@ -79,6 +76,10 @@ export class ClipRoamServer {
         .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       if (request.method === "OPTIONS") return reply.code(204).send();
+      // One place resolves the Bearer token for every route; handlers opt in
+      // through requireSessionUser().
+      const token = readBearerToken(request.headers.authorization);
+      request.sessionUser = token ? this.#auth.authenticateSession(token) : undefined;
     });
     // Upload chunks arrive as raw bytes rather than base64-in-JSON, which the
     // WebSocket path was forced into by its text framing.
@@ -88,21 +89,29 @@ export class ClipRoamServer {
       (_request, body, done) => done(null, body),
     );
     registerFileRoutes(this.#app, {
-      sessionUser: this.#sessionUser.bind(this),
       uploads: this.#uploads,
-      downloads: this.#downloads,
+      relays: this.#relays,
+      broadcast: this.#sockets.broadcast.bind(this.#sockets),
       store: this.#store,
     });
     registerEntryRoutes(this.#app, {
-      sessionUser: this.#sessionUser.bind(this),
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
+    });
+    registerDeviceRoutes(this.#app, {
+      store: this.#store,
     });
     registerAuthRoutes(this.#app, {
       auth: this.#auth,
       onPasswordChanged: (userId) => this.#sockets.disconnectUser(userId, "Password changed"),
     });
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
+    this.#app.get("/debug-stream", async (request, reply) => {
+      const { PassThrough } = await import("node:stream");
+      const stream = new PassThrough();
+      setTimeout(() => stream.write("hello"), 200);
+      return reply.header("Content-Type", "application/octet-stream").send(stream);
+    });
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));
     registerAdminRoutes(this.#app, {
       admin: this.#admin,
@@ -113,18 +122,10 @@ export class ClipRoamServer {
     this.#app.addHook("onClose", async () => this.#store.close());
   }
 
-  #sessionUser(request: { headers: { authorization?: string } }): { id: string } | undefined {
-    const token = readBearerToken(request.headers.authorization);
-    return token ? this.#auth.authenticateSession(token) : undefined;
-  }
-
   #publishFileAvailability(fileId: string): void {
     // The content pool is global, so availability is not scoped to the
     // uploader: any signed-in device that references the content wants this.
     this.#sockets.broadcastAll({ type: "file.available", fileId });
-    // A source device's push just completed, so any download waiting on this
-    // content can start fetching.
-    this.#downloads.notifyAvailable(fileId);
   }
 
   // Sweeping walks the whole content pool, so it is deferred off the caller

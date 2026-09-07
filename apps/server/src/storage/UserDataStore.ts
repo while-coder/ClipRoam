@@ -7,7 +7,7 @@ import {
   type ClipboardManifestEntry,
   type ClipboardTree,
   type Device,
-  type EntryCursor,
+  type EntryManifestQuery,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
@@ -60,9 +60,9 @@ export class UserDataStore {
         created_at TEXT NOT NULL,
         pinned INTEGER NOT NULL
       );
-      -- Keyset pagination orders on the (created_at, id) pair; id being the
-      -- primary key makes the order total, so a cursor never skips or repeats
-      -- a row. SQLite satisfies ORDER BY ... DESC by scanning this backwards.
+      -- The list endpoint orders on the (created_at, id) pair; id being the
+      -- primary key makes the order total. SQLite satisfies
+      -- ORDER BY ... DESC by scanning this backwards.
       DROP INDEX IF EXISTS clipboard_entries_created_at;
       CREATE INDEX IF NOT EXISTS clipboard_entries_order
         ON clipboard_entries(created_at, id);
@@ -82,29 +82,28 @@ export class UserDataStore {
     this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
-  // Keyset pagination: the (created_at, id) pair is unique because id is the
-  // primary key, so pages are stable even as new entries arrive. A cursor
-  // pointing at a since-deleted entry simply skips forward.
-  listPage(cursor: EntryCursor | undefined, limit: number): ClipboardEntry[] {
+  // Offset pagination over entry identities with optional keyword and UTC
+  // date-range filters. One extra row is fetched to decide hasMore without a
+  // separate count query. Full details ride POST /entries/query.
+  listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; hasMore: boolean } {
     const rows = this.#database
       .prepare(`
-        SELECT id, kind, content, extra, source_device_id, created_at, pinned
+        SELECT id
         FROM clipboard_entries
-        WHERE @createdAt IS NULL
-           OR created_at < @createdAt
-           OR (created_at = @createdAt AND id < @id)
+        WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
+          AND (@dayStart IS NULL OR created_at BETWEEN @dayStart AND @dayEnd)
         ORDER BY created_at DESC, id DESC
-        LIMIT @limit
+        LIMIT @limit OFFSET @offset
       `)
       .all({
-        createdAt: cursor?.createdAt ?? null,
-        id: cursor?.id ?? null,
-        limit,
-      }) as Array<EntryRow>;
-    return rows.flatMap((row) => {
-      const entry = this.#toEntry(row);
-      return entry ? [entry] : [];
-    });
+        search: query.search ? `%${escapeLike(query.search)}%` : null,
+        dayStart: query.dateStart ? `${query.dateStart}T00:00:00.000Z` : null,
+        dayEnd: query.dateEnd ? `${query.dateEnd}T23:59:59.999Z` : null,
+        limit: limit + 1,
+        offset: ((query.page ?? 1) - 1) * limit,
+      }) as Array<{ id: string }>;
+    const hasMore = rows.length > limit;
+    return { manifest: rows.slice(0, limit), hasMore };
   }
 
   listByIds(entryIds: readonly string[]): ClipboardEntry[] {
@@ -124,15 +123,6 @@ export class UserDataStore {
       }
     }
     return entries;
-  }
-
-  // The connection-time manifest only needs identity, and loading full entries
-  // for it would parse every directory tree in the account.
-  listManifest(): ClipboardManifestEntry[] {
-    const rows = this.#database
-      .prepare("SELECT id FROM clipboard_entries ORDER BY created_at DESC")
-      .all() as Array<{ id: string }>;
-    return rows;
   }
 
   upsertDevice(device: Device): void {
@@ -245,6 +235,12 @@ export class UserDataStore {
   #transaction(work: () => void): void {
     withTransaction(this.#database, work);
   }
+}
+
+// LIKE wildcards in user input must match literally, so they are escaped and
+// the statement declares '\\' as the escape character.
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
 function parseExtra(extra: string): { html?: string; rtf?: string; thumbnail?: string; tree?: ClipboardTree } {
