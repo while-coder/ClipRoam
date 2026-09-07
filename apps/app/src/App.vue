@@ -1572,9 +1572,10 @@ async function startSync(config: SyncConfig): Promise<void> {
   connected.value = false;
   syncEnabled.value = true;
   const device = await getDevice();
-  const { webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
+  const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
   let client: SyncClient;
   client = new SyncClient(
+    httpUrl,
     webSocketUrl,
     config.sessionToken,
     device,

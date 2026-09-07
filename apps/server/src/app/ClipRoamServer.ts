@@ -6,7 +6,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 import websocket, { type WebSocket } from "@fastify/websocket";
 import {
   ClientMessageSchema,
+  FILE_CHUNK_SIZE,
   MAX_MESSAGE_BYTES,
+  UploadBeginRequestSchema,
   type ClientMessage,
   type Device,
   type ServerMessage,
@@ -15,7 +17,8 @@ import { AuthService } from "../services/AuthService.js";
 import { AdminService } from "../services/AdminService.js";
 import { getLogger } from "./Logger.js";
 import type { ClientConnection, ConnectionTarget } from "./Connection.js";
-import { FileTransferService } from "../files/FileTransferService.js";
+import { FileDownloadService } from "../files/FileDownloadService.js";
+import { UploadConflictError, UploadHttpError, UploadSessionService } from "../files/UploadSessionService.js";
 import { getTransferSettings, loadServerConfig, updateTransferSettings, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../storage/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../services/TlsCertificateService.js";
@@ -34,15 +37,19 @@ export class ClipRoamServer {
   readonly #auth = new AuthService(this.#store);
   readonly #admin = new AdminService();
   readonly #clients = new Set<ClientConnection>();
-  readonly #transfers: FileTransferService;
+  readonly #downloads: FileDownloadService;
+  readonly #uploads: UploadSessionService;
   #collectionTimer?: NodeJS.Timeout;
 
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
-    this.#transfers = new FileTransferService(
+    this.#downloads = new FileDownloadService(
       this.#store.files(),
       this.#store.canReadFile.bind(this.#store),
-      config,
       this.#send.bind(this),
+    );
+    this.#uploads = new UploadSessionService(
+      this.#store.files(),
+      config,
       this.#publishFileAvailability.bind(this),
     );
   }
@@ -76,6 +83,60 @@ export class ClipRoamServer {
         .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       if (request.method === "OPTIONS") return reply.code(204).send();
+    });
+    // Upload chunks arrive as raw bytes rather than base64-in-JSON, which the
+    // WebSocket path was forced into by its text framing.
+    this.#app.addContentTypeParser(
+      "application/octet-stream",
+      { parseAs: "buffer" },
+      (_request, body, done) => done(null, body),
+    );
+    this.#app.post("/upload/begin", async (request, reply) => {
+      const user = this.#sessionUser(request);
+      if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+      const parsed = UploadBeginRequestSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ message: "上传参数无效" });
+      try {
+        return this.#uploads.begin(user.id, parsed.data.deviceId, parsed.data.fileId, parsed.data.size);
+      } catch (error) {
+        return this.#uploadError(reply, error);
+      }
+    });
+    this.#app.put("/upload/:sessionId", { bodyLimit: FILE_CHUNK_SIZE + 4096 }, async (request, reply) => {
+      const user = this.#sessionUser(request);
+      if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+      const { sessionId } = request.params as { sessionId: string };
+      const offset = Number((request.query as { offset?: string }).offset);
+      const chunk = request.body;
+      if (!Number.isInteger(offset) || offset < 0 || !Buffer.isBuffer(chunk)) {
+        return reply.code(400).send({ message: "上传参数无效" });
+      }
+      try {
+        return this.#uploads.append(user.id, sessionId, offset, chunk);
+      } catch (error) {
+        return this.#uploadError(reply, error);
+      }
+    });
+    this.#app.post("/upload/:sessionId/complete", async (request, reply) => {
+      const user = this.#sessionUser(request);
+      if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+      const { sessionId } = request.params as { sessionId: string };
+      try {
+        return this.#uploads.complete(user.id, sessionId);
+      } catch (error) {
+        return this.#uploadError(reply, error);
+      }
+    });
+    this.#app.delete("/upload/:sessionId", async (request, reply) => {
+      const user = this.#sessionUser(request);
+      if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+      const { sessionId } = request.params as { sessionId: string };
+      try {
+        this.#uploads.abort(user.id, sessionId);
+        return reply.code(204).send();
+      } catch (error) {
+        return this.#uploadError(reply, error);
+      }
     });
 
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
@@ -282,21 +343,24 @@ export class ClipRoamServer {
           entries: this.#store.listByIds(client.userId, message.entryIds),
         });
         return;
-      case "file.upload.begin":
-        this.#transfers.beginUpload(client, message);
-        return;
       case "file.download": {
-        await this.#transfers.downloadFile(client, message, this.#clients);
+        await this.#downloads.download(client, message, this.#clients);
         return;
       }
+      // Chunks and completions over the socket belong to device-to-server
+      // download relays only; uploads live on the HTTP routes now.
       case "file.chunk":
-        this.#transfers.receiveChunk(client, message.transferId, message.data);
+        if (!this.#downloads.receiveChunk(client, message.transferId, message.data)) {
+          this.#send(client, { type: "file.failed", transferId: message.transferId, message: "文件传输不存在或已过期" });
+        }
         return;
       case "file.complete":
-        this.#transfers.completeTransfer(client, message.transferId);
+        if (!this.#downloads.complete(client, message.transferId)) {
+          this.#send(client, { type: "file.failed", transferId: message.transferId, message: "文件传输不存在或已过期" });
+        }
         return;
       case "file.abort":
-        this.#transfers.failTransfer(client, message.transferId, message.message);
+        this.#downloads.fail(client, message.transferId, message.message);
         return;
       case "ping":
         this.#send(client, { type: "pong" });
@@ -376,10 +440,25 @@ export class ClipRoamServer {
   }
 
   #handleClientClose(client: ClientConnection): void {
-    this.#transfers.handleClientClose(client);
+    this.#downloads.handleClientClose(client);
     this.#clients.delete(client);
     logger.info(`Device disconnected: user=${client.userId} device=${client.device.id}`);
     this.#broadcast(client.userId, { type: "device.presence", device: client.device, online: false });
+  }
+
+  #sessionUser(request: { headers: { authorization?: string } }): { id: string } | undefined {
+    const token = readBearerToken(request.headers.authorization);
+    return token ? this.#auth.authenticateSession(token) : undefined;
+  }
+
+  #uploadError(reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } }, error: unknown): unknown {
+    if (error instanceof UploadConflictError) {
+      return reply.code(409).send({ offset: error.offset });
+    }
+    if (error instanceof UploadHttpError) {
+      return reply.code(error.status).send({ message: error.message });
+    }
+    throw error;
   }
 
   #send(client: ConnectionTarget, message: ServerMessage): void {

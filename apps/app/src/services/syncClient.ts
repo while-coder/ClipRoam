@@ -4,12 +4,19 @@ import {
   ENTRY_FETCH_BATCH,
   FILE_CHUNK_SIZE,
   ServerMessageSchema,
+  UploadBeginResponseSchema,
+  UploadChunkResponseSchema,
+  UploadCompleteResponseSchema,
+  UploadConflictResponseSchema,
   type AuthResponse,
   type ClientMessage,
   type ClipboardEntry,
   type ClipboardFile,
   type ClipboardManifestEntry,
   type Device,
+  type UploadBeginRequest,
+  type UploadBeginResponse,
+  type UploadChunkResponse,
 } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -17,8 +24,8 @@ import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
 
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
 
-/** `stored` means the server already holds the content, so nothing is sent. */
-type UploadReady = { stored: true } | { stored: false; offset: number };
+const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
+const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -194,11 +201,6 @@ export class SyncClient {
     entryId?: string;
     file?: ClipboardFile;
   }>();
-  #uploadReady = new Map<string, {
-    resolve: (ready: UploadReady) => void;
-    reject: (error: Error) => void;
-    timer: number;
-  }>();
   #publishConfirmations = new Map<string, {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -212,7 +214,8 @@ export class SyncClient {
   #entryUploads = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly url: string,
+    private readonly httpUrl: string,
+    private readonly webSocketUrl: string,
     private readonly token: string,
     private readonly device: Device,
     private readonly handlers: SyncHandlers,
@@ -243,11 +246,6 @@ export class SyncClient {
       transfer.reject(new Error(message));
     }
     this.#pending.clear();
-    for (const transfer of this.#uploadReady.values()) {
-      window.clearTimeout(transfer.timer);
-      transfer.reject(new Error(message));
-    }
-    this.#uploadReady.clear();
     for (const confirmation of this.#publishConfirmations.values()) {
       window.clearTimeout(confirmation.timer);
       confirmation.reject(new Error(message));
@@ -597,65 +595,125 @@ export class SyncClient {
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
         await this.#waitForConnection();
+        // The socket can stay open while HTTP is briefly unreachable, so back
+        // off instead of spinning on an immediately-failing fetch.
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
       }
     }
     throw new Error("同步连接已断开");
   }
 
+  // Uploads run over HTTP: one POST handshake that either reports the content
+  // already stored or hands out a session with the resume offset, then raw-byte
+  // PUTs that each carry their own answer. No socket correlation involved.
   async #uploadFileOnce(
     entry: ClipboardEntry,
     file: ClipboardFile,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
-    const transferId = crypto.randomUUID();
-    const completed = this.#waitForTransfer(transferId);
-    const ready = this.#waitForUploadReady(transferId);
-    if (!this.#send({
-      type: "file.upload.begin",
-      transferId,
-      fileId: file.fileId,
-      size: file.size,
-    })) {
-      this.#rejectTransfer(transferId, "同步服务未连接");
-      this.#rejectUploadReady(transferId, "同步服务未连接");
-      await completed;
-      throw new Error("同步服务未连接");
+    const begin = await this.#uploadBegin(file);
+    // The server already had these bytes, so the transfer is over before it
+    // began — this is what makes copying a folder twice nearly free.
+    if (begin.status === "stored") {
+      onProgress(file.size);
+      return;
     }
-    try {
-      const upload = await ready;
-      // The server already had these bytes, so the transfer is over before it
-      // began — this is what makes copying a folder twice nearly free.
-      if (upload.stored) {
+    if (begin.offset > file.size) throw new Error("服务器续传偏移超出文件大小");
+    onProgress(begin.offset);
+    let offset = begin.offset;
+    while (offset < file.size) {
+      const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
+      const data = await invoke<string>("read_file_chunk", {
+        entryId: entry.id, fileId: file.fileId, offset, length,
+      });
+      if (!data) break;
+      // A concurrent upload may store the same content mid-transfer; the next
+      // chunk response then reports `stored` and the remaining bytes are done.
+      const chunk = await this.#uploadChunk(begin.sessionId, offset, base64ToBytes(data));
+      if (chunk.status === "stored") {
         onProgress(file.size);
-        await completed;
         return;
       }
-      const resumeOffset = upload.offset;
-      if (resumeOffset > file.size) throw new Error("服务器续传偏移超出文件大小");
-      onProgress(resumeOffset);
-      let uploadedBytes = resumeOffset;
-      for (let offset = resumeOffset; offset < file.size; offset += FILE_CHUNK_SIZE) {
-        const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-        const data = await invoke<string>("read_file_chunk", {
-          entryId: entry.id, fileId: file.fileId, offset, length,
-        });
-        if (!this.#send({ type: "file.chunk", transferId, data })) {
-          this.#rejectTransfer(transferId, "同步服务未连接");
-          await completed;
-          throw new Error("同步服务未连接");
-        }
-        const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-        uploadedBytes += (data.length / 4) * 3 - padding;
-        onProgress(uploadedBytes);
-      }
-      if (!this.#send({ type: "file.complete", transferId })) {
-        this.#rejectTransfer(transferId, "同步服务未连接");
-      }
-      await completed;
-    } catch (error) {
-      await completed.catch(() => undefined);
-      throw error;
+      // `received` is normally this chunk's end; a 409 conflict rewinds it to
+      // the server's progress so the next iteration resends from there.
+      if (chunk.received <= offset) throw new Error("服务器上传进度异常");
+      offset = chunk.received;
+      onProgress(offset);
     }
+    await this.#uploadComplete(begin.sessionId);
+    onProgress(file.size);
+  }
+
+  async #uploadBegin(file: ClipboardFile): Promise<UploadBeginResponse> {
+    const request: UploadBeginRequest = {
+      fileId: file.fileId,
+      size: file.size,
+      deviceId: this.device.id,
+    };
+    const response = await this.#uploadFetch("POST", "/upload/begin", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(UPLOAD_BEGIN_TIMEOUT_MS),
+    });
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = UploadBeginResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的上传响应");
+    return parsed.data;
+  }
+
+  async #uploadChunk(sessionId: string, offset: number, chunk: Uint8Array): Promise<UploadChunkResponse> {
+    const response = await this.#uploadFetch("PUT", `/upload/${sessionId}?offset=${offset}`, {
+      headers: { "Content-Type": "application/octet-stream" },
+      body: chunk,
+      signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
+    });
+    if (response.status === 409) {
+      const body = await response.json().catch(() => undefined) as unknown;
+      const parsed = UploadConflictResponseSchema.safeParse(body);
+      // Rewind to the server's progress; the loop resends from there.
+      if (parsed.success) return { status: "accepted", received: parsed.data.offset };
+      throw new Error("服务器上传进度冲突");
+    }
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = UploadChunkResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的上传响应");
+    return parsed.data;
+  }
+
+  async #uploadComplete(sessionId: string): Promise<void> {
+    const response = await this.#uploadFetch("POST", `/upload/${sessionId}/complete`, {
+      signal: AbortSignal.timeout(UPLOAD_BEGIN_TIMEOUT_MS),
+    });
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = UploadCompleteResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的上传响应");
+  }
+
+  // Network-level failures surface as a disconnected sync so the caller's
+  // retry loop can pick the upload back up once the connection returns.
+  async #uploadFetch(method: string, path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(`${this.httpUrl}${path}`, {
+        ...init,
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          ...init.headers as Record<string, string>,
+        },
+      });
+    } catch {
+      throw new Error("同步连接已断开");
+    }
+  }
+
+  #uploadErrorMessage(body: unknown, status: number): string {
+    return typeof body === "object" && body && "message" in body
+      ? String((body as { message: unknown }).message)
+      : `服务器返回错误 ${status}`;
   }
 
   #waitForTransfer(transferId: string, entryId?: string, file?: ClipboardFile): Promise<void> {
@@ -668,35 +726,6 @@ export class SyncClient {
         resolve, reject, timer, writeChain: Promise.resolve(), entryId, file,
       });
     });
-  }
-
-  #waitForUploadReady(transferId: string): Promise<UploadReady> {
-    return new Promise<UploadReady>((resolve, reject) => {
-      const timer = window.setTimeout(
-        () => {
-          this.#rejectUploadReady(transferId, "服务器未接受文件上传");
-          this.#rejectTransfer(transferId, "服务器未接受文件上传");
-        },
-        15_000,
-      );
-      this.#uploadReady.set(transferId, { resolve, reject, timer });
-    });
-  }
-
-  #resolveUploadReady(transferId: string, ready: UploadReady): void {
-    const transfer = this.#uploadReady.get(transferId);
-    if (!transfer) return;
-    window.clearTimeout(transfer.timer);
-    this.#uploadReady.delete(transferId);
-    transfer.resolve(ready);
-  }
-
-  #rejectUploadReady(transferId: string, message: string): void {
-    const transfer = this.#uploadReady.get(transferId);
-    if (!transfer) return;
-    window.clearTimeout(transfer.timer);
-    this.#uploadReady.delete(transferId);
-    transfer.reject(new Error(message));
   }
 
   #resolveTransfer(transferId: string): void {
@@ -737,21 +766,10 @@ export class SyncClient {
     if (!result.success) return;
     const message = result.data;
     switch (message.type) {
-      case "file.uploaded":
-        // Sent either instead of `file.upload.ready` (instant upload) or after
-        // the last chunk; resolving a ready waiter that is already gone is a
-        // no-op, so both cases share this branch.
-        this.#resolveUploadReady(message.transferId, { stored: true });
-        this.#resolveTransfer(message.transferId);
-        return;
       case "file.available":
         this.handlers.onFileAvailable(message.fileId);
         return;
-      case "file.upload.ready":
-        this.#resolveUploadReady(message.transferId, { stored: false, offset: message.offset });
-        return;
       case "file.failed":
-        this.#rejectUploadReady(message.transferId, message.message);
         this.#rejectTransfer(message.transferId, message.message);
         return;
       case "file.source.request":
@@ -810,7 +828,7 @@ export class SyncClient {
 
   #open(): void {
     if (this.#stopped) return;
-    const socket = new WebSocket(this.url);
+    const socket = new WebSocket(this.webSocketUrl);
     this.#socket = socket;
 
     socket.addEventListener("open", () => {
@@ -839,4 +857,13 @@ export class SyncClient {
 
     socket.addEventListener("error", () => socket.close());
   }
+}
+
+// The Tauri command reads chunks as base64 (its WebSocket-era shape); uploads
+// now send raw bytes, so decode before handing them to fetch.
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
