@@ -1,6 +1,6 @@
 import { ClipRoamServer } from "./app/ClipRoamServer.js";
 import { getLogger, logsDirectory, shutdownLogger } from "./app/Logger.js";
-import { dataDirectory, usersDirectory } from "./storage/DataPaths.js";
+import { dataDirectory, usersDirectory } from "./DataPaths.js";
 
 const server = new ClipRoamServer();
 const logger = getLogger("server");

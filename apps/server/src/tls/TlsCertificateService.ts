@@ -1,7 +1,7 @@
 import { createSecureContext } from "node:tls";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tlsDirectory } from "../storage/DataPaths.js";
+import { tlsDirectory } from "../DataPaths.js";
 
 export type TlsOptions = { cert: Buffer; key: Buffer };
 export type TlsStatus = { enabled: boolean; source: "managed" | "none" };

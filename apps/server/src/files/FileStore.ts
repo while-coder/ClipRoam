@@ -2,7 +2,8 @@ import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ClipboardFile } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
-import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
+import { filesDatabasePath, filesDirectory } from "../DataPaths.js";
+import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
@@ -15,14 +16,13 @@ type FileRow = { file_id: string; size: number; stored: number };
 // bytes are stored once no matter how many entries or paths point at them.
 // Reclaiming is therefore driven from the outside — see `sweep`.
 export class FileStore {
-  constructor(
-    private readonly database: Database.Database,
-    private readonly directory: string,
-  ) {
-    mkdirSync(this.directory, { recursive: true });
-  }
+  private readonly database: Database.Database;
+  private readonly directory: string;
 
-  applySchema(): void {
+  constructor() {
+    this.database = openDatabase(filesDatabasePath);
+    this.directory = filesDirectory;
+    mkdirSync(this.directory, { recursive: true });
     const version = (this.database.prepare("PRAGMA user_version").get() as
       { user_version: number } | undefined)?.user_version ?? 0;
     if (version !== SCHEMA_VERSION) this.reset();
@@ -49,6 +49,8 @@ export class FileStore {
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
   }
+
+  close(): void { this.database.close(); }
 
   // Content addressing has no migration path from older layouts, so a schema
   // change discards the pool along with the tables that referenced it.

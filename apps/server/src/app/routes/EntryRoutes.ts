@@ -13,7 +13,7 @@ import {
   type ServerMessage,
 } from "@cliproam/protocol";
 import { getLogger } from "../Logger.js";
-import type { ClipRoamStore } from "../../storage/ClipRoamStore.js";
+import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 
 const logger = getLogger("EntryRoutes");

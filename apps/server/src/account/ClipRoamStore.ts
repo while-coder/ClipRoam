@@ -5,26 +5,20 @@ import type {
   EntryManifestQuery,
   EntryManifestResponse,
 } from "@cliproam/protocol";
-import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
-import { openDatabase } from "../sqlite.js";
 import { AccountStore } from "./AccountStore.js";
-import { filesDatabasePath, filesDirectory } from "./DataPaths.js";
-import { UserDataStore } from "./UserDataStore.js";
+import { UserDataStore } from "../clipboard/UserDataStore.js";
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
 export class ClipRoamStore {
   readonly #accounts: AccountStore;
-  readonly #filesDatabase: Database.Database;
   readonly #files: FileStore;
   readonly #userStores = new Map<string, UserDataStore>();
 
-  constructor(databasePath?: string) {
-    this.#accounts = new AccountStore(databasePath);
-    this.#filesDatabase = openDatabase(filesDatabasePath);
-    this.#files = new FileStore(this.#filesDatabase, filesDirectory);
-    this.#files.applySchema();
+  constructor() {
+    this.#accounts = new AccountStore();
+    this.#files = new FileStore();
   }
 
   async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
@@ -70,7 +64,7 @@ export class ClipRoamStore {
   }
   close(): void {
     this.#accounts.close();
-    this.#filesDatabase.close();
+    this.#files.close();
     this.#userStores.forEach((store) => store.close());
     this.#userStores.clear();
   }

@@ -1,5 +1,5 @@
 import { AuthCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol";
-import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "../storage/ClipRoamStore.js";
+import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 
 type LoginAttempt = { failures: number; windowStarted: number; blockedUntil: number };
 export type HttpResult = { statusCode: number; payload: unknown };

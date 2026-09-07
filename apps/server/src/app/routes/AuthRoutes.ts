@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { AuthService } from "../../services/AuthService.js";
+import type { AuthService } from "../../account/AuthService.js";
 
 export type AuthRouteDeps = {
   auth: Pick<AuthService, "register" | "login" | "changePassword" | "authenticateSession">;

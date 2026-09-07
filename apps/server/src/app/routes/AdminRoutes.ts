@@ -3,8 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import type { AdminService } from "../../services/AdminService.js";
-import type { TlsCertificateService, TlsOptions } from "../../services/TlsCertificateService.js";
+import type { AdminService } from "../../admin/AdminService.js";
+import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
 import { getTransferSettings, updateTransferSettings, type ServerConfig } from "../ServerConfig.js";
 
 const adminSessionCookie = "cliproam_admin";

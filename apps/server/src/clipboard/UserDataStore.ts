@@ -12,7 +12,7 @@ import {
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
 import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
-import { userDatabasePath } from "./DataPaths.js";
+import { userDatabasePath } from "../DataPaths.js";
 
 // The server-wide content pool changed layout. Older per-user entries are not
 // retained because their content metadata belongs to the discarded pool.
