@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { serverSettingsPath } from "../storage/DataPaths.js";
+import { serverSettingsPath } from "../DataPaths.js";
 
 const megabyte = 1024 * 1024;
 const hour = 60 * 60 * 1_000;

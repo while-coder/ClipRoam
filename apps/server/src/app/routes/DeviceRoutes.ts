@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { type DeviceListResponse } from "@cliproam/protocol";
-import type { ClipRoamStore } from "../../storage/ClipRoamStore.js";
+import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 
 export type DeviceRouteDeps = {

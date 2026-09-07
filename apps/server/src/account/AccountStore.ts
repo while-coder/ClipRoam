@@ -1,10 +1,9 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
-import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { openDatabase } from "../sqlite.js";
-import { accountsDatabasePath } from "./DataPaths.js";
+import { accountsDatabasePath } from "../DataPaths.js";
 
 const scryptAsync = promisify(scrypt);
 const passwordKeyLength = 64;
@@ -23,9 +22,8 @@ export class InvalidCredentialsError extends Error {
 export class AccountStore {
   readonly #database: Database.Database;
 
-  constructor(databasePath = accountsDatabasePath) {
-    const path = resolve(databasePath);
-    this.#database = openDatabase(path);
+  constructor() {
+    this.#database = openDatabase(accountsDatabasePath);
     this.#database.exec(`
       PRAGMA foreign_keys = ON;
 

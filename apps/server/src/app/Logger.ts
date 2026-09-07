@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import log4js, { type Logger } from "log4js";
-import { dataDirectory } from "../storage/DataPaths.js";
+import { dataDirectory } from "../DataPaths.js";
 
 export const logsDirectory = join(dataDirectory, "logs");
 mkdirSync(logsDirectory, { recursive: true });

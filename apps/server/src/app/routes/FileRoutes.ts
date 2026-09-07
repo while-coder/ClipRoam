@@ -9,7 +9,7 @@ import {
 import type { ServerMessage } from "@cliproam/protocol";
 import type { FileRelayService } from "../../files/FileRelayService.js";
 import { UploadHttpError, type UploadService } from "../../files/UploadService.js";
-import type { ClipRoamStore } from "../../storage/ClipRoamStore.js";
+import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 
 export type FileRouteDeps = {
@@ -89,6 +89,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const session = relays.create(user.id, entryId, fileId, size, stream);
     reply.hijack();
     reply.raw.writeHead(200, { "Content-Type": "application/octet-stream" });
+    // Without a Content-Length the headers would otherwise only flush with
+    // the first piped byte; flush now so the client sees the parked GET.
+    reply.raw.flushHeaders();
     stream.pipe(reply.raw);
     // The response's close (not the request's — an empty-body GET "closes" as
     // soon as it is fully received) means the requester hung up.
@@ -122,7 +125,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     if (session.userId !== user.id) {
       return reply.code(404).send({ message: "中转会话不存在" });
     }
-    if (!relays.claim(sessionId)) {
+    // Only the first PUT claims; later chunks of the same transfer pass
+    // through. A claim that fails here means another sender won the race.
+    if (!session.claimed && !relays.claim(sessionId)) {
       return reply.code(409).send({ message: "中转会话已被其他设备认领" });
     }
     if (!(await relays.push(sessionId, chunk))) {

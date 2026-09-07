@@ -1,8 +1,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
 import { MAX_MESSAGE_BYTES } from "@cliproam/protocol";
-import { AuthService } from "../services/AuthService.js";
-import { AdminService } from "../services/AdminService.js";
+import { AuthService } from "../account/AuthService.js";
+import { AdminService } from "../admin/AdminService.js";
 import { getLogger } from "./Logger.js";
 import { SocketHub } from "./SocketHub.js";
 import { registerAuthRoutes } from "./routes/AuthRoutes.js";
@@ -14,8 +14,8 @@ import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
 import { loadServerConfig, type ServerConfig } from "./ServerConfig.js";
-import { ClipRoamStore } from "../storage/ClipRoamStore.js";
-import { TlsCertificateService, type TlsOptions } from "../services/TlsCertificateService.js";
+import { ClipRoamStore } from "../account/ClipRoamStore.js";
+import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
 const garbageCollectionIntervalMs = 6 * 60 * 60 * 1_000;
 const logger = getLogger("ClipRoamServer");
@@ -106,12 +106,6 @@ export class ClipRoamServer {
       onPasswordChanged: (userId) => this.#sockets.disconnectUser(userId, "Password changed"),
     });
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
-    this.#app.get("/debug-stream", async (request, reply) => {
-      const { PassThrough } = await import("node:stream");
-      const stream = new PassThrough();
-      setTimeout(() => stream.write("hello"), 200);
-      return reply.header("Content-Type", "application/octet-stream").send(stream);
-    });
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));
     registerAdminRoutes(this.#app, {
       admin: this.#admin,
