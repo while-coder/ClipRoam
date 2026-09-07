@@ -6,7 +6,7 @@ import { chunk, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 type FileRow = { file_id: string; size: number; stored: number };
 
@@ -36,6 +36,16 @@ export class FileStore {
         stored INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       );
+      -- The upload ledger: one row per content being received, keyed by the
+      -- content id itself rather than a session, so any device can pick an
+      -- upload up where another left it. Bitmap bit i = chunk i is on disk.
+      CREATE TABLE IF NOT EXISTS upload_parts (
+        file_id TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        bitmap BLOB NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
   }
@@ -46,6 +56,7 @@ export class FileStore {
     this.database.exec(`
       DROP TABLE IF EXISTS files;
       DROP TABLE IF EXISTS upload_sessions;
+      DROP TABLE IF EXISTS upload_parts;
     `);
     rmSync(this.directory, { recursive: true, force: true });
     mkdirSync(this.directory, { recursive: true });
@@ -82,6 +93,48 @@ export class FileStore {
       .prepare("SELECT size FROM files WHERE file_id = ? AND stored = 1")
       .get(fileId) as { size: number } | undefined;
     return file && { path: this.path(fileId), size: file.size };
+  }
+
+  // Locates the preallocated upload buffer beside its eventual resting place so
+  // promoting a finished upload is a same-directory rename.
+  partialPath(fileId: string): string {
+    return `${this.preparePath(fileId)}.part`;
+  }
+
+  uploadLedger(fileId: string): { size: number; chunkCount: number; bitmap: Buffer } | undefined {
+    const row = this.database
+      .prepare("SELECT size, chunk_count, bitmap FROM upload_parts WHERE file_id = ?")
+      .get(fileId) as { size: number; chunk_count: number; bitmap: Buffer } | undefined;
+    return row && { size: row.size, chunkCount: row.chunk_count, bitmap: row.bitmap };
+  }
+
+  beginUploadLedger(fileId: string, size: number, chunkCount: number): void {
+    this.database.prepare(`
+      INSERT INTO upload_parts (file_id, size, chunk_count, bitmap, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(file_id) DO UPDATE SET
+        size = excluded.size, chunk_count = excluded.chunk_count,
+        bitmap = excluded.bitmap, updated_at = excluded.updated_at
+    `).run(fileId, size, chunkCount, zeroBitmap(chunkCount), new Date().toISOString());
+  }
+
+  // Marks one chunk written and reports whether the ledger is now full. Returns
+  // undefined when the sweep removed the row while the request was in flight.
+  markChunkWritten(fileId: string, index: number, chunkCount: number): { bitmap: Buffer; full: boolean } | undefined {
+    return withTransaction(this.database, () => {
+      const ledger = this.uploadLedger(fileId);
+      if (!ledger) return undefined;
+      const bitmap = Buffer.from(ledger.bitmap);
+      bitmap[index >> 3] |= 1 << (index & 7);
+      this.database
+        .prepare("UPDATE upload_parts SET bitmap = ?, updated_at = ? WHERE file_id = ?")
+        .run(bitmap, new Date().toISOString(), fileId);
+      return { bitmap, full: isBitmapFull(bitmap, chunkCount) };
+    });
+  }
+
+  removeUploadLedger(fileId: string): void {
+    this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?").run(fileId);
   }
 
   // Registers contents an entry refers to but the server may not hold yet, so
@@ -134,6 +187,7 @@ export class FileStore {
     // halfway through only leaves unreferenced bytes for the next sweep.
     let removedFiles = 0;
     let removedBytes = 0;
+    const removeLedger = this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?");
     for (const bucket of readDirectorySafely(this.directory)) {
       const bucketPath = join(this.directory, bucket);
       for (const name of readDirectorySafely(bucketPath)) {
@@ -144,6 +198,9 @@ export class FileStore {
         if (partial ? !isExpired(path, partialTtlMs) : referenced.has(fileId)) continue;
         removedBytes += sizeOf(path);
         rmSync(path, { force: true });
+        // The ledger must not outlive the bytes it describes, or a later `begin`
+        // would report chunks that no longer exist.
+        if (partial) removeLedger.run(fileId);
         removedFiles += 1;
       }
       if (readDirectorySafely(bucketPath).length === 0) rmSync(bucketPath, { recursive: true, force: true });
@@ -158,6 +215,35 @@ function readDirectorySafely(path: string): string[] {
   } catch {
     return [];
   }
+}
+
+// Bit `i` of a bitmap lives in byte `i >> 3`, counting from the least
+// significant bit, and the tail bits past `chunkCount` stay zero so a ledger is
+// byte-for-byte reproducible.
+export function zeroBitmap(chunkCount: number): Buffer {
+  return Buffer.alloc(Math.ceil(chunkCount / 8));
+}
+
+export function isBitmapFull(bitmap: Buffer, chunkCount: number): boolean {
+  const fullBytes = chunkCount >> 3;
+  for (let index = 0; index < fullBytes; index++) {
+    if (bitmap[index] !== 0xff) return false;
+  }
+  const tailBits = chunkCount & 7;
+  return tailBits === 0 || bitmap[fullBytes] === (1 << tailBits) - 1;
+}
+
+export function countWrittenChunks(bitmap: Buffer): number {
+  let count = 0;
+  for (const byte of bitmap) {
+    // Kernighan's trick: clearing the lowest set bit once per set bit.
+    let value = byte;
+    while (value) {
+      value &= value - 1;
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function sizeOf(path: string): number {

@@ -6,8 +6,6 @@ import {
   ServerMessageSchema,
   UploadBeginResponseSchema,
   UploadChunkResponseSchema,
-  UploadCompleteResponseSchema,
-  UploadConflictResponseSchema,
   type AuthResponse,
   type ClientMessage,
   type ClipboardEntry,
@@ -604,51 +602,73 @@ export class SyncClient {
   }
 
   // Uploads run over HTTP: one POST handshake that either reports the content
-  // already stored or hands out a session with the resume offset, then raw-byte
-  // PUTs that each carry their own answer. No socket correlation involved.
+  // already stored or hands back the server's chunk ledger, then raw-byte PUTs
+  // that each answer with the authoritative ledger. No socket correlation and
+  // no ordering constraint — a chunk only needs its index.
   async #uploadFileOnce(
     entry: ClipboardEntry,
     file: ClipboardFile,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
-    const begin = await this.#uploadBegin(file);
-    // The server already had these bytes, so the transfer is over before it
-    // began — this is what makes copying a folder twice nearly free.
-    if (begin.status === "stored") {
-      onProgress(file.size);
-      return;
-    }
-    if (begin.offset > file.size) throw new Error("服务器续传偏移超出文件大小");
-    onProgress(begin.offset);
-    let offset = begin.offset;
-    while (offset < file.size) {
-      const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-      const data = await invoke<string>("read_file_chunk", {
-        entryId: entry.id, fileId: file.fileId, offset, length,
-      });
-      if (!data) break;
-      // A concurrent upload may store the same content mid-transfer; the next
-      // chunk response then reports `stored` and the remaining bytes are done.
-      const chunk = await this.#uploadChunk(begin.sessionId, offset, base64ToBytes(data));
-      if (chunk.status === "stored") {
+    // The ledger can be retired under us — the TTL sweep, or another device's
+    // begin discarding state it no longer trusts. A PUT answered with 404 is
+    // not a failure: re-beginning hands back the current ledger and the
+    // upload continues from it.
+    for (let restart = 0; ; restart++) {
+      const begin = await this.#uploadBegin(file);
+      // The server already had these bytes, so the transfer is over before it
+      // began — this is what makes copying a folder twice nearly free.
+      if (begin.status === "stored") {
         onProgress(file.size);
         return;
       }
-      // `received` is normally this chunk's end; a 409 conflict rewinds it to
-      // the server's progress so the next iteration resends from there.
-      if (chunk.received <= offset) throw new Error("服务器上传进度异常");
-      offset = chunk.received;
-      onProgress(offset);
+      const chunkCount = Math.ceil(file.size / FILE_CHUNK_SIZE);
+      if (begin.receivedBytes > file.size) throw new Error("服务器续传进度超出文件大小");
+      // The server may already hold chunks from another device's attempt at
+      // the same content, so its bitmap is the only source of truth.
+      let missing = decodeMissing(begin.missing, chunkCount);
+      onProgress(begin.receivedBytes);
+      let retired = false;
+      while (missing.length > 0) {
+        const index = missing[0]!;
+        const offset = index * FILE_CHUNK_SIZE;
+        const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
+        const data = await invoke<string>("read_file_chunk", {
+          entryId: entry.id, fileId: file.fileId, offset, length,
+        });
+        if (!data) throw new Error("本机文件内容不可用");
+        // A concurrent upload may store the same content mid-transfer; the
+        // chunk response then reports `stored` and the remaining bytes are done.
+        const chunk = await this.#uploadChunk(file.fileId, index, base64ToBytes(data));
+        if (chunk === undefined) {
+          retired = true;
+          break;
+        }
+        if (chunk.status === "stored") {
+          onProgress(file.size);
+          return;
+        }
+        const next = decodeMissing(chunk.missing, chunkCount);
+        // Bits never clear, so the chunk just sent must have left the ledger;
+        // refusing to make progress would loop forever.
+        if (next.length >= missing.length) throw new Error("服务器上传进度异常");
+        missing = next;
+        onProgress(chunk.receivedBytes);
+      }
+      if (!retired) {
+        onProgress(file.size);
+        return;
+      }
+      // A bounded number of restarts keeps a server that keeps answering 404
+      // from spinning this loop forever.
+      if (restart >= 3) throw new Error("服务器上传进度反复失效");
     }
-    await this.#uploadComplete(begin.sessionId);
-    onProgress(file.size);
   }
 
   async #uploadBegin(file: ClipboardFile): Promise<UploadBeginResponse> {
     const request: UploadBeginRequest = {
       fileId: file.fileId,
       size: file.size,
-      deviceId: this.device.id,
     };
     const response = await this.#uploadFetch("POST", "/upload/begin", {
       headers: { "Content-Type": "application/json" },
@@ -663,34 +683,20 @@ export class SyncClient {
     return parsed.data;
   }
 
-  async #uploadChunk(sessionId: string, offset: number, chunk: Uint8Array): Promise<UploadChunkResponse> {
-    const response = await this.#uploadFetch("PUT", `/upload/${sessionId}?offset=${offset}`, {
+  // Returns undefined when the server no longer knows this upload — its
+  // ledger was swept or discarded; the caller re-begins to pick up the new one.
+  async #uploadChunk(fileId: string, index: number, chunk: Uint8Array): Promise<UploadChunkResponse | undefined> {
+    const response = await this.#uploadFetch("PUT", `/upload/${fileId}?index=${index}`, {
       headers: { "Content-Type": "application/octet-stream" },
       body: chunk,
       signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
     });
-    if (response.status === 409) {
-      const body = await response.json().catch(() => undefined) as unknown;
-      const parsed = UploadConflictResponseSchema.safeParse(body);
-      // Rewind to the server's progress; the loop resends from there.
-      if (parsed.success) return { status: "accepted", received: parsed.data.offset };
-      throw new Error("服务器上传进度冲突");
-    }
+    if (response.status === 404) return undefined;
     const body = await response.json().catch(() => undefined) as unknown;
     if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
     const parsed = UploadChunkResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error("服务器返回了不兼容的上传响应");
     return parsed.data;
-  }
-
-  async #uploadComplete(sessionId: string): Promise<void> {
-    const response = await this.#uploadFetch("POST", `/upload/${sessionId}/complete`, {
-      signal: AbortSignal.timeout(UPLOAD_BEGIN_TIMEOUT_MS),
-    });
-    const body = await response.json().catch(() => undefined) as unknown;
-    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
-    const parsed = UploadCompleteResponseSchema.safeParse(body);
-    if (!parsed.success) throw new Error("服务器返回了不兼容的上传响应");
   }
 
   // Network-level failures surface as a disconnected sync so the caller's
@@ -866,4 +872,16 @@ function base64ToBytes(base64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;
+}
+
+// Mirrors the server's ledger layout: bit `i` of byte `i >> 3`, least
+// significant bit first, one bit per chunk where 1 = still missing. Tail bits
+// past `chunkCount` are zero and skipped by the loop bound.
+function decodeMissing(missing: string, chunkCount: number): number[] {
+  const bytes = base64ToBytes(missing);
+  const indices: number[] = [];
+  for (let index = 0; index < chunkCount; index++) {
+    if (bytes[index >> 3]! & (1 << (index & 7))) indices.push(index);
+  }
+  return indices;
 }

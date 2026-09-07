@@ -208,38 +208,43 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-// Uploads run over HTTP instead of the WebSocket. The request/response pairing
-// correlates each handshake for free, so the server issues the session id and
-// `stored` answers (content it already holds) ride in ordinary response bodies.
+// Every status an upload response can carry, in one place. `stored`: the
+// server already holds the whole content, nothing left to send. `ready`:
+// `begin` is handing out the chunk ledger, start sending. `accepted`: the
+// chunk landed but the file is not complete yet, keep going.
+export const UploadStatus = {
+  stored: "stored",
+  ready: "ready",
+  accepted: "accepted",
+} as const;
+
+// Uploads run over HTTP instead of the WebSocket. There is no session: the
+// server tracks an upload as one preallocated file plus a per-chunk ledger, so
+// `begin` reports what is already on disk and every PUT answers with the same
+// ledger. `missing` is a base64 bitmap over chunk indices where bit 1 means
+// that chunk still has to be sent.
 export const UploadBeginRequestSchema = z.object({
   fileId: FileIdSchema,
   size: z.number().int().nonnegative(),
-  deviceId: z.string().min(1).max(100),
 });
 
 export const UploadBeginResponseSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("stored"), fileId: FileIdSchema }),
+  z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
   z.object({
-    status: z.literal("ready"),
-    sessionId: z.string().uuid(),
-    offset: z.number().int().nonnegative(),
+    status: z.literal(UploadStatus.ready),
+    missing: z.string(),
+    receivedBytes: z.number().int().nonnegative(),
   }),
 ]);
 
 export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("stored"), fileId: FileIdSchema }),
+  z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
   z.object({
-    status: z.literal("accepted"),
-    received: z.number().int().nonnegative(),
+    status: z.literal(UploadStatus.accepted),
+    missing: z.string(),
+    receivedBytes: z.number().int().nonnegative(),
   }),
 ]);
-
-// Body of a 409 reply when the client's offset no longer matches the session.
-export const UploadConflictResponseSchema = z.object({
-  offset: z.number().int().nonnegative(),
-});
-
-export const UploadCompleteResponseSchema = z.object({ fileId: FileIdSchema });
 
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
 export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
@@ -253,7 +258,5 @@ export type AuthResponse = z.infer<typeof AuthResponseSchema>;
 export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
 export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
 export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
-export type UploadConflictResponse = z.infer<typeof UploadConflictResponseSchema>;
-export type UploadCompleteResponse = z.infer<typeof UploadCompleteResponseSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

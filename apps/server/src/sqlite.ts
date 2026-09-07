@@ -24,11 +24,12 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return batches;
 }
 
-export function withTransaction(database: Database.Database, work: () => void): void {
+export function withTransaction<T>(database: Database.Database, work: () => T): T {
   database.exec("BEGIN");
   try {
-    work();
+    const result = work();
     database.exec("COMMIT");
+    return result;
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
