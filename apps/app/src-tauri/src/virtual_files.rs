@@ -1,9 +1,9 @@
 //! Windows virtual-file clipboard support.
 //!
 //! Explorer receives file descriptors immediately and asks each `IStream` for
-//! bytes only when the destination copy actually starts. Direct contents read
-//! the growing verified download cache; packed contents wait for their bounded
-//! pack and are then extracted before the member is exposed.
+//! bytes only when the destination copy actually starts. Reads come from the
+//! verified content cache, or from the growing partial download while the
+//! transfer is still streaming in.
 
 use crate::{
     content::{is_file_id, ClipboardEntry, ClipboardTreeFile},
@@ -56,8 +56,7 @@ const STREAM_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 #[derive(Clone)]
 struct VirtualItem {
     relative_path: String,
-    original_id: Option<String>,
-    transfer_id: Option<String>,
+    file_id: Option<String>,
     size: Option<u64>,
     is_dir: bool,
 }
@@ -108,14 +107,12 @@ fn normalize_descriptor_path(path: &str) -> Result<String, String> {
 }
 
 fn file_item(node: &ClipboardTreeFile) -> Result<VirtualItem, String> {
-    let transfer_id = node.b.as_deref().unwrap_or(&node.f);
-    if !is_file_id(&node.f) || !is_file_id(transfer_id) {
+    if !is_file_id(&node.f) {
         return Err(format!("文件内容尚未准备好：{}", node.p));
     }
     Ok(VirtualItem {
         relative_path: normalize_descriptor_path(&node.p)?,
-        original_id: Some(node.f.clone()),
-        transfer_id: Some(transfer_id.to_string()),
+        file_id: Some(node.f.clone()),
         size: node.s,
         is_dir: false,
     })
@@ -130,15 +127,14 @@ fn virtual_items(entry: &ClipboardEntry) -> Result<Vec<VirtualItem>, String> {
     for path in &tree.dirs {
         items.push(VirtualItem {
             relative_path: normalize_descriptor_path(path)?,
-            original_id: None,
-            transfer_id: None,
+            file_id: None,
             size: Some(0),
             is_dir: true,
         });
     }
     for node in &tree.files {
         let mut item = file_item(node)?;
-        if item.size.is_none() && node.b.is_none() {
+        if item.size.is_none() {
             item.size = entry
                 .files
                 .iter()
@@ -220,8 +216,7 @@ struct VirtualFileStream {
     window_label: String,
     entry_id: String,
     source_device_id: String,
-    original_id: String,
-    transfer_id: String,
+    file_id: String,
     size: Option<u64>,
     position: Mutex<u64>,
 }
@@ -240,8 +235,7 @@ impl VirtualFileStream {
             window_label,
             entry_id,
             source_device_id,
-            original_id: item.original_id.clone().unwrap_or_default(),
-            transfer_id: item.transfer_id.clone().unwrap_or_default(),
+            file_id: item.file_id.clone().unwrap_or_default(),
             size: item.size,
             position: Mutex::new(position),
         }
@@ -250,13 +244,13 @@ impl VirtualFileStream {
 
     fn request_download(&self) -> Result<(), String> {
         let state = self.app.state::<AppState>();
-        let should_emit = state.virtual_downloads.request(&self.transfer_id);
+        let should_emit = state.virtual_downloads.request(&self.file_id);
         if should_emit {
             let transfer_size = snapshot_entry(&state, &self.entry_id)?
                 .entry
                 .files
                 .iter()
-                .find(|file| file.file_id == self.transfer_id)
+                .find(|file| file.file_id == self.file_id)
                 .map(|file| file.size)
                 .or(self.size)
                 .unwrap_or_default();
@@ -266,7 +260,7 @@ impl VirtualFileStream {
                     "cliproam://virtual-file-request",
                     VirtualFileRequest {
                         entry_id: self.entry_id.clone(),
-                        file_id: self.transfer_id.clone(),
+                        file_id: self.file_id.clone(),
                         size: transfer_size,
                         source_device_id: self.source_device_id.clone(),
                     },
@@ -279,12 +273,7 @@ impl VirtualFileStream {
     fn resolved_path(&self) -> Option<std::path::PathBuf> {
         let state = self.app.state::<AppState>();
         let snapshot = snapshot_entry(&state, &self.entry_id).ok()?;
-        if self.original_id != self.transfer_id {
-            let _unpack = state.virtual_downloads.unpack.lock().ok()?;
-            snapshot.resolve_content(&self.original_id)
-        } else {
-            snapshot.resolve_content(&self.original_id)
-        }
+        snapshot.resolve(&self.file_id)
     }
 
     fn read_at(&self, target: &mut [u8], position: u64) -> Result<usize, String> {
@@ -297,7 +286,6 @@ impl VirtualFileStream {
 
         self.request_download()?;
         let state = self.app.state::<AppState>();
-        let is_pack = self.original_id != self.transfer_id;
         loop {
             if let Some(path) = self.resolved_path() {
                 let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
@@ -307,22 +295,20 @@ impl VirtualFileStream {
             }
 
             let snapshot = snapshot_entry(&state, &self.entry_id)?;
-            let partial = download_path(&snapshot.cache_dir, &self.transfer_id)
+            let partial = download_path(&snapshot.cache_dir, &self.file_id)
                 .ok_or_else(|| "内容标识不合法".to_string())?;
-            if !is_pack {
-                if let Ok(length) = fs::metadata(&partial).map(|metadata| metadata.len()) {
-                    if length > position {
-                        let mut file =
-                            fs::File::open(&partial).map_err(|error| error.to_string())?;
-                        file.seek(SeekFrom::Start(position))
-                            .map_err(|error| error.to_string())?;
-                        let available =
-                            usize::try_from((length - position).min(target.len() as u64))
-                                .unwrap_or(target.len());
-                        return file
-                            .read(&mut target[..available])
-                            .map_err(|error| error.to_string());
-                    }
+            if let Ok(length) = fs::metadata(&partial).map(|metadata| metadata.len()) {
+                if length > position {
+                    let mut file =
+                        fs::File::open(&partial).map_err(|error| error.to_string())?;
+                    file.seek(SeekFrom::Start(position))
+                        .map_err(|error| error.to_string())?;
+                    let available =
+                        usize::try_from((length - position).min(target.len() as u64))
+                            .unwrap_or(target.len());
+                    return file
+                        .read(&mut target[..available])
+                        .map_err(|error| error.to_string());
                 }
             }
 
@@ -331,15 +317,11 @@ impl VirtualFileStream {
                 .transfers
                 .lock()
                 .map_err(|e| e.to_string())?;
-            if let Some(status) = transfers.get(&self.transfer_id) {
+            if let Some(status) = transfers.get(&self.file_id) {
                 if let Some(error) = &status.error {
                     return Err(error.clone());
                 }
                 if status.complete {
-                    if is_pack {
-                        drop(transfers);
-                        continue;
-                    }
                     return Ok(0);
                 }
             }
@@ -479,8 +461,7 @@ impl IStream_Impl for VirtualFileStream_Impl {
             window_label: self.window_label.clone(),
             entry_id: self.entry_id.clone(),
             source_device_id: self.source_device_id.clone(),
-            original_id: self.original_id.clone(),
-            transfer_id: self.transfer_id.clone(),
+            file_id: self.file_id.clone(),
             size: self.size,
             position: Mutex::new(position),
         }

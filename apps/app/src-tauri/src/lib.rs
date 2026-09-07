@@ -35,15 +35,16 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use content::{
-    collect_tree, create_pack, describe_roots, download_path, file_entry_signature, file_signature,
+    collect_tree, describe_roots, download_path, file_entry_signature, file_signature,
     hash_bytes, hash_file, local_source_was_lost, new_tree, preserve_local_sources, readable_path,
-    rebuild_entry_files, rebuild_tree, transfer_file_id, unpack_pack, unpacked_file_path, upload_image_path,
+    rebuild_entry_files, rebuild_tree, upload_image_path,
     ClipboardEntry, ClipboardFile, ClipboardTreeFile, ClipboardTreeRoot, LocalSources,
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, open_history_database, refresh_entry_summary, register_cached_file, remember_hash,
-    retain_single_history, save_history, trim_history, write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
+    load_history, migrate_packed_contents, open_history_database, refresh_entry_summary,
+    register_cached_file, remember_hash, retain_single_history, save_history, trim_history,
+    write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
 };
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -56,20 +57,6 @@ const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
 const HASH_PROGRESS_BATCH: usize = 32;
-/// New large trees keep big contents independent while grouping small contents
-/// into stable hash-prefix buckets. Eight MiB stays below the default 10 MiB
-/// automatic upload threshold.
-const PACK_TREE_FILE_THRESHOLD: usize = 200;
-const PACK_MIN_CONTENTS: usize = 128;
-const PACK_MAX_CONTENT_SIZE: u64 = 1024 * 1024;
-const PACK_TARGET_SIZE: u64 = 8 * 1024 * 1024;
-
-#[derive(Clone)]
-struct PackCandidate {
-    file_id: String,
-    source: PathBuf,
-    size: u64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -166,8 +153,6 @@ struct VirtualDownloadStatus {
 struct VirtualDownloads {
     transfers: Mutex<HashMap<String, VirtualDownloadStatus>>,
     changed: Condvar,
-    /// Pack extraction has a shared destination per pack id.
-    unpack: Mutex<()>,
 }
 
 impl VirtualDownloads {
@@ -612,7 +597,6 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
             p: name,
             f: file_id.clone(),
             s: Some(webp.len() as u64),
-            b: None,
         });
         entry.tree = Some(tree);
         entry.files = vec![ClipboardFile {
@@ -859,147 +843,8 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
     let Some(final_entry_id) = apply_hashes(app, &current_entry_id, &batch, true)? else {
         return Ok(());
     };
-    // Packing is a transport optimization. If a source changes during the
-    // extra read, keep the already valid per-file entry publishable.
-    if let Err(error) = pack_small_contents(app, &final_entry_id) {
-        eprintln!("ClipRoam: 打包 {final_entry_id} 的小文件失败，改用单文件传输：{error}");
-    }
     app.emit("cliproam://entry-ready", final_entry_id)
         .map_err(|error| error.to_string())
-}
-
-fn split_pack_candidates(candidates: Vec<PackCandidate>, depth: usize) -> Vec<Vec<PackCandidate>> {
-    let encoded_size = candidates
-        .iter()
-        .map(|candidate| candidate.size + 64 + 8)
-        .sum::<u64>();
-    if encoded_size <= PACK_TARGET_SIZE || candidates.len() <= 1 || depth >= 64 {
-        return vec![candidates];
-    }
-    let mut buckets = vec![Vec::new(); 16];
-    for candidate in candidates {
-        let nibble = match candidate.file_id.as_bytes()[depth] {
-            b'0'..=b'9' => candidate.file_id.as_bytes()[depth] - b'0',
-            b'a'..=b'f' => candidate.file_id.as_bytes()[depth] - b'a' + 10,
-            _ => 0,
-        };
-        buckets[nibble as usize].push(candidate);
-    }
-    buckets
-        .into_iter()
-        .filter(|bucket| !bucket.is_empty())
-        .flat_map(|bucket| split_pack_candidates(bucket, depth + 1))
-        .collect()
-}
-
-/// Replaces the transfer identity of many small contents with bounded packs.
-/// Tree nodes retain their original hashes, so extraction can independently
-/// verify every file and entry identity does not depend on packing policy.
-fn pack_small_contents(app: &AppHandle, entry_id: &str) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let (entry, cache_dir, database_path) = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let entry = history
-            .find(entry_id)
-            .cloned()
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        (
-            entry,
-            active_cache_dir(&state, &history),
-            history_path_for_key(&state.histories_dir, &history.active_history),
-        )
-    };
-    let Some(tree) = entry.tree.as_ref() else {
-        return Ok(());
-    };
-    if tree.files.len() < PACK_TREE_FILE_THRESHOLD || tree.files.iter().any(|node| node.b.is_some()) {
-        return Ok(());
-    }
-
-    let mut candidates = entry
-        .sources
-        .files
-        .iter()
-        .filter(|source| source.size <= PACK_MAX_CONTENT_SIZE)
-        .filter_map(|source| {
-            source.file_id.as_ref().map(|file_id| PackCandidate {
-                file_id: file_id.clone(),
-                source: PathBuf::from(&source.source),
-                size: source.size,
-            })
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| left.file_id.cmp(&right.file_id));
-    candidates.dedup_by(|left, right| left.file_id == right.file_id);
-    if candidates.len() < PACK_MIN_CONTENTS {
-        return Ok(());
-    }
-
-    let groups = split_pack_candidates(candidates, 0);
-    let mut member_to_pack = HashMap::new();
-    let mut packed_files = HashMap::new();
-    for group in groups {
-        let temporary = cache_dir
-            .join("download")
-            .join(format!(".pack-{}", uuid::Uuid::new_v4()));
-        let contents = group
-            .iter()
-            .map(|candidate| (candidate.file_id.clone(), candidate.source.clone()))
-            .collect::<Vec<_>>();
-        let (pack_id, pack_size) = create_pack(&temporary, &contents)?;
-        let target = download_path(&cache_dir, &pack_id).ok_or_else(|| "文件包标识不合法".to_string())?;
-        if target.is_file() {
-            fs::remove_file(&temporary).map_err(|error| error.to_string())?;
-        } else {
-            fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
-        }
-        register_cached_file(&database_path, &pack_id, pack_size)?;
-        for candidate in group {
-            member_to_pack.insert(candidate.file_id, pack_id.clone());
-        }
-        packed_files.insert(pack_id.clone(), ClipboardFile {
-            file_id: pack_id,
-            size: pack_size,
-            available: false,
-        });
-    }
-
-    let known = entry
-        .files
-        .iter()
-        .map(|file| (file.file_id.clone(), file.clone()))
-        .collect::<HashMap<_, _>>();
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let Some(current) = history.find_mut(entry_id) else {
-        return Ok(());
-    };
-    let Some(tree) = current.tree.as_mut() else {
-        return Ok(());
-    };
-    for node in &mut tree.files {
-        node.b = member_to_pack.get(&node.f).cloned();
-    }
-    let mut seen = HashSet::new();
-    current.files = tree
-        .files
-        .iter()
-        .filter_map(|node| {
-            let transfer_id = transfer_file_id(node);
-            if !seen.insert(transfer_id.to_string()) {
-                return None;
-            }
-            packed_files.get(transfer_id).cloned().or_else(|| known.get(transfer_id).cloned())
-        })
-        .collect();
-    let connection = open_history_database(&history_path)?;
-    write_entry_data(&connection, current)?;
-    for pack_id in packed_files.keys() {
-        history.cached_files.insert(pack_id.clone());
-    }
-    refresh_entry_summary(&mut history, entry_id, &cache_dir);
-    Ok(())
 }
 
 /// Folds resolved content ids into the entry. Only the final call persists, so
@@ -2100,26 +1945,6 @@ impl EntrySnapshot {
     fn resolve(&self, file_id: &str) -> Option<PathBuf> {
         readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
     }
-
-    fn resolve_content(&self, file_id: &str) -> Option<PathBuf> {
-        if let Some(path) = self.resolve(file_id) {
-            return Some(path);
-        }
-        let pack_id = self
-            .entry
-            .tree
-            .as_ref()?
-            .files
-            .iter()
-            .find(|node| node.f == file_id)?
-            .b
-            .as_deref()?;
-        let pack_path = self.resolve(pack_id)?;
-        let target = unpacked_file_path(&self.cache_dir, pack_id, file_id)?;
-        let destination = target.parent()?;
-        unpack_pack(&pack_path, destination).ok()?;
-        target.is_file().then_some(target)
-    }
 }
 
 fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
@@ -2544,17 +2369,7 @@ fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usiz
             if resolved.contains_key(&node.f) {
                 continue;
             }
-            if let Some(pack_id) = node.b.as_deref() {
-                let pack_path = if session.downloaded.contains(pack_id) {
-                    Some(session.staging_dir.join(pack_id))
-                } else {
-                    snapshot.resolve(pack_id)
-                }
-                .ok_or_else(|| format!("文件内容不可用：{}", node.p))?;
-                let unpacked = session.staging_dir.join("unpacked").join(pack_id);
-                unpack_pack(&pack_path, &unpacked)?;
-                resolved.insert(node.f.clone(), unpacked.join(&node.f));
-            } else if session.downloaded.contains(&node.f) {
+            if session.downloaded.contains(&node.f) {
                 resolved.insert(node.f.clone(), session.staging_dir.join(&node.f));
             } else {
                 let source = snapshot
@@ -2683,7 +2498,7 @@ fn apply_clipboard_entry(
                             .join("views")
                             .join(safe_file_name(&snapshot.entry.id));
                         let _ = fs::remove_dir_all(&view);
-                        rebuild_tree(&view, tree, &|file_id| snapshot.resolve_content(file_id), true)?;
+                        rebuild_tree(&view, tree, &|file_id| snapshot.resolve(file_id), true)?;
                         let paths = tree
                             .roots
                             .iter()
@@ -2876,6 +2691,14 @@ pub fn run() {
                 let state = handle.state::<AppState>();
                 let pending = match state.history.lock() {
                     Ok(mut history) => {
+                        let cache_dir = active_cache_dir(&state, &history);
+                        let database_path =
+                            history_path_for_key(&state.histories_dir, &history.active_history);
+                        match migrate_packed_contents(&cache_dir, &database_path, &mut history) {
+                            Ok(0) => {}
+                            Ok(count) => eprintln!("ClipRoam: 已将 {count} 条记录的文件包迁移为独立内容"),
+                            Err(error) => eprintln!("ClipRoam: 迁移旧文件包失败：{error}"),
+                        }
                         let _ = collect_local_garbage(&state.histories_dir, &mut history);
                         pending_entry_ids(&history)
                     }
@@ -3089,35 +2912,6 @@ mod tests {
                 "fallback",
             ),
             entry_id_for_files(&[second, first], "device", "fallback"),
-        );
-    }
-
-    #[test]
-    fn many_small_contents_are_split_into_bounded_stable_packs() {
-        let candidates = (0..300)
-            .map(|index| PackCandidate {
-                file_id: hash_bytes(format!("file-{index}").as_bytes()),
-                source: PathBuf::from(format!("file-{index}")),
-                size: 100 * 1024,
-            })
-            .collect::<Vec<_>>();
-        let groups = split_pack_candidates(candidates.clone(), 0);
-        let repeated = split_pack_candidates(candidates, 0);
-
-        assert!(groups.len() < 300);
-        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), 300);
-        assert!(groups.iter().all(|group| {
-            group.iter().map(|candidate| candidate.size + 72).sum::<u64>() <= PACK_TARGET_SIZE
-        }));
-        assert_eq!(
-            groups
-                .iter()
-                .map(|group| group.iter().map(|candidate| candidate.file_id.as_str()).collect::<Vec<_>>())
-                .collect::<Vec<_>>(),
-            repeated
-                .iter()
-                .map(|group| group.iter().map(|candidate| candidate.file_id.as_str()).collect::<Vec<_>>())
-                .collect::<Vec<_>>(),
         );
     }
 

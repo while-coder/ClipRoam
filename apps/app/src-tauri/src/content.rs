@@ -33,14 +33,9 @@ pub struct ClipboardTreeFile {
     pub p: String,
     /// Content id; empty while the background hash is still pending.
     pub f: String,
-    /// Original file size. Transfer packs have their own size in `entry.files`;
-    /// this value is what virtual-file paste exposes to the destination.
+    /// Original file size, exposed to virtual-file paste destinations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s: Option<u64>,
-    /// Optional transfer pack containing `f`. Paths still address the original
-    /// content, while upload/download operates on this bounded pack blob.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub b: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,62 +179,16 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
     Ok(to_hex(&hasher.finalize()))
 }
 
-pub fn transfer_file_id(node: &ClipboardTreeFile) -> &str {
-    node.b.as_deref().unwrap_or(&node.f)
-}
-
-pub fn unpacked_file_path(cache_dir: &Path, pack_id: &str, file_id: &str) -> Option<PathBuf> {
-    (is_file_id(pack_id) && is_file_id(file_id))
-        .then(|| cache_dir.join("unpacked").join(pack_id).join(file_id))
-}
-
-/// Creates a deterministic, uncompressed pack. Compression is deliberately
-/// omitted: the optimization targets per-file protocol and filesystem
-/// overhead, and a bounded pack remains cheap to retry and stream.
-pub fn create_pack(temp_path: &Path, contents: &[(String, PathBuf)]) -> Result<(String, u64), String> {
-    if let Some(parent) = temp_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let result = (|| {
-        let mut output = fs::File::create(temp_path).map_err(|error| error.to_string())?;
-        output.write_all(PACK_MAGIC).map_err(|error| error.to_string())?;
-        output
-            .write_all(&(contents.len() as u32).to_le_bytes())
-            .map_err(|error| error.to_string())?;
-        for (file_id, source) in contents {
-            if !is_file_id(file_id) {
-                return Err("打包内容标识不合法".to_string());
-            }
-            let size = fs::metadata(source).map_err(|error| error.to_string())?.len();
-            output.write_all(file_id.as_bytes()).map_err(|error| error.to_string())?;
-            output.write_all(&size.to_le_bytes()).map_err(|error| error.to_string())?;
-
-            let mut input = fs::File::open(source).map_err(|error| error.to_string())?;
-            let mut hasher = Sha256::new();
-            let mut copied = 0u64;
-            let mut buffer = vec![0u8; HASH_READ_BUFFER];
-            loop {
-                let count = input.read(&mut buffer).map_err(|error| error.to_string())?;
-                if count == 0 {
-                    break;
-                }
-                copied += count as u64;
-                hasher.update(&buffer[..count]);
-                output.write_all(&buffer[..count]).map_err(|error| error.to_string())?;
-            }
-            if copied != size || to_hex(&hasher.finalize()) != *file_id {
-                return Err("打包时源文件发生了变化".to_string());
-            }
-        }
-        output.flush().map_err(|error| error.to_string())?;
-        let size = output.metadata().map_err(|error| error.to_string())?.len();
-        drop(output);
-        Ok((hash_file(temp_path)?, size))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temp_path);
-    }
-    result
+/// Whether the file begins with the transfer-pack magic. Only the legacy
+/// migration reads packs; everything else treats contents as plain files.
+pub fn is_pack_file(path: &Path) -> bool {
+    fs::File::open(path)
+        .and_then(|mut file| {
+            let mut magic = vec![0u8; PACK_MAGIC.len()];
+            file.read_exact(&mut magic)?;
+            Ok(magic == PACK_MAGIC)
+        })
+        .unwrap_or(false)
 }
 
 /// Expands a pack into an id-only directory. No archived path is trusted, and
@@ -431,7 +380,6 @@ fn collect_node(
             p: relative_path.to_string(),
             f: String::new(),
             s: Some(metadata.len()),
-            b: None,
         });
         sources.files.push(LocalSource {
             path: relative_path.to_string(),
@@ -512,16 +460,15 @@ pub fn rebuild_entry_files(entry: &mut ClipboardEntry) {
     let mut seen = HashSet::new();
     let mut files = Vec::new();
     for node in &tree.files {
-        let transfer_id = transfer_file_id(node);
-        if transfer_id.is_empty() || !seen.insert(transfer_id) {
+        if node.f.is_empty() || !seen.insert(&node.f) {
             continue;
         }
-        if let Some(file) = known.get(transfer_id) {
+        if let Some(file) = known.get(&node.f) {
             files.push(file.clone());
             continue;
         }
         files.push(ClipboardFile {
-            file_id: transfer_id.to_string(),
+            file_id: node.f.clone(),
             size: sizes.get(node.p.as_str()).copied().unwrap_or_default(),
             available: false,
         });
@@ -768,8 +715,8 @@ mod tests {
             roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
             dirs: vec!["bundle".to_string(), "bundle/empty".to_string(), "bundle/sub".to_string()],
             files: vec![
-                ClipboardTreeFile { p: "bundle/first.bin".to_string(), f: file_id.clone(), s: None, b: None },
-                ClipboardTreeFile { p: "bundle/sub/second.bin".to_string(), f: file_id.clone(), s: None, b: None },
+                ClipboardTreeFile { p: "bundle/first.bin".to_string(), f: file_id.clone(), s: None },
+                ClipboardTreeFile { p: "bundle/sub/second.bin".to_string(), f: file_id.clone(), s: None },
             ],
         };
 
@@ -786,26 +733,32 @@ mod tests {
     }
 
     #[test]
-    fn pack_round_trip_verifies_and_restores_each_content() {
+    fn unpack_pack_verifies_and_restores_each_legacy_content() {
         let directory = TemporaryDirectory::new("pack");
-        let first = directory.0.join("first.txt");
-        let second = directory.0.join("second.txt");
-        fs::write(&first, b"first payload").expect("write first");
-        fs::write(&second, b"second payload").expect("write second");
-        let first_id = hash_file(&first).expect("hash first");
-        let second_id = hash_file(&second).expect("hash second");
-        let pack = directory.0.join("contents.pack");
-
-        let (pack_id, pack_size) = create_pack(
-            &pack,
-            &[(first_id.clone(), first), (second_id.clone(), second)],
-        )
-        .expect("create pack");
-        assert_eq!(hash_file(&pack).expect("hash pack"), pack_id);
-        assert_eq!(fs::metadata(&pack).expect("pack metadata").len(), pack_size);
+        let hash = |payload: &[u8]| {
+            let mut hasher = Sha256::new();
+            hasher.update(payload);
+            to_hex(&hasher.finalize())
+        };
+        let first_id = hash(b"first payload");
+        let second_id = hash(b"second payload");
+        let members = [(first_id.as_str(), "first payload".as_bytes()), (second_id.as_str(), b"second payload")];
+        let mut pack = PACK_MAGIC.to_vec();
+        pack.extend_from_slice(&(members.len() as u32).to_le_bytes());
+        for (file_id, payload) in members {
+            let mut id_bytes = [0u8; 64];
+            id_bytes[..file_id.len()].copy_from_slice(file_id.as_bytes());
+            pack.extend_from_slice(&id_bytes);
+            pack.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+            pack.extend_from_slice(payload);
+        }
+        let pack_path = directory.0.join("contents.pack");
+        fs::write(&pack_path, &pack).expect("write pack");
+        assert!(is_pack_file(&pack_path));
+        assert!(!is_pack_file(&directory.0.join("missing.bin")));
 
         let unpacked = directory.0.join("unpacked");
-        unpack_pack(&pack, &unpacked).expect("unpack");
+        unpack_pack(&pack_path, &unpacked).expect("unpack");
         assert_eq!(fs::read(unpacked.join(first_id)).expect("read first"), b"first payload");
         assert_eq!(fs::read(unpacked.join(second_id)).expect("read second"), b"second payload");
         assert!(unpacked.join(".complete").is_file());
@@ -834,7 +787,7 @@ mod tests {
                 .tree
                 .files
                 .iter()
-                .map(|node| ClipboardTreeFile { p: node.p.clone(), f: "a".repeat(64), s: None, b: None })
+                .map(|node| ClipboardTreeFile { p: node.p.clone(), f: "a".repeat(64), s: None })
                 .collect(),
             ..collected.tree.clone()
         };
@@ -862,10 +815,10 @@ mod tests {
                 roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
                 dirs: vec!["bundle".to_string()],
                 files: vec![
-                    ClipboardTreeFile { p: "bundle/a".to_string(), f: uploaded.clone(), s: None, b: None },
-                    ClipboardTreeFile { p: "bundle/b".to_string(), f: local.clone(), s: None, b: None },
+                    ClipboardTreeFile { p: "bundle/a".to_string(), f: uploaded.clone(), s: None },
+                    ClipboardTreeFile { p: "bundle/b".to_string(), f: local.clone(), s: None },
                     // Still waiting on the background hash.
-                    ClipboardTreeFile { p: "bundle/c".to_string(), f: String::new(), s: None, b: None },
+                    ClipboardTreeFile { p: "bundle/c".to_string(), f: String::new(), s: None },
                 ],
             }),
             files: vec![

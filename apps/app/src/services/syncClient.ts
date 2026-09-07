@@ -8,6 +8,7 @@ import {
   EntryListResponseSchema,
   EntryPublishResponseSchema,
   EntryQueryResponseSchema,
+  FileRequestCreate,
   FileRequestsResponseSchema,
   ServerMessageSchema,
   UploadBeginResponseSchema,
@@ -529,9 +530,8 @@ export class SyncClient {
   }
 
   // Downloads pull raw bytes over HTTP. A 404 `NOT_STORED` means the content
-  // has not landed yet: the server recorded the demand, so a device holding
-  // the bytes will push them up through the upload routes — keep retrying
-  // until the deadline runs out.
+  // has not landed yet: declare the demand once, then keep retrying while a
+  // device holding the bytes pushes them up through the upload routes.
   async #fetchStoredFile(
     transferId: string,
     entryId: string,
@@ -539,6 +539,7 @@ export class SyncClient {
     abort: AbortController,
   ): Promise<void> {
     const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
+    let declared = false;
     for (;;) {
       const response = await this.#httpFetch(
         "GET",
@@ -547,11 +548,16 @@ export class SyncClient {
       );
       if (response.status === 401) throw new Error("登录已失效，请重新登录");
       if (response.status === 404) {
-        // NOT_STORED just means the content has not landed yet — retry.
-        // Any other 404 (no access, bad parameters) is a real refusal.
+        // NOT_STORED just means the content has not landed yet — declare the
+        // demand once, then retry. Any other 404 (no access, bad parameters)
+        // is a real refusal.
         const body = await response.json().catch(() => undefined) as unknown;
         if ((body as { code?: unknown } | null | undefined)?.code !== DOWNLOAD_NOT_STORED_CODE) {
           throw new Error(this.#uploadErrorMessage(body, response.status));
+        }
+        if (!declared) {
+          declared = true;
+          await this.#declareRequest(entryId, file).catch(() => undefined);
         }
         if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
         await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
@@ -572,6 +578,22 @@ export class SyncClient {
       }
       await invoke("finish_file_download", { transferId });
       return;
+    }
+  }
+
+  // The download route fails without side effects, so a client that wants the
+  // relay declares its demand here; serving devices long-poll the same list.
+  async #declareRequest(entryId: string, file: ClipboardFile): Promise<void> {
+    const response = await this.#httpFetch("POST", "/files/requests", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        { entryId, fileId: file.fileId, size: file.size } satisfies FileRequestCreate,
+      ),
+    });
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined) as unknown;
+      throw new Error(this.#uploadErrorMessage(body, response.status));
     }
   }
 
