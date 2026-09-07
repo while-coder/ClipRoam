@@ -11,12 +11,12 @@ type FileRow = { file_id: string; size: number; stored: number };
 
 // A pool answer for one content id: the size the first registering entry
 // reported, and whether the bytes are actually on disk.
-type FileStatus = { fileId: string; size: number; available: boolean };
+type FileStatus = { fileId: string; size: number; stored: boolean };
 
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
 // bytes are stored once no matter how many entries or paths point at them.
-// Reclaiming is therefore driven from the outside — see `sweep`.
+// Reclaiming is therefore driven from the outside — see `reclaimUnreferenced`.
 export class FileStore {
   private readonly database: Database.Database;
   private readonly directory: string;
@@ -105,7 +105,7 @@ export class FileStore {
   }
 
   // Marks one chunk written and reports whether the ledger is now full. Returns
-  // undefined when the sweep removed the row while the request was in flight.
+  // undefined when reclamation removed the row while the request was in flight.
   markChunkWritten(fileId: string, index: number): { bitmap: Buffer; full: boolean } | undefined {
     return withTransaction(this.database, () => {
       const ledger = this.uploadLedger(fileId);
@@ -153,14 +153,15 @@ export class FileStore {
       return {
         fileId,
         size: file?.size ?? 0,
-        available: Boolean(file?.stored),
+        stored: Boolean(file?.stored),
       } satisfies FileStatus;
     });
   }
 
-  // The sweep half of mark-and-sweep: the caller supplies every content id still
-  // reachable from a clipboard entry, because only the entries know that.
-  sweep(referenced: ReadonlySet<string>, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+  // Deletes every content the caller does not claim as still reachable from a
+  // clipboard entry, plus .part uploads idle past `partialTtlMs`. The caller
+  // supplies the reachable set because only the entries know it.
+  reclaimUnreferenced(referenced: ReadonlySet<string>, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
     withTransaction(this.database, () => {
       const known = this.database.prepare("SELECT file_id FROM files").all() as Array<{ file_id: string }>;
       const remove = this.database.prepare("DELETE FROM files WHERE file_id = ?");
@@ -170,7 +171,7 @@ export class FileStore {
     });
 
     // Disk removal stays outside the transaction: it is slow, and a crash
-    // halfway through only leaves unreferenced bytes for the next sweep.
+    // halfway through only leaves unreferenced bytes for the next run.
     let removedFiles = 0;
     let removedBytes = 0;
     const removeLedger = this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?");
@@ -184,7 +185,7 @@ export class FileStore {
         const fileId = partial ? name.slice(0, -PARTIAL_SUFFIX.length) : name;
         // One stat answers both questions — whether a .part has aged out and
         // how many bytes retiring it reclaims. A stat failure keeps the file
-        // for the next sweep to look at.
+        // for the next run to look at.
         const stats = statsOf(path);
         if (!stats || (partial ? !isExpired(stats.mtimeMs, partialTtlMs) : referenced.has(fileId))) continue;
         removedBytes += stats.size;

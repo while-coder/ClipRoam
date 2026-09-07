@@ -105,10 +105,6 @@ pub struct ClipboardEntry {
     /// Present when `kind` is `"image"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_info: Option<ImageInfo>,
-    /// Content ids the server's pool does not hold. Only server responses fill
-    /// it in; clients ignore it when publishing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub missing: Option<Vec<String>>,
     pub source_device_id: String,
     pub created_at: String,
     #[serde(default)]
@@ -135,12 +131,6 @@ pub struct CollectedTree {
     pub sources: LocalSources,
 }
 
-/// Whether a node is a file leaf. A directory may legitimately contain a child
-/// named "f" — its value is an object, not a string, so this stays unambiguous.
-pub fn is_file_node(node: &TreeNode) -> bool {
-    matches!(node, TreeNode::File { .. })
-}
-
 /// Every content the map references, de-duplicated in encounter order, with
 /// the size each leaf reports.
 pub fn tree_contents(file_info: &FileInfo) -> Vec<(String, u64)> {
@@ -160,20 +150,6 @@ pub fn tree_contents(file_info: &FileInfo) -> Vec<(String, u64)> {
     }
     walk(file_info, &mut seen, &mut contents);
     contents
-}
-
-/// Resolves a `/`-separated path inside the map, e.g. `bundle/sub/a.txt`.
-pub fn tree_node_at_path<'a>(file_info: &'a FileInfo, path: &str) -> Option<&'a TreeNode> {
-    let mut children = file_info;
-    let segments = path.split('/').collect::<Vec<_>>();
-    let (last, parents) = segments.split_last()?;
-    for segment in parents {
-        children = match children.get(*segment)? {
-            TreeNode::Dir(children) => children,
-            TreeNode::File { .. } => return None,
-        };
-    }
-    children.get(*last)
 }
 
 /// The mutable map that holds the leaf of a `/`-separated path, e.g.
@@ -460,7 +436,8 @@ pub fn refresh_summary(
         if uploaded.contains(file_id) {
             summary.uploaded_count += 1;
         }
-        if cached.contains(file_id) || local.contains(file_id.as_str()) {
+        if uploaded.contains(file_id) || cached.contains(file_id) || local.contains(file_id.as_str())
+        {
             summary.ready_count += 1;
             if !uploaded.contains(file_id) {
                 summary.uploadable_size =
@@ -670,18 +647,27 @@ mod tests {
 
         let collected = collect_tree(&[root]).expect("collect tree");
 
-        assert_eq!(collected.tree.roots.len(), 1);
-        assert_eq!(collected.tree.roots[0].kind, "dir");
-        assert_eq!(
-            collected.tree.dirs,
-            vec!["project", "project/empty", "project/nested"]
-        );
-        assert_eq!(
-            collected.tree.files.iter().map(|node| node.p.as_str()).collect::<Vec<_>>(),
-            vec!["project/nested/child.txt", "project/root.txt"]
-        );
+        assert_eq!(collected.file_info.len(), 1);
+        let TreeNode::Dir(project) = &collected.file_info["project"] else {
+            panic!("project should be a directory");
+        };
+        assert_eq!(project.len(), 3);
+        let TreeNode::Dir(nested) = &project["nested"] else {
+            panic!("nested should be a directory");
+        };
+        let TreeNode::File { f, s } = &nested["child.txt"] else {
+            panic!("child.txt should be a file");
+        };
         // Hashing is deferred, so contents start out unresolved.
-        assert!(collected.tree.files.iter().all(|node| node.f.is_empty()));
+        assert_eq!((f.as_str(), *s), ("", "child".len() as u64));
+        let TreeNode::Dir(empty) = &project["empty"] else {
+            panic!("empty should be a directory");
+        };
+        assert!(empty.is_empty());
+        let TreeNode::File { f, s } = &project["root.txt"] else {
+            panic!("root.txt should be a file");
+        };
+        assert_eq!((f.as_str(), *s), ("", "root".len() as u64));
         assert_eq!(collected.sources.files.len(), 2);
         assert_eq!(collected.sources.files[0].size, "child".len() as u64);
     }
@@ -699,22 +685,28 @@ mod tests {
         let collected = collect_tree(&[first, second]).expect("collect tree");
 
         assert_eq!(
-            collected.tree.roots.iter().map(|root| root.name.as_str()).collect::<Vec<_>>(),
+            collected.file_info.keys().map(String::as_str).collect::<Vec<_>>(),
             vec!["docs", "docs (2)"]
         );
-        assert_eq!(
-            collected.tree.files.iter().map(|node| node.p.as_str()).collect::<Vec<_>>(),
-            vec!["docs/one.txt", "docs (2)/two.txt"]
-        );
+        let TreeNode::Dir(docs) = &collected.file_info["docs"] else {
+            panic!("docs should be a directory");
+        };
+        assert!(matches!(docs["one.txt"], TreeNode::File { .. }));
+        let TreeNode::Dir(renamed) = &collected.file_info["docs (2)"] else {
+            panic!("docs (2) should be a directory");
+        };
+        assert!(matches!(renamed["two.txt"], TreeNode::File { .. }));
     }
 
     #[test]
     fn describe_roots_distinguishes_multiple_roots_from_files() {
-        let roots = vec![
-            ClipboardTreeRoot { name: "docs".to_string(), kind: "dir".to_string() },
-            ClipboardTreeRoot { name: "readme.md".to_string(), kind: "file".to_string() },
-            ClipboardTreeRoot { name: "assets".to_string(), kind: "dir".to_string() },
-        ];
+        let mut roots = FileInfo::new();
+        roots.insert("docs".to_string(), TreeNode::Dir(IndexMap::new()));
+        roots.insert(
+            "readme.md".to_string(),
+            TreeNode::File { f: "a".repeat(64), s: 0 },
+        );
+        roots.insert("assets".to_string(), TreeNode::Dir(IndexMap::new()));
 
         assert_eq!(describe_roots(&roots), "docs 等 3 项");
     }
@@ -725,18 +717,17 @@ mod tests {
         let source = directory.0.join("payload.bin");
         fs::write(&source, "shared").expect("write payload");
         let file_id = hash_bytes(b"shared");
-        let tree = ClipboardTree {
-            v: TREE_VERSION,
-            roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
-            dirs: vec!["bundle".to_string(), "bundle/empty".to_string(), "bundle/sub".to_string()],
-            files: vec![
-                ClipboardTreeFile { p: "bundle/first.bin".to_string(), f: file_id.clone(), s: None },
-                ClipboardTreeFile { p: "bundle/sub/second.bin".to_string(), f: file_id.clone(), s: None },
-            ],
-        };
+        let mut inner = IndexMap::new();
+        inner.insert("first.bin".to_string(), TreeNode::File { f: file_id.clone(), s: 6 });
+        let mut sub = IndexMap::new();
+        sub.insert("second.bin".to_string(), TreeNode::File { f: file_id.clone(), s: 6 });
+        inner.insert("sub".to_string(), TreeNode::Dir(sub));
+        inner.insert("empty".to_string(), TreeNode::Dir(IndexMap::new()));
+        let mut bundle = FileInfo::new();
+        bundle.insert("bundle".to_string(), TreeNode::Dir(inner));
 
         let destination = directory.0.join("view");
-        let written = rebuild_tree(&destination, &tree, &|_| Some(source.clone()), false)
+        let written = rebuild_tree(&destination, &bundle, &|_| Some(source.clone()), false)
             .expect("rebuild tree");
 
         assert_eq!(written, 2);
@@ -765,19 +756,38 @@ mod tests {
 
         let collected = collect_tree(&[root]).expect("collect tree");
         // Measure the worst case: every path resolved to a distinct content id.
-        let hashed = ClipboardTree {
-            files: collected
-                .tree
-                .files
-                .iter()
-                .map(|node| ClipboardTreeFile { p: node.p.clone(), f: "a".repeat(64), s: None })
-                .collect(),
-            ..collected.tree.clone()
-        };
+        fn set_hashed(dir: &FileInfo) -> FileInfo {
+            dir.iter()
+                .map(|(name, node)| {
+                    let node = match node {
+                        TreeNode::File { s, .. } => TreeNode::File { f: "a".repeat(64), s: *s },
+                        TreeNode::Dir(children) => TreeNode::Dir(set_hashed(children)),
+                    };
+                    (name.clone(), node)
+                })
+                .collect()
+        }
+        fn count_dirs(dir: &FileInfo) -> u64 {
+            dir.values()
+                .map(|node| match node {
+                    TreeNode::File { .. } => 0,
+                    TreeNode::Dir(children) => 1 + count_dirs(children),
+                })
+                .sum()
+        }
+        let hashed = set_hashed(&collected.file_info);
         let bytes = serde_json::to_string(&hashed).expect("serialize tree").len();
 
-        assert_eq!(collected.tree.files.len(), 3000);
-        assert_eq!(collected.tree.dirs.len(), 61);
+        fn count_files(dir: &FileInfo) -> u64 {
+            dir.values()
+                .map(|node| match node {
+                    TreeNode::File { .. } => 1,
+                    TreeNode::Dir(children) => count_files(children),
+                })
+                .sum()
+        }
+        assert_eq!(count_files(&collected.file_info), 3000);
+        assert_eq!(count_dirs(&collected.file_info), 61);
         assert!(bytes < MAX_MESSAGE_BYTES / 8, "3000 files encoded into {bytes} bytes");
     }
 
@@ -786,29 +796,20 @@ mod tests {
         let uploaded = hash_bytes(b"uploaded");
         let local = hash_bytes(b"local");
         let remote = hash_bytes(b"remote");
+        let mut inner = IndexMap::new();
+        inner.insert("a".to_string(), TreeNode::File { f: uploaded.clone(), s: 100 });
+        inner.insert("b".to_string(), TreeNode::File { f: local.clone(), s: 300 });
+        inner.insert("c".to_string(), TreeNode::File { f: remote.clone(), s: 500 });
+        let mut bundle = FileInfo::new();
+        bundle.insert("bundle".to_string(), TreeNode::Dir(inner));
         let mut entry = ClipboardEntry {
             id: "entry".to_string(),
             kind: "files".to_string(),
             content: String::new(),
             html: None,
             rtf: None,
-            thumbnail: None,
-            tree: Some(ClipboardTree {
-                v: TREE_VERSION,
-                roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
-                dirs: vec!["bundle".to_string()],
-                files: vec![
-                    ClipboardTreeFile { p: "bundle/a".to_string(), f: uploaded.clone(), s: None },
-                    ClipboardTreeFile { p: "bundle/b".to_string(), f: local.clone(), s: None },
-                    // Still waiting on the background hash.
-                    ClipboardTreeFile { p: "bundle/c".to_string(), f: String::new(), s: None },
-                ],
-            }),
-            files: vec![
-                ClipboardFile { file_id: uploaded.clone(), size: 100, available: true },
-                ClipboardFile { file_id: local.clone(), size: 300, available: false },
-                ClipboardFile { file_id: remote, size: 500, available: false },
-            ],
+            file_info: Some(bundle),
+            image_info: None,
             source_device_id: "device".to_string(),
             created_at: "now".to_string(),
             pinned: false,
@@ -825,17 +826,22 @@ mod tests {
             },
         };
 
-        refresh_summary(&mut entry, &HashSet::from([uploaded]), Path::new("cache"));
+        refresh_summary(
+            &mut entry,
+            &HashSet::new(),
+            &HashSet::from([uploaded]),
+            Path::new("cache"),
+        );
 
         let summary = &entry.summary;
         assert_eq!(summary.root_kind, "dir");
-        assert_eq!((summary.file_count, summary.hashed_count), (3, 2));
+        assert_eq!((summary.file_count, summary.hashed_count), (3, 3));
         assert_eq!(summary.content_count, 3);
         assert_eq!((summary.total_size, summary.max_file_size), (900, 500));
         assert_eq!(summary.uploaded_count, 1);
         assert_eq!(summary.ready_count, 2);
         assert_eq!((summary.pending_count, summary.pending_size), (1, 500));
-        // Only the cached-but-unpublished content can still be uploaded.
+        // Only the locally available but unpublished content can still be uploaded.
         assert_eq!(summary.uploadable_size, Some(300));
         assert!(summary.preview_path.is_none());
     }

@@ -26,7 +26,7 @@ export class UploadService {
   constructor(
     private readonly files: FileStore,
     private readonly config: ServerConfig,
-    private readonly fileAvailable: (fileId: string) => void,
+    private readonly fileStored: (fileId: string) => void,
   ) {}
 
   begin(fileId: string, size: number): UploadBeginResponse {
@@ -53,7 +53,7 @@ export class UploadService {
       this.#startLedger(fileId, size, chunkCount);
       return {
         status: "ready",
-        missing: missingFromBitmap(zeroBitmap(chunkCount), chunkCount),
+        missingChunks: missingFromBitmap(zeroBitmap(chunkCount), chunkCount),
         receivedBytes: 0,
       };
     }
@@ -66,7 +66,7 @@ export class UploadService {
     }
     return {
       status: "ready",
-      missing: missingFromBitmap(ledger.bitmap, chunkCount),
+      missingChunks: missingFromBitmap(ledger.bitmap, chunkCount),
       receivedBytes: countWrittenChunks(ledger.bitmap) * FILE_CHUNK_SIZE,
     };
   }
@@ -97,7 +97,7 @@ export class UploadService {
       descriptor = openSync(this.files.partialPath(fileId), "r+");
     } catch {
       // The bytes are gone but the ledger row is not — possible only through
-      // outside tampering, since the sweep removes both together. The next
+      // outside tampering, since reclamation removes both together. The next
       // `begin` finds the mismatch and starts over.
       throw new UploadHttpError(404, "上传不存在或已被清理");
     }
@@ -123,7 +123,7 @@ export class UploadService {
   #accept(fileId: string, bitmap: Buffer, chunkCount: number): UploadChunkResponse {
     return {
       status: "accepted",
-      missing: missingFromBitmap(bitmap, chunkCount),
+      missingChunks: missingFromBitmap(bitmap, chunkCount),
       receivedBytes: countWrittenChunks(bitmap) * FILE_CHUNK_SIZE,
     };
   }
@@ -140,7 +140,7 @@ export class UploadService {
     renameSync(partialPath, this.files.preparePath(fileId));
     this.files.store(fileId, size);
     this.files.removeUploadLedger(fileId);
-    this.fileAvailable(fileId);
+    this.fileStored(fileId);
   }
 
   // A ledger that disagrees with the declared size cannot describe the same
@@ -197,7 +197,7 @@ function hashFile(path: string): string {
 }
 
 // The ledger stores "written" bits; the wire carries the complement under the
-// name `missing`, with the tail bits past `chunkCount` forced to zero.
+// name `missingChunks`, with the tail bits past `chunkCount` forced to zero.
 function missingFromBitmap(bitmap: Buffer, chunkCount: number): string {
   const missing = Buffer.alloc(bitmap.length);
   const fullBytes = chunkCount >> 3;

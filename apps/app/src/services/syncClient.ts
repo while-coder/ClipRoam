@@ -8,19 +8,21 @@ import {
   DeviceListResponseSchema,
   EntryPublishResponseSchema,
   EntryQueryResponseSchema,
+  FileQueryResponseSchema,
   ServerMessageSchema,
   UploadBeginResponseSchema,
   UploadChunkResponseSchema,
   type AuthResponse,
   type ClientMessage,
   type ClipboardEntry,
-  type ClipboardFile,
   type ClipboardManifestEntry,
   type Device,
   type EntryActivateRequest,
   type EntryPublishRequest,
   type EntryQueryRequest,
+  type FileQueryRequest,
   type FileRelayRequest,
+  type FileStatus,
   type UploadBeginRequest,
   type UploadBeginResponse,
   type UploadChunkResponse,
@@ -30,6 +32,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
 
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
+
+/** One content an entry references, with what this device last knew the server to hold. */
+type UploadCandidate = { fileId: string; size: number; uploaded: boolean };
+
+/** The file-shape fields a download or upload transfer needs. */
+type FileReference = { fileId: string; size: number };
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
@@ -243,53 +251,52 @@ export class SyncClient {
   // their HTTP responses and downloads ride HTTP fetches that carry their own
   // abort controllers.
 
-  async publish(entry: ClipboardEntry): Promise<void> {
+  // Every write returns the server's stored entry: its id and timestamp are
+  // server-assigned, and the caller must adopt them into local state.
+
+  async publish(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // Publish the metadata first. Other devices can then retrieve the original
     // from this online device while the server copy is still uploading.
-    await this.#publishEntry(entry);
-    // Only a fresh OS clipboard capture calls publish(). Restores, uploads and
-    // metadata edits use separate paths, so they can never overwrite another
-    // device's clipboard. File lists stay history-only to avoid eager caches.
-    if (entry.kind !== "files") {
-      await this.activate(entry.id).catch(() => undefined);
-    }
+    const stored = await this.#publishEntry(entry);
     await this.#uploadEntry(entry, this.autoUploadLimit, false);
+    return stored;
   }
 
   /** Sends an existing entry update (such as pinning) without re-uploading files. */
-  async publishMetadata(entry: ClipboardEntry): Promise<void> {
-    await this.#publishEntry(entry);
+  async publishMetadata(entry: ClipboardEntry): Promise<ClipboardEntry> {
+    return this.#publishEntry(entry);
   }
 
-  async restore(entry: ClipboardEntry): Promise<void> {
+  async restore(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // A snapshot can show that the server no longer has this entry. The HTTP
     // response confirms the write directly, so the socket echo-wait becomes a
     // bounded retry around an ordinary publish.
-    await this.#publishWithRetry(entry);
+    const stored = await this.#publishWithRetry(entry);
     await this.#uploadEntry(entry, this.autoUploadLimit, false, true);
+    return stored;
   }
 
   // A reconcile pass must not spin while the server is unreachable, so each
   // failed attempt backs off like the upload retry loop does.
-  async #publishWithRetry(entry: ClipboardEntry): Promise<void> {
+  async #publishWithRetry(entry: ClipboardEntry): Promise<ClipboardEntry> {
     for (let attempt = 0; attempt < 3 && !this.#stopped; attempt++) {
       try {
-        await this.#publishEntry(entry);
-        return;
+        return await this.#publishEntry(entry);
       } catch (error) {
         if (!this.#isRecoverableUploadError(error)) throw error;
         await new Promise((resolve) => window.setTimeout(resolve, 2_000));
       }
     }
-    if (!this.#stopped) await this.#publishEntry(entry);
+    return this.#publishEntry(entry);
   }
 
-  async upload(entry: ClipboardEntry): Promise<void> {
+  async upload(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // A manual upload can be the first time the server learns about this entry.
     // Without the reference, garbage collection would reclaim the contents that
     // were just uploaded.
-    await this.#publishEntry(entry);
+    const stored = await this.#publishEntry(entry);
     await this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, true);
+    return stored;
   }
 
   async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
@@ -331,9 +338,9 @@ export class SyncClient {
     forceUpload: boolean,
   ): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
-    const files = await invoke<ClipboardFile[]>("list_entry_files", { entryId: entry.id });
+    const files = await invoke<UploadCandidate[]>("list_entry_files", { entryId: entry.id });
     const candidates = files.filter((file) => (
-      file.size < sizeLimit && (forceUpload || !file.available)
+      file.size < sizeLimit && (forceUpload || !file.uploaded)
     ));
     if (!candidates.length) {
       if (reportFailures) throw new Error("没有小于 100 MB 的未上传文件");
@@ -393,13 +400,8 @@ export class SyncClient {
         content: entry.content,
         html: entry.html,
         rtf: entry.rtf,
-        thumbnail: entry.thumbnail,
-        tree: entry.tree,
-        files: entry.files.map((file) => ({
-          fileId: file.fileId,
-          size: file.size,
-          available: file.available,
-        })),
+        fileInfo: entry.fileInfo,
+        imageInfo: entry.imageInfo,
         sourceDeviceId: entry.sourceDeviceId,
         createdAt: entry.createdAt,
         pinned: entry.pinned,
@@ -486,13 +488,42 @@ export class SyncClient {
     return parsed.data.entries;
   }
 
-  async downloadFile(entry: ClipboardEntry, file: ClipboardFile): Promise<void> {
+  // Pool availability for a batch of content ids. This replaces the per-entry
+  // `missing` list the protocol dropped: the client asks once per upsert batch
+  // which contents the server already holds, so locally stored availability
+  // marks stay truthful without the server restamping every entry read.
+  async fetchFileStatuses(fileIds: readonly string[]): Promise<FileStatus[]> {
+    const files: FileStatus[] = [];
+    for (let index = 0; index < fileIds.length; index += ENTRY_QUERY_BATCH) {
+      files.push(...await this.#fetchFileStatusBatch(fileIds.slice(index, index + ENTRY_QUERY_BATCH)));
+    }
+    return files;
+  }
+
+  async #fetchFileStatusBatch(fileIds: readonly string[]): Promise<FileStatus[]> {
+    const request: FileQueryRequest = { fileIds: [...fileIds] };
+    const response = await this.#httpFetch("POST", "/files/query", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
+    });
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined) as unknown;
+      throw new Error(this.#uploadErrorMessage(body, response.status));
+    }
+    const parsed = FileQueryResponseSchema.safeParse(await response.json().catch(() => undefined));
+    if (!parsed.success) throw new Error("服务器返回了不兼容的文件状态响应");
+    return parsed.data.files;
+  }
+
+  async downloadFile(entry: ClipboardEntry, file: FileReference): Promise<void> {
     return this.#downloadFileReference(entry.id, file);
   }
 
   async downloadFileToSave(
     entry: ClipboardEntry,
-    file: ClipboardFile,
+    file: FileReference,
     saveId: string,
   ): Promise<void> {
     return this.#downloadFileReference(entry.id, file, saveId);
@@ -507,13 +538,12 @@ export class SyncClient {
     return this.#downloadFileReference(request.entryId, {
       fileId: request.fileId,
       size: request.size,
-      available: true,
     });
   }
 
   async #downloadFileReference(
     entryId: string,
-    file: ClipboardFile,
+    file: FileReference,
     saveId?: string,
   ): Promise<void> {
     const transferId = crypto.randomUUID();
@@ -546,7 +576,7 @@ export class SyncClient {
   async #fetchStoredFile(
     transferId: string,
     entryId: string,
-    file: ClipboardFile,
+    file: FileReference,
     abort: AbortController,
   ): Promise<void> {
     const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
@@ -573,7 +603,7 @@ export class SyncClient {
   async #pullOnce(
     transferId: string,
     entryId: string,
-    file: ClipboardFile,
+    file: FileReference,
     offset: number,
     abort: AbortController,
   ): Promise<number> {
@@ -660,7 +690,7 @@ export class SyncClient {
 
   async #uploadFile(
     entry: ClipboardEntry,
-    file: ClipboardFile,
+    file: FileReference,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
     while (!this.#stopped) {
@@ -684,7 +714,7 @@ export class SyncClient {
   // no ordering constraint — a chunk only needs its index.
   async #uploadContent(
     entryId: string,
-    file: ClipboardFile,
+    file: FileReference,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
     // The ledger can be retired under us — the TTL sweep, or another device's
@@ -703,7 +733,7 @@ export class SyncClient {
       if (begin.receivedBytes > file.size) throw new Error("服务器续传进度超出文件大小");
       // The server may already hold chunks from another device's attempt at
       // the same content, so its bitmap is the only source of truth.
-      let missing = decodeMissing(begin.missing, chunkCount);
+      let missing = decodeMissing(begin.missingChunks, chunkCount);
       onProgress(begin.receivedBytes);
       let retired = false;
       while (missing.length > 0) {
@@ -725,7 +755,7 @@ export class SyncClient {
           onProgress(file.size);
           return;
         }
-        const next = decodeMissing(chunk.missing, chunkCount);
+        const next = decodeMissing(chunk.missingChunks, chunkCount);
         // Bits never clear, so the chunk just sent must have left the ledger;
         // refusing to make progress would loop forever.
         if (next.length >= missing.length) throw new Error("服务器上传进度异常");
@@ -742,7 +772,7 @@ export class SyncClient {
     }
   }
 
-  async #uploadBegin(file: ClipboardFile): Promise<UploadBeginResponse> {
+  async #uploadBegin(file: FileReference): Promise<UploadBeginResponse> {
     const request: UploadBeginRequest = {
       fileId: file.fileId,
       size: file.size,
