@@ -39,11 +39,7 @@ export const ClipboardTreeSchema = z.object({
   files: z.array(z.object({
     p: z.string().min(1).max(1024),
     f: FileIdSchema,
-    // Original size remains available even when `b` points at a transfer pack.
     s: z.number().int().nonnegative().optional(),
-    // Version 2 entries may transfer this original content inside a bounded
-    // pack. `f` remains the identity used to restore and verify the file.
-    b: FileIdSchema.optional(),
   })).default([]),
 });
 
@@ -234,6 +230,15 @@ export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
 // client that receives this code simply retries while the demand is served.
 export const DOWNLOAD_NOT_STORED_CODE = "NOT_STORED";
 
+// Body of `POST /files/requests`: a client fetched content the pool does not
+// hold and explicitly declares the demand, so devices holding the bytes can
+// push them up through the upload routes.
+export const FileRequestCreateSchema = z.object({
+  entryId: z.string().min(1),
+  fileId: FileIdSchema,
+  size: z.number().int().nonnegative(),
+});
+
 // Body of a `GET /files/requests` long-poll: the account's outstanding download
 // demands. A device that holds the listed content pushes it up through the
 // upload routes; demands nobody serves simply expire on the server.
@@ -265,6 +270,7 @@ export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
 export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
 export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
 export type FileRequest = z.infer<typeof FileRequestsResponseSchema>["requests"][number];
+export type FileRequestCreate = z.infer<typeof FileRequestCreateSchema>;
 export type FileRequestsResponse = z.infer<typeof FileRequestsResponseSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

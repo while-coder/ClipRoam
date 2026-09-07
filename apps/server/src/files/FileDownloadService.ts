@@ -12,11 +12,12 @@ const REQUEST_TTL_MS = 10 * 60_000;
 // A runaway client must not be able to grow the ledger without bound.
 const MAX_REQUESTS_PER_USER = 50;
 
-// Downloads pull raw bytes over HTTP (`GET /files/:entryId/:fileId`). This
-// service only tracks what is missing: a failed download records its demand
-// and fails immediately — the client retries — while any device of the
-// account long-polls `pending` and serves what it actually holds through the
-// upload routes. No socket is involved — a device that can serve simply does.
+// Downloads pull raw bytes over HTTP (`GET /files/:entryId/:fileId`) and the
+// download route itself is side-effect free. This service only tracks what is
+// missing: a client that wants the relay declares its demand explicitly
+// (`POST /files/requests`) — the client retries the download meanwhile — while
+// any device of the account long-polls `pending` and serves what it actually
+// holds through the upload routes. No socket is involved.
 export class FileDownloadService {
   #requests = new Map<string, Map<string, PullRequest>>();
   #pollWaiters = new Map<string, Set<() => void>>();

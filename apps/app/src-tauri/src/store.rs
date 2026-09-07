@@ -15,8 +15,8 @@ use std::{
 use uuid::Uuid;
 
 use crate::content::{
-    cached_file_path, refresh_summary, transfer_file_id, ClipboardEntry, ClipboardEntryExtra,
-    ClipboardFile, ClipboardTree,
+    cached_file_path, download_path, is_file_id, is_pack_file, rebuild_entry_files, refresh_summary,
+    unpack_pack, ClipboardEntry, ClipboardEntryExtra, ClipboardFile, ClipboardTree,
 };
 
 pub const SCHEMA_VERSION: i64 = 6;
@@ -367,13 +367,12 @@ fn files_for_tree(
     tree.files
         .iter()
         .filter_map(|node| {
-            let file_id = transfer_file_id(node);
-            if file_id.is_empty() || !seen.insert(file_id.to_string()) {
+            if node.f.is_empty() || !seen.insert(node.f.clone()) {
                 return None;
             }
-            Some(known_files.get(file_id).cloned().unwrap_or_else(|| ClipboardFile {
-                file_id: file_id.to_string(),
-                size: node.b.as_ref().map_or_else(|| node.s.unwrap_or_default(), |_| 0),
+            Some(known_files.get(&node.f).cloned().unwrap_or_else(|| ClipboardFile {
+                file_id: node.f.clone(),
+                size: node.s.unwrap_or_default(),
                 available: false,
             }))
         })
@@ -595,6 +594,78 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
     }
 }
 
+/// Older clients could transfer many small contents inside one bounded pack
+/// blob. Packs are no longer read anywhere, so every cached pack is expanded
+/// back into individual contents and the entry rewritten to address them
+/// directly. Must run before `collect_local_garbage`, which would otherwise
+/// judge the now-unreferenced pack blobs reclaimable.
+pub fn migrate_packed_contents(
+    cache_dir: &Path,
+    database_path: &Path,
+    history: &mut HistoryData,
+) -> Result<usize, String> {
+    let mut migrated_packs = HashSet::new();
+    let mut migrated_entries = 0usize;
+    let mut cached = std::mem::take(&mut history.cached_files);
+    let connection = open_history_database(database_path)?;
+    for entry in history.active_entries_mut() {
+        // Packs are found by content, not by entry shape: whatever this device
+        // actually cached and whose bytes carry the pack magic gets expanded.
+        let candidates = entry
+            .files
+            .iter()
+            .map(|file| file.file_id.clone())
+            .filter(|file_id| !migrated_packs.contains(file_id))
+            .filter(|file_id| {
+                cached_file_path(cache_dir, file_id).is_some_and(|path| is_pack_file(&path))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        for pack_id in candidates {
+            let Some(pack_path) = cached_file_path(cache_dir, &pack_id) else {
+                continue;
+            };
+            let staging = cache_dir.join(format!(".pack-migrate-{}", Uuid::new_v4()));
+            if let Err(error) = unpack_pack(&pack_path, &staging) {
+                let _ = fs::remove_dir_all(&staging);
+                eprintln!("ClipRoam: 迁移文件包 {pack_id} 失败，保留原始记录：{error}");
+                continue;
+            }
+            migrated_packs.insert(pack_id.clone());
+            for member in fs::read_dir(&staging)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+            {
+                let file_id = member.file_name().to_string_lossy().into_owned();
+                let Ok(metadata) = member.metadata() else { continue };
+                if !metadata.is_file() || !is_file_id(&file_id) {
+                    continue;
+                }
+                let Some(target) = download_path(cache_dir, &file_id) else { continue };
+                if !target.is_file() {
+                    fs::rename(member.path(), &target).map_err(|error| error.to_string())?;
+                }
+                register_cached_file(database_path, &file_id, metadata.len())?;
+                cached.insert(file_id);
+            }
+            let _ = fs::remove_dir_all(&staging);
+            cached.remove(&pack_id);
+        }
+        // The pack blobs leave `entry.files`; members that were only reachable
+        // through them come back as not-yet-available contents and upload on
+        // demand like any other missing content.
+        rebuild_entry_files(entry);
+        refresh_summary(entry, &cached, cache_dir);
+        write_entry_data(&connection, entry)?;
+        migrated_entries += 1;
+    }
+    history.cached_files = cached;
+    Ok(migrated_entries)
+}
+
 /// Mark-sweep over local uploads, downloaded content, and views for entries
 /// that are gone. Incomplete downloads expire after one day.
 pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) -> Result<usize, String> {
@@ -615,9 +686,8 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
         }
         if let Some(tree) = &entry.tree {
             for node in &tree.files {
-                let file_id = transfer_file_id(node);
-                if !file_id.is_empty() {
-                    referenced.insert(file_id.to_string());
+                if !node.f.is_empty() {
+                    referenced.insert(node.f.clone());
                 }
             }
         }
@@ -651,13 +721,6 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
         for view in views.filter_map(Result::ok) {
             if !entry_ids.contains(&view.file_name().to_string_lossy().into_owned()) {
                 let _ = fs::remove_dir_all(view.path());
-            }
-        }
-    }
-    if let Ok(packs) = fs::read_dir(cache_dir.join("unpacked")) {
-        for pack in packs.filter_map(Result::ok) {
-            if !referenced.contains(&pack.file_name().to_string_lossy().into_owned()) {
-                let _ = fs::remove_dir_all(pack.path());
             }
         }
     }
@@ -916,7 +979,7 @@ mod tests {
             v: crate::content::TREE_VERSION,
             roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
             dirs: vec!["bundle".to_string()],
-            files: vec![ClipboardTreeFile { p: "bundle/a.txt".to_string(), f: file_id.to_string(), s: None, b: None }],
+            files: vec![ClipboardTreeFile { p: "bundle/a.txt".to_string(), f: file_id.to_string(), s: None }],
         };
         let mut history = HistoryData {
             active_history: LOCAL_HISTORY_KEY.to_string(),
@@ -970,6 +1033,114 @@ mod tests {
         assert_eq!(cached_hash(&connection, "C:/a.txt", 12, 99).as_deref(), Some("abc"));
         assert_eq!(cached_hash(&connection, "C:/a.txt", 13, 99), None);
         drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn migration_expands_cached_packs_back_into_members() {
+        use sha2::{Digest, Sha256};
+
+        let directory = std::env::temp_dir().join(format!("cliproam-pack-test-{}", Uuid::new_v4()));
+        let cache_dir = directory.join("files");
+        let download_dir = cache_dir.join("download");
+        fs::create_dir_all(&download_dir).expect("create cache");
+
+        let hash = |payload: &[u8]| {
+            let mut hasher = Sha256::new();
+            hasher.update(payload);
+            crate::content::to_hex(&hasher.finalize())
+        };
+        let member_ids = ["first payload", "second payload"]
+            .iter()
+            .map(|payload| hash(payload.as_bytes()))
+            .collect::<Vec<_>>();
+        let pack_id = hash(b"pack bytes");
+        // Hand-build a legacy pack: magic, member count, then verified members.
+        let mut pack = b"CLIPROAM-PACK-1\n".to_vec();
+        pack.extend_from_slice(&(member_ids.len() as u32).to_le_bytes());
+        for (file_id, payload) in member_ids.iter().zip(["first payload", "second payload"]) {
+            let mut id_bytes = [0u8; 64];
+            id_bytes[..file_id.len()].copy_from_slice(file_id.as_bytes());
+            pack.extend_from_slice(&id_bytes);
+            pack.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+            pack.extend_from_slice(payload.as_bytes());
+        }
+        fs::write(download_dir.join(&pack_id), &pack).expect("write pack");
+        // A regular content cached next to the pack must survive untouched.
+        let plain_id = hash(b"plain bytes");
+        fs::write(download_dir.join(&plain_id), b"plain bytes").expect("write plain");
+
+        let path = directory.join("history.sqlite");
+        let mut history = HistoryData {
+            active_history: LOCAL_HISTORY_KEY.to_string(),
+            ..HistoryData::default()
+        };
+        let mut entry = ClipboardEntry {
+            id: "entry".to_string(),
+            kind: "files".to_string(),
+            content: "bundle".to_string(),
+            html: None,
+            rtf: None,
+            thumbnail: None,
+            tree: Some(ClipboardTree {
+                v: crate::content::TREE_VERSION,
+                roots: vec![ClipboardTreeRoot { name: "bundle".to_string(), kind: "dir".to_string() }],
+                dirs: vec![],
+                files: vec![
+                    ClipboardTreeFile { p: "bundle/first.txt".to_string(), f: member_ids[0].clone(), s: Some(13) },
+                    ClipboardTreeFile { p: "bundle/second.txt".to_string(), f: member_ids[1].clone(), s: Some(14) },
+                    ClipboardTreeFile { p: "bundle/plain.txt".to_string(), f: plain_id.clone(), s: None },
+                ],
+            }),
+            files: vec![
+                ClipboardFile { file_id: pack_id.clone(), size: pack.len() as u64, available: true },
+                ClipboardFile { file_id: plain_id.clone(), size: 10, available: false },
+            ],
+            source_device_id: "device".to_string(),
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            pinned: false,
+            summary: Default::default(),
+            sources: crate::content::LocalSources::default(),
+        };
+        entry.sources.roots = vec!["C:/bundle".to_string()];
+        entry.sources.files = vec![
+            crate::content::LocalSource {
+                path: "bundle/first.txt".to_string(),
+                source: "C:/bundle/first.txt".to_string(),
+                size: 13,
+                modified_at: None,
+                file_id: Some(member_ids[0].clone()),
+            },
+            crate::content::LocalSource {
+                path: "bundle/second.txt".to_string(),
+                source: "C:/bundle/second.txt".to_string(),
+                size: 14,
+                modified_at: None,
+                file_id: Some(member_ids[1].clone()),
+            },
+        ];
+        history.active_entries_mut().push(entry);
+        history.cached_files.insert(pack_id.clone());
+        history.cached_files.insert(plain_id.clone());
+
+        let migrated = migrate_packed_contents(&cache_dir, &path, &mut history).expect("migrate");
+        assert_eq!(migrated, 1);
+
+        let entry = &history.active_entries()[0];
+        let file_ids = entry.files.iter().map(|file| file.file_id.as_str()).collect::<Vec<_>>();
+        assert_eq!(file_ids, [member_ids[0].as_str(), member_ids[1].as_str(), plain_id.as_str()]);
+        assert!(!entry.files.iter().any(|file| file.file_id == pack_id));
+        assert!(!history.cached_files.contains(&pack_id));
+        for member_id in &member_ids {
+            assert!(history.cached_files.contains(member_id));
+            assert_eq!(
+                fs::read(download_dir.join(member_id)).expect("member bytes"),
+                if *member_id == member_ids[0] { b"first payload" as &[u8] } else { b"second payload" }
+            );
+        }
+        // The pack blob itself is now unreferenced and left for GC to reclaim.
+        assert!(download_dir.join(&pack_id).is_file());
+        drop(history);
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 }

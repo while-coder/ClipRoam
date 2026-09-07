@@ -4,6 +4,7 @@ import {
   DOWNLOAD_NOT_STORED_CODE,
   FILE_CHUNK_SIZE,
   FileIdSchema,
+  FileRequestCreateSchema,
   UploadBeginRequestSchema,
 } from "@cliproam/protocol";
 import type { FileDownloadService } from "../../files/FileDownloadService.js";
@@ -53,10 +54,10 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     }
   });
 
-  // Downloads stream straight from the content pool as raw bytes. When the
-  // content is missing, the demand is recorded and the reply fails right
-  // away — the client retries while a device holding the bytes serves the
-  // demand through the upload routes. The entry scopes the permission
+  // Downloads stream straight from the content pool as raw bytes and are
+  // side-effect free: content that is missing simply fails with
+  // `NOT_STORED`, and a client that wants the relay to kick in declares the
+  // demand via `POST /files/requests`. The entry scopes the permission
   // check: a content id alone says nothing about who may read it.
   app.get("/files/:entryId/:fileId", async (request, reply) => {
     const user = sessionUser(request);
@@ -70,17 +71,26 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     }
     const stored = store.files().get(fileId);
     if (!stored) {
-      downloads.request(
-        user.id,
-        fileId,
-        entryId,
-        store.files().describe([fileId])[0]?.size ?? 0,
-      );
       return reply.code(404).send({ code: DOWNLOAD_NOT_STORED_CODE, message: "文件尚未同步到服务器" });
     }
     return reply.header("Content-Type", "application/octet-stream")
       .header("Content-Length", String(stored.size))
       .send(createReadStream(stored.path));
+  });
+
+  // A client that got `NOT_STORED` posts here to declare its demand; serving
+  // devices long-poll the same URL to pick it up. Registration is the
+  // client's explicit choice, so the download route above stays pure.
+  app.post("/files/requests", { bodyLimit: 4 * 1024 }, async (request, reply) => {
+    const user = sessionUser(request);
+    if (!user) return reply.code(401).send({ message: "登录已失效，请重新登录" });
+    const parsed = FileRequestCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: "中转参数无效" });
+    if (!store.canReadFile(user.id, parsed.data.entryId, parsed.data.fileId)) {
+      return reply.code(404).send({ message: "文件不存在或无权访问" });
+    }
+    downloads.request(user.id, parsed.data.fileId, parsed.data.entryId, parsed.data.size);
+    return reply.code(204).send();
   });
 
   // Devices long-poll here for missing content they might hold. The list is
