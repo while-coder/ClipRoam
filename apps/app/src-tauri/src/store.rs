@@ -1038,9 +1038,13 @@ mod tests {
 
     #[test]
     fn migration_expands_cached_packs_back_into_members() {
+        use crate::content::{ClipboardTreeFile, ClipboardTreeRoot};
         use sha2::{Digest, Sha256};
 
         let directory = std::env::temp_dir().join(format!("cliproam-pack-test-{}", Uuid::new_v4()));
+        // Initialize the schema first: opening an unknown-version database
+        // resets the whole cache directory as a side effect.
+        drop(open_history_database(&directory.join("history.sqlite")).expect("create database"));
         let cache_dir = directory.join("files");
         let download_dir = cache_dir.join("download");
         fs::create_dir_all(&download_dir).expect("create cache");
