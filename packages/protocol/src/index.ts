@@ -2,10 +2,16 @@ import { z } from "zod";
 
 export const DEFAULT_AUTO_UPLOAD_LIMIT = 10 * 1024 * 1024;
 export const FILE_CHUNK_SIZE = 128 * 1024;
-// A single entry carries its whole directory tree, so publish/fetch messages can
-// get large. The tree is compact (~40 bytes per node) but unbounded by design.
+// A single entry carries its whole directory tree, so a publish body can get
+// large. The tree is compact (~40 bytes per node) but unbounded by design.
+// The same cap bounds the WebSocket maxPayload.
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
-export const ENTRY_FETCH_BATCH = 20;
+// One HTTP query round-trip covers far more ids than the per-message batches
+// the WebSocket era needed; the response size (thumbnails included) is the
+// real bound, not the request.
+export const ENTRY_QUERY_BATCH = 100;
+export const ENTRY_PAGE_DEFAULT_LIMIT = 100;
+export const ENTRY_PAGE_MAX_LIMIT = 200;
 
 export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
 
@@ -70,10 +76,15 @@ export const DeviceSchema = z.object({
   osVersion: z.string().min(1).max(80).default("未知"),
 });
 
+// `DeviceSchema.id` stays unconstrained on purpose: it validates device
+// identity, not length. Request bodies that carry a device id on behalf of the
+// sender get this bounded shape instead.
+export const DeviceIdSchema = z.string().min(1).max(100);
+
 export const AuthCredentialsSchema = z.object({
   username: z.string().trim().min(3).max(32).regex(/^[a-zA-Z0-9_.-]+$/),
   password: z.string().min(6).max(128),
-  deviceId: z.string().min(1).max(100),
+  deviceId: DeviceIdSchema,
 });
 
 export const ChangePasswordSchema = z.object({
@@ -93,55 +104,52 @@ export const AuthResponseSchema = z.object({
   }),
 });
 
+// Entries run over HTTP. The publish response is the sender's confirmation —
+// the socket echo the WebSocket flow once waited for no longer exists.
+export const EntryPublishRequestSchema = z.object({
+  deviceId: DeviceIdSchema,
+  // The keyset cursor orders on `createdAt`, so it must be a fixed-width
+  // ISO-8601 UTC string: a client-supplied non-ISO value would break
+  // pagination even though it would otherwise store fine.
+  entry: ClipboardEntrySchema.refine(
+    (value) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(value.createdAt),
+    { message: "createdAt 必须是 ISO-8601 UTC 时间" },
+  ),
+});
+
+export const EntryPublishResponseSchema = z.object({ entry: ClipboardEntrySchema });
+
+export const EntryQueryRequestSchema = z.object({
+  entryIds: z.array(z.string()).min(1).max(ENTRY_QUERY_BATCH),
+});
+
+// Ids the server does not know are simply absent, not an error.
+export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
+
+// Keyset pagination: `nextCursor` feeds straight back into the next request,
+// and null means the last page was reached.
+export const EntryListResponseSchema = z.object({
+  entries: z.array(ClipboardEntrySchema),
+  nextCursor: z.string().nullable(),
+});
+
+export const EntryActivateRequestSchema = z.object({ deviceId: DeviceIdSchema });
+
+export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
+
+// Opaque to clients: the server encodes the last entry of a page and expects
+// the same token back on the next request.
+export type EntryCursor = { createdAt: string; id: string };
+
+// The socket only authenticates the connection and carries server-push
+// notifications. Every request/response exchange — listing, querying,
+// publishing, activating, deleting entries, plus all file bytes and the file
+// download orchestration — runs over HTTP.
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("auth"),
     token: z.string().min(1),
     device: DeviceSchema,
-  }),
-  z.object({
-    type: z.literal("clipboard.publish"),
-    entry: ClipboardEntrySchema,
-  }),
-  // A durable history update and a live clipboard change are different
-  // events. Reconnect restores and metadata edits publish entries without
-  // unexpectedly replacing the clipboard on every other device.
-  z.object({
-    type: z.literal("clipboard.activate"),
-    entryId: z.string(),
-  }),
-  z.object({
-    type: z.literal("clipboard.delete"),
-    entryId: z.string(),
-  }),
-  z.object({
-    type: z.literal("clipboard.fetch"),
-    requestId: z.string().uuid(),
-    entryIds: z.array(z.string()).min(1).max(ENTRY_FETCH_BATCH),
-  }),
-  // Uploads no longer travel over this socket: they run as HTTP requests, where
-  // request/response pairing needs no correlation id and chunks can be raw
-  // bytes. Only downloads and their device-to-server relays remain here.
-  z.object({
-    type: z.literal("file.download"),
-    transferId: z.string().uuid(),
-    entryId: z.string(),
-    fileId: FileIdSchema,
-    sourceDeviceId: z.string(),
-  }),
-  z.object({
-    type: z.literal("file.chunk"),
-    transferId: z.string().uuid(),
-    data: z.string(),
-  }),
-  z.object({
-    type: z.literal("file.complete"),
-    transferId: z.string().uuid(),
-  }),
-  z.object({
-    type: z.literal("file.abort"),
-    transferId: z.string().uuid(),
-    message: z.string(),
   }),
   z.object({ type: z.literal("ping") }),
 ]);
@@ -151,11 +159,6 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("auth.ack"),
     manifest: z.array(ClipboardManifestEntrySchema),
     devices: z.array(DeviceSchema),
-  }),
-  z.object({
-    type: z.literal("clipboard.entries"),
-    requestId: z.string().uuid(),
-    entries: z.array(ClipboardEntrySchema),
   }),
   z.object({
     type: z.literal("clipboard.created"),
@@ -179,26 +182,6 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("file.available"),
     fileId: FileIdSchema,
-  }),
-  z.object({
-    type: z.literal("file.source.request"),
-    transferId: z.string().uuid(),
-    entryId: z.string(),
-    fileId: FileIdSchema,
-  }),
-  z.object({
-    type: z.literal("file.chunk"),
-    transferId: z.string().uuid(),
-    data: z.string(),
-  }),
-  z.object({
-    type: z.literal("file.complete"),
-    transferId: z.string().uuid(),
-  }),
-  z.object({
-    type: z.literal("file.failed"),
-    transferId: z.string().uuid(),
-    message: z.string(),
   }),
   z.object({ type: z.literal("pong") }),
   z.object({
@@ -246,6 +229,22 @@ export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
+// Body of a `GET /files/:entryId/:fileId` 404 reply when the content is not
+// on the server (yet). Any other 404 is a real refusal reported verbatim; a
+// client that receives this code simply retries while the demand is served.
+export const DOWNLOAD_NOT_STORED_CODE = "NOT_STORED";
+
+// Body of a `GET /files/requests` long-poll: the account's outstanding download
+// demands. A device that holds the listed content pushes it up through the
+// upload routes; demands nobody serves simply expire on the server.
+export const FileRequestsResponseSchema = z.object({
+  requests: z.array(z.object({
+    fileId: FileIdSchema,
+    entryId: z.string(),
+    size: z.number().int().nonnegative(),
+  })),
+});
+
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
 export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
 export type ClipboardTree = z.infer<typeof ClipboardTreeSchema>;
@@ -255,8 +254,17 @@ export type ClipboardManifestEntry = z.infer<typeof ClipboardManifestEntrySchema
 export type Device = z.infer<typeof DeviceSchema>;
 export type AuthCredentials = z.infer<typeof AuthCredentialsSchema>;
 export type AuthResponse = z.infer<typeof AuthResponseSchema>;
+export type EntryPublishRequest = z.infer<typeof EntryPublishRequestSchema>;
+export type EntryPublishResponse = z.infer<typeof EntryPublishResponseSchema>;
+export type EntryQueryRequest = z.infer<typeof EntryQueryRequestSchema>;
+export type EntryQueryResponse = z.infer<typeof EntryQueryResponseSchema>;
+export type EntryListResponse = z.infer<typeof EntryListResponseSchema>;
+export type EntryActivateResponse = z.infer<typeof EntryActivateResponseSchema>;
+export type EntryActivateRequest = z.infer<typeof EntryActivateRequestSchema>;
 export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
 export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
 export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
+export type FileRequest = z.infer<typeof FileRequestsResponseSchema>["requests"][number];
+export type FileRequestsResponse = z.infer<typeof FileRequestsResponseSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

@@ -7,6 +7,7 @@ import {
   type ClipboardManifestEntry,
   type ClipboardTree,
   type Device,
+  type EntryCursor,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
@@ -59,8 +60,12 @@ export class UserDataStore {
         created_at TEXT NOT NULL,
         pinned INTEGER NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS clipboard_entries_created_at
-        ON clipboard_entries(created_at DESC);
+      -- Keyset pagination orders on the (created_at, id) pair; id being the
+      -- primary key makes the order total, so a cursor never skips or repeats
+      -- a row. SQLite satisfies ORDER BY ... DESC by scanning this backwards.
+      DROP INDEX IF EXISTS clipboard_entries_created_at;
+      CREATE INDEX IF NOT EXISTS clipboard_entries_order
+        ON clipboard_entries(created_at, id);
 
       CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
@@ -77,14 +82,25 @@ export class UserDataStore {
     this.#database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
-  list(): ClipboardEntry[] {
+  // Keyset pagination: the (created_at, id) pair is unique because id is the
+  // primary key, so pages are stable even as new entries arrive. A cursor
+  // pointing at a since-deleted entry simply skips forward.
+  listPage(cursor: EntryCursor | undefined, limit: number): ClipboardEntry[] {
     const rows = this.#database
       .prepare(`
         SELECT id, kind, content, extra, source_device_id, created_at, pinned
         FROM clipboard_entries
-        ORDER BY created_at DESC
+        WHERE @createdAt IS NULL
+           OR created_at < @createdAt
+           OR (created_at = @createdAt AND id < @id)
+        ORDER BY created_at DESC, id DESC
+        LIMIT @limit
       `)
-      .all() as Array<EntryRow>;
+      .all({
+        createdAt: cursor?.createdAt ?? null,
+        id: cursor?.id ?? null,
+        limit,
+      }) as Array<EntryRow>;
     return rows.flatMap((row) => {
       const entry = this.#toEntry(row);
       return entry ? [entry] : [];

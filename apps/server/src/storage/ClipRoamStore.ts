@@ -3,6 +3,7 @@ import type {
   ClipboardEntry,
   ClipboardManifestEntry,
   Device,
+  EntryCursor,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
@@ -44,7 +45,9 @@ export class ClipRoamStore {
     return this.#accounts.authenticateSession(token);
   }
 
-  list(userId: string): ClipboardEntry[] { return this.#userStore(userId).list(); }
+  listPage(userId: string, cursor: EntryCursor | undefined, limit: number): ClipboardEntry[] {
+    return this.#userStore(userId).listPage(cursor, limit);
+  }
   listByIds(userId: string, entryIds: readonly string[]): ClipboardEntry[] {
     return this.#userStore(userId).listByIds(entryIds);
   }
