@@ -18,28 +18,25 @@ export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
 // entity no matter how many entries, paths or devices reference them.
 export const FileIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
-// Content-pool entry: describes bytes only. Names and paths live in the tree.
-export const ClipboardFileSchema = z.object({
+// A `files` entry is one nested map: a file leaf is `{f, s}` (content id +
+// byte size), a directory is another such map, and an empty directory is `{}`.
+// Root names are the top-level keys, so roots/dirs/path arrays all disappear.
+export const FileNodeSchema = z.object({
+  f: FileIdSchema,
+  s: z.number().int().nonnegative(),
+});
+const NodeNameSchema = z.string().min(1).max(255).regex(/^[^/\\]+$/, "名称不能包含路径分隔符");
+export const TreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() =>
+  z.union([FileNodeSchema, z.record(NodeNameSchema, TreeNodeSchema)]),
+);
+export const FileInfoSchema = z.record(NodeNameSchema, TreeNodeSchema);
+
+// An `image` entry references one content-pool blob plus its list thumbnail;
+// no fake single-file tree is involved.
+export const ImageInfoSchema = z.object({
   fileId: FileIdSchema,
   size: z.number().int().nonnegative(),
-  available: z.boolean().default(false),
-});
-
-// Structure of a `files` entry, kept compact: `p` is a relative path rooted at
-// one of `roots`, `f` is the content it points at. Directories never occupy a
-// content row, and duplicated content is a repeated `f`, not a repeated blob.
-export const ClipboardTreeSchema = z.object({
-  v: z.union([z.literal(1), z.literal(2)]),
-  roots: z.array(z.object({
-    name: z.string().min(1).max(255),
-    kind: z.enum(["file", "dir"]),
-  })),
-  dirs: z.array(z.string().min(1).max(1024)).default([]),
-  files: z.array(z.object({
-    p: z.string().min(1).max(1024),
-    f: FileIdSchema,
-    s: z.number().int().nonnegative().optional(),
-  })).default([]),
+  thumbnail: z.string().max(96 * 1024),
 });
 
 export const ClipboardEntrySchema = z.object({
@@ -48,15 +45,42 @@ export const ClipboardEntrySchema = z.object({
   content: z.string(),
   html: z.string().optional(),
   rtf: z.string().optional(),
-  // A small WebP data payload for image-list rendering. Full-resolution image
-  // bytes remain in the content pool and are only fetched for preview/paste.
-  thumbnail: z.string().max(96 * 1024).optional(),
-  tree: ClipboardTreeSchema.nullish().transform((value) => value ?? undefined),
-  files: z.array(ClipboardFileSchema).default([]),
+  // Exactly one of these is present, matching `kind`: the nested file map for
+  // `files`, the single blob reference for `image`.
+  fileInfo: FileInfoSchema.optional(),
+  imageInfo: ImageInfoSchema.optional(),
+  // Content ids the server's pool does not hold yet. Server responses fill it
+  // in fresh on every read; clients ignore it when publishing.
+  missing: FileIdSchema.array().optional(),
   sourceDeviceId: z.string(),
   createdAt: z.string(),
   pinned: z.boolean().default(false),
 });
+
+// Every content an entry references, de-duplicated in encounter order. Covers
+// both kinds, so server-side availability/GC checks have one entry point.
+export function entryContents(entry: { kind: string; fileInfo?: FileInfo; imageInfo?: ImageInfo }): Array<{ fileId: string; size: number }> {
+  if (entry.kind === "image") {
+    return entry.imageInfo ? [{ fileId: entry.imageInfo.fileId, size: entry.imageInfo.size }] : [];
+  }
+  const contents = new Map<string, number>();
+  const walk = (node: TreeNode): void => {
+    if (isFileNode(node)) {
+      if (!contents.has(node.f)) contents.set(node.f, node.s);
+      return;
+    }
+    for (const child of Object.values(node)) walk(child);
+  };
+  if (entry.fileInfo) for (const node of Object.values(entry.fileInfo)) walk(node);
+  return [...contents].map(([fileId, size]) => ({ fileId, size }));
+}
+
+// A leaf holds the content id in `f`; a directory map has no `f` string. A
+// directory may legitimately contain a child named "f" — its value is an
+// object, not a string, so this check stays unambiguous.
+export function isFileNode(node: TreeNode): node is { f: string; s: number } {
+  return typeof (node as { f?: unknown }).f === "string";
+}
 
 // The connection-time manifest is intentionally small. Full entry metadata is
 // fetched only for records missing from the local history.
@@ -242,9 +266,11 @@ export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
 ]);
 
 export type ClipboardKind = z.infer<typeof ClipboardKindSchema>;
-export type ClipboardFile = z.infer<typeof ClipboardFileSchema>;
-export type ClipboardTree = z.infer<typeof ClipboardTreeSchema>;
-export type ClipboardTreeRoot = ClipboardTree["roots"][number];
+// Recursive tree types are written by hand: `z.infer` over `z.lazy` recursion
+// struggles to name the recursive reference on its own.
+export type TreeNode = { f: string; s: number } | { [name: string]: TreeNode };
+export type FileInfo = { [rootName: string]: TreeNode };
+export type ImageInfo = z.infer<typeof ImageInfoSchema>;
 export type ClipboardEntry = z.infer<typeof ClipboardEntrySchema>;
 export type ClipboardManifestEntry = z.infer<typeof ClipboardManifestEntrySchema>;
 export type Device = z.infer<typeof DeviceSchema>;

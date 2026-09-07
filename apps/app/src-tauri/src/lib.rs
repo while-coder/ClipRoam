@@ -36,9 +36,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use content::{
     collect_tree, describe_roots, download_path, file_entry_signature, file_signature,
-    hash_bytes, hash_file, local_source_was_lost, new_tree, preserve_local_sources, readable_path,
-    rebuild_entry_files, rebuild_tree, upload_image_path,
-    ClipboardEntry, ClipboardFile, ClipboardTreeFile, ClipboardTreeRoot, LocalSources,
+    hash_bytes, hash_file, local_source_was_lost, preserve_local_sources, readable_path,
+    rebuild_tree, tree_node_at_path, tree_contents, upload_image_path,
+    ClipboardEntry, FileInfo, ImageInfo, LocalSources,
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
@@ -327,16 +327,16 @@ fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     // html/rtf can be hundreds of kilobytes per rich-text entry and the list
     // never renders them, so they stay behind `get_entry`.
     let mut lightweight = ClipboardEntry {
-        tree: None,
-        files: Vec::new(),
+        file_info: None,
+        image_info: None,
         html: None,
         rtf: None,
         sources: LocalSources::default(),
         ..entry.clone()
     };
     if lightweight.kind == "files" {
-        if let Some(tree) = &entry.tree {
-            lightweight.content = describe_roots(&tree.roots);
+        if let Some(file_info) = &entry.file_info {
+            lightweight.content = describe_roots(file_info);
         }
     }
     lightweight
@@ -410,11 +410,10 @@ fn entry_id(content: &str, device_id: &str) -> String {
     content::to_hex(&hasher.finalize())
 }
 
-fn entry_id_for_files(files: &[ClipboardFile], device_id: &str, fallback: &str) -> String {
-    let mut file_ids = files
-        .iter()
-        .map(|file| file.file_id.as_str())
-        .filter(|file_id| !file_id.is_empty())
+fn entry_id_for_file_info(file_info: &FileInfo, device_id: &str, fallback: &str) -> String {
+    let mut file_ids = tree_contents(file_info)
+        .into_iter()
+        .map(|(file_id, _)| file_id)
         .collect::<Vec<_>>();
     file_ids.sort_unstable();
     file_ids.dedup();
@@ -433,9 +432,9 @@ fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
         content,
         html: None,
         rtf: None,
-        thumbnail: None,
-        tree: None,
-        files: Vec::new(),
+        file_info: None,
+        image_info: None,
+        missing: None,
         source_device_id: device_id,
         created_at: Utc::now().to_rfc3339(),
         pinned: false,
@@ -506,7 +505,7 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
         let cache_dir = active_cache_dir(&state, &history);
         let device_id = history.device_id.clone();
         let created_at = Utc::now().to_rfc3339();
-        let content = describe_roots(&collected.tree.roots);
+        let content = describe_roots(&collected.file_info);
         let entries = history.active_entries_mut();
         let entry_id = match entries
             .iter()
@@ -522,9 +521,8 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
             None => {
                 let mut entry = new_entry("files", content, device_id);
                 entry.created_at = created_at;
-                entry.tree = Some(collected.tree);
+                entry.file_info = Some(collected.file_info);
                 entry.sources = collected.sources;
-                rebuild_entry_files(&mut entry);
                 let entry_id = entry.id.clone();
                 entries.insert(0, entry);
                 entry_id
@@ -587,23 +585,11 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         let name = format!("{}.webp", &file_id[..16]);
         let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id.clone());
         entry.id = entry_id(&file_id, &device_id);
-        entry.thumbnail = thumbnail;
-        let mut tree = new_tree();
-        tree.roots.push(ClipboardTreeRoot {
-            name: name.clone(),
-            kind: "file".to_string(),
-        });
-        tree.files.push(ClipboardTreeFile {
-            p: name,
-            f: file_id.clone(),
-            s: Some(webp.len() as u64),
-        });
-        entry.tree = Some(tree);
-        entry.files = vec![ClipboardFile {
+        entry.image_info = Some(ImageInfo {
             file_id,
             size: webp.len() as u64,
-            available: false,
-        }];
+            thumbnail,
+        });
         let entry_id = entry.id.clone();
         let entries = history.active_entries_mut();
         entries.insert(0, entry);
@@ -863,35 +849,48 @@ fn apply_hashes(
         .active_entries()
         .iter()
         .position(|entry| entry.id == entry_id);
-    let hashes = resolved
-        .iter()
-        .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
-        .collect::<HashMap<_, _>>();
     let final_entry_id = {
         let Some(entry) = history.find_mut(entry_id) else {
             return Ok(None);
         };
-        if let Some(tree) = entry.tree.as_mut() {
-            tree.files.retain_mut(|node| match hashes.get(node.p.as_str()) {
-                Some(Some(file_id)) => {
-                    node.f = (*file_id).to_string();
+        if let Some(file_info) = entry.file_info.as_mut() {
+            for (path, file_id) in resolved {
+                let Some(parent) = tree_parent_at_path(file_info, path) else {
+                    continue;
+                };
+                let leaf = path.rsplit('/').next().unwrap_or_default();
+                match file_id {
+                    Some(file_id) => {
+                        if let Some(TreeNode::File { f, .. }) = parent.get_mut(leaf) {
+                            *f = file_id.clone();
+                        }
+                    }
+                    // A file that vanished between copy and hash drops out of the tree.
+                    None => {
+                        parent.shift_remove(leaf);
+                    }
+                }
+            }
+        }
+        entry.sources.files.retain_mut(|source| {
+            match resolved
+                .iter()
+                .find(|(path, _)| path == &source.path)
+                .and_then(|(_, file_id)| file_id.as_deref())
+            {
+                Some(file_id) => {
+                    source.file_id = Some(file_id.to_string());
                     true
                 }
-                Some(None) => false,
-                None => true,
-            });
-        }
-        entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
-            Some(Some(file_id)) => {
-                source.file_id = Some((*file_id).to_string());
-                true
+                // Only paths this batch resolved disappear; unknown paths stay.
+                None => !resolved.iter().any(|(path, _)| path == &source.path),
             }
-            Some(None) => false,
-            None => true,
         });
-        rebuild_entry_files(entry);
         if persist {
-            entry.id = entry_id_for_files(&entry.files, &device_id, &entry.content);
+            entry.id = match entry.file_info.as_ref() {
+                Some(file_info) => entry_id_for_file_info(file_info, &device_id, &entry.content),
+                None => entry_id(&entry.content, &device_id),
+            };
         }
         entry.id.clone()
     };

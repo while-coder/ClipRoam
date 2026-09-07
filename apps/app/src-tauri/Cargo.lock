@@ -577,6 +577,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "image",
+ "indexmap 2.14.0",
  "rfd",
  "rusqlite",
  "serde",
