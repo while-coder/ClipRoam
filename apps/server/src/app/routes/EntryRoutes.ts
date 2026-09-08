@@ -31,10 +31,11 @@ export type EntryRouteDeps = {
 export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps): void {
   const { store, broadcast } = deps;
 
-  // Paginated identity listing with optional keyword and UTC date-range
-  // filters. Ids only, so a page stays small; details arrive through
+  // Paginated identity listing with optional keyword, UTC date-range, kind and
+  // pinned filters. Ids only, so a page stays small; details arrive through
   // POST /entries/query. It doubles as the connection-time reconciliation
-  // snapshot: an unfiltered walk until hasMore turns false covers the account.
+  // snapshot: an unfiltered walk until the fetched count reaches total covers
+  // the account.
   app.get("/entries/manifest", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
