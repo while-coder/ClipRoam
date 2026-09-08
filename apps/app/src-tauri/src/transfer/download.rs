@@ -7,7 +7,6 @@ use std::{fs, sync::Mutex};
 use tauri::State;
 
 use crate::content::download_path;
-use crate::store::{history_path_for_key, register_cached_file};
 use crate::AppState;
 
 #[derive(Default)]
@@ -214,11 +213,6 @@ pub(crate) fn finish_file_download(state: State<'_, AppState>, transfer_id: Stri
 
     match &download.target {
         DownloadTarget::Cache => {
-            let database_path = {
-                let history = state.history.lock().map_err(|error| error.to_string())?;
-                history_path_for_key(&state.histories_dir, &history.active_history)
-            };
-            register_cached_file(&database_path, &download.file_id, download.expected_size)?;
             state
                 .history
                 .lock()
