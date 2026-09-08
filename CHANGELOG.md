@@ -2,6 +2,21 @@
 
 本文件记录 ClipRoam App 与 Server 的发版说明。发版 workflow 会自动提取对应 `## <version>` 段落作为 GitHub Release notes。
 
+## Unreleased
+
+### App
+
+#### 变更
+
+- 移除条目固定（pin）功能：本地历史统一保留最新 200 条，"清除"按钮改为清空全部历史
+
+### Server
+
+#### 变更
+
+- 相同内容重复发布仅刷新条目时间（重新复制回到顶部），其余已存储数据不再被覆盖
+- 移除条目固定功能及 `/entries/manifest` 的 `pinned` 查询参数，并自动迁移旧用户数据库
+
 ## 0.1.0
 
 ### App

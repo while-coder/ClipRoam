@@ -280,11 +280,6 @@ export class SyncClient {
     return stored;
   }
 
-  /** Sends an existing entry update (such as pinning) without re-uploading files. */
-  async publishMetadata(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    return this.#publishEntry(entry);
-  }
-
   async upload(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // A manual upload can be the first time the server learns about this entry.
     // Without the reference, garbage collection would reclaim the contents that
@@ -388,7 +383,6 @@ export class SyncClient {
       fileInfo: row.extra.fileInfo ?? undefined,
       imageInfo: row.extra.imageInfo ?? undefined,
       sourceDeviceId: this.device.id,
-      pinned: false,
     };
     const stored = await this.#publishEntry(payload);
     // The upload commands still address the local entry, which keeps its
@@ -542,23 +536,20 @@ export class SyncClient {
   }
 
   // Pulls the reconciliation snapshot after the socket's bare `auth.ack`: the
-  // full identity manifest (paged, unfiltered) plus the account's devices.
-  // Details of missing entries follow through fetchEntries().
+  // newest manifest page (ids only, refetched on every connection — never
+  // cached) plus the account's devices. Older pages are deliberately not
+  // walked: the local history window is smaller than a page of server rows,
+  // and details of missing entries follow through fetchEntries().
   async #fetchConnectionState(): Promise<void> {
-    const manifest: ClipboardManifestEntry[] = [];
-    for (let page = 1; ; page++) {
-      const response = await this.#httpFetch("GET", `/entries/manifest?page=${page}`, {
-        signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
-      });
-      if (response.status === 401) throw new Error("登录已失效，请重新登录");
-      const body = await response.json().catch(() => undefined) as unknown;
-      if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
-      const parsed = EntryManifestResponseSchema.safeParse(body);
-      if (!parsed.success) throw new Error("服务器返回了不兼容的连接状态响应");
-      manifest.push(...parsed.data.manifest);
-      if (manifest.length >= parsed.data.total) break;
-    }
-    this.handlers.onManifest(manifest, await this.#fetchDevices());
+    const response = await this.#httpFetch("GET", "/entries/manifest", {
+      signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS),
+    });
+    if (response.status === 401) throw new Error("登录已失效，请重新登录");
+    const body = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) throw new Error(this.#uploadErrorMessage(body, response.status));
+    const parsed = EntryManifestResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error("服务器返回了不兼容的连接状态响应");
+    this.handlers.onManifest(parsed.data.manifest, await this.#fetchDevices());
   }
 
   async #fetchDevices(): Promise<Device[]> {

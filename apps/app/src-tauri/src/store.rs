@@ -18,7 +18,7 @@ use crate::content::{
     cached_file_path, refresh_summary, tree_contents, ClipboardEntry, ClipboardEntryExtra,
 };
 
-pub const MAX_UNPINNED_ENTRIES: usize = 200;
+pub const MAX_HISTORY_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -35,10 +35,6 @@ pub struct HistoryData {
     /// Locally initiated deletions are kept until the server echoes the
     /// deletion, otherwise an offline delete would be restored on reconnect.
     pub pending_deletions: HashSet<String>,
-    /// Small entry updates (currently pinning) need the same durable replay:
-    /// a manifest only contains ids, so it cannot discover an update to an
-    /// entry that already exists remotely.
-    pub pending_entry_updates: HashSet<String>,
     /// Content ids this machine has a blob for. Kept in memory so refreshing a
     /// summary never touches the disk.
     pub cached_files: HashSet<String>,
@@ -59,7 +55,6 @@ impl Default for HistoryData {
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "This device".to_string()),
             pending_deletions: HashSet::new(),
-            pending_entry_updates: HashSet::new(),
             cached_files: HashSet::new(),
             uploaded_files: HashSet::new(),
         }
@@ -157,9 +152,25 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             .map_err(|error| error.to_string())?;
         !names.iter().any(|name| name == "content")
     };
+    // Pinning was removed: the column is dropped from databases written by
+    // older builds instead of being recreated.
+    let has_pinned = {
+        let mut statement = connection
+            .prepare("SELECT name FROM pragma_table_info('entries')")
+            .map_err(|error| error.to_string())?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        names.iter().any(|name| name == "pinned")
+    };
     let mut schema = String::new();
     if recreate_pending_entries {
         schema.push_str("DROP TABLE IF EXISTS pending_entries;\n");
+    }
+    if has_pinned {
+        schema.push_str("ALTER TABLE entries DROP COLUMN pinned;\n");
     }
     schema.push_str(
         "
@@ -180,7 +191,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             content TEXT NOT NULL,
             extra TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
-            pinned INTEGER NOT NULL,
             source_device_id TEXT NOT NULL,
             source_app TEXT NOT NULL DEFAULT '',
             sources TEXT NOT NULL DEFAULT '{}'
@@ -232,9 +242,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                     "pending_deletions" => {
                         history.pending_deletions = serde_json::from_str(&value).unwrap_or_default()
                     }
-                    "pending_entry_updates" => {
-                        history.pending_entry_updates = serde_json::from_str(&value).unwrap_or_default()
-                    }
                     _ => {}
                 }
             }
@@ -243,7 +250,7 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
 
     let mut entries = Vec::new();
     if let Ok(mut statement) = connection.prepare(
-        "SELECT id, kind, content, extra, source_device_id, created_at, pinned, sources FROM entries ORDER BY pinned DESC, created_at DESC",
+        "SELECT id, kind, content, extra, source_device_id, created_at, sources FROM entries ORDER BY created_at DESC",
     ) {
         if let Ok(rows) = statement.query_map([], |row| {
             let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
@@ -257,7 +264,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                 image_info: extra.image_info,
                 source_device_id: row.get("source_device_id")?,
                 created_at: row.get("created_at")?,
-                pinned: row.get::<_, i64>("pinned")? != 0,
                 summary: Default::default(),
                 sources: serde_json::from_str(&row.get::<_, String>("sources")?).unwrap_or_default(),
             })
@@ -340,7 +346,7 @@ pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_di
 }
 
 /// Writes small entry fields plus metadata. Existing trees, local sources and
-/// content rows are changed only by `write_entry_data`, so pinning or trimming
+/// content rows are changed only by `write_entry_data`, so trimming
 /// cannot overwrite work completed by the background hash worker.
 pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
     let mut connection = open_history_database(path)?;
@@ -379,14 +385,13 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
         let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "INSERT OR IGNORE INTO entries (id, kind, content, extra, created_at, pinned, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO entries (id, kind, content, extra, created_at, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     entry.id,
                     entry.kind,
                     entry.content,
                     extra,
                     entry.created_at,
-                    entry.pinned,
                     entry.source_device_id,
                     sources,
                 ],
@@ -394,13 +399,12 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "UPDATE entries SET kind = ?, content = ?, extra = json_patch(extra, ?), created_at = ?, pinned = ?, source_device_id = ? WHERE id = ?",
+                "UPDATE entries SET kind = ?, content = ?, extra = json_patch(extra, ?), created_at = ?, source_device_id = ? WHERE id = ?",
                 params![
                     entry.kind,
                     entry.content,
                     presentation,
                     entry.created_at,
-                    entry.pinned,
                     entry.source_device_id,
                     entry.id,
                 ],
@@ -432,10 +436,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    for (key, values) in [
-        ("pending_deletions", &history.pending_deletions),
-        ("pending_entry_updates", &history.pending_entry_updates),
-    ] {
+    for (key, values) in [("pending_deletions", &history.pending_deletions)] {
         let value = serde_json::to_string(values).map_err(|error| error.to_string())?;
         transaction
             .execute(
@@ -747,15 +748,7 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
 }
 
 pub fn trim_history(entries: &mut Vec<ClipboardEntry>) {
-    let mut unpinned = 0usize;
-    entries.retain(|entry| {
-        if entry.pinned {
-            true
-        } else {
-            unpinned += 1;
-            unpinned <= MAX_UNPINNED_ENTRIES
-        }
-    });
+    entries.truncate(MAX_HISTORY_ENTRIES);
 }
 
 pub fn retain_single_history(history: &mut HistoryData, key: &str) {
@@ -812,13 +805,12 @@ mod tests {
             image_info: None,
             source_device_id: "device".to_string(),
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
-            pinned: false,
             summary: Default::default(),
             sources: crate::content::LocalSources::default(),
         });
         save_history(&path, &history).expect("store history");
 
-        // Pinning, pasting or trimming all go through `save_history`, which must
+        // Pasting or trimming goes through `save_history`, which must
         // never clobber a tree the hash worker filled in the meantime.
         let hashed = "a".repeat(64);
         {
@@ -827,13 +819,11 @@ mod tests {
             updated.file_info = Some(tree(&hashed));
             write_entry_data(&connection, &updated).expect("persist hashed tree");
         }
-        history.active_entries_mut()[0].pinned = true;
         save_history(&path, &history).expect("store history again");
 
         let reloaded = load_history(&path, LOCAL_HISTORY_KEY);
         let entry = &reloaded.active_entries()[0];
         fs::remove_dir_all(&directory).expect("remove temporary database");
-        assert!(entry.pinned);
         assert_eq!(entry.html.as_deref(), Some("<b>bundle</b>"));
         assert_eq!(entry.rtf.as_deref(), Some("{\\rtf1 bundle}"));
         let crate::content::TreeNode::Dir(bundle) = &entry.file_info.as_ref().expect("file info")["bundle"]
@@ -923,7 +913,6 @@ mod tests {
             image_info: None,
             source_device_id: "device".to_string(),
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
-            pinned: false,
             summary: Default::default(),
             sources: crate::content::LocalSources::default(),
         };

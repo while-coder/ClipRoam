@@ -51,7 +51,6 @@ export const ClipboardEntrySchema = z.object({
   imageInfo: ImageInfoSchema.optional(),
   sourceDeviceId: z.string(),
   createdAt: z.string(),
-  pinned: z.boolean().default(false),
 });
 
 // Every content an entry references, de-duplicated in encounter order. Covers
@@ -160,15 +159,16 @@ export const FileQueryRequestSchema = z.object({
 export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchema) });
 
 // Offset pagination over entry identities: keyword filter on entry content, an
-// inclusive UTC date range, kind and pinned filters, and a 1-based page. Page
+// inclusive UTC time range, a kind filter, and a 1-based page. Page
 // size is the server's choice. Filters apply before paging, so a filtered page
 // always holds up to a full page of matching rows.
 export const EntryManifestQuerySchema = z.object({
   search: z.string().trim().min(1).max(100).optional(),
-  dateStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateStart 必须是 YYYY-MM-DD").optional(),
-  dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateEnd 必须是 YYYY-MM-DD").optional(),
+  // Either a UTC date (`YYYY-MM-DD`, expanded to the whole day) or a concrete
+  // UTC timestamp down to milliseconds, matching how entries are stored.
+  dateStart: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)?$/, "dateStart 必须是 UTC 日期或时间戳").optional(),
+  dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)?$/, "dateEnd 必须是 UTC 日期或时间戳").optional(),
   kind: ClipboardKindSchema.optional(),
-  pinned: z.stringbool().optional(),
   page: z.coerce.number().int().min(1).max(100000).optional(),
 });
 
