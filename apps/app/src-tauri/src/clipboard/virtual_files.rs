@@ -6,8 +6,9 @@
 //! transfer is still streaming in.
 
 use crate::{
-    content::{is_file_id, ClipboardEntry, FileInfo, TreeNode},
-    download_path, snapshot_entry, AppState,
+    clipboard::output::snapshot_entry,
+    content::{download_path, is_file_id, ClipboardEntry, FileInfo, TreeNode},
+    AppState,
 };
 use serde::Serialize;
 use std::{
