@@ -3,9 +3,16 @@
   "tasks": [
     {
       "label": "ui:kill",
-      "type": "shell",
-      "command": "npx kill-port 1430",
-      "options": { "cwd": "${workspaceFolder}" },
+      "type": "process",
+      "command": "node",
+      "args": ["${workspaceFolder}/scripts/kill-port.js", "1430"],
+      "problemMatcher": []
+    },
+    {
+      "label": "server:kill",
+      "type": "process",
+      "command": "node",
+      "args": ["${workspaceFolder}/scripts/kill-port.js", "4810"],
       "problemMatcher": []
     },
     {
@@ -64,7 +71,7 @@
     },
     {
       "label": "launch:server",
-      "dependsOn": ["debug:server", "build:admin"],
+      "dependsOn": ["server:kill", "debug:server", "build:admin"],
       "dependsOrder": "sequence"
     }
   ]

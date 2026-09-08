@@ -1798,25 +1798,17 @@ onBeforeUnmount(() => {
   </main>
 
   <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
-    <header class="titlebar">
-      <div class="brand">
-        <span class="brand-mark"><Clipboard :size="16" /></span>
-        <strong>ClipRoam</strong>
-      </div>
-      <div class="titlebar-actions">
-        <button
-          v-if="hasSavedSyncConfig"
-          class="icon-button"
-          type="button"
-          title="返回剪贴板历史"
-          aria-label="返回剪贴板历史"
-          :disabled="testingConnection"
-          @click="closeSetup"
-        >
-          <ArrowLeft :size="17" aria-hidden="true" />
-        </button>
-      </div>
-    </header>
+    <button
+      v-if="hasSavedSyncConfig"
+      class="icon-button setup-back-button"
+      type="button"
+      title="返回剪贴板历史"
+      aria-label="返回剪贴板历史"
+      :disabled="testingConnection"
+      @click="closeSetup"
+    >
+      <ArrowLeft :size="17" aria-hidden="true" />
+    </button>
 
     <section class="setup-content">
       <div class="setup-intro">
