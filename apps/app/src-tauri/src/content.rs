@@ -108,8 +108,6 @@ pub struct ClipboardEntry {
     pub source_device_id: String,
     pub created_at: String,
     #[serde(default)]
-    pub pinned: bool,
-    #[serde(default)]
     pub summary: EntrySummary,
     #[serde(skip)]
     pub sources: LocalSources,
@@ -812,7 +810,6 @@ mod tests {
             image_info: None,
             source_device_id: "device".to_string(),
             created_at: "now".to_string(),
-            pinned: false,
             summary: EntrySummary::default(),
             sources: LocalSources {
                 roots: Vec::new(),

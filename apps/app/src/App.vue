@@ -173,7 +173,6 @@ const demoEntries: LocalClipboardEntry[] = [
     content: "ClipRoam 已准备好。复制一段文字，它会自动出现在这里。",
     sourceDeviceId: "browser",
     createdAt: new Date().toISOString(),
-    pinned: true,
     summary: EMPTY_SUMMARY,
   },
 ];
@@ -264,7 +263,9 @@ function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
  * Which of a batch's contents the server's pool holds. This replaces the
  * per-entry `missing` list the protocol dropped: one query per upsert batch,
  * and a failure degrades to "nothing is uploaded" — re-beginning an upload of
- * content the server actually has costs one cheap `stored` answer.
+ * content the server actually has costs one cheap `stored` answer. Contents
+ * this device already caches or knows are stored are filtered out Rust-side,
+ * so they never ride the request.
  */
 async function serverAvailableFileIds(batch: ClipboardEntry[]): Promise<string[]> {
   const client = syncClient;
@@ -272,7 +273,11 @@ async function serverAvailableFileIds(batch: ClipboardEntry[]): Promise<string[]
   const fileIds = [...new Set(batch.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId)))];
   if (!fileIds.length) return [];
   try {
-    const statuses = await client.fetchFileStatuses(fileIds);
+    const unknown = runningInTauri
+      ? await invoke<string[]>("filter_unknown_file_ids", { fileIds })
+      : fileIds;
+    if (!unknown.length) return [];
+    const statuses = await client.fetchFileStatuses(unknown);
     return statuses.filter((file) => file.stored).map((file) => file.fileId);
   } catch (error) {
     showToast(`查询服务器文件状态失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -592,21 +597,6 @@ function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   }
 }
 
-async function togglePin(entry: ClipboardEntry): Promise<void> {
-  if (!runningInTauri) {
-    entry.pinned = !entry.pinned;
-    return;
-  }
-  await invoke("set_pinned", { entryId: entry.id, pinned: !entry.pinned });
-  await refreshEntries();
-  const client = syncClient;
-  if (client) {
-    void client.publishMetadata(await fullEntry(entry as LocalClipboardEntry))
-      .then((stored) => adoptPublishedEntry(entry.id, stored))
-      .catch(() => undefined);
-  }
-}
-
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
   if (runningInTauri) await invoke("delete_entry", { entryId: entry.id });
   else entries.value = entries.value.filter((item) => item.id !== entry.id);
@@ -618,7 +608,7 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
 // owns the dialog state, the toast and the post-clear focus.
 async function clearHistory(): Promise<void> {
   if (runningInTauri) await invoke("clear_history");
-  else entries.value = entries.value.filter((entry) => entry.pinned);
+  else entries.value = [];
   await refreshEntries();
 }
 
@@ -1158,7 +1148,11 @@ async function refreshPendingUploadStatuses(): Promise<void> {
     ...new Set(pending.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId))),
   ];
   try {
-    const statuses = await client.fetchFileStatuses(pendingFileIds);
+    // Contents already cached or known stored are skipped Rust-side; what
+    // remains is all the pool query can still correct.
+    const unknown = await invoke<string[]>("filter_unknown_file_ids", { fileIds: pendingFileIds });
+    if (!unknown.length) return;
+    const statuses = await client.fetchFileStatuses(unknown);
     const stored = new Set(statuses.filter((file) => file.stored).map((file) => file.fileId));
     if (!stored.size) return;
     for (const entry of pending) {
@@ -1185,9 +1179,15 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     // Best effort: a failed delete keeps the id in the pending list and the
     // next reconcile retries it.
     for (const entryId of pendingDeletions) await client.delete(entryId).catch(() => undefined);
-    syncedEntryIds.value = new Set(
-      manifest.filter((entry) => !pendingDeletions.has(entry.id)).map((entry) => entry.id),
-    );
+    // The manifest covers only the newest page of server rows, so marks merge
+    // instead of rebuilding: entries older than that page keep the "synced"
+    // state they were given when last seen in a manifest. Remote deletions
+    // still clear marks through the `clipboard.deleted` push.
+    const knownSynced = new Set(syncedEntryIds.value);
+    for (const entry of manifest) {
+      if (!pendingDeletions.has(entry.id)) knownSynced.add(entry.id);
+    }
+    syncedEntryIds.value = knownSynced;
     // Read the durable history rather than the rendered list. The latter can
     // be stale while another Tauri window is refreshing it.
     const localEntries = runningInTauri
@@ -1205,18 +1205,6 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       await applyRemoteUpserts(remoteEntries);
     }
 
-    if (runningInTauri) {
-      const pendingUpdates = await invoke<string[]>("list_pending_entry_updates");
-      for (const entryId of pendingUpdates) {
-        if (pendingDeletions.has(entryId) || syncClient !== client) continue;
-        try {
-          const stored = await client.publishMetadata(await fullEntry({ id: entryId }));
-          await adoptPublishedEntry(entryId, stored);
-        } catch (error) {
-          if (!String(error).includes("剪贴板记录不存在")) throw error;
-        }
-      }
-    }
     await refreshEntries();
     // A reconcile is also the moment stale "unuploaded" marks get corrected
     // against the pool; the drain afterwards can then skip re-uploading.
@@ -1258,9 +1246,7 @@ async function startSync(config: SyncConfig): Promise<void> {
       },
       onDevicePresence: (device) => { rememberDevices([device]); },
       onEntry: (entry) => {
-        void queueRemoteUpsert(entry).then(() => {
-          if (runningInTauri) return invoke("acknowledge_entry_update", { entryId: entry.id });
-        });
+        void queueRemoteUpsert(entry);
       },
       onActivation: (entry) => {
         if (syncClient === client) void activateRemoteClipboard(entry);
@@ -1700,7 +1686,6 @@ onBeforeUnmount(() => {
       :ensure-local-files="ensureLocalFiles"
       :clear-history="clearHistory"
       @activate="activateFromView"
-      @toggle-pin="togglePin"
       @remove="removeEntry"
       @save="saveEntry"
       @upload="uploadEntry"

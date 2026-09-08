@@ -25,7 +25,6 @@ type EntryRow = {
   extra: string;
   source_device_id: string;
   created_at: string;
-  pinned: number;
 };
 
 // Clipboard records and devices. Contents live in an independent pool that this
@@ -48,6 +47,12 @@ export class UserDataStore {
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entry'")
       .get() as { sql: string } | undefined;
     if (existing && !existing.sql.includes("hash")) this.#database.exec("DROP TABLE entry");
+    // Pinning was removed: the column is dropped from databases written by
+    // older builds instead of being recreated.
+    const columns = this.#database.prepare("PRAGMA table_info(entry)").all() as Array<{ name: string }>;
+    if (columns.some(({ name }) => name === "pinned")) {
+      this.#database.exec("ALTER TABLE entry DROP COLUMN pinned");
+    }
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS entry (
         id INTEGER PRIMARY KEY,
@@ -56,9 +61,10 @@ export class UserDataStore {
         content TEXT NOT NULL,
         extra TEXT NOT NULL DEFAULT '{}',
         source_device_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        pinned INTEGER NOT NULL
+        created_at TEXT NOT NULL
       );
+
+      CREATE INDEX IF NOT EXISTS entry_created_at ON entry (created_at DESC);
 
       CREATE TABLE IF NOT EXISTS device (
         device_id TEXT PRIMARY KEY,
@@ -69,31 +75,31 @@ export class UserDataStore {
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
-  // date-range, kind and pinned filters. The total covers the same filters, so
+  // date-range and kind filters. The total covers the same filters, so
   // a client can render "page x of y" and detect the last page from a filtered
-  // result set. Full details ride POST /entries/query.
+  // result set. Full details ride POST /entries/query. Recency order follows
+  // `created_at`: the rowid no longer reflects it, since a re-copy refreshes
+  // the timestamp while keeping its original rowid.
   listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
       WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
-        AND (@dayStart IS NULL OR created_at BETWEEN @dayStart AND @dayEnd)
+        AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
         AND (@kind IS NULL OR kind = @kind)
-        AND (@pinned IS NULL OR pinned = @pinned)
     `;
     const filters = {
       search: query.search ? `%${escapeLike(query.search)}%` : null,
-      dayStart: query.dateStart ? `${query.dateStart}T00:00:00.000Z` : null,
-      dayEnd: query.dateEnd ? `${query.dateEnd}T23:59:59.999Z` : null,
+      dateStart: query.dateStart ? normalizeDateBound(query.dateStart, "start") : null,
+      dateEnd: query.dateEnd ? normalizeDateBound(query.dateEnd, "end") : null,
       kind: query.kind ?? null,
-      pinned: query.pinned === undefined ? null : query.pinned ? 1 : 0,
     };
     const rows = this.#database
       .prepare(`
         SELECT id
         FROM entry
         ${where}
-        ORDER BY id DESC
+        ORDER BY created_at DESC
         LIMIT @limit OFFSET @offset
       `)
       .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number }>;
@@ -113,10 +119,10 @@ export class UserDataStore {
       if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
-          SELECT id, kind, content, extra, source_device_id, created_at, pinned
+          SELECT id, kind, content, extra, source_device_id, created_at
           FROM entry
           WHERE id IN (${ids.map(() => "?").join(",")})
-          ORDER BY id DESC
+          ORDER BY created_at DESC
         `)
         .all(...ids) as Array<EntryRow>;
       for (const row of rows) {
@@ -154,8 +160,9 @@ export class UserDataStore {
 
   // The server owns identity: it dedupes by content hash, assigns the rowid
   // and stamps arrival time. The client's id and clock are ignored, so a
-  // retried publish cannot mint a second row and re-copying bumps the entry
-  // back to the top.
+  // retried publish cannot mint a second row. A hash conflict means the same
+  // content was re-copied: only `created_at` is refreshed so the entry moves
+  // back to the top, and no other stored field is ever rewritten.
   upsert(entry: EntryPublishInput): ClipboardEntry {
     const createdAt = new Date().toISOString();
     const extra = JSON.stringify({
@@ -167,15 +174,9 @@ export class UserDataStore {
     const row = this.#transaction(() => {
       const row = this.#database.prepare(`
         INSERT INTO entry (
-          hash, kind, content, extra, source_device_id, created_at, pinned
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET
-          kind = excluded.kind,
-          content = excluded.content,
-          extra = excluded.extra,
-          source_device_id = excluded.source_device_id,
-          created_at = excluded.created_at,
-          pinned = excluded.pinned
+          hash, kind, content, extra, source_device_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at
         RETURNING id, created_at
       `).get(
         entryHash(entry),
@@ -184,7 +185,6 @@ export class UserDataStore {
         extra,
         entry.sourceDeviceId,
         createdAt,
-        Number(entry.pinned),
       ) as { id: number; created_at: string };
       this.files.register(entryContents(entry));
       return row;
@@ -193,7 +193,6 @@ export class UserDataStore {
       ...entry,
       id: String(row.id),
       createdAt: row.created_at,
-      pinned: entry.pinned,
     };
   }
 
@@ -235,7 +234,6 @@ export class UserDataStore {
       content: row.content,
       sourceDeviceId: row.source_device_id,
       createdAt: row.created_at,
-      pinned: Boolean(row.pinned),
     });
     return result.success ? result.data : undefined;
   }
@@ -249,6 +247,19 @@ export class UserDataStore {
 // the statement declares '\\' as the escape character.
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+// Range bounds compare against `created_at` (stored via `toISOString()`, i.e.
+// UTC with milliseconds), so they are normalized into the same shape for the
+// string comparison to be correct. A bare date expands to the whole day;
+// seconds without milliseconds gain `.000` so the bound stays within the
+// stored format's precision.
+function normalizeDateBound(value: string, bound: "start" | "end"): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return bound === "start" ? `${value}T00:00:00.000Z` : `${value}T23:59:59.999Z`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return `${value.slice(0, -1)}.000Z`;
+  return value;
 }
 
 // Content fingerprint for dedup, deliberately free of device identity: the

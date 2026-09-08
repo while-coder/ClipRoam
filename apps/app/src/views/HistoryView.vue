@@ -11,7 +11,6 @@ import {
   Image,
   LoaderCircle,
   Monitor,
-  Pin,
   Search,
   Settings2,
   Trash2,
@@ -66,7 +65,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
-  "toggle-pin": [entry: ClipboardEntry];
   remove: [entry: ClipboardEntry];
   save: [entry: LocalClipboardEntry];
   upload: [entry: LocalClipboardEntry];
@@ -133,9 +131,7 @@ const filteredEntries = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   const timeRange = activeTimeRange.value;
   return props.entries.filter((entry) => {
-    const matchesType = filter.value === "all"
-      || (filter.value === "pinned" && entry.pinned)
-      || entry.kind === filter.value;
+    const matchesType = filter.value === "all" || entry.kind === filter.value;
     const matchesQuery = !needle
       || entry.content.toLocaleLowerCase().includes(needle)
       || deviceDisplayName(props.devicesById, entry).toLocaleLowerCase().includes(needle);
@@ -146,19 +142,13 @@ const filteredEntries = computed(() => {
   });
 });
 
-const showsEmptyPinnedState = computed(() => (
-  filter.value === "pinned" && timeFilter.value === "all" && !query.value.trim()
-));
-
 const filterResultSummary = computed(() => {
   if (timeRangeError.value) return "日期有误";
   const count = `${filteredEntries.value.length} 条`;
   return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
 });
 
-const clearableEntryCount = computed(() => (
-  props.entries.reduce((count, entry) => count + Number(!entry.pinned), 0)
-));
+const clearableEntryCount = computed(() => props.entries.length);
 
 watch(filteredEntries, (nextEntries) => {
   if (!nextEntries.some((entry) => entry.id === selectedEntryId.value)) {
@@ -411,7 +401,6 @@ defineExpose({ handleKeydown, focusSearch });
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
           <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
-          <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
           <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
           <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
           <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
@@ -430,9 +419,9 @@ defineExpose({ handleKeydown, focusSearch });
             class="clear-button"
             type="button"
             :disabled="!clearableEntryCount"
-            :title="clearableEntryCount ? `清除 ${clearableEntryCount} 条未固定记录` : '没有可清除的未固定记录'"
+            :title="clearableEntryCount ? `清除 ${clearableEntryCount} 条记录` : '没有可清除的记录'"
             @click="requestClearHistory"
-          >清除未固定</button>
+          >清除</button>
         </div>
       </div>
     </section>
@@ -481,10 +470,6 @@ defineExpose({ handleKeydown, focusSearch });
             <Monitor :size="12" /> {{ entryDeviceName(entry) }}
             <span>·</span>
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
-            <template v-if="entry.pinned">
-              <span>·</span>
-              <span class="pinned-status"><Pin :size="11" aria-hidden="true" />已固定</span>
-            </template>
             <span>·</span>
             <span class="sync-status" role="img" :title="syncStatusLabel(isEntrySynced(entry))" :aria-label="syncStatusLabel(isEntrySynced(entry))">{{ isEntrySynced(entry) ? "☁️" : "⏳" }}</span>
             <template v-if="fileEntrySummary(entry)">
@@ -519,16 +504,6 @@ defineExpose({ handleKeydown, focusSearch });
             @keydown.enter.stop="emit('upload', entry)"
           ><LoaderCircle v-if="uploadingEntryId === entry.id || uploadProgressByEntryId[entry.id]" :size="15" class="spin" /><Upload v-else :size="15" /></span>
           <span
-            class="item-action"
-            :class="{ active: entry.pinned }"
-            role="button"
-            tabindex="0"
-            :title="entry.pinned ? '取消固定' : '固定'"
-            :aria-label="entry.pinned ? '取消固定' : '固定'"
-            @click.stop="emit('toggle-pin', entry)"
-            @keydown.enter.stop="emit('toggle-pin', entry)"
-          ><Pin :size="15" /></span>
-          <span
             class="item-action danger"
             role="button"
             tabindex="0"
@@ -542,8 +517,8 @@ defineExpose({ handleKeydown, focusSearch });
 
       <div v-if="!filteredEntries.length" class="empty-state">
         <Search :size="28" />
-        <strong>{{ timeRangeError ? "日期区间无效" : showsEmptyPinnedState ? "还没有固定内容" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (showsEmptyPinnedState ? "固定常用条目后，可在这里集中查看" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <strong>{{ timeRangeError ? "日期区间无效" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
+        <span>{{ timeRangeError || (timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <button v-if="timeFilter !== 'all'" class="empty-filter-reset" type="button" @click="resetTimeFilter">清除时间筛选</button>
       </div>
     </section>

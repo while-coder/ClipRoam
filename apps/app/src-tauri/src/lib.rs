@@ -414,7 +414,6 @@ fn new_entry(seq: i64, kind: &str, content: String, device_id: String) -> Clipbo
         image_info: None,
         source_device_id: device_id,
         created_at: Utc::now().to_rfc3339(),
-        pinned: false,
         summary: Default::default(),
         sources: LocalSources::default(),
     }
@@ -1174,6 +1173,31 @@ fn get_device(state: State<'_, AppState>) -> Result<(String, String), String> {
     Ok((history.device_id.clone(), history.device_name.clone()))
 }
 
+/// File ids this device knows nothing about: neither a local blob in the cache
+/// nor an "available" mark from the server pool. The sync flow queries server
+/// storage status only for these, so locally known contents never ride a
+/// `/files/query` request.
+#[tauri::command(rename_all = "camelCase")]
+fn filter_unknown_file_ids(
+    state: State<'_, AppState>,
+    file_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut unknown = Vec::new();
+    let mut seen = HashSet::new();
+    for file_id in file_ids {
+        if file_id.is_empty()
+            || !seen.insert(file_id.clone())
+            || history.cached_files.contains(&file_id)
+            || history.uploaded_files.contains(&file_id)
+        {
+            continue;
+        }
+        unknown.push(file_id);
+    }
+    Ok(unknown)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn configure_device(
     state: State<'_, AppState>,
@@ -1404,11 +1428,6 @@ fn apply_published_entry(
         entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        // A pending pin/unpin recorded under the local key moves to the
-        // server key so the next replay publishes the right entry.
-        if history.pending_entry_updates.remove(&local_entry_id) {
-            history.pending_entry_updates.insert(entry_id.clone());
-        }
         // The id changed, so the save's INSERT OR IGNORE writes a fresh row
         // and the mark-sweep deletes the old one.
         save_active_history(&state, &history)?;
@@ -1477,30 +1496,6 @@ fn mark_file_available(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn set_pinned(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-    pinned: bool,
-) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let changed = if let Some(entry) = history.find_mut(&entry_id) {
-            entry.pinned = pinned;
-            true
-        } else {
-            false
-        };
-        if changed {
-            history.pending_entry_updates.insert(entry_id);
-        }
-        save_active_history(&state, &history)?;
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command(rename_all = "camelCase")]
 fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
@@ -1513,7 +1508,6 @@ fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) ->
             if store::temp_entry_seq(&entry_id).is_none() {
                 history.pending_deletions.insert(entry_id.clone());
             }
-            history.pending_entry_updates.remove(&entry_id);
         }
         save_active_history(&state, &history)?;
         // Dropping references is what frees disk space, so the sweep runs here.
@@ -1530,15 +1524,13 @@ fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
         let deleted = history
             .active_entries()
             .iter()
-            .filter(|entry| !entry.pinned)
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
-        history.active_entries_mut().retain(|entry| entry.pinned);
+        history.active_entries_mut().clear();
         for entry_id in &deleted {
             if store::temp_entry_seq(entry_id).is_none() {
                 history.pending_deletions.insert(entry_id.clone());
             }
-            history.pending_entry_updates.remove(entry_id);
         }
         save_active_history(&state, &history)?;
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
@@ -1568,27 +1560,10 @@ fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<String>, Str
     Ok(pending)
 }
 
-#[tauri::command]
-fn list_pending_entry_updates(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let mut pending = history.pending_entry_updates.iter().cloned().collect::<Vec<_>>();
-    pending.sort();
-    Ok(pending)
-}
-
 #[tauri::command(rename_all = "camelCase")]
 fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.pending_deletions.remove(&entry_id) {
-        save_active_history(&state, &history)?;
-    }
-    Ok(())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-fn acknowledge_entry_update(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    if history.pending_entry_updates.remove(&entry_id) {
         save_active_history(&state, &history)?;
     }
     Ok(())
@@ -2975,6 +2950,7 @@ pub fn run() {
             list_entries,
             get_entry,
             list_entry_files,
+            filter_unknown_file_ids,
             get_device,
             configure_device,
             get_sync_config,
@@ -2985,14 +2961,11 @@ pub fn run() {
             apply_published_entry,
             mark_files_uploaded,
             mark_file_available,
-            set_pinned,
             delete_entry,
             clear_history,
             remove_remote_entry,
             list_pending_deletions,
-            list_pending_entry_updates,
             acknowledge_entry_deletion,
-            acknowledge_entry_update,
             list_pending_entries,
             acknowledge_pending_entry,
             open_paste,
