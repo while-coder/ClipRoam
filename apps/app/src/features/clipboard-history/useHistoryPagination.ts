@@ -1,6 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref, type WatchSource } from "vue";
-import { PAGE_SIZE } from "../utils/constants";
-import type { LocalClipboardEntry } from "../types";
+import { PAGE_SIZE } from "../../utils/constants";
+import type { LocalClipboardEntry } from "../../types";
 
 type PaginationOptions = {
   listElement?: Ref<HTMLElement | undefined>;

@@ -49,8 +49,8 @@ import {
   saveQuickPasteShortcut,
 } from "./services/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
-import HistoryView from "./views/HistoryView.vue";
-import PendingSyncView from "./views/PendingSyncView.vue";
+import HistoryView from "./features/clipboard-history/HistoryView.vue";
+import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
 import {
   BROWSER_CONFIG_KEY,
   CONFIGURED_SERVER_PROTOCOL,
@@ -133,7 +133,6 @@ const savingEntryId = ref("");
 const serverInput = ref<HTMLInputElement>();
 const accountPasswordInput = ref<HTMLInputElement>();
 const historyView = ref<InstanceType<typeof HistoryView>>();
-const pendingSyncView = ref<InstanceType<typeof PendingSyncView>>();
 let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
@@ -1695,7 +1694,6 @@ onBeforeUnmount(() => {
 
     <PendingSyncView
       v-else
-      ref="pendingSyncView"
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"
