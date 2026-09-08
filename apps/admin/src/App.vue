@@ -24,7 +24,7 @@ const tlsSummary = computed(() => {
 });
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/admin/api/${path}`, {
+  const response = await fetch(`/admin-api/${path}`, {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,

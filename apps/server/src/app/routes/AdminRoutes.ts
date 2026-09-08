@@ -9,9 +9,11 @@ import { getTransferSettings, updateTransferSettings, type ServerConfig } from "
 
 const adminSessionCookie = "cliproam_admin";
 const adminSessionMaxAgeSeconds = 8 * 60 * 60;
-// The admin app ships inside the server package once built; the workspace
-// fallback serves it straight from the monorepo during development.
-const bundledAdminDirectory = fileURLToPath(new URL("../../admin", import.meta.url));
+// The admin UI ships inside the server package once built, under ./admin-ui —
+// a different name from the backend ./admin (AdminService), because tsc mirrors
+// the src tree and both would otherwise land in the same output directory. The
+// workspace fallback serves the Vite output straight from the monorepo in dev.
+const bundledAdminDirectory = fileURLToPath(new URL("../../admin-ui", import.meta.url));
 const workspaceAdminDirectory = fileURLToPath(new URL("../../../admin", import.meta.url));
 
 export type AdminRouteDeps = {
@@ -39,7 +41,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     const parts = [
       `${adminSessionCookie}=${value}`,
       "HttpOnly",
-      "Path=/admin",
+      "Path=/admin-api",
       "SameSite=Strict",
       `Max-Age=${maxAge}`,
     ];
@@ -47,7 +49,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     return parts.join("; ");
   };
 
-  app.post("/admin/api/login", async (request, reply) => {
+  app.post("/admin-api/login", async (request, reply) => {
     const password = request.body && typeof request.body === "object" && "password" in request.body
       ? (request.body as { password?: unknown }).password
       : undefined;
@@ -65,18 +67,18 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     return { ok: true };
   });
 
-  app.post("/admin/api/logout", async (request, reply) => {
+  app.post("/admin-api/logout", async (request, reply) => {
     admin.logout(readCookie(request.headers.cookie, adminSessionCookie));
     reply.header("Set-Cookie", adminCookie("", 0));
     return { ok: true };
   });
 
-  app.get("/admin/api/status", async (request, reply) => {
+  app.get("/admin-api/status", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     return { tls: tls.status, transfer: getTransferSettings(config) };
   });
 
-  app.put("/admin/api/transfer-settings", async (request, reply) => {
+  app.put("/admin-api/transfer-settings", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     try {
       return { transfer: updateTransferSettings(config, request.body) };
@@ -88,7 +90,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     }
   });
 
-  app.put("/admin/api/tls", async (request, reply) => {
+  app.put("/admin-api/tls", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     const body = request.body as { cert?: unknown; key?: unknown } | undefined;
     try {
@@ -106,7 +108,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     }
   });
 
-  app.delete("/admin/api/tls", async (request, reply) => {
+  app.delete("/admin-api/tls", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     try {
       tls.remove();
@@ -133,8 +135,11 @@ function readCookie(header: string | undefined, name: string): string | undefine
 }
 
 async function serveAdminAsset(requestPath: string, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown }; type: (contentType: string) => { send: (payload: unknown) => unknown } }): Promise<unknown> {
-  const directory = existsSync(bundledAdminDirectory) ? bundledAdminDirectory : workspaceAdminDirectory;
-  if (!existsSync(directory)) {
+  // The backend also compiles into a sibling "admin" directory, so a bare
+  // directory check is not enough — only index.html proves the UI is here.
+  const hasBundledUi = existsSync(join(bundledAdminDirectory, "index.html"));
+  const directory = hasBundledUi ? bundledAdminDirectory : workspaceAdminDirectory;
+  if (!existsSync(join(directory, "index.html"))) {
     return reply.code(503).send({ message: "管理后台资源未构建。请先执行 pnpm --filter @cliproam/admin build。" });
   }
 
