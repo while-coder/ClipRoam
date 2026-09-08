@@ -1,9 +1,10 @@
 mod clipboard;
 mod content;
 mod store;
+mod sync;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
 use std::time::Instant;
@@ -11,7 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{mpsc, Condvar, Mutex},
     thread,
 };
@@ -30,15 +31,15 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use content::{
-    download_path, local_source_was_lost, preserve_local_sources, readable_path,
+    download_path, local_source_was_lost, readable_path,
     rebuild_tree, tree_contents,
     ClipboardEntry, TreeNode,
 };
 use store::{
     cache_dir_for, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, open_history_database, refresh_entry_summary, register_cached_file,
-    retain_single_history, save_history, trim_history,
-    write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
+    load_history, refresh_entry_summary, register_cached_file,
+    retain_single_history, save_history,
+    HistoryData,
 };
 use clipboard::output::{missing_files, refresh_snapshot_summary, snapshot_entry, FilePasteStrategy};
 use clipboard::lightweight_entry;
@@ -49,23 +50,6 @@ const TRAY_SHOW_MAIN: &str = "show-main";
 const TRAY_QUIT: &str = "quit";
 const FILE_CHUNK_LIMIT: usize = 128 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncConfig {
-    enabled: bool,
-    #[serde(default, alias = "serverUrl")]
-    server_address: String,
-    #[serde(default = "default_server_protocol")]
-    server_protocol: String,
-    #[serde(default)]
-    username: String,
-    #[serde(default, alias = "token")]
-    session_token: String,
-    #[serde(default = "default_auto_upload_limit_mb")]
-    auto_upload_limit_mb: u64,
-    #[serde(default = "default_auto_receive_clipboard")]
-    auto_receive_clipboard: bool,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,22 +88,11 @@ fn get_platform_capabilities() -> PlatformCapabilities {
     }
 }
 
-fn default_server_protocol() -> String {
-    "http".to_string()
-}
-
-fn default_auto_upload_limit_mb() -> u64 {
-    10
-}
-
-fn default_auto_receive_clipboard() -> bool {
-    true
-}
 
 struct AppState {
     history: Mutex<HistoryData>,
     histories_dir: PathBuf,
-    sync_config: Mutex<Option<SyncConfig>>,
+    sync_config: Mutex<Option<crate::sync::config::SyncConfig>>,
     sync_config_path: PathBuf,
     downloads: Mutex<HashMap<String, DownloadState>>,
     save_sessions: Mutex<HashMap<String, SaveSession>>,
@@ -241,28 +214,6 @@ struct SavePreparation {
 }
 
 
-fn history_key_for_config(config: &SyncConfig) -> String {
-    if config.enabled && !config.username.trim().is_empty() {
-        format!(
-            "account:{}:{}",
-            config.server_address.trim().to_ascii_lowercase(),
-            config.username.trim().to_ascii_lowercase()
-        )
-    } else {
-        LOCAL_HISTORY_KEY.to_string()
-    }
-}
-
-fn load_sync_config(path: &Path) -> Option<SyncConfig> {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-}
-
-fn write_sync_config(path: &Path, config: &Option<SyncConfig>) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
-    fs::write(path, json).map_err(|error| error.to_string())
-}
 
 fn save_active_history(state: &AppState, history: &HistoryData) -> Result<(), String> {
     save_history(
@@ -342,30 +293,6 @@ fn get_device(state: State<'_, AppState>) -> Result<(String, String), String> {
     Ok((history.device_id.clone(), history.device_name.clone()))
 }
 
-/// File ids this device knows nothing about: neither a local blob in the cache
-/// nor an "available" mark from the server pool. The sync flow queries server
-/// storage status only for these, so locally known contents never ride a
-/// `/files/query` request.
-#[tauri::command(rename_all = "camelCase")]
-fn filter_unknown_file_ids(
-    state: State<'_, AppState>,
-    file_ids: Vec<String>,
-) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let mut unknown = Vec::new();
-    let mut seen = HashSet::new();
-    for file_id in file_ids {
-        if file_id.is_empty()
-            || !seen.insert(file_id.clone())
-            || history.cached_files.contains(&file_id)
-            || history.uploaded_files.contains(&file_id)
-        {
-            continue;
-        }
-        unknown.push(file_id);
-    }
-    Ok(unknown)
-}
 
 #[tauri::command(rename_all = "camelCase")]
 fn configure_device(
@@ -379,14 +306,6 @@ fn configure_device(
     save_active_history(&state, &history)
 }
 
-#[tauri::command]
-fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncConfig>, String> {
-    Ok(state
-        .sync_config
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone())
-}
 
 #[tauri::command]
 fn open_app_data_dir(app: AppHandle) -> Result<(), String> {
@@ -421,248 +340,11 @@ fn open_app_data_dir(app: AppHandle) -> Result<(), String> {
     }
 }
 
-#[tauri::command(rename_all = "camelCase")]
-fn save_sync_config(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    config: SyncConfig,
-) -> Result<(), String> {
-    let history_key = history_key_for_config(&config);
-    let pending = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.active_history != history_key {
-            save_active_history(&state, &history)?;
-            let next_path = history_path_for_key(&state.histories_dir, &history_key);
-            let profile_exists = next_path.exists();
-            let device_id = history.device_id.clone();
-            let device_name = history.device_name.clone();
-            let mut next_history = load_history(&next_path, &history_key);
-            retain_single_history(&mut next_history, &history_key);
-            if !profile_exists {
-                next_history.device_id = device_id;
-                next_history.device_name = device_name;
-            }
-            *history = next_history;
-        }
-        save_active_history(&state, &history)?;
-        crate::clipboard::hashing::pending_entry_ids(&history)
-    };
-    for entry_id in pending {
-        crate::clipboard::hashing::queue_hashing(&state, &entry_id);
-    }
-    let config = Some(config);
-    write_sync_config(&state.sync_config_path, &config)?;
-    *state.sync_config.lock().map_err(|error| error.to_string())? = config;
-    app.emit("cliproam://sync-config-changed", ())
-        .map_err(|error| error.to_string())
-}
 
-#[tauri::command(rename_all = "camelCase")]
-fn upsert_remote_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    mut entry: ClipboardEntry,
-    available_file_ids: Vec<String>,
-) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        // The caller pre-queried which contents the server's pool holds
-        // (POST /files/query). Those need no re-upload from this device, and
-        // the availability row makes the state survive a restart.
-        let available: Vec<String> = entry_contents_of(&entry)
-            .into_iter()
-            .map(|(file_id, _)| file_id)
-            .filter(|file_id| available_file_ids.contains(file_id))
-            .collect();
-        let entries = history.active_entries_mut();
-        if let Some(local) = entries.iter().find(|item| item.id == entry.id) {
-            preserve_local_sources(&mut entry, local);
-        }
-        entries.retain(|item| item.id != entry.id);
-        let entry_id = entry.id.clone();
-        entries.push(entry);
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        trim_history(entries);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        save_active_history(&state, &history)?;
-        // Existing rows keep their large data during the general history save;
-        // a remote update replaces it explicitly here.
-        if let Some(entry) = history.find(&entry_id) {
-            let connection = open_history_database(&history_path)?;
-            write_entry_data(&connection, entry)?;
-            store::mark_files_uploaded(&connection, &available);
-        }
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
 
-/// Reconciling a fresh install can deliver hundreds of remote entries at once;
-/// a single lock, save and event keeps that from locking up the windows.
-#[tauri::command(rename_all = "camelCase")]
-fn upsert_remote_entries(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entries: Vec<ClipboardEntry>,
-    available_file_ids: Vec<String>,
-) -> Result<(), String> {
-    if entries.is_empty() {
-        return Ok(());
-    }
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let mut upserted_ids = Vec::with_capacity(entries.len());
-        // The caller pre-queried which contents the server's pool holds
-        // (POST /files/query). Those need no re-upload from this device, and
-        // the availability rows make the state survive a restart.
-        let available: HashSet<String> = entries
-            .iter()
-            .flat_map(entry_contents_of)
-            .map(|(file_id, _)| file_id)
-            .filter(|file_id| available_file_ids.contains(file_id))
-            .collect();
-        history.uploaded_files.extend(available.iter().cloned());
-        {
-            let slot = history.active_entries_mut();
-            for mut entry in entries {
-                if let Some(local) = slot.iter().find(|item| item.id == entry.id) {
-                    preserve_local_sources(&mut entry, local);
-                }
-                let entry_id = entry.id.clone();
-                slot.retain(|item| item.id != entry.id);
-                slot.push(entry);
-                upserted_ids.push(entry_id);
-            }
-            slot.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            trim_history(slot);
-        }
-        for entry_id in &upserted_ids {
-            refresh_entry_summary(&mut history, entry_id, &cache_dir);
-        }
-        save_active_history(&state, &history)?;
-        // Existing rows keep their large data during the general history save;
-        // a remote update replaces it explicitly here.
-        let connection = open_history_database(&history_path)?;
-        for entry_id in &upserted_ids {
-            if let Some(entry) = history.find(entry_id) {
-                write_entry_data(&connection, entry)?;
-            }
-        }
-        let available_vec = available.into_iter().collect::<Vec<_>>();
-        store::mark_files_uploaded(&connection, &available_vec);
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
 
-/// Adopts the server's record for a locally captured entry: the local
-/// content-hash id is swapped for the server-assigned one so local history,
-/// the pending sets and every entryId command share the server's key space.
-/// Returns false when the entry was deleted locally while the publish was in
-/// flight — the caller must then delete the server row itself.
-#[tauri::command(rename_all = "camelCase")]
-fn apply_published_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    local_entry_id: String,
-    mut entry: ClipboardEntry,
-) -> Result<bool, String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.pending_deletions.remove(&local_entry_id) {
-            save_active_history(&state, &history)?;
-            return Ok(false);
-        }
-        // A deletion can land while the publish is in flight — including of an
-        // entry that was still unpublished. Without the local entry there is
-        // nothing to adopt, and the caller must delete the server row.
-        if history.find(&local_entry_id).is_none() {
-            return Ok(false);
-        }
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        if let Some(local) = history.find(&local_entry_id) {
-            preserve_local_sources(&mut entry, local);
-        }
-        // The WS echo may have inserted the server id before the publish
-        // response arrived; drop both keys so only one row survives.
-        let entries = history.active_entries_mut();
-        entries.retain(|item| item.id != local_entry_id && item.id != entry.id);
-        let entry_id = entry.id.clone();
-        entries.push(entry);
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        trim_history(entries);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        // The id changed, so the save's INSERT OR IGNORE writes a fresh row
-        // and the mark-sweep deletes the old one.
-        save_active_history(&state, &history)?;
-        if let Some(entry) = history.find(&entry_id) {
-            let connection = open_history_database(&history_path)?;
-            write_entry_data(&connection, entry)?;
-        }
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())?;
-    Ok(true)
-}
 
-#[tauri::command(rename_all = "camelCase")]
-fn mark_files_uploaded(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-    file_ids: Vec<String>,
-) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let uploaded = file_ids.into_iter().collect::<Vec<_>>();
-        history.uploaded_files.extend(uploaded.iter().cloned());
-        let connection = open_history_database(&history_path)?;
-        store::mark_files_uploaded(&connection, &uploaded);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
 
-/// Server storage is content-addressed, so another device can finish uploading
-/// a file after this entry was already received locally. Update every local
-/// entry that references the now-available content.
-#[tauri::command(rename_all = "camelCase")]
-fn mark_file_available(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    file_id: String,
-) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        if history.uploaded_files.contains(&file_id) {
-            return Ok(());
-        }
-        let changed_ids = history
-            .active_entries()
-            .iter()
-            .filter(|entry| entry_references(entry, &file_id))
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
-        history.uploaded_files.insert(file_id.clone());
-        let connection = open_history_database(&history_path)?;
-        store::mark_files_uploaded(&connection, &[file_id]);
-        for entry_id in &changed_ids {
-            refresh_entry_summary(&mut history, entry_id, &cache_dir);
-        }
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
 
 #[tauri::command(rename_all = "camelCase")]
 fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
@@ -708,104 +390,8 @@ fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
         .map_err(|error| error.to_string())
 }
 
-/// Applies a server-confirmed deletion without creating a new local tombstone.
-#[tauri::command(rename_all = "camelCase")]
-fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        history.active_entries_mut().retain(|entry| entry.id != entry_id);
-        save_active_history(&state, &history)?;
-        let _ = collect_local_garbage(&state.histories_dir, &mut history);
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
 
-#[tauri::command]
-fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let mut pending = history.pending_deletions.iter().cloned().collect::<Vec<_>>();
-    pending.sort();
-    Ok(pending)
-}
 
-#[tauri::command(rename_all = "camelCase")]
-fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    if history.pending_deletions.remove(&entry_id) {
-        save_active_history(&state, &history)?;
-    }
-    Ok(())
-}
-
-/// One durable upload-queue row for the sync client, enriched with the local
-/// entry state the publish flow needs.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PendingQueueRowView {
-    seq: i64,
-    kind: String,
-    content: String,
-    extra: serde_json::Value,
-    created_at: String,
-    /// The temporary id the local entry carries until the server's is adopted.
-    local_id: String,
-    /// False once the entry was adopted, evicted or deleted — the row only
-    /// needs acknowledging then.
-    exists: bool,
-    /// Files entries are publishable only once every content id is resolved.
-    ready: bool,
-}
-
-#[tauri::command]
-fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<PendingQueueRowView>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let rows = store::list_pending_rows(&history_path_for_key(
-        &state.histories_dir,
-        &history.active_history,
-    ))?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let local_id = store::temp_entry_id(row.seq);
-            let entry = history.find(&local_id);
-            let ready = match entry {
-                // Same rule as the hash-resume list: any unresolved source
-                // file means the payload is not final yet.
-                Some(entry) if entry.kind == "files" => !entry
-                    .sources
-                    .files
-                    .iter()
-                    .any(|source| source.file_id.is_none()),
-                Some(_) => true,
-                None => false,
-            };
-            let extra = serde_json::from_str(&row.extra).unwrap_or_else(|_| {
-                serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
-            });
-            PendingQueueRowView {
-                seq: row.seq,
-                kind: row.kind,
-                content: row.content,
-                extra,
-                created_at: row.created_at,
-                exists: entry.is_some(),
-                ready,
-                local_id,
-            }
-        })
-        .collect())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-fn acknowledge_pending_entry(state: State<'_, AppState>, seq: i64) -> Result<(), String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    store::acknowledge_pending_entry(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        seq,
-    )?;
-    Ok(())
-}
 
 #[tauri::command]
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -1592,10 +1178,10 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
-            let sync_config = load_sync_config(&sync_config_path);
+            let sync_config = sync::config::load_sync_config(&sync_config_path);
             let history_key = sync_config
                 .as_ref()
-                .map(history_key_for_config)
+                .map(sync::config::history_key_for_config)
                 .unwrap_or_else(default_active_history);
             let mut history = load_history(&history_path_for_key(&histories_dir, &history_key), &history_key);
             retain_single_history(&mut history, &history_key);
@@ -1710,24 +1296,24 @@ pub fn run() {
             list_entries,
             get_entry,
             list_entry_files,
-            filter_unknown_file_ids,
+            sync::remote::filter_unknown_file_ids,
             get_device,
             configure_device,
-            get_sync_config,
+            sync::config::get_sync_config,
             open_app_data_dir,
-            save_sync_config,
-            upsert_remote_entry,
-            upsert_remote_entries,
-            apply_published_entry,
-            mark_files_uploaded,
-            mark_file_available,
+            sync::config::save_sync_config,
+            sync::remote::upsert_remote_entry,
+            sync::remote::upsert_remote_entries,
+            sync::remote::apply_published_entry,
+            sync::remote::mark_files_uploaded,
+            sync::remote::mark_file_available,
             delete_entry,
             clear_history,
-            remove_remote_entry,
-            list_pending_deletions,
-            acknowledge_entry_deletion,
-            list_pending_entries,
-            acknowledge_pending_entry,
+            sync::remote::remove_remote_entry,
+            sync::queue::list_pending_deletions,
+            sync::queue::acknowledge_entry_deletion,
+            sync::queue::list_pending_entries,
+            sync::queue::acknowledge_pending_entry,
             open_paste,
             start_window_drag,
             hide_paste,
@@ -1757,23 +1343,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn older_sync_config_enables_clipboard_roaming_by_default() {
-        let config: SyncConfig = serde_json::from_str(
-            r#"{
-                "enabled": true,
-                "serverAddress": "127.0.0.1:4810",
-                "serverProtocol": "http",
-                "username": "tester",
-                "sessionToken": "token",
-                "autoUploadLimitMb": 10
-            }"#,
-        )
-        .unwrap();
-
-        assert!(config.auto_receive_clipboard);
-    }
 
 
     #[test]
