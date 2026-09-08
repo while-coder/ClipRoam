@@ -17,15 +17,15 @@ import {
   Upload,
   X,
 } from "lucide-vue-next";
-import TimeFilterControl from "../components/TimeFilterControl.vue";
-import PaginationControl from "../components/PaginationControl.vue";
-import { useHistoryPagination } from "../composables/useHistoryPagination";
-import { isPasteWindow, runningInTauri, usePlatform } from "../composables/usePlatform";
+import TimeFilterControl from "./TimeFilterControl.vue";
+import PaginationControl from "./PaginationControl.vue";
+import { useHistoryPagination } from "./useHistoryPagination";
+import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
 import {
   formatAge as formatAgeRelative,
   formatExactDateTime,
   parseLocalDate,
-} from "../utils/format";
+} from "../../utils/format";
 import {
   canManualUpload,
   canSaveEntry,
@@ -34,7 +34,7 @@ import {
   saveEntryLabel,
   syncStatusLabel,
   uploadStatus as uploadStatusOf,
-} from "../utils/entry";
+} from "../../utils/entry";
 import type {
   ClipboardEntry,
   Device,
@@ -44,7 +44,7 @@ import type {
   TimeFilter,
   ToastTone,
   UploadProgress,
-} from "../types";
+} from "../../types";
 
 const props = defineProps<{
   entries: LocalClipboardEntry[];

@@ -12,10 +12,10 @@ import {
   Trash2,
   Upload,
 } from "lucide-vue-next";
-import { canManualUpload, deviceName as deviceDisplayName } from "../utils/entry";
-import { formatAge as formatAgeRelative, formatExactDateTime } from "../utils/format";
-import { usePlatform } from "../composables/usePlatform";
-import type { ClipboardEntry, Device, LocalClipboardEntry } from "../types";
+import { canManualUpload, deviceName as deviceDisplayName } from "../../utils/entry";
+import { formatAge as formatAgeRelative, formatExactDateTime } from "../../utils/format";
+import { usePlatform } from "../../composables/usePlatform";
+import type { ClipboardEntry, Device, LocalClipboardEntry } from "../../types";
 
 /**
  * Everything in this list shares one state — 未同步. Once an entry reaches the
