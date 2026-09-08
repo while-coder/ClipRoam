@@ -1,4 +1,4 @@
-import { MANUAL_UPLOAD_LIMIT } from "../services/syncClient";
+import { MANUAL_UPLOAD_LIMIT } from "../features/sync/syncClient";
 import { runningInTauri } from "../composables/usePlatform";
 import { formatFileSize } from "./format";
 import type {
