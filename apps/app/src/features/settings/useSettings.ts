@@ -8,6 +8,7 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword } from "../sync/syncClient";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB } from "@cliproam/protocol";
 import type { SettingsPage, SyncConfig } from "../../types";
 
 /**
@@ -42,8 +43,8 @@ function requireBridge(): SettingsBridge {
 
 const settingsVisible = ref(false);
 const settingsPage = ref<SettingsPage>("general");
-const autoUploadLimitMb = ref(10);
-const autoReceiveClipboard = ref(true);
+const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
+const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
 const savingSettings = ref(false);
 const recordingQuickPasteShortcut = ref(false);
 const changingPassword = ref(false);

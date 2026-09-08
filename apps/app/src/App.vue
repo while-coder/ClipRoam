@@ -8,7 +8,7 @@ import type {
   ClipboardEntry,
   ClipboardManifestEntry,
 } from "@cliproam/protocol";
-import { entryContents } from "@cliproam/protocol";
+import { entryContents, DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
 import {
   Clipboard,
   Cloud,
@@ -658,7 +658,7 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   let serverAddress = typeof value.serverAddress === "string" ? value.serverAddress : "";
-  let serverProtocol: ServerProtocol = value.serverProtocol === "https" ? "https" : "http";
+  let serverProtocol: ServerProtocol = value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL;
   if (serverAddress.includes("://")) {
     try {
       const url = new URL(serverAddress);
@@ -674,7 +674,7 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
     sessionToken: typeof value.sessionToken === "string" ? value.sessionToken : "",
     autoUploadLimitMb: typeof value.autoUploadLimitMb === "number"
       ? Math.max(0, value.autoUploadLimitMb)
-      : 10,
+      : DEFAULT_AUTO_UPLOAD_LIMIT_MB,
     autoReceiveClipboard: value.autoReceiveClipboard !== false,
   };
 }
@@ -699,8 +699,8 @@ async function useLocalMode(draft: SetupDraft): Promise<void> {
     serverProtocol: draft.serverProtocol,
     username: draft.username,
     sessionToken: activeSyncConfig?.sessionToken ?? "",
-    autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? 10,
-    autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? true,
+    autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? DEFAULT_AUTO_UPLOAD_LIMIT_MB,
+    autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? DEFAULT_AUTO_RECEIVE_CLIPBOARD,
   };
   setupError.value = "";
   try {
@@ -746,8 +746,8 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       serverProtocol,
       username: session.user.username,
       sessionToken: session.sessionToken,
-      autoUploadLimitMb: 10,
-      autoReceiveClipboard: true,
+      autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
+      autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
     };
     await persistSyncConfig(config);
     activeSyncConfig = config;

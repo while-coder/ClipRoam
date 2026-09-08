@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-export const DEFAULT_AUTO_UPLOAD_LIMIT = 10 * 1024 * 1024;
+// Sync-config defaults shared by the app's settings UI and (as a comment) the
+// Rust serde fallbacks in apps/app/src-tauri/src/sync/config.rs.
+export const DEFAULT_SERVER_PROTOCOL = "http";
+export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 10;
+export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
+export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
 export const FILE_CHUNK_SIZE = 128 * 1024;
 // A single entry carries its whole directory tree, so a publish body can get
 // large. The tree is compact (~40 bytes per node) but unbounded by design.
