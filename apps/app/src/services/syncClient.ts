@@ -556,7 +556,7 @@ export class SyncClient {
       const parsed = EntryManifestResponseSchema.safeParse(body);
       if (!parsed.success) throw new Error("服务器返回了不兼容的连接状态响应");
       manifest.push(...parsed.data.manifest);
-      if (!parsed.data.hasMore) break;
+      if (manifest.length >= parsed.data.total) break;
     }
     this.handlers.onManifest(manifest, await this.#fetchDevices());
   }

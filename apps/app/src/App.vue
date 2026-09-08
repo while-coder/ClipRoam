@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { addPluginListener, convertFileSrc, invoke, type PluginListener } from "@tauri-apps/api/core";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 import type {
@@ -16,27 +16,18 @@ import {
   Clipboard,
   Cloud,
   CloudOff,
-  Download,
-  File,
-  FileText,
+  CloudUpload,
   FolderOpen,
-  Image,
   Info,
   KeyRound,
   LoaderCircle,
-  Monitor,
-  Pin,
   RefreshCw,
-  Search,
   Server,
   Settings2,
   ShieldCheck,
-  Trash2,
-  Upload,
   X,
 } from "lucide-vue-next";
 import {
-  MANUAL_UPLOAD_LIMIT,
   SyncClient,
   authenticateAccount,
   changeAccountPassword,
@@ -58,9 +49,8 @@ import {
   saveQuickPasteShortcut,
 } from "./services/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
-import TimeFilterControl from "./components/TimeFilterControl.vue";
-import PaginationControl from "./components/PaginationControl.vue";
-import { useHistoryPagination } from "./composables/useHistoryPagination";
+import HistoryView from "./views/HistoryView.vue";
+import PendingSyncView from "./views/PendingSyncView.vue";
 import {
   BROWSER_CONFIG_KEY,
   CONFIGURED_SERVER_PROTOCOL,
@@ -68,17 +58,11 @@ import {
   DESKTOP_CAPABILITIES,
   EMPTY_SUMMARY,
 } from "./utils/constants";
-import {
-  formatAge as formatAgeRelative,
-  formatExactDateTime,
-  formatFileSize,
-  parseLocalDate,
-} from "./utils/format";
+import { canManualUpload, canSaveEntry, isHashing } from "./utils/entry";
 import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
 import type {
   Device,
   DownloadProgress,
-  EntryFilter,
   ToastPayload,
   ToastTone,
   LocalClipboardEntry,
@@ -89,7 +73,6 @@ import type {
   ShareImportSummary,
   ShareReceiverEvent,
   SyncConfig,
-  TimeFilter,
   UploadProgress,
   VirtualFileRequest,
 } from "./types";
@@ -107,18 +90,11 @@ const {
 
 const entries = ref<LocalClipboardEntry[]>([]);
 const syncedEntryIds = ref(new Set<string>());
+const activeView = ref<"history" | "pending-sync">("history");
 const devicesById = ref<Record<string, Device>>({
   browser: { id: "browser", name: "浏览器预览", platform: "browser", osVersion: "未知" },
 });
 const currentTime = ref(Date.now());
-const query = ref("");
-const filter = ref<EntryFilter>("all");
-const timeFilter = ref<TimeFilter>("all");
-const startDate = ref("");
-const endDate = ref("");
-const selectedEntryId = ref("");
-const clearHistoryConfirmVisible = ref(false);
-const clearingHistory = ref(false);
 const connected = ref(false);
 const syncEnabled = ref(false);
 const toastPayload = ref<ToastPayload>();
@@ -148,23 +124,16 @@ const currentPassword = ref("");
 const newPassword = ref("");
 const confirmNewPassword = ref("");
 const currentUsername = ref("");
-const capturingClipboard = ref(false);
 const importingShare = ref(false);
 const activatingEntryId = ref("");
 const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
 const savingEntryId = ref("");
-const previewImage = ref<LocalClipboardEntry>();
-const previewLoading = ref(false);
-const previewDialog = ref<HTMLElement>();
-const searchInput = ref<HTMLInputElement>();
-const historyListElement = ref<HTMLElement>();
-const clearHistoryButton = ref<HTMLButtonElement>();
-const clearHistoryCancelButton = ref<HTMLButtonElement>();
-const clearHistoryConfirmButton = ref<HTMLButtonElement>();
 const serverInput = ref<HTMLInputElement>();
 const accountPasswordInput = ref<HTMLInputElement>();
+const historyView = ref<InstanceType<typeof HistoryView>>();
+const pendingSyncView = ref<InstanceType<typeof PendingSyncView>>();
 let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
@@ -209,99 +178,14 @@ const demoEntries: LocalClipboardEntry[] = [
   },
 ];
 
-const timeRangeError = computed(() => {
-  if (timeFilter.value !== "custom") return "";
-  if (!startDate.value || !endDate.value) return "请选择完整的开始和结束日期";
-  if (startDate.value > endDate.value) return "开始日期不能晚于结束日期";
-  return "";
-});
-
-const activeTimeRange = computed<{ start?: number; end?: number }>(() => {
-  if (timeFilter.value === "all") return {};
-  if (timeFilter.value === "custom") {
-    if (timeRangeError.value) return {};
-    return {
-      start: parseLocalDate(startDate.value)?.getTime(),
-      end: parseLocalDate(endDate.value, true)?.getTime(),
-    };
-  }
-  const start = new Date(currentTime.value);
-  start.setHours(0, 0, 0, 0);
-  if (timeFilter.value === "7-days") start.setDate(start.getDate() - 6);
-  if (timeFilter.value === "30-days") start.setDate(start.getDate() - 29);
-  const end = new Date(currentTime.value);
-  end.setHours(23, 59, 59, 999);
-  return { start: start.getTime(), end: end.getTime() };
-});
-
-const timeFilterSummary = computed(() => {
-  if (timeFilter.value === "all") return "";
-  if (timeFilter.value === "today") return "今天";
-  if (timeFilter.value === "7-days") return "近 7 天";
-  if (timeFilter.value === "30-days") return "近 30 天";
-  if (!startDate.value || !endDate.value) return "自定义区间";
-  return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
-});
-
-const filteredEntries = computed(() => {
-  if (timeRangeError.value) return [];
-  const needle = query.value.trim().toLocaleLowerCase();
-  const timeRange = activeTimeRange.value;
-  return entries.value.filter((entry) => {
-    const matchesType = filter.value === "all"
-      || (filter.value === "pinned" && entry.pinned)
-      || (filter.value === "pending-upload" && entry.summary.uploadedCount < entry.summary.contentCount)
-      || entry.kind === filter.value;
-    const matchesQuery = !needle
-      || entry.content.toLocaleLowerCase().includes(needle)
-      || deviceName(entry).toLocaleLowerCase().includes(needle);
-    const createdAt = new Date(entry.createdAt).getTime();
-    const matchesTime = (timeRange.start === undefined || createdAt >= timeRange.start)
-      && (timeRange.end === undefined || createdAt <= timeRange.end);
-    return matchesType && matchesQuery && matchesTime;
-  });
-});
-
-const showsEmptyPinnedState = computed(() => (
-  filter.value === "pinned" && timeFilter.value === "all" && !query.value.trim()
+/**
+ * Entries the server manifest does not know about: captured offline, queued for
+ * publishing, or waiting for their content ids (hashing). Text syncs on its
+ * own; files and images additionally need a content upload.
+ */
+const pendingEntries = computed(() => (
+  entries.value.filter((entry) => !isEntrySynced(entry))
 ));
-
-const filterResultSummary = computed(() => {
-  if (timeRangeError.value) return "日期有误";
-  const count = `${filteredEntries.value.length} 条`;
-  return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
-});
-
-const clearableEntryCount = computed(() => (
-  entries.value.reduce((count, entry) => count + Number(!entry.pinned), 0)
-));
-
-watch(filteredEntries, (nextEntries) => {
-  if (!nextEntries.some((entry) => entry.id === selectedEntryId.value)) {
-    selectedEntryId.value = nextEntries[0]?.id ?? "";
-  }
-});
-
-const selectedIndex = computed(() => {
-  const index = filteredEntries.value.findIndex((entry) => entry.id === selectedEntryId.value);
-  return index >= 0 ? index : 0;
-});
-
-const {
-  page: currentPage,
-  pageCount,
-  pagedEntries,
-  goToPageOf,
-  changePage,
-} = useHistoryPagination(
-  filteredEntries,
-  [query, filter, timeFilter, startDate, endDate],
-  {
-    listElement: historyListElement,
-    getSelectedEntryId: () => selectedEntryId.value,
-    setSelectedEntryId: (id) => { selectedEntryId.value = id; },
-  },
-);
 
 function displayToast(payload: ToastPayload): void {
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);
@@ -328,10 +212,6 @@ function showToast(message: string, tone: ToastTone = "info"): void {
     return;
   }
   void invoke("show_toast", payload).catch(() => displayToast(payload));
-}
-
-function formatAge(createdAt: string): string {
-  return formatAgeRelative(createdAt, currentTime.value);
 }
 
 async function refreshEntries(): Promise<void> {
@@ -448,10 +328,6 @@ function rememberDevices(devices: Device[]): void {  devicesById.value = {
   };
 }
 
-function deviceName(entry: ClipboardEntry): string {
-  return devicesById.value[entry.sourceDeviceId]?.name ?? "未知设备";
-}
-
 function entrySyncId(entry: ClipboardEntry): string {
   return entry.id;
 }
@@ -466,51 +342,8 @@ function isEntrySynced(entry: ClipboardEntry): boolean {
   return syncedEntryIds.value.has(entrySyncId(entry));
 }
 
-function syncStatusLabel(entry: ClipboardEntry): string {
-  return isEntrySynced(entry) ? "已同步到服务器" : "未同步到服务器";
-}
-
-function imageSource(entry: LocalClipboardEntry): string | undefined {
-  const path = entry.summary.previewPath;
-  return path && runningInTauri ? convertFileSrc(path) : undefined;
-}
-
-function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
-  return entry.imageInfo?.thumbnail
-    ? `data:image/webp;base64,${entry.imageInfo.thumbnail}`
-    : undefined;
-}
-
-function fileEntrySummary(entry: LocalClipboardEntry): string | undefined {
-  if (entry.kind !== "files" || !entry.summary.fileCount) return undefined;
-  const count = `${entry.summary.fileCount} 个文件`;
-  if (!entry.summary.totalSize) return count;
-  return `${count} · ${formatFileSize(entry.summary.totalSize)}`;
-}
-
-async function focusSearch(): Promise<void> {
-  query.value = "";
-  if (isPasteWindow) {
-    filter.value = "all";
-    timeFilter.value = "all";
-  }
-  selectedEntryId.value = filteredEntries.value[0]?.id ?? "";
-  await nextTick();
-  searchInput.value?.focus();
-}
-
-async function captureCurrentClipboard(): Promise<void> {
-  if (!runningInTauri || capturingClipboard.value) return;
-  capturingClipboard.value = true;
-  try {
-    const captured = await invoke<boolean>("capture_current_clipboard_text");
-    await refreshEntries();
-    showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
-  } catch (error) {
-    showToast(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
-  } finally {
-    capturingClipboard.value = false;
-  }
+function focusSearch(): void {
+  void nextTick(() => historyView.value?.focusSearch());
 }
 
 function shareImportMessage(summary: ShareImportSummary): string {
@@ -635,44 +468,6 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
   return activateEntry(entry, "paste_entry");
 }
 
-function isHashing(entry: LocalClipboardEntry): boolean {
-  return entry.summary.hashedCount < entry.summary.fileCount;
-}
-
-function uploadStatus(entry: LocalClipboardEntry): string | undefined {
-  const summary = entry.summary;
-  if (!summary.fileCount) return undefined;
-  // Content ids are computed in the background, so a fresh entry is usable
-  // locally before it can be addressed on the server.
-  if (isHashing(entry)) return `计算中 ${summary.hashedCount}/${summary.fileCount}`;
-  const download = downloadProgressByEntryId.value[entry.id];
-  if (download) return `下载中 ${download.finished}/${download.total}`;
-  const progress = uploadProgressByEntryId.value[entry.id];
-  if (progress) {
-    const percent = progress.totalBytes
-      ? Math.min(99, Math.floor((progress.uploadedBytes / progress.totalBytes) * 100))
-      : 0;
-    return `上传中 ${percent}%`;
-  }
-  if (!summary.contentCount) return undefined;
-  if (summary.uploadedCount === summary.contentCount) return "已上传";
-  if (summary.uploadedCount) {
-    return `部分上传（${summary.uploadedCount}/${summary.contentCount}）`;
-  }
-  if (summary.uploadableSize !== undefined && summary.uploadableSize >= MANUAL_UPLOAD_LIMIT) {
-    return "未上传（超过 100 MB）";
-  }
-  return "未上传";
-}
-
-function canManualUpload(entry: LocalClipboardEntry): boolean {
-  const uploadableSize = entry.summary.uploadableSize;
-  return runningInTauri
-    && !isHashing(entry)
-    && uploadableSize !== undefined
-    && uploadableSize < MANUAL_UPLOAD_LIMIT;
-}
-
 async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
   if (!syncClient) {
     showToast("同步服务未连接，无法上传文件", "error");
@@ -718,17 +513,6 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
     }
   }
   if (syncClient === client) await refreshEntries();
-}
-
-function canSaveEntry(entry: LocalClipboardEntry): boolean {
-  return runningInTauri
-    && (entry.kind === "files" || entry.kind === "image")
-    && entry.summary.contentCount > 0;
-}
-
-function saveEntryLabel(entry: LocalClipboardEntry): string {
-  if (savingEntryId.value === entry.id) return isMobile.value ? "正在下载…" : "正在另存为…";
-  return isMobile.value ? "下载到本机缓存" : "另存为…";
 }
 
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
@@ -789,51 +573,23 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   }
 }
 
-function selectOrActivate(entry: LocalClipboardEntry): void {
-  selectedEntryId.value = entry.id;
-  if (isPasteWindow) void pasteEntry(entry);
-  else if (isMobile.value) void copyEntry(entry);
-}
-
-function activateSelectedEntry(entry?: LocalClipboardEntry): void {
-  if (!entry) return;
+/**
+ * Activation requests from the history view. `viaClick` mirrors the old
+ * select-or-activate split: clicks activate immediately only in the paste
+ * window and on mobile, keyboard/double-click everywhere.
+ */
+function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
+  if (viaClick) {
+    if (isPasteWindow) void pasteEntry(entry);
+    else if (isMobile.value) void copyEntry(entry);
+    return;
+  }
   if (isPasteWindow) void pasteEntry(entry);
   else if (entry.kind === "files") {
     showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“另存为…”手动下载", "info");
   } else {
     void copyEntry(entry);
   }
-}
-
-function moveSelection(offset: -1 | 1): void {
-  if (!filteredEntries.value.length) return;
-  const index = Math.min(
-    Math.max(selectedIndex.value + offset, 0),
-    filteredEntries.value.length - 1,
-  );
-  selectedEntryId.value = filteredEntries.value[index].id;
-  goToPageOf(index);
-}
-
-async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
-  if (isPasteWindow || previewLoading.value) return;
-  previewLoading.value = true;
-  try {
-    const localEntry = await ensureLocalFiles(entry);
-    if (!imageSource(localEntry)) throw new Error("图片文件不可用");
-    previewImage.value = localEntry;
-    await nextTick();
-    previewDialog.value?.focus();
-  } catch (error) {
-    showToast(`无法预览图片：${error instanceof Error ? error.message : String(error)}`, "error");
-  } finally {
-    previewLoading.value = false;
-  }
-}
-
-function closeImagePreview(): void {
-  previewImage.value = undefined;
-  void nextTick(() => searchInput.value?.focus());
 }
 
 async function togglePin(entry: ClipboardEntry): Promise<void> {
@@ -858,51 +614,12 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
   await refreshEntries();
 }
 
-async function requestClearHistory(): Promise<void> {
-  if (!clearableEntryCount.value) return;
-  clearHistoryConfirmVisible.value = true;
-  await nextTick();
-  clearHistoryCancelButton.value?.focus();
-}
-
-function resetTimeFilter(): void {
-  timeFilter.value = "all";
-  startDate.value = "";
-  endDate.value = "";
-}
-
-async function closeClearHistoryConfirm(): Promise<void> {
-  if (clearingHistory.value) return;
-  clearHistoryConfirmVisible.value = false;
-  await nextTick();
-  clearHistoryButton.value?.focus();
-}
-
+// Invoked from the history view once its confirm dialog was accepted; the view
+// owns the dialog state, the toast and the post-clear focus.
 async function clearHistory(): Promise<void> {
-  if (clearingHistory.value || !clearableEntryCount.value) return;
-  const clearedCount = clearableEntryCount.value;
-  clearingHistory.value = true;
-  try {
-    if (runningInTauri) await invoke("clear_history");
-    else entries.value = entries.value.filter((entry) => entry.pinned);
-    await refreshEntries();
-    clearHistoryConfirmVisible.value = false;
-    showToast(`已清除 ${clearedCount} 条未固定记录`, "success");
-    await nextTick();
-    searchInput.value?.focus();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    showToast(`清除历史失败：${message}`, "error");
-  } finally {
-    clearingHistory.value = false;
-  }
-}
-
-async function startWindowDrag(event: MouseEvent): Promise<void> {
-  if (!runningInTauri || isMobile.value || event.button !== 0) return;
-  const target = event.target as HTMLElement;
-  if (target.closest("button, input, [role='button']")) return;
-  await invoke("start_window_drag");
+  if (runningInTauri) await invoke("clear_history");
+  else entries.value = entries.value.filter((entry) => entry.pinned);
+  await refreshEntries();
 }
 
 async function getDevice(): Promise<Device> {
@@ -1337,28 +1054,6 @@ async function connectAndSave(): Promise<void> {
 }
 
 function handleKeys(event: KeyboardEvent): void {
-  if (!isPasteWindow && clearHistoryConfirmVisible.value) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      void closeClearHistoryConfirm();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      const cancelButton = clearHistoryCancelButton.value;
-      const confirmButton = clearHistoryConfirmButton.value;
-      const focusConfirm = event.shiftKey
-        ? document.activeElement === cancelButton
-        : document.activeElement !== confirmButton;
-      (focusConfirm ? confirmButton : cancelButton)?.focus();
-    }
-    return;
-  }
-  if (!isPasteWindow && previewImage.value) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeImagePreview();
-    }
-    return;
-  }
   if (!isPasteWindow && settingsVisible.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -1373,18 +1068,12 @@ function handleKeys(event: KeyboardEvent): void {
     }
     return;
   }
+  // The history view handles its own dialogs (clear-history confirm, image
+  // preview) plus selection keys; a true return means the key was consumed.
+  if (historyView.value?.handleKeydown(event)) return;
   if (event.key === "Escape") {
     event.preventDefault();
     void hideWindow();
-  } else if (event.key === "ArrowDown") {
-    event.preventDefault();
-    moveSelection(1);
-  } else if (event.key === "ArrowUp") {
-    event.preventDefault();
-    moveSelection(-1);
-  } else if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    activateSelectedEntry(filteredEntries.value[selectedIndex.value]);
   }
 }
 
@@ -1451,6 +1140,40 @@ async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEn
   return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
 }
 
+/**
+ * Upload marks are local bookkeeping, so they can go stale: a `file.available`
+ * push missed while offline, or a failed pool query when a remote entry was
+ * upserted, leaves contents marked unuploaded that the server has long since
+ * stored. Each reconcile re-asks the pool about what this history still
+ * believes is missing; the Rust side refreshes the affected summaries.
+ */
+async function refreshPendingUploadStatuses(): Promise<void> {
+  const client = syncClient;
+  if (!client || !runningInTauri) return;
+  const pending = entries.value.filter((entry) => (
+    entry.summary.contentCount > entry.summary.uploadedCount
+  ));
+  if (!pending.length) return;
+  const pendingFileIds = [
+    ...new Set(pending.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId))),
+  ];
+  try {
+    const statuses = await client.fetchFileStatuses(pendingFileIds);
+    const stored = new Set(statuses.filter((file) => file.stored).map((file) => file.fileId));
+    if (!stored.size) return;
+    for (const entry of pending) {
+      const fileIds = entryContents(entry)
+        .map(({ fileId }) => fileId)
+        .filter((fileId) => stored.has(fileId));
+      if (fileIds.length) {
+        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds });
+      }
+    }
+  } catch (error) {
+    showToast(`刷新上传状态失败：${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
 async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<void> {
   const client = syncClient;
   if (!client) return;
@@ -1495,6 +1218,9 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       }
     }
     await refreshEntries();
+    // A reconcile is also the moment stale "unuploaded" marks get corrected
+    // against the pool; the drain afterwards can then skip re-uploading.
+    if (syncClient === client) await refreshPendingUploadStatuses();
     // Deletions and remote upserts have been replayed; now publish whatever
     // the durable capture queue still holds (single-flight, no-op if running).
     if (syncClient === client) client.drainQueue();
@@ -1920,9 +1646,26 @@ onBeforeUnmount(() => {
 
       <nav class="sidebar-nav" aria-label="功能模块">
         <span class="nav-section-label">工作区</span>
-        <button class="nav-item active" type="button" aria-current="page">
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'history' }"
+          type="button"
+          :aria-current="activeView === 'history' ? 'page' : undefined"
+          @click="activeView = 'history'"
+        >
           <Clipboard :size="17" aria-hidden="true" />
           <span>剪贴板历史</span>
+        </button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'pending-sync' }"
+          type="button"
+          :aria-current="activeView === 'pending-sync' ? 'page' : undefined"
+          @click="activeView = 'pending-sync'"
+        >
+          <CloudUpload :size="17" aria-hidden="true" />
+          <span>待同步</span>
+          <span v-if="pendingEntries.length" class="nav-count">{{ pendingEntries.length }}</span>
         </button>
       </nav>
 
@@ -1939,211 +1682,43 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <section class="app-content history-content">
-      <div v-if="isPasteWindow" class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
-      <header v-else class="titlebar workspace-titlebar">
-        <div class="page-title">
-          <span>工作区</span>
-          <h1>剪贴板历史</h1>
-        </div>
-        <div class="titlebar-actions">
-          <span v-if="isMobile" class="mobile-connection" :class="connectionStatus.tone">{{ connectionStatus.label }}</span>
-          <button v-if="isMobile" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="openSettings">
-            <Settings2 :size="19" />
-          </button>
-        </div>
-      </header>
+    <HistoryView
+      v-if="activeView === 'history'"
+      ref="historyView"
+      :entries="entries"
+      :devices-by-id="devicesById"
+      :synced-entry-ids="syncedEntryIds"
+      :connection-status="connectionStatus"
+      :current-time="currentTime"
+      :importing-share="importingShare"
+      :activating-entry-id="activatingEntryId"
+      :uploading-entry-id="uploadingEntryId"
+      :saving-entry-id="savingEntryId"
+      :upload-progress-by-entry-id="uploadProgressByEntryId"
+      :download-progress-by-entry-id="downloadProgressByEntryId"
+      :show-toast="showToast"
+      :ensure-local-files="ensureLocalFiles"
+      :clear-history="clearHistory"
+      @activate="activateFromView"
+      @toggle-pin="togglePin"
+      @remove="removeEntry"
+      @save="saveEntry"
+      @upload="uploadEntry"
+      @refresh="refreshEntries"
+      @open-settings="openSettings"
+    />
 
-      <section class="toolbar">
-      <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
-        <LoaderCircle :size="18" class="spin" aria-hidden="true" />
-        <span>正在接收系统分享…</span>
-      </div>
-      <label class="search-field">
-        <Search :size="17" aria-hidden="true" />
-        <input ref="searchInput" v-model="query" type="search" placeholder="搜索剪贴板历史" aria-label="搜索剪贴板历史" />
-        <kbd>Enter</kbd>
-      </label>
-      <button v-if="isMobile" class="mobile-capture-button" type="button" :disabled="capturingClipboard" @click="captureCurrentClipboard">
-        <LoaderCircle v-if="capturingClipboard" :size="18" class="spin" aria-hidden="true" />
-        <Clipboard v-else :size="18" aria-hidden="true" />
-        {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
-      </button>
-      <div class="filter-row" role="group" aria-label="剪贴板筛选">
-        <div class="filter-scroll">
-          <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
-          <button :class="{ active: filter === 'pinned' }" type="button" @click="filter = 'pinned'">已固定</button>
-          <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
-          <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
-          <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
-          <button :class="{ active: filter === 'pending-upload' }" type="button" @click="filter = 'pending-upload'">未上传</button>
-          <TimeFilterControl
-            v-model="timeFilter"
-            v-model:start-date="startDate"
-            v-model:end-date="endDate"
-            :error="timeRangeError"
-          />
-        </div>
-        <div class="filter-actions">
-          <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
-          <button
-            v-if="!isPasteWindow"
-            ref="clearHistoryButton"
-            class="clear-button"
-            type="button"
-            :disabled="!clearableEntryCount"
-            :title="clearableEntryCount ? `清除 ${clearableEntryCount} 条未固定记录` : '没有可清除的未固定记录'"
-            @click="requestClearHistory"
-          >清除未固定</button>
-        </div>
-      </div>
-      </section>
-
-      <section id="history-content" ref="historyListElement" class="history-list" aria-label="剪贴板历史">
-      <div
-        v-for="entry in pagedEntries"
-        :key="entry.id"
-        class="history-item"
-        :class="{ selected: selectedEntryId === entry.id, 'image-entry': entry.kind === 'image' }"
-        role="button"
-        :tabindex="activatingEntryId === entry.id ? -1 : 0"
-        :aria-disabled="activatingEntryId === entry.id"
-        @mouseenter="selectedEntryId = entry.id"
-        @dblclick="!isPasteWindow && !isMobile && activateSelectedEntry(entry)"
-        @click="selectOrActivate(entry)"
-        @keydown.enter.stop="activateSelectedEntry(entry)"
-        @keydown.space.prevent.stop="activateSelectedEntry(entry)"
-      >
-        <button
-          v-if="entry.kind === 'image' && !isPasteWindow"
-          class="image-thumbnail"
-          type="button"
-          :aria-label="`预览${entry.content}`"
-          :title="`预览${entry.content}`"
-          @click.stop="openImagePreview(entry)"
-          @dblclick.stop
-        >
-          <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
-          <Image v-else :size="18" aria-hidden="true" />
-        </button>
-        <span v-else-if="entry.kind === 'image' && thumbnailSource(entry)" class="image-thumbnail" aria-hidden="true">
-          <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
-        </span>
-        <span v-else class="kind-icon">
-          <LoaderCircle v-if="activatingEntryId === entry.id" :size="18" class="spin" />
-          <FileText v-else-if="entry.kind === 'text'" :size="18" />
-          <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
-          <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />
-          <Image v-else-if="entry.kind === 'image'" :size="18" />
-          <Clipboard v-else :size="18" />
-        </span>
-        <span class="entry-body">
-          <span class="entry-content">{{ entry.content }}</span>
-          <span class="entry-meta">
-            <Monitor :size="12" /> {{ deviceName(entry) }}
-            <span>·</span>
-            <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
-            <template v-if="entry.pinned">
-              <span>·</span>
-              <span class="pinned-status"><Pin :size="11" aria-hidden="true" />已固定</span>
-            </template>
-            <span>·</span>
-            <span class="sync-status" role="img" :title="syncStatusLabel(entry)" :aria-label="syncStatusLabel(entry)">{{ isEntrySynced(entry) ? "☁️" : "⏳" }}</span>
-            <template v-if="fileEntrySummary(entry)">
-              <span>·</span>
-              <span>{{ fileEntrySummary(entry) }}</span>
-            </template>
-            <template v-if="uploadStatus(entry)">
-              <span>·</span>
-              <span class="upload-status" :class="{ uploaded: uploadStatus(entry) === '已上传', uploading: uploadStatus(entry)?.startsWith('上传中') }">{{ uploadStatus(entry) }}</span>
-            </template>
-          </span>
-        </span>
-        <span v-if="!isPasteWindow" class="entry-actions">
-          <span
-            v-if="canSaveEntry(entry)"
-            class="item-action"
-            role="button"
-            tabindex="0"
-            :title="saveEntryLabel(entry)"
-            :aria-label="saveEntryLabel(entry)"
-            @click.stop="saveEntry(entry)"
-            @keydown.enter.stop="saveEntry(entry)"
-          ><LoaderCircle v-if="savingEntryId === entry.id" :size="15" class="spin" /><Download v-else :size="15" /></span>
-          <span
-            v-if="canManualUpload(entry)"
-            class="item-action"
-            role="button"
-            tabindex="0"
-            :title="uploadingEntryId === entry.id ? '正在上传…' : '上传到服务器（小于 100 MB）'"
-            :aria-label="uploadingEntryId === entry.id ? '正在上传' : '上传到服务器'"
-            @click.stop="uploadEntry(entry)"
-            @keydown.enter.stop="uploadEntry(entry)"
-          ><LoaderCircle v-if="uploadingEntryId === entry.id || uploadProgressByEntryId[entry.id]" :size="15" class="spin" /><Upload v-else :size="15" /></span>
-          <span
-            class="item-action"
-            :class="{ active: entry.pinned }"
-            role="button"
-            tabindex="0"
-            :title="entry.pinned ? '取消固定' : '固定'"
-            :aria-label="entry.pinned ? '取消固定' : '固定'"
-            @click.stop="togglePin(entry)"
-            @keydown.enter.stop="togglePin(entry)"
-          ><Pin :size="15" /></span>
-          <span
-            class="item-action danger"
-            role="button"
-            tabindex="0"
-            title="删除"
-            aria-label="删除"
-            @click.stop="removeEntry(entry)"
-            @keydown.enter.stop="removeEntry(entry)"
-          ><Trash2 :size="15" /></span>
-        </span>
-      </div>
-
-      <div v-if="!filteredEntries.length" class="empty-state">
-        <Search :size="28" />
-        <strong>{{ timeRangeError ? "日期区间无效" : showsEmptyPinnedState ? "还没有固定内容" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (showsEmptyPinnedState ? "固定常用条目后，可在这里集中查看" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
-        <button v-if="timeFilter !== 'all'" class="empty-filter-reset" type="button" @click="resetTimeFilter">清除时间筛选</button>
-      </div>
-      </section>
-
-      <footer class="footer-hint">
-      <span v-if="isMobile">点按文本复制，点按文件下载到缓存</span>
-      <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
-      <span v-else>单击选择，双击复制</span>
-      <span v-if="!isMobile"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-      <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
-      <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
-      <PaginationControl
-        v-if="pageCount > 1"
-        :page="currentPage"
-        :page-count="pageCount"
-        @update:page="changePage"
-      />
-      <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
-      </footer>
-    </section>
-
-    <div v-if="!isPasteWindow && clearHistoryConfirmVisible" class="confirm-backdrop" @mousedown.self="closeClearHistoryConfirm">
-      <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="clear-history-heading" aria-describedby="clear-history-description">
-        <span class="confirm-icon danger" aria-hidden="true"><Trash2 :size="20" /></span>
-        <div class="confirm-copy">
-          <h2 id="clear-history-heading">清除未固定记录？</h2>
-          <p id="clear-history-description">将永久删除 {{ clearableEntryCount }} 条未固定的剪贴板记录。已固定记录会保留，此操作无法撤销。</p>
-        </div>
-        <footer class="confirm-actions">
-          <button ref="clearHistoryCancelButton" class="secondary-button" type="button" :disabled="clearingHistory" @click="closeClearHistoryConfirm">取消</button>
-          <button ref="clearHistoryConfirmButton" class="danger-button" type="button" :disabled="clearingHistory || !clearableEntryCount" @click="clearHistory">
-            <LoaderCircle v-if="clearingHistory" :size="17" class="spin" aria-hidden="true" />
-            <Trash2 v-else :size="17" aria-hidden="true" />
-            {{ clearingHistory ? "正在清除…" : "确认清除" }}
-          </button>
-        </footer>
-      </section>
-    </div>
+    <PendingSyncView
+      v-else
+      ref="pendingSyncView"
+      :entries="pendingEntries"
+      :devices-by-id="devicesById"
+      :current-time="currentTime"
+      :uploading-entry-id="uploadingEntryId"
+      @upload="uploadEntry"
+      @remove="removeEntry"
+      @back="activeView = 'history'"
+    />
 
     <div v-if="!isPasteWindow && settingsVisible" class="settings-backdrop" @mousedown.self="closeSettings">
       <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
@@ -2386,22 +1961,6 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <div v-if="!isPasteWindow && previewImage" class="image-preview-backdrop" @mousedown.self="closeImagePreview">
-      <section ref="previewDialog" class="image-preview-dialog" role="dialog" aria-modal="true" :aria-label="previewImage.content" tabindex="-1">
-        <header class="image-preview-header">
-          <div>
-            <span>图片预览</span>
-            <strong>{{ previewImage.content }}</strong>
-          </div>
-          <button class="icon-button" type="button" title="关闭预览" aria-label="关闭图片预览" @click="closeImagePreview">
-            <X :size="17" />
-          </button>
-        </header>
-        <div class="image-preview-stage">
-          <img :src="imageSource(previewImage)" :alt="previewImage.content" />
-        </div>
-      </section>
-    </div>
   </main>
 
   <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />

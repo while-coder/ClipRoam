@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-vue-next";
 defineProps<{
   page: number;
   pageCount: number;
+  total: number;
 }>();
 
 const emit = defineEmits<{
@@ -24,7 +25,7 @@ const emit = defineEmits<{
       <ChevronLeft :size="15" aria-hidden="true" />
       <span>上一页</span>
     </button>
-    <span class="pagination-status" aria-live="polite">第 {{ page }} / {{ pageCount }} 页</span>
+    <span class="pagination-status" aria-live="polite">共 {{ total }} 条 · 第 {{ page }} / {{ pageCount }} 页</span>
     <button
       class="pagination-button"
       type="button"
