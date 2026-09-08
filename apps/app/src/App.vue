@@ -33,8 +33,8 @@ import {
   testSyncConnection,
   type AuthMode,
   type ServerProtocol,
-} from "./services/syncClient";
-import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./services/concurrency";
+} from "./features/sync/syncClient";
+import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./features/sync/concurrency";
 import {
   displayShortcut,
   disposeQuickPasteShortcut,
@@ -44,7 +44,7 @@ import {
   quickPasteShortcutStatus,
   resetQuickPasteShortcutDraft,
   saveQuickPasteShortcut,
-} from "./services/quickPasteShortcut";
+} from "./features/quick-paste/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
