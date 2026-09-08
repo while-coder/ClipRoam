@@ -1471,7 +1471,6 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       ? await invoke<LocalClipboardEntry[]>("list_entries")
       : [...entries.value];
     const localClientIds = new Set(localEntries.map((entry) => entry.id));
-    const serverClientIds = new Set(manifest.map((entry) => entry.id));
     const remoteOnlyEntryIds = manifest
       .filter((entry) => !localClientIds.has(entry.id) && !pendingDeletions.has(entry.id))
       .map((entry) => entry.id);
@@ -1483,21 +1482,6 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       await applyRemoteUpserts(remoteEntries);
     }
 
-    for (const entry of localEntries) {
-      if (pendingDeletions.has(entry.id) || serverClientIds.has(entry.id) || syncClient !== client) continue;
-      // An entry whose contents are still being hashed has no addressable ids
-      // yet; `entry-ready` publishes it once they exist.
-      if (isHashing(entry)) continue;
-      try {
-        const stored = await client.restore(await fullEntry(entry));
-        await adoptPublishedEntry(entry.id, stored);
-      } catch (error) {
-        // Another window can delete or replace this record after list_entries()
-        // captured its snapshot. It no longer needs restoring.
-        if (String(error).includes("剪贴板记录不存在")) continue;
-        throw error;
-      }
-    }
     if (runningInTauri) {
       const pendingUpdates = await invoke<string[]>("list_pending_entry_updates");
       for (const entryId of pendingUpdates) {
@@ -1511,6 +1495,9 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       }
     }
     await refreshEntries();
+    // Deletions and remote upserts have been replayed; now publish whatever
+    // the durable capture queue still holds (single-flight, no-op if running).
+    if (syncClient === client) client.drainQueue();
   } catch (error) {
     if (syncClient === client) {
       showToast(`同步历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -1536,6 +1523,8 @@ async function startSync(config: SyncConfig): Promise<void> {
     {
       onConnected: (value) => {
         connected.value = value;
+        // Offline captures replay the moment the socket comes back.
+        syncClient?.drainQueue();
       },
       onManifest: (manifest, devices) => {
         rememberDevices(devices);
@@ -1644,22 +1633,17 @@ async function initializeTauriServices(): Promise<void> {
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
       scheduleRefreshEntries();
+      // The queue row already carries the full payload; hashing (for files) and
+      // publishing both happen inside the drain.
+      syncClient?.drainQueue();
     }),
     // Emitted once every content of an entry has a known id, which for a
-    // folder happens after background hashing finishes.
-    listen<string>("cliproam://entry-ready", async ({ payload }) => {
+    // folder happens after background hashing finishes. The drain treats the
+    // row as ready only then, so this restarts any pass blocked on it.
+    listen<string>("cliproam://entry-ready", async () => {
       scheduleRefreshEntries();
-      if (isPasteWindow || !syncClient) return;
-      try {
-        const stored = await syncClient.publish(await invoke<ClipboardEntry>("get_entry", { entryId: payload }));
-        await adoptPublishedEntry(payload, stored);
-        // Only a fresh OS clipboard capture reaches this path. Restores, uploads
-        // and metadata edits use separate entry keys, so they can never overwrite
-        // another device's clipboard. File lists stay history-only.
-        if (stored.kind !== "files") await syncClient.activate(stored.id).catch(() => undefined);
-      } catch (error) {
-        showToast(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
-      }
+      if (isPasteWindow) return;
+      syncClient?.drainQueue();
     }),
     listen("cliproam://history-changed", scheduleRefreshEntries),
     listen("cliproam://focus-search", focusSearch),

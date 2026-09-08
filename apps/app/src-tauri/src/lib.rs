@@ -38,7 +38,7 @@ use content::{
     collect_tree, describe_roots, download_path, file_entry_signature, file_signature,
     hash_bytes, hash_file, local_source_was_lost, preserve_local_sources, readable_path,
     rebuild_tree, tree_contents, tree_parent_at_path, upload_image_path,
-    ClipboardEntry, FileInfo, ImageInfo, LocalSources, TreeNode,
+    ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources, TreeNode,
 };
 use store::{
     cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
@@ -399,36 +399,13 @@ fn image_signature(image: &[u8]) -> String {
     format!("{prefix}:{hash:016x}")
 }
 
-/// Local, pre-publish entry identity. The server assigns the real id when the
-/// entry is first published and dedupes by content, so this value only has to
-/// stay stable until `apply_published_entry` swaps it out. The NUL separator
-/// keeps the two variable-length inputs unambiguous.
-fn entry_id_for(content: &str, device_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    hasher.update([0]);
-    hasher.update(device_id.as_bytes());
-    content::to_hex(&hasher.finalize())
-}
-
-fn entry_id_for_file_info(file_info: &FileInfo, device_id: &str, fallback: &str) -> String {
-    let mut file_ids = tree_contents(file_info)
-        .into_iter()
-        .map(|(file_id, _)| file_id)
-        .collect::<Vec<_>>();
-    file_ids.sort_unstable();
-    file_ids.dedup();
-    let identity = if file_ids.is_empty() {
-        fallback.to_string()
-    } else {
-        file_ids.join("\n")
-    };
-    entry_id_for(&identity, device_id)
-}
-
-fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
+/// Local, pre-publish entry identity: the seq of the capture's durable queue
+/// row. The server assigns the real id when the entry is first published and
+/// `apply_published_entry` swaps it out, so this only has to stay stable until
+/// then.
+fn new_entry(seq: i64, kind: &str, content: String, device_id: String) -> ClipboardEntry {
     ClipboardEntry {
-        id: entry_id_for(&content, &device_id),
+        id: store::temp_entry_id(seq),
         kind: kind.to_string(),
         content,
         html: None,
@@ -443,6 +420,38 @@ fn new_entry(kind: &str, content: String, device_id: String) -> ClipboardEntry {
     }
 }
 
+/// Writes the full capture payload to the durable upload queue. The returned
+/// seq doubles as the entry's temporary local id.
+fn queue_entry_payload(
+    state: &AppState,
+    history: &HistoryData,
+    kind: &str,
+    content: &str,
+    extra: &ClipboardEntryExtra,
+    created_at: &str,
+) -> Result<i64, String> {
+    let payload = serde_json::to_string(extra).map_err(|error| error.to_string())?;
+    store::enqueue_pending_entry(
+        &history_path_for_key(&state.histories_dir, &history.active_history),
+        kind,
+        content,
+        &payload,
+        created_at,
+    )
+}
+
+/// Re-serializes an entry's large fields the way `save_history` stores them,
+/// so queue rows and entry rows carry identical payloads.
+fn entry_extra(entry: &ClipboardEntry) -> Result<String, String> {
+    serde_json::to_string(&ClipboardEntryExtra {
+        html: entry.html.clone(),
+        rtf: entry.rtf.clone(),
+        file_info: entry.file_info.clone(),
+        image_info: entry.image_info.clone(),
+    })
+    .map_err(|error| error.to_string())
+}
+
 fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
     if rich_text.text.trim().is_empty() {
         return Ok(());
@@ -454,28 +463,40 @@ fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
         if history.last_clipboard == signature {
             return Ok(());
         }
+        let device_id = history.device_id.clone();
+        let created_at = Utc::now().to_rfc3339();
+        let extra = ClipboardEntryExtra {
+            html: rich_text.html.clone(),
+            rtf: rich_text.rtf.clone(),
+            file_info: None,
+            image_info: None,
+        };
+        // The payload lands in the durable queue first: the seq it gets back
+        // is the entry's local id until the server's id is adopted. Without a
+        // queue row there is nothing to sync later, so the capture is skipped.
+        let seq = match queue_entry_payload(&state, &history, "text", &rich_text.text, &extra, &created_at) {
+            Ok(seq) => seq,
+            Err(error) => {
+                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                return Ok(());
+            }
+        };
         history.last_clipboard = signature;
         history.last_file_signature.clear();
         history.last_image_signature.clear();
-        let device_id = history.device_id.clone();
-        let mut entry = new_entry("text", rich_text.text, device_id);
-        entry.html = rich_text.html;
-        entry.rtf = rich_text.rtf;
+        let mut entry = new_entry(seq, "text", rich_text.text, device_id);
+        entry.html = extra.html;
+        entry.rtf = extra.rtf;
+        entry.created_at = created_at;
         let entries = history.active_entries_mut();
         entries.retain(|item| item.content != entry.content);
         entries.insert(0, entry.clone());
         trim_history(entries);
         save_active_history(&state, &history)?;
-        if let Err(error) = store::enqueue_pending_entry(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &entry.id,
-        ) {
-            eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-        }
         entry
     };
     // Text has no contents to hash, so it is publishable the moment it lands —
-    // the frontend only ever publishes on `entry-ready`.
+    // the frontend drains the queue whenever an entry becomes ready.
     app.emit("cliproam://entry-created", lightweight_entry(&entry))
         .map_err(|error| error.to_string())?;
     app.emit("cliproam://entry-ready", entry.id)
@@ -509,6 +530,7 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
         history.last_clipboard.clear();
         history.last_image_signature.clear();
         let cache_dir = active_cache_dir(&state, &history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let device_id = history.device_id.clone();
         let created_at = Utc::now().to_rfc3339();
         let content = describe_roots(&collected.file_info);
@@ -520,12 +542,45 @@ fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
             Some(index) => {
                 let mut existing = entries.remove(index);
                 existing.created_at = created_at;
+                // A reused entry keeps its id — and its queue row when it is
+                // still unpublished. Recreate the row if it went missing, so
+                // the copy is not silently never synced.
+                if let Some(seq) = store::temp_entry_seq(&existing.id) {
+                    let payload = entry_extra(&existing)?;
+                    if let Err(error) = store::ensure_pending_entry(
+                        &history_path,
+                        seq,
+                        &existing.kind,
+                        &existing.content,
+                        &payload,
+                        &existing.created_at,
+                    ) {
+                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                    }
+                }
                 let entry_id = existing.id.clone();
                 entries.insert(0, existing);
                 entry_id
             }
             None => {
-                let mut entry = new_entry("files", content, device_id);
+                // The tree goes into the queue with unresolved content ids
+                // (`f: ""`); the hash worker folds the real ones back in.
+                let extra = ClipboardEntryExtra {
+                    html: None,
+                    rtf: None,
+                    file_info: Some(collected.file_info.clone()),
+                    image_info: None,
+                };
+                let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
+                let seq = match store::enqueue_pending_entry(&history_path, "files", &content, &payload, &created_at)
+                {
+                    Ok(seq) => seq,
+                    Err(error) => {
+                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                        return Ok(());
+                    }
+                };
+                let mut entry = new_entry(seq, "files", content, device_id);
                 entry.created_at = created_at;
                 entry.file_info = Some(collected.file_info);
                 entry.sources = collected.sources;
@@ -588,25 +643,44 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         history.last_file_signature.clear();
 
         let device_id = history.device_id.clone();
-        let mut entry = new_entry("image", format!("截图（{width} × {height}）"), device_id.clone());
-        entry.id = entry_id_for(&file_id, &device_id);
-        entry.image_info = Some(ImageInfo {
-            file_id,
+        let created_at = Utc::now().to_rfc3339();
+        let content = format!("截图（{width} × {height}）");
+        let image_info = ImageInfo {
+            file_id: file_id.clone(),
             size: webp.len() as u64,
             thumbnail: thumbnail.unwrap_or_default(),
-        });
+        };
+        // Bytes are hashed already, so the queued payload is complete and the
+        // entry is publishable as soon as it lands.
+        let extra = ClipboardEntryExtra {
+            html: None,
+            rtf: None,
+            file_info: None,
+            image_info: Some(image_info.clone()),
+        };
+        let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
+        let seq = match store::enqueue_pending_entry(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            "image",
+            &content,
+            &payload,
+            &created_at,
+        ) {
+            Ok(seq) => seq,
+            Err(error) => {
+                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                return Ok(());
+            }
+        };
+        let mut entry = new_entry(seq, "image", content, device_id);
+        entry.created_at = created_at;
+        entry.image_info = Some(image_info);
         let entry_id = entry.id.clone();
         let entries = history.active_entries_mut();
         entries.insert(0, entry);
         trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
         save_active_history(&state, &history)?;
-        if let Err(error) = store::enqueue_pending_entry(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &entry_id,
-        ) {
-            eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-        }
         history
             .find(&entry_id)
             .map(lightweight_entry)
@@ -818,7 +892,6 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
 
     // A second connection keeps the hash cache off the UI thread's connection.
     let connection = open_history_database(&history_path_for_key(&state.histories_dir, &history_key))?;
-    let mut current_entry_id = entry_id.to_string();
     let mut batch = Vec::new();
     for item in pending {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
@@ -830,23 +903,16 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
         });
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            let Some(updated_entry_id) = apply_hashes(app, &current_entry_id, &batch, false)? else {
+            if apply_hashes(app, entry_id, &batch, false)?.is_none() {
                 return Ok(());
             };
-            current_entry_id = updated_entry_id;
             batch.clear();
         }
     }
-    let Some(final_entry_id) = apply_hashes(app, &current_entry_id, &batch, true)? else {
+    if apply_hashes(app, entry_id, &batch, true)?.is_none() {
         return Ok(());
     };
-    if let Err(error) = store::enqueue_pending_entry(
-        &history_path_for_key(&state.histories_dir, &history_key),
-        &final_entry_id,
-    ) {
-        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-    }
-    app.emit("cliproam://entry-ready", final_entry_id)
+    app.emit("cliproam://entry-ready", entry_id)
         .map_err(|error| error.to_string())
 }
 
@@ -861,11 +927,6 @@ fn apply_hashes(
     let state = app.state::<AppState>();
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let cache_dir = active_cache_dir(&state, &history);
-    let device_id = history.device_id.clone();
-    let current_entry_index = history
-        .active_entries()
-        .iter()
-        .position(|entry| entry.id == entry_id);
     let hashes = resolved
         .iter()
         .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
@@ -901,26 +962,29 @@ fn apply_hashes(
             Some(None) => false,
             None => true,
         });
-        if persist {
-            entry.id = match entry.file_info.as_ref() {
-                Some(file_info) => entry_id_for_file_info(file_info, &device_id, &entry.content),
-                None => entry_id_for(&entry.content, &device_id),
-            };
-        }
         entry.id.clone()
     };
-    if persist && final_entry_id != entry_id {
-        let entries = history.active_entries_mut();
-        if let Some(index) = entries.iter().enumerate().find_map(|(index, entry)| {
-            (Some(index) != current_entry_index && entry.id == final_entry_id).then_some(index)
-        })
-        {
-            entries.remove(index);
-        }
-    }
     refresh_entry_summary(&mut history, &final_entry_id, &cache_dir);
     if persist {
         save_active_history(&state, &history)?;
+        // The queue row carries the published payload, so the resolved tree
+        // must land there too — an unpublished files entry is only synced
+        // once its content ids are known.
+        if let Some(seq) = store::temp_entry_seq(&final_entry_id) {
+            if let Some(entry) = history.find(&final_entry_id) {
+                let payload = entry_extra(entry)?;
+                if let Err(error) = store::update_pending_entry(
+                    &history_path_for_key(&state.histories_dir, &history.active_history),
+                    seq,
+                    &entry.kind,
+                    &entry.content,
+                    &payload,
+                    &entry.created_at,
+                ) {
+                    eprintln!("ClipRoam: 回写待上传条目失败：{error}");
+                }
+            }
+        }
     }
     drop(history);
     app.emit("cliproam://history-changed", ())
@@ -1320,6 +1384,12 @@ fn apply_published_entry(
             save_active_history(&state, &history)?;
             return Ok(false);
         }
+        // A deletion can land while the publish is in flight — including of an
+        // entry that was still unpublished. Without the local entry there is
+        // nothing to adopt, and the caller must delete the server row.
+        if history.find(&local_entry_id).is_none() {
+            return Ok(false);
+        }
         let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         if let Some(local) = history.find(&local_entry_id) {
@@ -1437,15 +1507,15 @@ fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) ->
         let existed = history.active_entries().iter().any(|entry| entry.id == entry_id);
         history.active_entries_mut().retain(|entry| entry.id != entry_id);
         if existed {
-            history.pending_deletions.insert(entry_id.clone());
+            // The server only knows published (numeric) ids; a temporary id
+            // was never uploaded, so removing it merely drops its queue row
+            // on the next save.
+            if store::temp_entry_seq(&entry_id).is_none() {
+                history.pending_deletions.insert(entry_id.clone());
+            }
             history.pending_entry_updates.remove(&entry_id);
         }
         save_active_history(&state, &history)?;
-        // A queued upload of a deleted entry must never reach the server.
-        let _ = store::remove_pending_entries(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &[entry_id.clone()],
-        );
         // Dropping references is what frees disk space, so the sweep runs here.
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
@@ -1465,14 +1535,12 @@ fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
             .collect::<Vec<_>>();
         history.active_entries_mut().retain(|entry| entry.pinned);
         for entry_id in &deleted {
-            history.pending_deletions.insert(entry_id.clone());
+            if store::temp_entry_seq(entry_id).is_none() {
+                history.pending_deletions.insert(entry_id.clone());
+            }
             history.pending_entry_updates.remove(entry_id);
         }
         save_active_history(&state, &history)?;
-        let _ = store::remove_pending_entries(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &deleted,
-        );
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
     app.emit("cliproam://history-changed", ())
@@ -1526,21 +1594,71 @@ fn acknowledge_entry_update(state: State<'_, AppState>, entry_id: String) -> Res
     Ok(())
 }
 
+/// One durable upload-queue row for the sync client, enriched with the local
+/// entry state the publish flow needs.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingQueueRowView {
+    seq: i64,
+    kind: String,
+    content: String,
+    extra: serde_json::Value,
+    created_at: String,
+    /// The temporary id the local entry carries until the server's is adopted.
+    local_id: String,
+    /// False once the entry was adopted, evicted or deleted — the row only
+    /// needs acknowledging then.
+    exists: bool,
+    /// Files entries are publishable only once every content id is resolved.
+    ready: bool,
+}
+
 #[tauri::command]
-fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<PendingQueueRowView>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    store::list_pending_entry_ids(&history_path_for_key(
+    let rows = store::list_pending_rows(&history_path_for_key(
         &state.histories_dir,
         &history.active_history,
-    ))
+    ))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let local_id = store::temp_entry_id(row.seq);
+            let entry = history.find(&local_id);
+            let ready = match entry {
+                // Same rule as the hash-resume list: any unresolved source
+                // file means the payload is not final yet.
+                Some(entry) if entry.kind == "files" => !entry
+                    .sources
+                    .files
+                    .iter()
+                    .any(|source| source.file_id.is_none()),
+                Some(_) => true,
+                None => false,
+            };
+            let extra = serde_json::from_str(&row.extra).unwrap_or_else(|_| {
+                serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
+            });
+            PendingQueueRowView {
+                seq: row.seq,
+                kind: row.kind,
+                content: row.content,
+                extra,
+                created_at: row.created_at,
+                exists: entry.is_some(),
+                ready,
+                local_id,
+            }
+        })
+        .collect())
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn acknowledge_pending_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+fn acknowledge_pending_entry(state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     store::acknowledge_pending_entry(
         &history_path_for_key(&state.histories_dir, &history.active_history),
-        &entry_id,
+        seq,
     )?;
     Ok(())
 }
@@ -2950,13 +3068,6 @@ mod tests {
     }
 
     #[test]
-    fn entry_id_is_stable_per_content_and_device() {
-        assert_eq!(entry_id_for("same", "device"), entry_id_for("same", "device"));
-        assert_ne!(entry_id_for("same", "device"), entry_id_for("other", "device"));
-        assert_ne!(entry_id_for("same", "device"), entry_id_for("same", "other-device"));
-    }
-
-    #[test]
     fn macos_html_transport_wrapper_keeps_the_same_signature() {
         let fragment = RichText {
             text: "hello".to_string(),
@@ -2984,27 +3095,6 @@ mod tests {
         assert!(materialized.requires_complete_content("files"));
         assert!(materialized.requires_complete_content("image"));
         assert!(!materialized.requires_complete_content("text"));
-    }
-
-    #[test]
-    fn file_entry_id_is_order_independent_and_deduplicated() {
-        let first_id = hash_bytes(b"first");
-        let second_id = hash_bytes(b"second");
-        let mut forward = FileInfo::new();
-        forward.insert("a.txt".to_string(), TreeNode::File { f: first_id.clone(), s: 1 });
-        forward.insert("b.txt".to_string(), TreeNode::File { f: second_id.clone(), s: 2 });
-        let mut backward = FileInfo::new();
-        backward.insert("b.txt".to_string(), TreeNode::File { f: second_id.clone(), s: 2 });
-        backward.insert("a.txt".to_string(), TreeNode::File { f: first_id.clone(), s: 1 });
-        assert_eq!(
-            entry_id_for_file_info(&forward, "device", "fallback"),
-            entry_id_for_file_info(&backward, "device", "fallback"),
-        );
-        // Nothing hashed yet falls back to the plain content identity.
-        assert_eq!(
-            entry_id_for_file_info(&FileInfo::new(), "device", "bundle"),
-            entry_id_for("bundle", "device"),
-        );
     }
 
     #[test]
