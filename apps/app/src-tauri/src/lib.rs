@@ -1,13 +1,8 @@
+mod clipboard;
 mod content;
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
-mod platform_clipboard;
 mod store;
-#[cfg(target_os = "windows")]
-mod virtual_files;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::Utc;
-use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
@@ -15,7 +10,7 @@ use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{mpsc, Condvar, Mutex},
     thread,
@@ -35,28 +30,24 @@ use tauri::{
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use content::{
-    collect_tree, describe_roots, download_path, file_entry_signature, file_signature,
-    hash_bytes, hash_file, local_source_was_lost, preserve_local_sources, readable_path,
-    rebuild_tree, tree_contents, tree_parent_at_path, upload_image_path,
-    ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources, TreeNode,
+    download_path, local_source_was_lost, preserve_local_sources, readable_path,
+    rebuild_tree, tree_contents,
+    ClipboardEntry, TreeNode,
 };
 use store::{
-    cache_dir_for, cached_hash, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, open_history_database, refresh_entry_summary,
-    register_cached_file, remember_hash, retain_single_history, save_history, trim_history,
+    cache_dir_for, collect_local_garbage, default_active_history, history_path_for_key,
+    load_history, open_history_database, refresh_entry_summary, register_cached_file,
+    retain_single_history, save_history, trim_history,
     write_entry_data, HistoryData, LOCAL_HISTORY_KEY,
 };
+use clipboard::output::{missing_files, refresh_snapshot_summary, snapshot_entry, FilePasteStrategy};
+use clipboard::lightweight_entry;
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const TRAY_SHOW_MAIN: &str = "show-main";
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const TRAY_QUIT: &str = "quit";
 const FILE_CHUNK_LIMIT: usize = 128 * 1024;
-const THUMBNAIL_MAX_EDGE: u32 = 64;
-const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
-/// How many freshly hashed paths are folded into the entry before the UI is
-/// told about the progress.
-const HASH_PROGRESS_BATCH: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +125,7 @@ struct AppState {
     save_sessions: Mutex<HashMap<String, SaveSession>>,
     virtual_downloads: VirtualDownloads,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    platform_clipboard: platform_clipboard::PlatformClipboard,
+    platform_clipboard: crate::clipboard::platform_clipboard::PlatformClipboard,
     /// `Sender` is not `Sync`, so managed state has to guard it.
     hash_queue: Mutex<mpsc::Sender<String>>,
     share_import: Mutex<()>,
@@ -249,43 +240,6 @@ struct SavePreparation {
     missing: Vec<MissingFile>,
 }
 
-#[derive(Debug, Clone)]
-struct RichText {
-    text: String,
-    html: Option<String>,
-    rtf: Option<String>,
-}
-
-struct PendingHash {
-    path: String,
-    source: String,
-    size: u64,
-    modified_at: Option<u64>,
-}
-
-/// The business flow is shared; only the final system clipboard delivery
-/// differs. Windows can expose remote contents lazily, while macOS/Linux need
-/// real local paths before they can publish a file list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FilePasteStrategy {
-    VirtualStream,
-    MaterializedPaths,
-}
-
-impl FilePasteStrategy {
-    fn for_entry(entry: &ClipboardEntry) -> Self {
-        #[cfg(target_os = "windows")]
-        if entry.kind == "files" && virtual_files::supports_entry(entry) {
-            return Self::VirtualStream;
-        }
-        let _ = entry;
-        Self::MaterializedPaths
-    }
-
-    fn requires_complete_content(self, kind: &str) -> bool {
-        kind == "image" || (kind == "files" && self == Self::MaterializedPaths)
-    }
-}
 
 fn history_key_for_config(config: &SyncConfig) -> String {
     if config.enabled && !config.username.trim().is_empty() {
@@ -321,793 +275,8 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
     cache_dir_for(&state.histories_dir, &history.active_history)
 }
 
-/// The frontend renders lists of hundreds of entries; shipping their trees
-/// would mean tens of thousands of nodes per refresh.
-fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
-    // html/rtf can be hundreds of kilobytes per rich-text entry and the list
-    // never renders them, so they stay behind `get_entry`.
-    let mut lightweight = ClipboardEntry {
-        file_info: None,
-        image_info: None,
-        html: None,
-        rtf: None,
-        sources: LocalSources::default(),
-        ..entry.clone()
-    };
-    if lightweight.kind == "files" {
-        if let Some(file_info) = &entry.file_info {
-            lightweight.content = describe_roots(file_info);
-        }
-    }
-    lightweight
-}
 
-fn safe_file_name(name: &str) -> String {
-    name.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
 
-fn rich_text_signature(rich_text: &RichText) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    // arboard wraps HTML on macOS to force UTF-8 interpretation. Treat that
-    // transport wrapper as equivalent to the original fragment so paste does
-    // not get captured back as a second history item.
-    const MAC_HTML_PREFIX: &str =
-        "<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>";
-    const MAC_HTML_SUFFIX: &str = "</body></html>";
-    let html = rich_text.html.as_deref().map(|html| {
-        html.strip_prefix(MAC_HTML_PREFIX)
-            .and_then(|html| html.strip_suffix(MAC_HTML_SUFFIX))
-            .unwrap_or(html)
-    });
-    for value in [
-        Some(rich_text.text.as_str()),
-        html,
-        rich_text.rtf.as_deref(),
-    ] {
-        for byte in value.unwrap_or_default().bytes().chain(std::iter::once(0)) {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
-    }
-    format!("{hash:016x}")
-}
-
-fn image_signature(image: &[u8]) -> String {
-    // Clipboard encodings differ by platform (BMP, PNG, TIFF), while pasted
-    // history images are WebP. Hash canonical RGBA pixels so writing an image
-    // does not make the monitor capture the same pixels as a new entry.
-    let canonical = image::load_from_memory(image).ok().map(|decoded| {
-        let rgba = decoded.into_rgba8();
-        let (width, height) = rgba.dimensions();
-        (width, height, rgba.into_raw())
-    });
-    let (prefix, bytes) = match canonical {
-        Some((width, height, pixels)) => (format!("{width}x{height}"), pixels),
-        None => (image.len().to_string(), image.to_vec()),
-    };
-    // FNV-1a is sufficient here: this only suppresses repeated reads of the current clipboard.
-    let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    });
-    format!("{prefix}:{hash:016x}")
-}
-
-/// Local, pre-publish entry identity: the seq of the capture's durable queue
-/// row. The server assigns the real id when the entry is first published and
-/// `apply_published_entry` swaps it out, so this only has to stay stable until
-/// then.
-fn new_entry(seq: i64, kind: &str, content: String, device_id: String) -> ClipboardEntry {
-    ClipboardEntry {
-        id: store::temp_entry_id(seq),
-        kind: kind.to_string(),
-        content,
-        html: None,
-        rtf: None,
-        file_info: None,
-        image_info: None,
-        source_device_id: device_id,
-        created_at: Utc::now().to_rfc3339(),
-        summary: Default::default(),
-        sources: LocalSources::default(),
-    }
-}
-
-/// Writes the full capture payload to the durable upload queue. The returned
-/// seq doubles as the entry's temporary local id.
-fn queue_entry_payload(
-    state: &AppState,
-    history: &HistoryData,
-    kind: &str,
-    content: &str,
-    extra: &ClipboardEntryExtra,
-    created_at: &str,
-) -> Result<i64, String> {
-    let payload = serde_json::to_string(extra).map_err(|error| error.to_string())?;
-    store::enqueue_pending_entry(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        kind,
-        content,
-        &payload,
-        created_at,
-    )
-}
-
-/// Re-serializes an entry's large fields the way `save_history` stores them,
-/// so queue rows and entry rows carry identical payloads.
-fn entry_extra(entry: &ClipboardEntry) -> Result<String, String> {
-    serde_json::to_string(&ClipboardEntryExtra {
-        html: entry.html.clone(),
-        rtf: entry.rtf.clone(),
-        file_info: entry.file_info.clone(),
-        image_info: entry.image_info.clone(),
-    })
-    .map_err(|error| error.to_string())
-}
-
-fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
-    if rich_text.text.trim().is_empty() {
-        return Ok(());
-    }
-    let signature = rich_text_signature(&rich_text);
-    let state = app.state::<AppState>();
-    let entry = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.last_clipboard == signature {
-            return Ok(());
-        }
-        let device_id = history.device_id.clone();
-        let created_at = Utc::now().to_rfc3339();
-        let extra = ClipboardEntryExtra {
-            html: rich_text.html.clone(),
-            rtf: rich_text.rtf.clone(),
-            file_info: None,
-            image_info: None,
-        };
-        // The payload lands in the durable queue first: the seq it gets back
-        // is the entry's local id until the server's id is adopted. Without a
-        // queue row there is nothing to sync later, so the capture is skipped.
-        let seq = match queue_entry_payload(&state, &history, "text", &rich_text.text, &extra, &created_at) {
-            Ok(seq) => seq,
-            Err(error) => {
-                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-                return Ok(());
-            }
-        };
-        history.last_clipboard = signature;
-        history.last_file_signature.clear();
-        history.last_image_signature.clear();
-        let mut entry = new_entry(seq, "text", rich_text.text, device_id);
-        entry.html = extra.html;
-        entry.rtf = extra.rtf;
-        entry.created_at = created_at;
-        let entries = history.active_entries_mut();
-        entries.retain(|item| item.content != entry.content);
-        entries.insert(0, entry.clone());
-        trim_history(entries);
-        save_active_history(&state, &history)?;
-        entry
-    };
-    // Text has no contents to hash, so it is publishable the moment it lands —
-    // the frontend drains the queue whenever an entry becomes ready.
-    app.emit("cliproam://entry-created", lightweight_entry(&entry))
-        .map_err(|error| error.to_string())?;
-    app.emit("cliproam://entry-ready", entry.id)
-        .map_err(|error| error.to_string())
-}
-
-fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let signature = file_signature(&paths);
-    let state = app.state::<AppState>();
-    // Walking a large folder can take seconds, so the duplicate check happens
-    // before the tree is collected and the history lock is released for it.
-    if state
-        .history
-        .lock()
-        .map_err(|error| error.to_string())?
-        .last_file_signature
-        == signature
-    {
-        return Ok(());
-    }
-    let collected = collect_tree(&paths)?;
-    let (entry, entry_id) = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.last_file_signature == signature {
-            return Ok(());
-        }
-        history.last_file_signature = signature.clone();
-        history.last_clipboard.clear();
-        history.last_image_signature.clear();
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let device_id = history.device_id.clone();
-        let created_at = Utc::now().to_rfc3339();
-        let content = describe_roots(&collected.file_info);
-        let entries = history.active_entries_mut();
-        let entry_id = match entries
-            .iter()
-            .position(|item| item.kind == "files" && file_entry_signature(item) == signature)
-        {
-            Some(index) => {
-                let mut existing = entries.remove(index);
-                existing.created_at = created_at;
-                // A reused entry keeps its id — and its queue row when it is
-                // still unpublished. Recreate the row if it went missing, so
-                // the copy is not silently never synced.
-                if let Some(seq) = store::temp_entry_seq(&existing.id) {
-                    let payload = entry_extra(&existing)?;
-                    if let Err(error) = store::ensure_pending_entry(
-                        &history_path,
-                        seq,
-                        &existing.kind,
-                        &existing.content,
-                        &payload,
-                        &existing.created_at,
-                    ) {
-                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-                    }
-                }
-                let entry_id = existing.id.clone();
-                entries.insert(0, existing);
-                entry_id
-            }
-            None => {
-                // The tree goes into the queue with unresolved content ids
-                // (`f: ""`); the hash worker folds the real ones back in.
-                let extra = ClipboardEntryExtra {
-                    html: None,
-                    rtf: None,
-                    file_info: Some(collected.file_info.clone()),
-                    image_info: None,
-                };
-                let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
-                let seq = match store::enqueue_pending_entry(&history_path, "files", &content, &payload, &created_at)
-                {
-                    Ok(seq) => seq,
-                    Err(error) => {
-                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-                        return Ok(());
-                    }
-                };
-                let mut entry = new_entry(seq, "files", content, device_id);
-                entry.created_at = created_at;
-                entry.file_info = Some(collected.file_info);
-                entry.sources = collected.sources;
-                let entry_id = entry.id.clone();
-                entries.insert(0, entry);
-                entry_id
-            }
-        };
-        trim_history(entries);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        save_active_history(&state, &history)?;
-        let entry = history
-            .find(&entry_id)
-            .map(lightweight_entry)
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        (entry, entry_id)
-    };
-    queue_hashing(&state, &entry_id);
-    app.emit("cliproam://entry-created", entry)
-        .map_err(|error| error.to_string())
-}
-
-fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
-    let signature = image_signature(&image);
-    let state = app.state::<AppState>();
-    if state
-        .history
-        .lock()
-        .map_err(|error| error.to_string())?
-        .last_image_signature
-        == signature
-    {
-        return Ok(());
-    }
-    let (webp, width, height, thumbnail) = encode_image_as_webp(&image)?;
-    // The bytes are already in memory, so hashing is immediate and the entry
-    // never passes through the background queue.
-    let file_id = hash_bytes(&webp);
-    let entry = {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.last_image_signature == signature {
-            return Ok(());
-        }
-        let cache_dir = active_cache_dir(&state, &history);
-        let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
-        if let Some(parent) = image_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        if !image_path.is_file() {
-            fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
-        }
-        register_cached_file(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &file_id,
-            webp.len() as u64,
-        )?;
-        history.cached_files.insert(file_id.clone());
-        history.last_image_signature = signature;
-        history.last_clipboard.clear();
-        history.last_file_signature.clear();
-
-        let device_id = history.device_id.clone();
-        let created_at = Utc::now().to_rfc3339();
-        let content = format!("截图（{width} × {height}）");
-        let image_info = ImageInfo {
-            file_id: file_id.clone(),
-            size: webp.len() as u64,
-            thumbnail: thumbnail.unwrap_or_default(),
-        };
-        // Bytes are hashed already, so the queued payload is complete and the
-        // entry is publishable as soon as it lands.
-        let extra = ClipboardEntryExtra {
-            html: None,
-            rtf: None,
-            file_info: None,
-            image_info: Some(image_info.clone()),
-        };
-        let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
-        let seq = match store::enqueue_pending_entry(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            "image",
-            &content,
-            &payload,
-            &created_at,
-        ) {
-            Ok(seq) => seq,
-            Err(error) => {
-                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-                return Ok(());
-            }
-        };
-        let mut entry = new_entry(seq, "image", content, device_id);
-        entry.created_at = created_at;
-        entry.image_info = Some(image_info);
-        let entry_id = entry.id.clone();
-        let entries = history.active_entries_mut();
-        entries.insert(0, entry);
-        trim_history(entries);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        save_active_history(&state, &history)?;
-        history
-            .find(&entry_id)
-            .map(lightweight_entry)
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?
-    };
-    let entry_id = entry.id.clone();
-    app.emit("cliproam://entry-created", entry)
-        .map_err(|error| error.to_string())?;
-    app.emit("cliproam://entry-ready", entry_id)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn start_clipboard_monitor(app: AppHandle) {
-    thread::spawn(move || {
-        // Every pass reads the full clipboard and re-decodes its contents for
-        // the signatures (a bitmap can be tens of megabytes), so Windows gates
-        // each pass on the clipboard sequence number: an unchanged clipboard —
-        // a screenshot sitting idle for hours, for example — is skipped without
-        // even opening it.
-        #[cfg(target_os = "windows")]
-        let mut last_clipboard_sequence = 0u32;
-        loop {
-            #[cfg(target_os = "windows")]
-            {
-                let sequence = unsafe {
-                    windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-                };
-                if sequence != 0 && sequence == last_clipboard_sequence {
-                    thread::sleep(Duration::from_millis(350));
-                    continue;
-                }
-                last_clipboard_sequence = sequence;
-            }
-            if let Some(paths) = read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
-                let _ = capture_files(&app, paths);
-            } else if let Some(rich_text) = read_clipboard_text(&app) {
-                let _ = capture_text(&app, rich_text);
-            } else if let Some(image) = read_clipboard_image(&app) {
-                let _ = capture_image(&app, image);
-            }
-            thread::sleep(Duration::from_millis(350));
-        }
-    });
-}
-
-#[tauri::command]
-fn capture_current_clipboard_text(app: AppHandle) -> Result<bool, String> {
-    let Some(rich_text) = read_clipboard_text(&app) else {
-        return Ok(false);
-    };
-    capture_text(&app, rich_text)?;
-    Ok(true)
-}
-
-#[derive(Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShareImportSummary {
-    shares: usize,
-    texts: usize,
-    images: usize,
-    files: usize,
-}
-
-#[cfg(target_os = "android")]
-fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<PathBuf>, String> {
-    let state = app.state::<AppState>();
-    let cache_dir = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        active_cache_dir(&state, &history)
-    };
-    let request_id = uuid::Uuid::parse_str(&share.id).map_err(|_| "分享请求标识不合法".to_string())?;
-    let directory = cache_dir.join("share").join(request_id.to_string());
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-
-    let mut paths = Vec::with_capacity(share.items.len());
-    for (index, item) in share.items.iter().enumerate() {
-        let source = PathBuf::from(&item.path);
-        if !source.is_file() {
-            return Err(format!("分享文件已失效：{}", item.name));
-        }
-        let name = Path::new(&item.name)
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .map(|name| name.to_owned())
-            .unwrap_or_else(|| format!("shared-{}", index + 1).into());
-        let target = directory.join(name);
-        let source_size = fs::metadata(&source).map_err(|error| error.to_string())?.len();
-        let target_matches = fs::metadata(&target)
-            .map(|metadata| metadata.is_file() && metadata.len() == source_size)
-            .unwrap_or(false);
-        if !target_matches {
-            fs::copy(&source, &target).map_err(|error| format!("无法保存分享文件 {}：{error}", item.name))?;
-        }
-        paths.push(target);
-    }
-    Ok(paths)
-}
-
-#[cfg(target_os = "android")]
-fn import_android_share(app: &AppHandle, share: &PendingShare) -> Result<ShareImportSummary, String> {
-    let mut summary = ShareImportSummary::default();
-    if let Some(text) = share.text.as_ref().filter(|text| !text.trim().is_empty()) {
-        let rich_text = RichText {
-            text: text.clone(),
-            html: share.html.clone(),
-            rtf: None,
-        };
-        // A share is the mobile equivalent of a fresh local clipboard capture.
-        // Keep the OS clipboard useful too, but never discard the history item
-        // just because a particular device rejected the clipboard write.
-        let _ = write_clipboard_text(app, &rich_text);
-        capture_text(app, rich_text)?;
-        summary.texts = 1;
-    }
-
-    if share.items.len() == 1 && share.items[0].mime_type.starts_with("image/") {
-        let image = fs::read(&share.items[0].path)
-            .map_err(|error| format!("无法读取分享图片：{error}"))?;
-        capture_image(app, image)?;
-        summary.images = 1;
-    } else if !share.items.is_empty() {
-        let paths = persist_shared_files(app, share)?;
-        capture_files(app, paths)?;
-        summary.files = share.items.len();
-    }
-    summary.shares = 1;
-    Ok(summary)
-}
-
-#[tauri::command]
-fn consume_mobile_shares(app: AppHandle, state: State<'_, AppState>) -> Result<ShareImportSummary, String> {
-    let _guard = state.share_import.lock().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "android")]
-    {
-        let mut imported = ShareImportSummary::default();
-        for share in app.share_receiver().pending().map_err(|error| error.to_string())? {
-            let summary = import_android_share(&app, &share)?;
-            app.share_receiver()
-                .acknowledge(&share.id)
-                .map_err(|error| error.to_string())?;
-            imported.shares += summary.shares;
-            imported.texts += summary.texts;
-            imported.images += summary.images;
-            imported.files += summary.files;
-        }
-        Ok(imported)
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(ShareImportSummary::default())
-    }
-}
-
-fn queue_hashing(state: &AppState, entry_id: &str) {
-    if let Ok(sender) = state.hash_queue.lock() {
-        let _ = sender.send(entry_id.to_string());
-    }
-}
-
-fn pending_entry_ids(history: &HistoryData) -> Vec<String> {
-    history
-        .active_entries()
-        .iter()
-        .filter(|entry| entry.sources.files.iter().any(|source| source.file_id.is_none()))
-        .map(|entry| entry.id.clone())
-        .collect()
-}
-
-/// Hashing runs on one background thread: an entry becomes visible and pasteable
-/// straight away, and only reaches the server once every content is identified.
-fn start_hash_worker(app: AppHandle, receiver: mpsc::Receiver<String>) {
-    thread::spawn(move || {
-        for entry_id in receiver {
-            if let Err(error) = hash_entry_files(&app, &entry_id) {
-                eprintln!("ClipRoam: 计算 {entry_id} 的内容标识失败：{error}");
-            }
-        }
-    });
-}
-
-fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let (history_key, pending) = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let Some(entry) = history.find(entry_id) else {
-            return Ok(());
-        };
-        let pending = entry
-            .sources
-            .files
-            .iter()
-            .filter(|source| source.file_id.is_none())
-            .map(|source| PendingHash {
-                path: source.path.clone(),
-                source: source.source.clone(),
-                size: source.size,
-                modified_at: source.modified_at,
-            })
-            .collect::<Vec<_>>();
-        (history.active_history.clone(), pending)
-    };
-    if pending.is_empty() {
-        return app
-            .emit("cliproam://entry-ready", entry_id)
-            .map_err(|error| error.to_string());
-    }
-
-    // A second connection keeps the hash cache off the UI thread's connection.
-    let connection = open_history_database(&history_path_for_key(&state.histories_dir, &history_key))?;
-    let mut batch = Vec::new();
-    for item in pending {
-        let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
-        let file_id = cached_hash(&connection, &item.source, item.size, modified_at).or_else(|| {
-            // A file that vanished between copy and hash drops out of the tree.
-            let hashed = hash_file(Path::new(&item.source)).ok()?;
-            remember_hash(&connection, &item.source, item.size, modified_at, &hashed);
-            Some(hashed)
-        });
-        batch.push((item.path, file_id));
-        if batch.len() >= HASH_PROGRESS_BATCH {
-            if apply_hashes(app, entry_id, &batch, false)?.is_none() {
-                return Ok(());
-            };
-            batch.clear();
-        }
-    }
-    if apply_hashes(app, entry_id, &batch, true)?.is_none() {
-        return Ok(());
-    };
-    app.emit("cliproam://entry-ready", entry_id)
-        .map_err(|error| error.to_string())
-}
-
-/// Folds resolved content ids into the entry. Only the final call persists, so
-/// progress updates stay in memory.
-fn apply_hashes(
-    app: &AppHandle,
-    entry_id: &str,
-    resolved: &[(String, Option<String>)],
-    persist: bool,
-) -> Result<Option<String>, String> {
-    let state = app.state::<AppState>();
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    let hashes = resolved
-        .iter()
-        .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
-        .collect::<HashMap<_, _>>();
-    let final_entry_id = {
-        let Some(entry) = history.find_mut(entry_id) else {
-            return Ok(None);
-        };
-        if let Some(file_info) = entry.file_info.as_mut() {
-            for (path, file_id) in resolved {
-                let Some(parent) = tree_parent_at_path(file_info, path) else {
-                    continue;
-                };
-                let leaf = path.rsplit('/').next().unwrap_or_default();
-                match file_id {
-                    Some(file_id) => {
-                        if let Some(TreeNode::File { f, .. }) = parent.get_mut(leaf) {
-                            *f = file_id.clone();
-                        }
-                    }
-                    // A file that vanished between copy and hash drops out of the tree.
-                    None => {
-                        parent.shift_remove(leaf);
-                    }
-                }
-            }
-        }
-        entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
-            Some(Some(file_id)) => {
-                source.file_id = Some((*file_id).to_string());
-                true
-            }
-            Some(None) => false,
-            None => true,
-        });
-        entry.id.clone()
-    };
-    refresh_entry_summary(&mut history, &final_entry_id, &cache_dir);
-    if persist {
-        save_active_history(&state, &history)?;
-        // The queue row carries the published payload, so the resolved tree
-        // must land there too — an unpublished files entry is only synced
-        // once its content ids are known.
-        if let Some(seq) = store::temp_entry_seq(&final_entry_id) {
-            if let Some(entry) = history.find(&final_entry_id) {
-                let payload = entry_extra(entry)?;
-                if let Err(error) = store::update_pending_entry(
-                    &history_path_for_key(&state.histories_dir, &history.active_history),
-                    seq,
-                    &entry.kind,
-                    &entry.content,
-                    &payload,
-                    &entry.created_at,
-                ) {
-                    eprintln!("ClipRoam: 回写待上传条目失败：{error}");
-                }
-            }
-        }
-    }
-    drop(history);
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())?;
-    Ok(Some(final_entry_id))
-}
-
-#[cfg(target_os = "windows")]
-fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
-    clipboard_win::get_clipboard(clipboard_win::formats::FileList).ok()
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn read_clipboard_files(app: &AppHandle) -> Option<Vec<PathBuf>> {
-    app.state::<AppState>().platform_clipboard.read_files()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
-    use clipboard_win::{formats::Bitmap, Clipboard, Getter};
-
-    let _clipboard = Clipboard::new_attempts(10).ok()?;
-    let mut image = Vec::new();
-    Bitmap.read_clipboard(&mut image).ok()?;
-    (!image.is_empty()).then_some(image)
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn read_clipboard_image(app: &AppHandle) -> Option<Vec<u8>> {
-    app.state::<AppState>().platform_clipboard.read_image_as_bmp()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-fn read_clipboard_text(_app: &AppHandle) -> Option<RichText> {
-    use clipboard_win::{
-        formats::{Html, RawData, Unicode},
-        raw, Clipboard, Getter,
-    };
-
-    let _clipboard = Clipboard::new_attempts(10).ok()?;
-    let mut text = String::new();
-    Unicode.read_clipboard(&mut text).ok()?;
-    if text.trim().is_empty() {
-        return None;
-    }
-
-    let html = Html::new().and_then(|format| {
-        let mut value = String::new();
-        format
-            .read_clipboard(&mut value)
-            .ok()
-            .filter(|_| !value.is_empty())
-            .map(|_| value)
-    });
-    let rtf = raw::register_format("Rich Text Format").and_then(|format| {
-        let mut value = Vec::new();
-        RawData(format.get())
-            .read_clipboard(&mut value)
-            .ok()
-            .and_then(|_| String::from_utf8(value).ok())
-            .map(|value| value.trim_end_matches('\0').to_string())
-            .filter(|value| !value.is_empty())
-    });
-
-    Some(RichText { text, html, rtf })
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
-    let clipboard = &app.state::<AppState>().platform_clipboard;
-    clipboard.read_text().map(|text| RichText {
-        html: clipboard.read_html(),
-        text,
-        rtf: None,
-    })
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
-    app.clipboard().read_text().ok().and_then(|text| {
-        (!text.trim().is_empty()).then_some(RichText { text, html: None, rtf: None })
-    })
-}
-
-fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32, Option<String>), String> {
-    let decoded = image::load_from_memory(image)
-        .map_err(|error| error.to_string())?;
-    let (width, height) = decoded.dimensions();
-    let mut output = Cursor::new(Vec::new());
-    decoded
-        .write_to(&mut output, ImageFormat::WebP)
-        .map_err(|error| error.to_string())?;
-    let thumbnail = decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE);
-    let mut thumbnail_output = Cursor::new(Vec::new());
-    thumbnail
-        .write_to(&mut thumbnail_output, ImageFormat::WebP)
-        .map_err(|error| error.to_string())?;
-    let thumbnail = thumbnail_output.into_inner();
-    Ok((
-        output.into_inner(),
-        width,
-        height,
-        (thumbnail.len() <= THUMBNAIL_MAX_BYTES).then(|| BASE64.encode(thumbnail)),
-    ))
-}
-
-fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
-    let decoded = image::load_from_memory(image).map_err(|error| error.to_string())?;
-    let mut output = Cursor::new(Vec::new());
-    decoded
-        .write_to(&mut output, ImageFormat::Bmp)
-        .map_err(|error| error.to_string())?;
-    Ok(output.into_inner())
-}
 
 #[tauri::command]
 fn list_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
@@ -1276,10 +445,10 @@ fn save_sync_config(
             *history = next_history;
         }
         save_active_history(&state, &history)?;
-        pending_entry_ids(&history)
+        crate::clipboard::hashing::pending_entry_ids(&history)
     };
     for entry_id in pending {
-        queue_hashing(&state, &entry_id);
+        crate::clipboard::hashing::queue_hashing(&state, &entry_id);
     }
     let config = Some(config);
     write_sync_config(&state.sync_config_path, &config)?;
@@ -1961,197 +1130,6 @@ fn hide_main(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "windows")]
-fn synthesize_paste() -> Result<(), String> {
-    use std::mem::size_of;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_V,
-    };
-    fn key(vk: u16, flags: u32) -> INPUT {
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    wScan: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        }
-    }
-    let inputs = [
-        key(VK_CONTROL, 0),
-        key(VK_V, 0),
-        key(VK_V, KEYEVENTF_KEYUP),
-        key(VK_CONTROL, KEYEVENTF_KEYUP),
-    ];
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            size_of::<INPUT>() as i32,
-        )
-    };
-    if sent == inputs.len() as u32 {
-        Ok(())
-    } else {
-        Err(format!("SendInput inserted {sent} of {} events", inputs.len()))
-    }
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn synthesize_paste() -> Result<(), String> {
-    platform_clipboard::synthesize_paste()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn synthesize_paste() -> Result<(), String> {
-    Ok(())
-}
-
-enum ClipboardPayload {
-    Text(RichText),
-    Files(Vec<String>),
-    #[cfg(target_os = "windows")]
-    VirtualFiles(Box<ClipboardEntry>),
-    Image(Vec<u8>),
-}
-
-#[cfg(target_os = "windows")]
-fn write_clipboard_files(_app: &AppHandle, paths: &[String]) -> Result<(), String> {
-    use clipboard_win::{formats::FileList, Clipboard, Setter};
-
-    let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-    FileList
-        .write_clipboard(paths)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn write_clipboard_files(app: &AppHandle, paths: &[String]) -> Result<(), String> {
-    app.state::<AppState>().platform_clipboard.write_files(paths)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn write_clipboard_files(_app: &AppHandle, _paths: &[String]) -> Result<(), String> {
-    Err("当前平台暂不支持文件粘贴".to_string())
-}
-
-#[cfg(target_os = "windows")]
-fn write_clipboard_image(_app: &AppHandle, image: &[u8]) -> Result<(), String> {
-    use clipboard_win::{options::DoClear, raw, Clipboard};
-
-    let bitmap = decode_image_as_bmp(image)?;
-    let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-    // clipboard-win 5.x keeps existing formats when setting a bitmap. Clear
-    // them explicitly so a text-only target cannot paste stale Unicode text
-    // from the previous clipboard value when it rejects the image format.
-    raw::set_bitmap_with(&bitmap, DoClear)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn write_clipboard_image(app: &AppHandle, image: &[u8]) -> Result<(), String> {
-    app.state::<AppState>().platform_clipboard.write_image(image)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn write_clipboard_image(_app: &AppHandle, _image: &[u8]) -> Result<(), String> {
-    Err("当前平台暂不支持图片粘贴".to_string())
-}
-
-fn write_clipboard_text(_app: &AppHandle, rich_text: &RichText) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use clipboard_win::{
-            formats::{Html, Unicode},
-            raw, Clipboard, Setter,
-        };
-
-        let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-        Unicode
-            .write_clipboard(&rich_text.text)
-            .map_err(|error| error.to_string())?;
-        if let Some(html) = &rich_text.html {
-            if let Some(format) = Html::new() {
-                format
-                    .write_clipboard(html)
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        if let Some(rtf) = &rich_text.rtf {
-            let format = raw::register_format("Rich Text Format")
-                .ok_or_else(|| "无法注册 RTF 剪贴板格式".to_string())?;
-            let mut rtf = rtf.clone().into_bytes();
-            rtf.push(0);
-            raw::set_without_clear(format.get(), &rtf).map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        _app
-            .state::<AppState>()
-            .platform_clipboard
-            .write_text(&rich_text.text, rich_text.html.as_deref())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        _app.clipboard()
-            .write_text(&rich_text.text)
-            .map_err(|error| error.to_string())
-    }
-}
-
-/// A snapshot taken under the history lock so file dialogs and disk work never
-/// block the clipboard monitor.
-struct EntrySnapshot {
-    entry: ClipboardEntry,
-    cached: HashSet<String>,
-    cache_dir: PathBuf,
-}
-
-fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(state, &history);
-    let entry = history
-        .find(entry_id)
-        .cloned()
-        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    Ok(EntrySnapshot {
-        entry,
-        cached: history.cached_files.clone(),
-        cache_dir,
-    })
-}
-
-impl EntrySnapshot {
-    fn resolve(&self, file_id: &str) -> Option<PathBuf> {
-        readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
-    }
-}
-
-fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
-    entry_contents_of(&snapshot.entry)
-        .into_iter()
-        .filter(|(file_id, _)| snapshot.resolve(file_id).is_none())
-        .map(|(file_id, size)| MissingFile {
-            file_id,
-            size,
-            source_device_id: snapshot.entry.source_device_id.clone(),
-        })
-        .collect()
-}
-
-fn refresh_snapshot_summary(state: &AppState, snapshot: &EntrySnapshot, entry_id: &str) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    refresh_entry_summary(&mut history, entry_id, &snapshot.cache_dir);
-    Ok(())
-}
 
 /// Recomputes one entry's aggregates. Downloads deliberately skip this so that
 /// finishing a file stays O(1); the caller refreshes once the batch is done.
@@ -2593,224 +1571,6 @@ fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usiz
     result
 }
 
-/// Writes a live clipboard activation received from another device without
-/// synthesizing Paste. File-list entries are deliberately excluded: they stay
-/// in history until the user explicitly chooses where to paste or save them.
-#[tauri::command(rename_all = "camelCase")]
-fn activate_remote_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-) -> Result<(), String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
-    let payload = match snapshot.entry.kind.as_str() {
-        "files" => return Err("文件和文件夹不会自动写入漫游剪贴板".to_string()),
-        "image" => {
-            let file_id = snapshot
-                .entry
-                .image_info
-                .as_ref()
-                .map(|image| image.file_id.clone())
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            let path = snapshot
-                .resolve(&file_id)
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
-        }
-        _ => ClipboardPayload::Text(RichText {
-            text: snapshot.entry.content.clone(),
-            html: snapshot.entry.html.clone(),
-            rtf: snapshot.entry.rtf.clone(),
-        }),
-    };
-
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        match &payload {
-            ClipboardPayload::Image(image) => {
-                history.last_image_signature = image_signature(image);
-                history.last_clipboard.clear();
-                history.last_file_signature.clear();
-            }
-            ClipboardPayload::Text(rich_text) => {
-                history.last_clipboard = rich_text_signature(rich_text);
-                history.last_file_signature.clear();
-                history.last_image_signature.clear();
-            }
-            ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
-            #[cfg(target_os = "windows")]
-            ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
-        }
-        save_active_history(&state, &history)?;
-    }
-
-    match payload {
-        ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text),
-        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image),
-        ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
-        #[cfg(target_os = "windows")]
-        ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
-    }
-}
-
-fn apply_clipboard_entry(
-    window: tauri::WebviewWindow,
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-    synthesize: bool,
-) -> Result<(), String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
-    let payload = match snapshot.entry.kind.as_str() {
-        "files" => {
-            let file_info = snapshot
-                .entry
-                .file_info
-                .as_ref()
-                .ok_or_else(|| "该记录不包含文件".to_string())?;
-            let roots = &snapshot.entry.sources.roots;
-            // Copying and pasting on the same machine should not duplicate a
-            // single byte, so the original paths are reused when still intact.
-            let intact = !roots.is_empty()
-                && roots.len() == file_info.len()
-                && roots.iter().all(|path| Path::new(path).exists());
-            if intact {
-                ClipboardPayload::Files(roots.clone())
-            } else {
-                match FilePasteStrategy::for_entry(&snapshot.entry) {
-                    FilePasteStrategy::VirtualStream => {
-                        #[cfg(target_os = "windows")]
-                        {
-                            ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        unreachable!("virtual file paste is only available on Windows")
-                    }
-                    FilePasteStrategy::MaterializedPaths => {
-                        let view = snapshot
-                            .cache_dir
-                            .join("views")
-                            .join(safe_file_name(&snapshot.entry.id));
-                        let _ = fs::remove_dir_all(&view);
-                        rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), true)?;
-                        let paths = file_info
-                            .keys()
-                            .map(|root| view.join(root).display().to_string())
-                            .collect();
-                        ClipboardPayload::Files(paths)
-                    }
-                }
-            }
-        }
-        "image" => {
-            let file_id = snapshot
-                .entry
-                .image_info
-                .as_ref()
-                .map(|image| image.file_id.clone())
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            let path = snapshot
-                .resolve(&file_id)
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
-        }
-        _ => ClipboardPayload::Text(RichText {
-            text: snapshot.entry.content.clone(),
-            html: snapshot.entry.html.clone(),
-            rtf: snapshot.entry.rtf.clone(),
-        }),
-    };
-
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        match &payload {
-            ClipboardPayload::Files(paths) => {
-                let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-                history.last_file_signature = file_signature(&paths);
-                history.last_clipboard.clear();
-                history.last_image_signature.clear();
-            }
-            #[cfg(target_os = "windows")]
-            ClipboardPayload::VirtualFiles(_) => {
-                history.last_file_signature.clear();
-                history.last_clipboard.clear();
-                history.last_image_signature.clear();
-            }
-            ClipboardPayload::Image(image) => {
-                history.last_image_signature = image_signature(image);
-                history.last_clipboard.clear();
-                history.last_file_signature.clear();
-            }
-            ClipboardPayload::Text(rich_text) => {
-                history.last_clipboard = rich_text_signature(rich_text);
-                history.last_file_signature.clear();
-                history.last_image_signature.clear();
-            }
-        }
-        save_active_history(&state, &history)?;
-    }
-
-    match payload {
-        ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text)?,
-        ClipboardPayload::Files(paths) => write_clipboard_files(&app, &paths)?,
-        #[cfg(target_os = "windows")]
-        ClipboardPayload::VirtualFiles(entry) => {
-            virtual_files::set_clipboard(&app, window.label(), *entry)?
-        }
-        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image)?,
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        // Mobile operating systems do not let a normal app inject a paste into
-        // another app. Keep ClipRoam visible and treat activation as Copy.
-        let _ = window;
-        let _ = synthesize;
-        return Ok(());
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        if !synthesize {
-            return Ok(());
-        }
-        window.hide().map_err(|error| error.to_string())?;
-        thread::sleep(Duration::from_millis(90));
-        if let Err(error) = synthesize_paste() {
-            // The clipboard content is still valid, but the user needs to see why
-            // automatic delivery failed (for example missing Linux helpers or
-            // macOS Accessibility permission).
-            let _ = window.show();
-            return Err(error);
-        }
-        Ok(())
-    }
-}
-
-#[tauri::command(rename_all = "camelCase")]
-fn copy_entry(
-    window: tauri::WebviewWindow,
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-) -> Result<(), String> {
-    apply_clipboard_entry(window, app, state, entry_id, false)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-fn paste_entry(
-    window: tauri::WebviewWindow,
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry_id: String,
-) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    if window.label() != "paste" {
-        return Err("只有快捷粘贴窗口可以执行自动粘贴".to_string());
-    }
-
-    apply_clipboard_entry(window, app, state, entry_id, true)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2826,7 +1586,7 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             #[cfg(target_os = "windows")]
-            virtual_files::initialize()?;
+            clipboard::virtual_files::initialize()?;
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             let window_configs = app.config().app.windows.clone();
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
@@ -2842,7 +1602,7 @@ pub fn run() {
             save_history(&history_path_for_key(&histories_dir, &history_key), &history)?;
             let (sender, receiver) = mpsc::channel::<String>();
             #[cfg(any(target_os = "macos", target_os = "linux"))]
-            let platform_clipboard = platform_clipboard::PlatformClipboard::new()?;
+            let platform_clipboard = clipboard::platform_clipboard::PlatformClipboard::new()?;
             app.manage(AppState {
                 history: Mutex::new(history),
                 histories_dir,
@@ -2873,9 +1633,9 @@ pub fn run() {
                     let _ = window.set_ignore_cursor_events(true);
                 }
             }
-            start_hash_worker(app.handle().clone(), receiver);
+            crate::clipboard::hashing::start_hash_worker(app.handle().clone(), receiver);
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            start_clipboard_monitor(app.handle().clone());
+            crate::clipboard::monitor::start_clipboard_monitor(app.handle().clone());
 
             // Hashes that were still pending when the app last closed are
             // persisted, so they simply resume.
@@ -2885,12 +1645,12 @@ pub fn run() {
                 let pending = match state.history.lock() {
                     Ok(mut history) => {
                         let _ = collect_local_garbage(&state.histories_dir, &mut history);
-                        pending_entry_ids(&history)
+                        crate::clipboard::hashing::pending_entry_ids(&history)
                     }
                     Err(_) => Vec::new(),
                 };
                 for entry_id in pending {
-                    queue_hashing(&state, &entry_id);
+                    crate::clipboard::hashing::queue_hashing(&state, &entry_id);
                 }
             });
             Ok(())
@@ -2945,8 +1705,8 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             get_platform_capabilities,
-            capture_current_clipboard_text,
-            consume_mobile_shares,
+            clipboard::capture::capture_current_clipboard_text,
+            clipboard::share::consume_mobile_shares,
             list_entries,
             get_entry,
             list_entry_files,
@@ -2986,9 +1746,9 @@ pub fn run() {
             cancel_save_entry,
             finish_save_entry,
             fail_virtual_file_request,
-            activate_remote_entry,
-            copy_entry,
-            paste_entry
+            clipboard::output::activate_remote_entry,
+            clipboard::output::copy_entry,
+            clipboard::output::paste_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running ClipRoam");
@@ -2997,7 +1757,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, Rgba, RgbaImage};
 
     #[test]
     fn older_sync_config_enables_clipboard_roaming_by_default() {
@@ -3016,59 +1775,6 @@ mod tests {
         assert!(config.auto_receive_clipboard);
     }
 
-    #[test]
-    fn screenshot_webp_round_trip_preserves_pixels() {
-        let source = RgbaImage::from_fn(16, 12, |x, y| {
-            Rgba([(x * 13) as u8, (y * 19) as u8, ((x + y) * 7) as u8, 255])
-        });
-        let mut bmp = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(source.clone())
-            .write_to(&mut bmp, ImageFormat::Bmp)
-            .unwrap();
-        let bmp = bmp.into_inner();
-
-        let (webp, width, height, thumbnail) = encode_image_as_webp(&bmp).unwrap();
-        assert_eq!((width, height), (16, 12));
-        assert!(thumbnail.is_some());
-        assert_eq!(image::guess_format(&webp).unwrap(), ImageFormat::WebP);
-
-        let restored_bmp = decode_image_as_bmp(&webp).unwrap();
-        let restored = image::load_from_memory_with_format(&restored_bmp, ImageFormat::Bmp)
-            .unwrap()
-            .to_rgba8();
-        assert_eq!(restored, source);
-        assert_eq!(image_signature(&bmp), image_signature(&webp));
-    }
-
-    #[test]
-    fn macos_html_transport_wrapper_keeps_the_same_signature() {
-        let fragment = RichText {
-            text: "hello".to_string(),
-            html: Some("<b>hello</b>".to_string()),
-            rtf: None,
-        };
-        let wrapped = RichText {
-            text: fragment.text.clone(),
-            html: Some(format!(
-                "<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>",
-                fragment.html.as_deref().unwrap()
-            )),
-            rtf: None,
-        };
-        assert_eq!(rich_text_signature(&fragment), rich_text_signature(&wrapped));
-    }
-
-    #[test]
-    fn paste_strategy_owns_platform_materialization_policy() {
-        let virtual_stream = FilePasteStrategy::VirtualStream;
-        let materialized = FilePasteStrategy::MaterializedPaths;
-
-        assert!(!virtual_stream.requires_complete_content("files"));
-        assert!(virtual_stream.requires_complete_content("image"));
-        assert!(materialized.requires_complete_content("files"));
-        assert!(materialized.requires_complete_content("image"));
-        assert!(!materialized.requires_complete_content("text"));
-    }
 
     #[test]
     fn paste_window_position_stays_inside_the_work_area() {
