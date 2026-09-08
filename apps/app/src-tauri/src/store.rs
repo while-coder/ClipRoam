@@ -177,6 +177,11 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
                 hash TEXT NOT NULL,
                 PRIMARY KEY (source, size, modified_at)
             );
+            CREATE TABLE IF NOT EXISTS pending_entries (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id TEXT NOT NULL UNIQUE,
+                queued_at TEXT NOT NULL
+            );
             ",
         )
         .map_err(|error| error.to_string())?;
@@ -457,6 +462,61 @@ pub fn register_cached_file(
     Ok(())
 }
 
+/// Durable upload queue. Rows are appended in capture order and removed only
+/// after the server confirmed the publish, so an offline capture replays in
+/// order on the next connection.
+pub fn enqueue_pending_entry(database_path: &Path, entry_id: &str) -> Result<(), String> {
+    let connection = open_history_database(database_path)?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO pending_entries (entry_id, queued_at) VALUES (?, ?)",
+            params![entry_id, now_rfc3339()],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn list_pending_entry_ids(database_path: &Path) -> Result<Vec<String>, String> {
+    let connection = open_history_database(database_path)?;
+    let mut statement = connection
+        .prepare("SELECT entry_id FROM pending_entries ORDER BY seq ASC")
+        .map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(ids)
+}
+
+/// Returns whether a row was actually removed.
+pub fn acknowledge_pending_entry(database_path: &Path, entry_id: &str) -> Result<bool, String> {
+    let connection = open_history_database(database_path)?;
+    let changed = connection
+        .execute(
+            "DELETE FROM pending_entries WHERE entry_id = ?",
+            params![entry_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(changed > 0)
+}
+
+/// Drops queue rows for entries that no longer exist locally.
+pub fn remove_pending_entries(database_path: &Path, entry_ids: &[String]) -> Result<(), String> {
+    if entry_ids.is_empty() {
+        return Ok(());
+    }
+    let connection = open_history_database(database_path)?;
+    let placeholders = std::iter::repeat("?").take(entry_ids.len()).collect::<Vec<_>>().join(", ");
+    connection
+        .execute(
+            &format!("DELETE FROM pending_entries WHERE entry_id IN ({placeholders})"),
+            params_from_iter(entry_ids.iter()),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
     connection
         .query_row(
@@ -697,6 +757,57 @@ mod tests {
         assert_eq!(cached_hash(&connection, "C:/a.txt", 12, 99).as_deref(), Some("abc"));
         assert_eq!(cached_hash(&connection, "C:/a.txt", 13, 99), None);
         drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn pending_entries_keep_capture_order() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        for entry_id in ["c", "b", "a"] {
+            enqueue_pending_entry(&path, entry_id).expect("enqueue entry");
+        }
+        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["c", "b", "a"]);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn pending_entries_deduplicate_by_entry_id() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        enqueue_pending_entry(&path, "a").expect("enqueue entry");
+        enqueue_pending_entry(&path, "b").expect("enqueue entry");
+        enqueue_pending_entry(&path, "a").expect("enqueue entry again");
+        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["a", "b"]);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn acknowledging_removes_only_the_confirmed_row() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        for entry_id in ["a", "b", "c"] {
+            enqueue_pending_entry(&path, entry_id).expect("enqueue entry");
+        }
+        assert!(acknowledge_pending_entry(&path, "b").expect("acknowledge entry"));
+        assert!(!acknowledge_pending_entry(&path, "missing").expect("acknowledge entry"));
+        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["a", "c"]);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn save_history_leaves_the_upload_queue_untouched() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        enqueue_pending_entry(&path, "x").expect("enqueue entry");
+        let history = HistoryData {
+            active_history: LOCAL_HISTORY_KEY.to_string(),
+            ..HistoryData::default()
+        };
+        save_history(&path, &history).expect("store history");
+        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["x"]);
+        remove_pending_entries(&path, &["x".to_string()]).expect("remove pending entries");
+        assert!(list_pending_entry_ids(&path).expect("list pending").is_empty());
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 }
