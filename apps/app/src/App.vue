@@ -11,14 +11,11 @@ import { entryContents } from "@cliproam/protocol";
 import {
   ArrowLeft,
   Check,
-  CircleAlert,
-  CircleCheck,
   Clipboard,
   Cloud,
   CloudOff,
   CloudUpload,
   FolderOpen,
-  Info,
   KeyRound,
   LoaderCircle,
   RefreshCw,
@@ -51,6 +48,8 @@ import {
 import { useUpdater } from "./useUpdater";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
+import ToastLayer from "./features/toast/ToastLayer.vue";
+import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import {
   BROWSER_CONFIG_KEY,
   CONFIGURED_SERVER_PROTOCOL,
@@ -63,8 +62,6 @@ import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./com
 import type {
   Device,
   DownloadProgress,
-  ToastPayload,
-  ToastTone,
   LocalClipboardEntry,
   MissingFile,
   PlatformCapabilities,
@@ -97,7 +94,6 @@ const devicesById = ref<Record<string, Device>>({
 const currentTime = ref(Date.now());
 const connected = ref(false);
 const syncEnabled = ref(false);
-const toastPayload = ref<ToastPayload>();
 const initializing = ref(true);
 const setupVisible = ref(false);
 const settingsVisible = ref(false);
@@ -137,8 +133,6 @@ let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
-let toastTimer: number | undefined;
-let toastWindowHideTimer: number | undefined;
 let shareReceiverListener: PluginListener | undefined;
 let localClipboardRevision = 0;
 let remoteActivationRevision = 0;
@@ -184,33 +178,6 @@ const demoEntries: LocalClipboardEntry[] = [
 const pendingEntries = computed(() => (
   entries.value.filter((entry) => !isEntrySynced(entry))
 ));
-
-function displayToast(payload: ToastPayload): void {
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
-  toastPayload.value = payload;
-  toastTimer = window.setTimeout(() => {
-    toastPayload.value = undefined;
-    toastTimer = undefined;
-    if (isToastWindow) {
-      toastWindowHideTimer = window.setTimeout(() => {
-        void invoke("hide_toast");
-        toastWindowHideTimer = undefined;
-      }, 180);
-    }
-  }, payload.tone === "error" ? 5_000 : 3_200);
-}
-
-function showToast(message: string, tone: ToastTone = "info"): void {
-  const normalized = message.trim();
-  if (!normalized) return;
-  const payload = { message: normalized, tone };
-  if (!runningInTauri) {
-    displayToast(payload);
-    return;
-  }
-  void invoke("show_toast", payload).catch(() => displayToast(payload));
-}
 
 async function refreshEntries(): Promise<void> {
   if (!runningInTauri) {
@@ -1338,9 +1305,7 @@ function readableStartupError(error: unknown): string {
 
 async function initializeTauriServices(): Promise<void> {
   const listenerResults = await Promise.allSettled([
-    listen<ToastPayload>("cliproam://toast", ({ payload }) => {
-      displayToast(payload);
-    }),
+    startToastWindowListener(),
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
       scheduleRefreshEntries();
@@ -1413,9 +1378,7 @@ async function initializeTauriServices(): Promise<void> {
 
 onMounted(async () => {
   if (isToastWindow) {
-    unlisteners = [await listen<ToastPayload>("cliproam://toast", ({ payload }) => {
-      displayToast(payload);
-    })];
+    unlisteners = [await startToastWindowListener()];
     return;
   }
 
@@ -1482,8 +1445,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
+  disposeToast();
   if (refreshEntriesTimer !== undefined) window.clearTimeout(refreshEntriesTimer);
   if (pendingRemoteUpserts.size) {
     void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
@@ -1681,7 +1643,6 @@ onBeforeUnmount(() => {
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
-      :show-toast="showToast"
       :ensure-local-files="ensureLocalFiles"
       :clear-history="clearHistory"
       @activate="activateFromView"
@@ -1948,21 +1909,5 @@ onBeforeUnmount(() => {
 
   <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />
 
-  <Transition name="toast">
-    <aside
-      v-if="toastPayload"
-      class="toast-layer"
-      :class="[`toast-${toastPayload.tone}`, { 'tray-toast': isToastWindow }]"
-      :role="toastPayload.tone === 'error' ? 'alert' : 'status'"
-      :aria-live="toastPayload.tone === 'error' ? 'assertive' : 'polite'"
-      aria-atomic="true"
-    >
-      <span class="toast-card">
-        <CircleCheck v-if="toastPayload.tone === 'success'" :size="17" aria-hidden="true" />
-        <CircleAlert v-else-if="toastPayload.tone === 'error'" :size="17" aria-hidden="true" />
-        <Info v-else :size="17" aria-hidden="true" />
-        <span>{{ toastPayload.message }}</span>
-      </span>
-    </aside>
-  </Transition>
+  <ToastLayer />
 </template>

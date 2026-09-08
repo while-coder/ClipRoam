@@ -21,6 +21,7 @@ import TimeFilterControl from "./TimeFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryPagination } from "./useHistoryPagination";
 import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
+import { showToast } from "../toast/useToast";
 import {
   formatAge as formatAgeRelative,
   formatExactDateTime,
@@ -42,7 +43,6 @@ import type {
   EntryFilter,
   LocalClipboardEntry,
   TimeFilter,
-  ToastTone,
   UploadProgress,
 } from "../../types";
 
@@ -58,7 +58,6 @@ const props = defineProps<{
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
-  showToast: (message: string, tone?: ToastTone) => void;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
   clearHistory: () => Promise<void>;
 }>();
@@ -232,9 +231,9 @@ async function captureCurrentClipboard(): Promise<void> {
   try {
     const captured = await invoke<boolean>("capture_current_clipboard_text");
     emit("refresh");
-    props.showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
+    showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
   } catch (error) {
-    props.showToast(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     capturingClipboard.value = false;
   }
@@ -250,7 +249,7 @@ async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
     await nextTick();
     previewDialog.value?.focus();
   } catch (error) {
-    props.showToast(`无法预览图片：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`无法预览图片：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     previewLoading.value = false;
   }
@@ -308,11 +307,11 @@ async function confirmClearHistory(): Promise<void> {
   try {
     await props.clearHistory();
     clearHistoryConfirmVisible.value = false;
-    props.showToast(`已清除 ${clearedCount} 条未固定记录`, "success");
+    showToast(`已清除 ${clearedCount} 条未固定记录`, "success");
     await nextTick();
     searchInput.value?.focus();
   } catch (error) {
-    props.showToast(`清除历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`清除历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
     clearingHistory.value = false;
   }
