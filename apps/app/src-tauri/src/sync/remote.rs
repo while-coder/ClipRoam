@@ -9,7 +9,8 @@ use crate::store::{
     collect_local_garbage, history_path_for_key, mark_files_uploaded as store_mark_files_uploaded,
     open_history_database, refresh_entry_summary, trim_history, write_entry_data,
 };
-use crate::{active_cache_dir, entry_contents_of, entry_references, save_active_history, AppState};
+use crate::history::{entry_contents_of, entry_references};
+use crate::{active_cache_dir, save_active_history, AppState};
 
 /// File ids this device knows nothing about: neither a local blob in the cache
 /// nor an "available" mark from the server pool. The sync flow queries server

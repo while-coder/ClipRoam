@@ -14,7 +14,9 @@ use tauri::Manager;
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry};
 use crate::store::refresh_entry_summary;
-use crate::{active_cache_dir, entry_contents_of, save_active_history, AppState};
+use crate::history::entry_contents_of;
+use crate::{active_cache_dir, save_active_history, AppState};
+use crate::transfer::save::MissingFile;
 
 use super::capture::{decode_image_as_bmp, image_signature, rich_text_signature, safe_file_name, RichText};
 
@@ -213,11 +215,11 @@ impl EntrySnapshot {
     }
 }
 
-pub(crate) fn missing_files(snapshot: &EntrySnapshot) -> Vec<crate::MissingFile> {
+pub(crate) fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
     entry_contents_of(&snapshot.entry)
         .into_iter()
         .filter(|(file_id, _)| snapshot.resolve(file_id).is_none())
-        .map(|(file_id, size)| crate::MissingFile {
+        .map(|(file_id, size)| MissingFile {
             file_id,
             size,
             source_device_id: snapshot.entry.source_device_id.clone(),
