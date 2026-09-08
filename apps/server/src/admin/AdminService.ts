@@ -10,11 +10,18 @@ type LoginAttempt = { failures: number; windowStarted: number; blockedUntil: num
 export class AdminService {
   #sessions = new Map<string, number>();
   #attempts = new Map<string, LoginAttempt>();
+  readonly #password: string;
 
-  constructor(private readonly password = process.env.CLIPROAM_ADMIN_PASSWORD ?? "") {}
+  constructor(password = process.env.CLIPROAM_ADMIN_PASSWORD ?? "") {
+    this.#password = password;
+  }
+
+  get password(): string {
+    return this.#password;
+  }
 
   get isConfigured(): boolean {
-    return this.password.length > 0;
+    return this.#password.length > 0;
   }
 
   login(ip: string, password: unknown): { token: string } | { error: "NOT_CONFIGURED" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" } {
