@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { cursorPosition, getCurrentWindow, monitorFromPoint, PhysicalPosition, type Monitor } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 import type {
   ClipboardEntry,
@@ -302,6 +303,62 @@ function isEntrySynced(entry: ClipboardEntry): boolean {
 
 function focusSearch(): void {
   void nextTick(() => historyView.value?.focusSearch());
+}
+
+// Mirrors the former Rust-side paste positioning: center the window below the
+// cursor and clamp it inside the monitor's work area. All values are physical
+// pixels.
+function calculatePasteWindowPosition(
+  cursorX: number,
+  cursorY: number,
+  workX: number,
+  workY: number,
+  workWidth: number,
+  workHeight: number,
+  windowWidth: number,
+  windowHeight: number,
+): { x: number; y: number } {
+  const CURSOR_GAP = 12;
+  const SCREEN_MARGIN = 8;
+  const minX = workX + SCREEN_MARGIN;
+  const minY = workY + SCREEN_MARGIN;
+  const maxX = Math.max(workX + workWidth - windowWidth - SCREEN_MARGIN, minX);
+  const maxY = Math.max(workY + workHeight - windowHeight - SCREEN_MARGIN, minY);
+  const x = Math.min(Math.max(cursorX - Math.floor(windowWidth / 2), minX), maxX);
+  const belowCursor = cursorY + CURSOR_GAP;
+  const preferredY = belowCursor <= maxY ? belowCursor : cursorY - windowHeight - CURSOR_GAP;
+  return { x, y: Math.min(Math.max(preferredY, minY), maxY) };
+}
+
+async function showPasteWindow(): Promise<void> {
+  if (!isPasteWindow || !runningInTauri) return;
+  const pasteWindow = getCurrentWindow();
+  try {
+    const cursor = await cursorPosition();
+    const monitor: Monitor | null = await monitorFromPoint(cursor.x, cursor.y);
+    if (monitor) {
+      const windowSize = await pasteWindow.outerSize();
+      const workArea = monitor.workArea;
+      const position = calculatePasteWindowPosition(
+        Math.round(cursor.x),
+        Math.round(cursor.y),
+        workArea.position.x,
+        workArea.position.y,
+        workArea.size.width,
+        workArea.size.height,
+        windowSize.width,
+        windowSize.height,
+      );
+      await pasteWindow.setPosition(new PhysicalPosition(position.x, position.y));
+    }
+  } catch (error) {
+    // The window still opens even if positioning is unavailable.
+    console.error("定位快捷粘贴窗口失败：", error);
+  }
+  await pasteWindow.show();
+  await pasteWindow.unminimize();
+  await pasteWindow.setFocus();
+  focusSearch();
 }
 
 function shareImportMessage(summary: ShareImportSummary): string {
@@ -1029,7 +1086,7 @@ async function initializeTauriServices(): Promise<void> {
       syncClient?.drainQueue();
     }),
     listen("cliproam://history-changed", scheduleRefreshEntries),
-    listen("cliproam://focus-search", focusSearch),
+    listen("cliproam://show-paste", () => { void showPasteWindow(); }),
     listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
     listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
       const client = syncClient;

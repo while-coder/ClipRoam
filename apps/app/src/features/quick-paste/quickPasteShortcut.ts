@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 
 const STORAGE_KEY = "cliproam.quickPasteShortcut";
 export const DEFAULT_QUICK_PASTE_SHORTCUT = "CommandOrControl+Shift+V";
@@ -38,7 +38,7 @@ export function resetQuickPasteShortcutDraft(): void {
 async function registerShortcut(shortcut: string): Promise<void> {
   shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
   await shortcutApi.register(shortcut, (event) => {
-    if (event.state === "Pressed") void invoke("open_paste");
+    if (event.state === "Pressed") void emitTo("paste", "cliproam://show-paste");
   });
 }
 
