@@ -68,28 +68,42 @@ export class UserDataStore {
     `);
   }
 
-  // Offset pagination over entry identities with optional keyword and UTC
-  // date-range filters. One extra row is fetched to decide hasMore without a
-  // separate count query. Full details ride POST /entries/query.
-  listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; hasMore: boolean } {
+  // Offset pagination over entry identities with optional keyword, UTC
+  // date-range, kind and pinned filters. The total covers the same filters, so
+  // a client can render "page x of y" and detect the last page from a filtered
+  // result set. Full details ride POST /entries/query.
+  listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
+    // Shared between the page read and the total count so the two can never
+    // disagree about what a "matching row" is.
+    const where = `
+      WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
+        AND (@dayStart IS NULL OR created_at BETWEEN @dayStart AND @dayEnd)
+        AND (@kind IS NULL OR kind = @kind)
+        AND (@pinned IS NULL OR pinned = @pinned)
+    `;
+    const filters = {
+      search: query.search ? `%${escapeLike(query.search)}%` : null,
+      dayStart: query.dateStart ? `${query.dateStart}T00:00:00.000Z` : null,
+      dayEnd: query.dateEnd ? `${query.dateEnd}T23:59:59.999Z` : null,
+      kind: query.kind ?? null,
+      pinned: query.pinned === undefined ? null : query.pinned ? 1 : 0,
+    };
     const rows = this.#database
       .prepare(`
         SELECT id
         FROM entry
-        WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
-          AND (@dayStart IS NULL OR created_at BETWEEN @dayStart AND @dayEnd)
+        ${where}
         ORDER BY id DESC
         LIMIT @limit OFFSET @offset
       `)
-      .all({
-        search: query.search ? `%${escapeLike(query.search)}%` : null,
-        dayStart: query.dateStart ? `${query.dateStart}T00:00:00.000Z` : null,
-        dayEnd: query.dateEnd ? `${query.dateEnd}T23:59:59.999Z` : null,
-        limit: limit + 1,
-        offset: ((query.page ?? 1) - 1) * limit,
-      }) as Array<{ id: number }>;
-    const hasMore = rows.length > limit;
-    return { manifest: rows.slice(0, limit).map(({ id }) => ({ id: String(id) })), hasMore };
+      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number }>;
+    const { count } = this.#database
+      .prepare(`SELECT COUNT(*) AS count FROM entry ${where}`)
+      .get(filters) as { count: number };
+    return {
+      manifest: rows.map(({ id }) => ({ id: String(id) })),
+      total: count,
+    };
   }
 
   listByIds(entryIds: readonly string[]): ClipboardEntry[] {
