@@ -9,22 +9,18 @@ import type {
 } from "@cliproam/protocol";
 import { entryContents } from "@cliproam/protocol";
 import {
-  ArrowLeft,
   Clipboard,
   Cloud,
   CloudOff,
   CloudUpload,
   LoaderCircle,
-  Server,
   Settings2,
 } from "lucide-vue-next";
 import {
   SyncClient,
   authenticateAccount,
   getServerUrls,
-  normalizeServerAddress,
   testSyncConnection,
-  type AuthMode,
   type ServerProtocol,
 } from "./features/sync/syncClient";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./features/sync/concurrency";
@@ -39,11 +35,12 @@ import { closeSettings, openSettings, settingsVisible } from "./features/setting
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
+import SetupWizard from "./features/setup/SetupWizard.vue";
+import type { SetupDraft } from "./features/setup/SetupWizard.vue";
 import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import {
   BROWSER_CONFIG_KEY,
-  CONFIGURED_SERVER_PROTOCOL,
   DEFAULT_SERVER_ADDRESS,
   DESKTOP_CAPABILITIES,
   EMPTY_SUMMARY,
@@ -80,14 +77,6 @@ const syncEnabled = ref(false);
 const initializing = ref(true);
 const setupVisible = ref(false);
 const hasSavedSyncConfig = ref(false);
-const setupServerAddress = ref(DEFAULT_SERVER_ADDRESS);
-const setupServerProtocol = ref<ServerProtocol>(CONFIGURED_SERVER_PROTOCOL);
-const setupUsername = ref("");
-const setupPassword = ref("");
-const authMode = ref<AuthMode>("login");
-const serverFieldError = ref("");
-const usernameFieldError = ref("");
-const passwordFieldError = ref("");
 const setupError = ref("");
 const testingConnection = ref(false);
 const currentUsername = ref("");
@@ -97,9 +86,8 @@ const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
 const savingEntryId = ref("");
-const serverInput = ref<HTMLInputElement>();
-const accountPasswordInput = ref<HTMLInputElement>();
 const historyView = ref<InstanceType<typeof HistoryView>>();
+const setupWizard = ref<InstanceType<typeof SetupWizard>>();
 let activeSyncConfig: SyncConfig | undefined;
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
@@ -124,12 +112,13 @@ initSettings({
   },
   uploadNowEligibleEntries,
   openSetup: ({ config, message, focus }) => {
-    if (config) setSetupFields(config);
     if (message !== undefined) setupError.value = message;
     setupVisible.value = true;
+    // SetupWizard 挂载后才持有表单状态，setFields/focus 须等下一个 tick。
     void nextTick(() => {
-      if (focus === "password") accountPasswordInput.value?.focus();
-      else if (focus === "server") serverInput.value?.focus();
+      if (config) setupWizard.value?.setFields(config);
+      if (focus === "password") setupWizard.value?.focusPasswordInput();
+      else if (focus === "server") setupWizard.value?.focusServerInput();
     });
   },
   focusSearch,
@@ -638,49 +627,6 @@ async function persistSyncConfig(config: SyncConfig): Promise<void> {
   else window.localStorage.setItem(BROWSER_CONFIG_KEY, JSON.stringify(config));
 }
 
-function setSetupFields(config?: SyncConfig): void {
-  setupServerAddress.value = config?.serverAddress || DEFAULT_SERVER_ADDRESS;
-  setupServerProtocol.value = config?.serverProtocol || CONFIGURED_SERVER_PROTOCOL;
-  setupUsername.value = config?.username || "";
-  setupPassword.value = "";
-  authMode.value = "login";
-  serverFieldError.value = "";
-  usernameFieldError.value = "";
-  passwordFieldError.value = "";
-}
-
-function validateServerField(): string | undefined {
-  try {
-    const normalized = normalizeServerAddress(setupServerAddress.value);
-    setupServerAddress.value = normalized;
-    serverFieldError.value = "";
-    return normalized;
-  } catch (error) {
-    serverFieldError.value = error instanceof Error ? error.message : String(error);
-    return undefined;
-  }
-}
-
-function validateUsernameField(): boolean {
-  usernameFieldError.value = /^[a-zA-Z0-9_.-]{3,32}$/.test(setupUsername.value.trim())
-    ? ""
-    : "账号需为 3-32 位字母、数字或 _.-";
-  return !usernameFieldError.value;
-}
-
-function validatePasswordField(): boolean {
-  const length = setupPassword.value.length;
-  passwordFieldError.value = length >= 6 && length <= 128 ? "" : "密码长度需为 6-128 位";
-  return !passwordFieldError.value;
-}
-
-function switchAuthMode(mode: AuthMode): void {
-  authMode.value = mode;
-  setupError.value = "";
-  usernameFieldError.value = "";
-  passwordFieldError.value = "";
-}
-
 function closeSetup(): void {
   if (testingConnection.value || !hasSavedSyncConfig.value) return;
   setupVisible.value = false;
@@ -688,13 +634,13 @@ function closeSetup(): void {
   void nextTick(focusSearch);
 }
 
-async function useLocalMode(): Promise<void> {
+async function useLocalMode(draft: SetupDraft): Promise<void> {
   if (testingConnection.value) return;
   const config: SyncConfig = {
     enabled: false,
-    serverAddress: setupServerAddress.value.trim() || DEFAULT_SERVER_ADDRESS,
-    serverProtocol: setupServerProtocol.value,
-    username: setupUsername.value.trim(),
+    serverAddress: draft.serverAddress,
+    serverProtocol: draft.serverProtocol,
+    username: draft.username,
     sessionToken: activeSyncConfig?.sessionToken ?? "",
     autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? 10,
     autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? true,
@@ -718,13 +664,9 @@ async function useLocalMode(): Promise<void> {
   }
 }
 
-async function connectAndSave(): Promise<void> {
+async function connectAndSave(draft: SetupDraft): Promise<void> {
   setupError.value = "";
-  const serverAddress = validateServerField();
-  const usernameValid = validateUsernameField();
-  const passwordValid = validatePasswordField();
-  if (!serverAddress || !usernameValid || !passwordValid) return;
-  const username = setupUsername.value.trim();
+  const { serverAddress, username, password, serverProtocol } = draft;
 
   testingConnection.value = true;
   let accountCreated = false;
@@ -733,18 +675,18 @@ async function connectAndSave(): Promise<void> {
     const session = await authenticateAccount(
       serverAddress,
       username,
-      setupPassword.value,
-      authMode.value,
-      setupServerProtocol.value,
+      password,
+      draft.authMode,
+      serverProtocol,
       device.id,
     );
-    accountCreated = authMode.value === "register";
-    const { webSocketUrl } = getServerUrls(serverAddress, setupServerProtocol.value);
+    accountCreated = draft.authMode === "register";
+    const { webSocketUrl } = getServerUrls(serverAddress, serverProtocol);
     await testSyncConnection(webSocketUrl, session.sessionToken, device);
     const config: SyncConfig = {
       enabled: true,
       serverAddress,
-      serverProtocol: setupServerProtocol.value,
+      serverProtocol,
       username: session.user.username,
       sessionToken: session.sessionToken,
       autoUploadLimitMb: 10,
@@ -754,10 +696,6 @@ async function connectAndSave(): Promise<void> {
     activeSyncConfig = config;
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
-    setupServerAddress.value = serverAddress;
-    setupServerProtocol.value = config.serverProtocol;
-    setupUsername.value = session.user.username;
-    setupPassword.value = "";
     setupVisible.value = false;
     await refreshEntries();
     await startSync(config);
@@ -766,7 +704,7 @@ async function connectAndSave(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (accountCreated) {
-      authMode.value = "login";
+      setupWizard.value?.setAuthMode("login");
       setupError.value = `账号已创建，但同步连接失败：${message}。请重新登录`;
     } else {
       setupError.value = message;
@@ -1019,10 +957,12 @@ async function startSync(config: SyncConfig): Promise<void> {
         const expiredConfig = { ...config, sessionToken: "" };
         activeSyncConfig = expiredConfig;
         currentUsername.value = expiredConfig.username;
-        if (!alreadyRelogging) setSetupFields(expiredConfig);
         setupError.value = message;
         setupVisible.value = true;
-        if (!alreadyRelogging) void persistSyncConfig(expiredConfig);
+        if (!alreadyRelogging) {
+          void persistSyncConfig(expiredConfig);
+          void nextTick(() => setupWizard.value?.setFields(expiredConfig));
+        }
       },
     },
     config.autoUploadLimitMb * 1024 * 1024,
@@ -1183,7 +1123,6 @@ onMounted(async () => {
     syncEnabled.value = config.enabled;
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
-    setSetupFields(config);
     if (config.enabled && (!config.username || !config.sessionToken)) setupVisible.value = true;
   }
   initializing.value = false;
@@ -1197,7 +1136,8 @@ onMounted(async () => {
 
   if (setupVisible.value) {
     await nextTick();
-    serverInput.value?.focus();
+    setupWizard.value?.setFields(config ?? undefined);
+    setupWizard.value?.focusServerInput();
   } else if (config?.enabled && config.username && config.sessionToken) {
     try {
       await startSync(config);
@@ -1238,114 +1178,16 @@ onBeforeUnmount(() => {
   </main>
 
   <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
-    <button
-      v-if="hasSavedSyncConfig"
-      class="icon-button setup-back-button"
-      type="button"
-      title="返回剪贴板历史"
-      aria-label="返回剪贴板历史"
-      :disabled="testingConnection"
-      @click="closeSetup"
-    >
-      <ArrowLeft :size="17" aria-hidden="true" />
-    </button>
-
-    <section class="setup-content">
-      <div class="setup-intro">
-        <span class="setup-icon" aria-hidden="true"><Server :size="24" /></span>
-        <span class="setup-eyebrow">{{ hasSavedSyncConfig ? "重新登录" : "首次设置" }}</span>
-        <h1>{{ authMode === "login" ? "登录同步服务器" : "创建同步账号" }}</h1>
-        <p>每个账号拥有独立的剪贴板内容和设备列表。</p>
-      </div>
-
-      <form class="setup-form" @submit.prevent="connectAndSave">
-        <div class="auth-mode-switch" aria-label="账号操作">
-          <button type="button" :class="{ active: authMode === 'login' }" :aria-pressed="authMode === 'login'" @click="switchAuthMode('login')">登录</button>
-          <button type="button" :class="{ active: authMode === 'register' }" :aria-pressed="authMode === 'register'" @click="switchAuthMode('register')">注册</button>
-        </div>
-
-        <div class="server-connection-fields">
-          <div class="server-address-field">
-            <label for="server-address">服务器地址</label>
-            <input
-              id="server-address"
-              ref="serverInput"
-              v-model="setupServerAddress"
-              type="text"
-              inputmode="text"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="192.168.1.20:4810"
-              :disabled="testingConnection"
-              :aria-invalid="Boolean(serverFieldError)"
-              :aria-describedby="serverFieldError ? 'server-address-error' : 'server-connection-hint'"
-              @blur="validateServerField"
-            />
-          </div>
-          <div class="server-protocol-field">
-            <label for="server-protocol">协议</label>
-            <select id="server-protocol" v-model="setupServerProtocol" :disabled="testingConnection" aria-describedby="server-connection-hint">
-              <option value="http">HTTP</option>
-              <option value="https">HTTPS</option>
-            </select>
-          </div>
-        </div>
-        <span v-if="serverFieldError" id="server-address-error" class="field-error">{{ serverFieldError }}</span>
-        <span v-else id="server-connection-hint" class="field-hint">
-          {{ setupServerProtocol === "https"
-            ? "HTTPS + WSS：服务端需要配置可信 TLS 证书。"
-            : "HTTP + WS 未加密，仅应在受信任的网络中使用。" }}
-        </span>
-
-        <label for="account-username">账号</label>
-        <input
-          id="account-username"
-          v-model="setupUsername"
-          type="text"
-          autocomplete="username"
-          spellcheck="false"
-          placeholder="请输入账号"
-          :disabled="testingConnection"
-          :aria-invalid="Boolean(usernameFieldError)"
-          :aria-describedby="usernameFieldError ? 'account-username-error' : undefined"
-          @blur="validateUsernameField"
-        />
-        <span v-if="usernameFieldError" id="account-username-error" class="field-error">{{ usernameFieldError }}</span>
-
-        <label for="account-password">密码</label>
-        <input
-          id="account-password"
-          ref="accountPasswordInput"
-          v-model="setupPassword"
-          type="password"
-          :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'"
-          placeholder="请输入密码"
-          :disabled="testingConnection"
-          :aria-invalid="Boolean(passwordFieldError)"
-          :aria-describedby="passwordFieldError ? 'account-password-error' : 'account-password-hint'"
-          @blur="validatePasswordField"
-        />
-        <span v-if="passwordFieldError" id="account-password-error" class="field-error">{{ passwordFieldError }}</span>
-        <span v-else id="account-password-hint" class="field-hint">密码长度至少 6 位</span>
-
-        <p v-if="setupError" class="setup-error" role="alert">{{ setupError }}</p>
-
-        <button class="primary-button" type="submit" :disabled="testingConnection">
-          <LoaderCircle v-if="testingConnection" :size="17" class="spin" aria-hidden="true" />
-          <ShieldCheck v-else :size="17" aria-hidden="true" />
-          {{ testingConnection
-            ? (authMode === "login" ? "正在登录…" : "正在创建账号…")
-            : (authMode === "login" ? "登录并连接" : "创建账号并连接") }}
-        </button>
-        <button class="secondary-button" type="button" :disabled="testingConnection" @click="useLocalMode">
-          暂时仅使用本地剪贴板
-        </button>
-      </form>
-    </section>
-
-    <footer class="setup-footer">
-      当前设备仅保存登录会话，不保存账号密码
-    </footer>
+    <SetupWizard
+      ref="setupWizard"
+      :has-saved-sync-config="hasSavedSyncConfig"
+      :busy="testingConnection"
+      :error="setupError"
+      @submit="connectAndSave"
+      @local="useLocalMode"
+      @close="closeSetup"
+      @reset-error="setupError = ''"
+    />
   </main>
 
   <main v-else class="app-shell" :class="{ 'paste-app': isPasteWindow, 'mobile-app': isMobile }">
