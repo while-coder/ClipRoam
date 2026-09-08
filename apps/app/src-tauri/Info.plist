@@ -10,5 +10,9 @@
       <key>NSAllowsArbitraryLoads</key>
       <true/>
     </dict>
+    <!-- iOS 14+ / macOS 15+ 访问局域网设备需要本地网络权限，
+         没有这个声明的话直连 http://192.168.x.x:port 会静默失败。 -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>ClipRoam 需要访问本地网络以连接你的剪贴板同步服务器。</string>
   </dict>
 </plist>
