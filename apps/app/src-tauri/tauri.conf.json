@@ -23,7 +23,7 @@
         "center": true,
         "alwaysOnTop": false,
         "skipTaskbar": false,
-        "decorations": false
+        "decorations": true
       },
       {
         "label": "paste",
@@ -41,7 +41,7 @@
         "decorations": false
       },
       {
-        "label": "feedback",
+        "label": "toast",
         "create": false,
         "title": "ClipRoam",
         "width": 380,

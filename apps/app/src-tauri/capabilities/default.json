@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Least-privilege capability for the ClipRoam main, quick-paste, and feedback windows",
-  "windows": ["main", "paste", "feedback"],
+  "description": "Least-privilege capability for the ClipRoam main, quick-paste, and toast windows",
+  "windows": ["main", "paste", "toast"],
   "platforms": ["windows", "macOS", "linux"],
   "permissions": [
     "core:default",

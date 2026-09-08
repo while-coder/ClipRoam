@@ -92,7 +92,7 @@ struct PlatformCapabilities {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FeedbackPayload {
+struct ToastPayload {
     message: String,
     tone: String,
 }
@@ -466,6 +466,12 @@ fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
         entries.insert(0, entry.clone());
         trim_history(entries);
         save_active_history(&state, &history)?;
+        if let Err(error) = store::enqueue_pending_entry(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            &entry.id,
+        ) {
+            eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+        }
         entry
     };
     // Text has no contents to hash, so it is publishable the moment it lands —
@@ -595,6 +601,12 @@ fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
         trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
         save_active_history(&state, &history)?;
+        if let Err(error) = store::enqueue_pending_entry(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            &entry_id,
+        ) {
+            eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+        }
         history
             .find(&entry_id)
             .map(lightweight_entry)
@@ -828,6 +840,12 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
     let Some(final_entry_id) = apply_hashes(app, &current_entry_id, &batch, true)? else {
         return Ok(());
     };
+    if let Err(error) = store::enqueue_pending_entry(
+        &history_path_for_key(&state.histories_dir, &history_key),
+        &final_entry_id,
+    ) {
+        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+    }
     app.emit("cliproam://entry-ready", final_entry_id)
         .map_err(|error| error.to_string())
 }
@@ -1423,6 +1441,11 @@ fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) ->
             history.pending_entry_updates.remove(&entry_id);
         }
         save_active_history(&state, &history)?;
+        // A queued upload of a deleted entry must never reach the server.
+        let _ = store::remove_pending_entries(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            &[entry_id.clone()],
+        );
         // Dropping references is what frees disk space, so the sweep runs here.
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
@@ -1441,11 +1464,15 @@ fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
         history.active_entries_mut().retain(|entry| entry.pinned);
-        for entry_id in deleted {
+        for entry_id in &deleted {
             history.pending_deletions.insert(entry_id.clone());
-            history.pending_entry_updates.remove(&entry_id);
+            history.pending_entry_updates.remove(entry_id);
         }
         save_active_history(&state, &history)?;
+        let _ = store::remove_pending_entries(
+            &history_path_for_key(&state.histories_dir, &history.active_history),
+            &deleted,
+        );
         let _ = collect_local_garbage(&state.histories_dir, &mut history);
     }
     app.emit("cliproam://history-changed", ())
@@ -1496,6 +1523,25 @@ fn acknowledge_entry_update(state: State<'_, AppState>, entry_id: String) -> Res
     if history.pending_entry_updates.remove(&entry_id) {
         save_active_history(&state, &history)?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    store::list_pending_entry_ids(&history_path_for_key(
+        &state.histories_dir,
+        &history.active_history,
+    ))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn acknowledge_pending_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    store::acknowledge_pending_entry(
+        &history_path_for_key(&state.histories_dir, &history.active_history),
+        &entry_id,
+    )?;
     Ok(())
 }
 
@@ -1590,12 +1636,12 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn show_feedback(app: AppHandle, message: String, tone: String) -> Result<(), String> {
+fn show_toast(app: AppHandle, message: String, tone: String) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Ok(());
     }
-    let payload = FeedbackPayload {
+    let payload = ToastPayload {
         message: message.to_string(),
         tone: match tone.as_str() {
             "success" | "error" | "info" => tone,
@@ -1609,38 +1655,38 @@ fn show_feedback(app: AppHandle, message: String, tone: String) -> Result<(), St
         main.is_visible().unwrap_or(false) && !main.is_minimized().unwrap_or(false);
     if main_is_visible {
         return main
-            .emit("cliproam://feedback", payload)
+            .emit("cliproam://toast", payload)
             .map_err(|error| error.to_string());
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
         let window = app
-            .get_webview_window("feedback")
-            .ok_or_else(|| "feedback window is unavailable".to_string())?;
-        position_feedback_window(&app, &window)?;
+            .get_webview_window("toast")
+            .ok_or_else(|| "toast window is unavailable".to_string())?;
+        position_toast_window(&app, &window)?;
         window
-            .emit("cliproam://feedback", payload)
+            .emit("cliproam://toast", payload)
             .map_err(|error| error.to_string())?;
         window.show().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    main.emit("cliproam://feedback", payload)
+    main.emit("cliproam://toast", payload)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn hide_feedback(app: AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("feedback") else {
+fn hide_toast(app: AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("toast") else {
         return Ok(());
     };
     window.hide().map_err(|error| error.to_string())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn position_feedback_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
+fn position_toast_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
     let window_size = window.outer_size().map_err(|error| error.to_string())?;
     let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
     let tray_rect = app
@@ -1669,7 +1715,7 @@ fn position_feedback_window(app: &AppHandle, window: &tauri::WebviewWindow) -> R
         (position, size, monitor)
     } else {
         // Linux tray implementations do not expose icon bounds. Anchor the
-        // feedback to the primary work area's bottom-right corner instead.
+        // toast to the primary work area's bottom-right corner instead.
         let monitor = window
             .primary_monitor()
             .map_err(|error| error.to_string())?
@@ -1685,7 +1731,7 @@ fn position_feedback_window(app: &AppHandle, window: &tauri::WebviewWindow) -> R
         )
     };
     let work_area = monitor.work_area();
-    let position = calculate_feedback_position(
+    let position = calculate_toast_position(
         tray_position.x,
         tray_position.y,
         tray_size.width,
@@ -1704,7 +1750,7 @@ fn position_feedback_window(app: &AppHandle, window: &tauri::WebviewWindow) -> R
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 #[allow(clippy::too_many_arguments)]
-fn calculate_feedback_position(
+fn calculate_toast_position(
     tray_x: i32,
     tray_y: i32,
     tray_width: u32,
@@ -1820,35 +1866,6 @@ fn hide_main(app: AppHandle) -> Result<(), String> {
         .ok_or_else(|| "main window is unavailable".to_string())?
         .hide()
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.minimize().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn minimize_window(_window: tauri::WebviewWindow) -> Result<(), String> {
-    Err("移动端不支持最小化窗口".to_string())
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-fn toggle_window_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
-    if window.is_maximized().map_err(|error| error.to_string())? {
-        window.unmaximize()
-    } else {
-        window.maximize()
-    }
-    .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn toggle_window_maximize(_window: tauri::WebviewWindow) -> Result<(), String> {
-    Err("移动端不支持最大化窗口".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -2759,7 +2776,7 @@ pub fn run() {
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             {
                 setup_tray(app.handle())?;
-                if let Some(window) = app.get_webview_window("feedback") {
+                if let Some(window) = app.get_webview_window("toast") {
                     let _ = window.set_ignore_cursor_events(true);
                 }
             }
@@ -2858,14 +2875,14 @@ pub fn run() {
             list_pending_entry_updates,
             acknowledge_entry_deletion,
             acknowledge_entry_update,
+            list_pending_entries,
+            acknowledge_pending_entry,
             open_paste,
             start_window_drag,
-            minimize_window,
-            toggle_window_maximize,
             hide_paste,
             hide_main,
-            show_feedback,
-            hide_feedback,
+            show_toast,
+            hide_toast,
             refresh_entry,
             prepare_entry_files,
             prepare_paste_entry,
@@ -2998,18 +3015,18 @@ mod tests {
     }
 
     #[test]
-    fn feedback_appears_above_a_bottom_tray() {
+    fn toast_appears_above_a_bottom_tray() {
         let position =
-            calculate_feedback_position(1850, 1040, 32, 32, 0, 0, 1920, 1040, 380, 88);
+            calculate_toast_position(1850, 1040, 32, 32, 0, 0, 1920, 1040, 380, 88);
         assert_eq!(position.y, 944);
         assert!(position.x >= 8);
         assert!(position.x + 380 <= 1912);
     }
 
     #[test]
-    fn feedback_appears_beside_a_right_tray() {
+    fn toast_appears_beside_a_right_tray() {
         let position =
-            calculate_feedback_position(1920, 850, 40, 32, 0, 0, 1920, 1080, 380, 88);
+            calculate_toast_position(1920, 850, 40, 32, 0, 0, 1920, 1080, 380, 88);
         assert_eq!(position.x, 1532);
         assert!(position.y >= 8);
         assert!(position.y + 88 <= 1072);
