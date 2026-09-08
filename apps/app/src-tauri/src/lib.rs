@@ -213,7 +213,6 @@ pub fn run() {
             sync::queue::acknowledge_entry_deletion,
             sync::queue::list_pending_entries,
             sync::queue::acknowledge_pending_entry,
-            windows::open_paste,
             windows::start_window_drag,
             windows::hide_paste,
             windows::hide_main,
