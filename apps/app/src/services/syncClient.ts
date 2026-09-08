@@ -7,6 +7,7 @@ import {
   EntryManifestResponseSchema,
   DeviceListResponseSchema,
   EntryPublishResponseSchema,
+  type EntryPublishInput,
   EntryQueryResponseSchema,
   FileQueryResponseSchema,
   ServerMessageSchema,
@@ -39,12 +40,26 @@ type UploadCandidate = { fileId: string; size: number; uploaded: boolean };
 /** The file-shape fields a download or upload transfer needs. */
 type FileReference = { fileId: string; size: number };
 
+/** One row of the Rust-side durable capture queue, with the local entry state the publish flow needs. */
+type PendingQueueRow = {
+  seq: number;
+  kind: ClipboardEntry["kind"];
+  content: string;
+  extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
+  createdAt: string;
+  localId: string;
+  exists: boolean;
+  ready: boolean;
+};
+
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const DOWNLOAD_RETRY_MS = 3_000;
 const SERVE_RETRY_BACKOFF_MS = 60_000;
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
+const QUEUE_FAILURE_BACKOFF_MS = 60_000;
+const QUEUE_FAILURE_LIMIT = 3;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -216,6 +231,9 @@ export class SyncClient {
   #servingFiles = new Set<string>();
   #failedServes = new Map<string, number>();
   #entryUploads = new Map<string, Promise<void>>();
+  #drainRunning = false;
+  #drainAgain = false;
+  #queueFailures = new Map<number, { at: number; count: number }>();
 
   constructor(
     private readonly httpUrl: string,
@@ -252,7 +270,7 @@ export class SyncClient {
   // abort controllers.
 
   // Every write returns the server's stored entry: its id and timestamp are
-  // server-assigned, and the caller must adopt them into local state.
+  // server-assigned, and the caller must adopt it into local state.
 
   async publish(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // Publish the metadata first. Other devices can then retrieve the original
@@ -267,29 +285,6 @@ export class SyncClient {
     return this.#publishEntry(entry);
   }
 
-  async restore(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    // A snapshot can show that the server no longer has this entry. The HTTP
-    // response confirms the write directly, so the socket echo-wait becomes a
-    // bounded retry around an ordinary publish.
-    const stored = await this.#publishWithRetry(entry);
-    await this.#uploadEntry(entry, this.autoUploadLimit, false, true);
-    return stored;
-  }
-
-  // A reconcile pass must not spin while the server is unreachable, so each
-  // failed attempt backs off like the upload retry loop does.
-  async #publishWithRetry(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    for (let attempt = 0; attempt < 3 && !this.#stopped; attempt++) {
-      try {
-        return await this.#publishEntry(entry);
-      } catch (error) {
-        if (!this.#isRecoverableUploadError(error)) throw error;
-        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-      }
-    }
-    return this.#publishEntry(entry);
-  }
-
   async upload(entry: ClipboardEntry): Promise<ClipboardEntry> {
     // A manual upload can be the first time the server learns about this entry.
     // Without the reference, garbage collection would reclaim the contents that
@@ -297,6 +292,120 @@ export class SyncClient {
     const stored = await this.#publishEntry(entry);
     await this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, true);
     return stored;
+  }
+
+  // The durable capture queue is the single replay mechanism: captures land
+  // there with their full payload, and this drain publishes them strictly in
+  // insertion order. Concurrent calls collapse into the running pass.
+  drainQueue(): void {
+    if (this.#stopped) return;
+    if (this.#drainRunning) {
+      this.#drainAgain = true;
+      return;
+    }
+    this.#drainRunning = true;
+    void this.#runDrain()
+      .catch((error: unknown) => {
+        if (!this.#stopped) {
+          this.handlers.onError(`同步剪贴板记录失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      })
+      .finally(() => {
+        this.#drainRunning = false;
+        if (this.#drainAgain && !this.#stopped) {
+          this.#drainAgain = false;
+          this.drainQueue();
+        }
+      });
+  }
+
+  // One pass over the queue, head to tail. The pass ends (without error) at
+  // the first row that cannot proceed right now — not-ready payload, a recent
+  // failure backoff, a lost connection — and a later trigger restarts it.
+  async #runDrain(): Promise<void> {
+    while (!this.#stopped) {
+      const rows = await invoke<PendingQueueRow[]>("list_pending_entries");
+      if (!rows.length) return;
+      let blocked = false;
+      for (const row of rows) {
+        if (this.#stopped) return;
+        if (!row.exists) {
+          // The entry was already adopted, evicted or deleted, so the publish
+          // outcome is decided; only the queue row itself is left to clean up.
+          await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
+          continue;
+        }
+        if (!row.ready) {
+          // Strict insertion order: a files entry still hashing blocks the
+          // whole tail; `entry-ready` restarts the pass when it resolves.
+          blocked = true;
+          break;
+        }
+        const failure = this.#queueFailures.get(row.seq);
+        if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) {
+          blocked = true;
+          break;
+        }
+        try {
+          await this.#publishQueueRow(row);
+          this.#queueFailures.delete(row.seq);
+        } catch (error) {
+          if (this.#isRecoverableUploadError(error)) {
+            // Bounded wait for the socket, then end the pass — the row keeps
+            // its place in line for the next trigger.
+            await this.#waitForConnection().catch(() => undefined);
+            return;
+          }
+          const attempts = (failure?.count ?? 0) + 1;
+          if (attempts >= QUEUE_FAILURE_LIMIT) {
+            // Give up on the row (the entry stays local) instead of blocking
+            // the whole queue behind it forever.
+            this.#queueFailures.delete(row.seq);
+            await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
+            this.handlers.onError(
+              `剪贴板记录同步失败，已跳过：${error instanceof Error ? error.message : String(error)}`,
+            );
+            continue;
+          }
+          this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) return;
+    }
+  }
+
+  // Publishes one queue row: metadata first, then contents under the local id,
+  // then the server's id is adopted (or the just-created server row deleted if
+  // the entry vanished mid-publish), then the broadcast activation.
+  async #publishQueueRow(row: PendingQueueRow): Promise<void> {
+    const payload: EntryPublishInput = {
+      kind: row.kind,
+      content: row.content,
+      html: row.extra.html ?? undefined,
+      rtf: row.extra.rtf ?? undefined,
+      fileInfo: row.extra.fileInfo ?? undefined,
+      imageInfo: row.extra.imageInfo ?? undefined,
+      sourceDeviceId: this.device.id,
+      pinned: false,
+    };
+    const stored = await this.#publishEntry(payload);
+    // The upload commands still address the local entry, which keeps its
+    // temporary id until `apply_published_entry` swaps it.
+    await this.#uploadEntry({ ...payload, id: row.localId } as ClipboardEntry, this.autoUploadLimit, false);
+    const adopted = await invoke<boolean>("apply_published_entry", {
+      localEntryId: row.localId,
+      entry: stored,
+    });
+    if (!adopted) {
+      // The entry was deleted while the publish was in flight.
+      await this.delete(stored.id).catch(() => undefined);
+    }
+    else if (stored.kind !== "files") {
+      await this.activate(stored.id).catch(() => undefined);
+    }
+    await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
   }
 
   async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
@@ -390,22 +499,13 @@ export class SyncClient {
     }
   }
 
-  // The HTTP response is the confirmation the socket echo used to be.
-  async #publishEntry(entry: ClipboardEntry): Promise<ClipboardEntry> {
+  // The HTTP response is the confirmation the socket echo used to be. The
+  // queue-row payload carries no id and no createdAt: identity and timestamp
+  // belong to the server, which dedupes by content either way.
+  async #publishEntry(entry: EntryPublishInput): Promise<ClipboardEntry> {
     const request: EntryPublishRequest = {
       deviceId: this.device.id,
-      entry: {
-        id: entry.id,
-        kind: entry.kind,
-        content: entry.content,
-        html: entry.html,
-        rtf: entry.rtf,
-        fileInfo: entry.fileInfo,
-        imageInfo: entry.imageInfo,
-        sourceDeviceId: entry.sourceDeviceId,
-        createdAt: entry.createdAt,
-        pinned: entry.pinned,
-      },
+      entry,
     };
     const response = await this.#httpFetch("POST", "/entries", {
       headers: { "Content-Type": "application/json" },

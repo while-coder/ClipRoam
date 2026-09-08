@@ -142,48 +142,70 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
+    // The durable upload queue carries the full capture payload, so the sync
+    // client can publish straight from it without re-reading `entries`.
+    // Databases written by older builds queued `(seq, entry_id, queued_at)`
+    // references instead; that data is not migrated — the table is recreated.
+    let recreate_pending_entries = {
+        let mut statement = connection
+            .prepare("SELECT name FROM pragma_table_info('pending_entries')")
+            .map_err(|error| error.to_string())?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        !names.iter().any(|name| name == "content")
+    };
+    let mut schema = String::new();
+    if recreate_pending_entries {
+        schema.push_str("DROP TABLE IF EXISTS pending_entries;\n");
+    }
+    schema.push_str(
+        "
+        CREATE TABLE IF NOT EXISTS pending_entries (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            extra TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS entries (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            extra TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            pinned INTEGER NOT NULL,
+            source_device_id TEXT NOT NULL,
+            source_app TEXT NOT NULL DEFAULT '',
+            sources TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
+        CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
+        CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
+        CREATE TABLE IF NOT EXISTS files (
+            file_id TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            available INTEGER NOT NULL DEFAULT 0,
+            cached INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS hash_cache (
+            source TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            modified_at INTEGER NOT NULL,
+            hash TEXT NOT NULL,
+            PRIMARY KEY (source, size, modified_at)
+        );
+        ",
+    );
     connection
-        .execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS entries (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                content TEXT NOT NULL,
-                extra TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                pinned INTEGER NOT NULL,
-                source_device_id TEXT NOT NULL,
-                source_app TEXT NOT NULL DEFAULT '',
-                sources TEXT NOT NULL DEFAULT '{}'
-            );
-            CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
-            CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
-            CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
-            CREATE TABLE IF NOT EXISTS files (
-                file_id TEXT PRIMARY KEY,
-                size INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                available INTEGER NOT NULL DEFAULT 0,
-                cached INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS hash_cache (
-                source TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                modified_at INTEGER NOT NULL,
-                hash TEXT NOT NULL,
-                PRIMARY KEY (source, size, modified_at)
-            );
-            CREATE TABLE IF NOT EXISTS pending_entries (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                entry_id TEXT NOT NULL UNIQUE,
-                queued_at TEXT NOT NULL
-            );
-            ",
-        )
+        .execute_batch(&schema)
         .map_err(|error| error.to_string())?;
     Ok(connection)
 }
@@ -385,6 +407,17 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
+    // Every path that removes or re-keys an entry goes through this save: the
+    // publish swap, trim eviction, content dedup and deletions all drop the
+    // queue row that no longer has a matching temporary-id entry. This runs
+    // after the rows above are written, so freshly captured entries keep
+    // theirs.
+    transaction
+        .execute(
+            "DELETE FROM pending_entries WHERE 'p' || seq NOT IN (SELECT id FROM entries)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
     for (key, value) in [
         ("last_clipboard", history.last_clipboard.as_str()),
         ("last_file_signature", history.last_file_signature.as_str()),
@@ -462,59 +495,123 @@ pub fn register_cached_file(
     Ok(())
 }
 
-/// Durable upload queue. Rows are appended in capture order and removed only
-/// after the server confirmed the publish, so an offline capture replays in
-/// order on the next connection.
-pub fn enqueue_pending_entry(database_path: &Path, entry_id: &str) -> Result<(), String> {
+/// Temporary, pre-publish entry identity. The server assigns the real id on
+/// first publish and `apply_published_entry` swaps it in, so this only has to
+/// stay stable until then. The `p` prefix keeps it from colliding with the
+/// server's numeric ids.
+pub fn temp_entry_id(seq: i64) -> String {
+    format!("p{seq}")
+}
+
+/// Parses a temporary id back into its queue row seq.
+pub fn temp_entry_seq(id: &str) -> Option<i64> {
+    id.strip_prefix('p')?.parse::<i64>().ok().filter(|seq| *seq > 0)
+}
+
+/// One durable upload-queue row: the full capture payload.
+#[derive(Debug)]
+pub struct PendingQueueRow {
+    pub seq: i64,
+    pub kind: String,
+    pub content: String,
+    pub extra: String,
+    pub created_at: String,
+}
+
+/// Durable upload queue. Rows are appended in capture order with the complete
+/// entry payload, and removed by the `save_history` sweep (publish swap,
+/// eviction, deletion) or an explicit acknowledge, so an offline capture
+/// replays in order on the next connection.
+pub fn enqueue_pending_entry(
+    database_path: &Path,
+    kind: &str,
+    content: &str,
+    extra: &str,
+    created_at: &str,
+) -> Result<i64, String> {
     let connection = open_history_database(database_path)?;
     connection
         .execute(
-            "INSERT OR IGNORE INTO pending_entries (entry_id, queued_at) VALUES (?, ?)",
-            params![entry_id, now_rfc3339()],
+            "INSERT INTO pending_entries (kind, content, extra, created_at) VALUES (?, ?, ?, ?)",
+            params![kind, content, extra, created_at],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(connection.last_insert_rowid())
+}
+
+/// Recreates the queue row an existing temporary-id entry should have, for the
+/// rare case where the entry survived but its row did not. A row already
+/// occupying the seq is kept.
+pub fn ensure_pending_entry(
+    database_path: &Path,
+    seq: i64,
+    kind: &str,
+    content: &str,
+    extra: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    let connection = open_history_database(database_path)?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)",
+            params![seq, kind, content, extra, created_at],
         )
         .map_err(|error| error.to_string())?;
     Ok(())
 }
 
-pub fn list_pending_entry_ids(database_path: &Path) -> Result<Vec<String>, String> {
+/// Folds updated payload (resolved content ids after hashing) back into the
+/// queue row, recreating it if the sweep removed it in the meantime.
+pub fn update_pending_entry(
+    database_path: &Path,
+    seq: i64,
+    kind: &str,
+    content: &str,
+    extra: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    let connection = open_history_database(database_path)?;
+    connection
+        .execute(
+            "INSERT INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(seq) DO UPDATE SET kind = excluded.kind, content = excluded.content, extra = excluded.extra",
+            params![seq, kind, content, extra, created_at],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn list_pending_rows(database_path: &Path) -> Result<Vec<PendingQueueRow>, String> {
     let connection = open_history_database(database_path)?;
     let mut statement = connection
-        .prepare("SELECT entry_id FROM pending_entries ORDER BY seq ASC")
+        .prepare("SELECT seq, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
         .map_err(|error| error.to_string())?;
-    let ids = statement
-        .query_map([], |row| row.get::<_, String>(0))
+    let rows = statement
+        .query_map([], |row| {
+            Ok(PendingQueueRow {
+                seq: row.get("seq")?,
+                kind: row.get("kind")?,
+                content: row.get("content")?,
+                extra: row.get("extra")?,
+                created_at: row.get("created_at")?,
+            })
+        })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    Ok(ids)
+    Ok(rows)
 }
 
 /// Returns whether a row was actually removed.
-pub fn acknowledge_pending_entry(database_path: &Path, entry_id: &str) -> Result<bool, String> {
+pub fn acknowledge_pending_entry(database_path: &Path, seq: i64) -> Result<bool, String> {
     let connection = open_history_database(database_path)?;
     let changed = connection
         .execute(
-            "DELETE FROM pending_entries WHERE entry_id = ?",
-            params![entry_id],
+            "DELETE FROM pending_entries WHERE seq = ?",
+            params![seq],
         )
         .map_err(|error| error.to_string())?;
     Ok(changed > 0)
-}
-
-/// Drops queue rows for entries that no longer exist locally.
-pub fn remove_pending_entries(database_path: &Path, entry_ids: &[String]) -> Result<(), String> {
-    if entry_ids.is_empty() {
-        return Ok(());
-    }
-    let connection = open_history_database(database_path)?;
-    let placeholders = std::iter::repeat("?").take(entry_ids.len()).collect::<Vec<_>>().join(", ");
-    connection
-        .execute(
-            &format!("DELETE FROM pending_entries WHERE entry_id IN ({placeholders})"),
-            params_from_iter(entry_ids.iter()),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
@@ -761,24 +858,25 @@ mod tests {
     }
 
     #[test]
-    fn pending_entries_keep_capture_order() {
+    fn pending_entries_keep_capture_order_and_payload() {
         let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
         let path = directory.join("history.sqlite");
-        for entry_id in ["c", "b", "a"] {
-            enqueue_pending_entry(&path, entry_id).expect("enqueue entry");
+        let mut seqs = Vec::new();
+        for (kind, content) in [("text", "c"), ("text", "b"), ("image", "a")] {
+            seqs.push(
+                enqueue_pending_entry(&path, kind, content, "{}", "2026-01-01T00:00:00.000Z")
+                    .expect("enqueue entry"),
+            );
         }
-        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["c", "b", "a"]);
-        fs::remove_dir_all(&directory).expect("remove temporary database");
-    }
-
-    #[test]
-    fn pending_entries_deduplicate_by_entry_id() {
-        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
-        let path = directory.join("history.sqlite");
-        enqueue_pending_entry(&path, "a").expect("enqueue entry");
-        enqueue_pending_entry(&path, "b").expect("enqueue entry");
-        enqueue_pending_entry(&path, "a").expect("enqueue entry again");
-        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["a", "b"]);
+        let rows = list_pending_rows(&path).expect("list pending");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].seq, seqs[0]);
+        assert_eq!(rows[2].seq, seqs[2]);
+        assert_eq!(rows[0].content, "c");
+        assert_eq!(rows[2].kind, "image");
+        assert_eq!(temp_entry_id(seqs[1]), format!("p{}", seqs[1]));
+        assert_eq!(temp_entry_seq(&format!("p{}", seqs[1])), Some(seqs[1]));
+        assert_eq!(temp_entry_seq(&seqs[1].to_string()), None);
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 
@@ -786,28 +884,110 @@ mod tests {
     fn acknowledging_removes_only_the_confirmed_row() {
         let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
         let path = directory.join("history.sqlite");
-        for entry_id in ["a", "b", "c"] {
-            enqueue_pending_entry(&path, entry_id).expect("enqueue entry");
+        let mut seqs = Vec::new();
+        for content in ["a", "b", "c"] {
+            seqs.push(
+                enqueue_pending_entry(&path, "text", content, "{}", "2026-01-01T00:00:00.000Z")
+                    .expect("enqueue entry"),
+            );
         }
-        assert!(acknowledge_pending_entry(&path, "b").expect("acknowledge entry"));
-        assert!(!acknowledge_pending_entry(&path, "missing").expect("acknowledge entry"));
-        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["a", "c"]);
+        assert!(acknowledge_pending_entry(&path, seqs[1]).expect("acknowledge entry"));
+        assert!(!acknowledge_pending_entry(&path, seqs[1] + 1_000).expect("acknowledge entry"));
+        let remaining = list_pending_rows(&path).expect("list pending");
+        assert_eq!(remaining.iter().map(|row| row.seq).collect::<Vec<_>>(), [seqs[0], seqs[2]]);
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 
     #[test]
-    fn save_history_leaves_the_upload_queue_untouched() {
+    fn save_history_keeps_queue_rows_for_surviving_entries_and_sweeps_the_rest() {
         let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
         let path = directory.join("history.sqlite");
-        enqueue_pending_entry(&path, "x").expect("enqueue entry");
-        let history = HistoryData {
+        let kept = enqueue_pending_entry(&path, "text", "kept", "{}", "2026-01-01T00:00:00.000Z")
+            .expect("enqueue entry");
+        let dropped = enqueue_pending_entry(&path, "text", "dropped", "{}", "2026-01-01T00:00:00.000Z")
+            .expect("enqueue entry");
+
+        // `kept` still has its temporary-id entry; `dropped` was evicted, so
+        // the sweep must remove its row while leaving the other untouched.
+        let mut history = HistoryData {
             active_history: LOCAL_HISTORY_KEY.to_string(),
             ..HistoryData::default()
         };
+        let entry = ClipboardEntry {
+            id: temp_entry_id(kept),
+            kind: "text".to_string(),
+            content: "kept".to_string(),
+            html: None,
+            rtf: None,
+            file_info: None,
+            image_info: None,
+            source_device_id: "device".to_string(),
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            pinned: false,
+            summary: Default::default(),
+            sources: crate::content::LocalSources::default(),
+        };
+        history.active_entries_mut().push(entry);
         save_history(&path, &history).expect("store history");
-        assert_eq!(list_pending_entry_ids(&path).expect("list pending"), ["x"]);
-        remove_pending_entries(&path, &["x".to_string()]).expect("remove pending entries");
-        assert!(list_pending_entry_ids(&path).expect("list pending").is_empty());
+        let rows = list_pending_rows(&path).expect("list pending");
+        assert_eq!(rows.iter().map(|row| row.seq).collect::<Vec<_>>(), [kept]);
+        assert!(rows[0].seq != dropped);
+
+        // Publishing swaps the entry id, which sweeps the queue row too.
+        history.active_entries_mut()[0].id = "42".to_string();
+        save_history(&path, &history).expect("store history again");
+        assert!(list_pending_rows(&path).expect("list pending").is_empty());
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn ensure_and_update_pending_entry_round_trip() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        let seq = enqueue_pending_entry(&path, "files", "bundle", r#"{"fileInfo":{}}"#, "2026-01-01T00:00:00.000Z")
+            .expect("enqueue entry");
+        // Recreating an existing row keeps the original.
+        ensure_pending_entry(&path, seq, "files", "bundle", r#"{"fileInfo":{}}"#, "2026-01-01T00:00:00.000Z")
+            .expect("ensure entry");
+        assert_eq!(list_pending_rows(&path).expect("list pending").len(), 1);
+        // Hashing folds the resolved content ids back into the row.
+        update_pending_entry(&path, seq, "files", "bundle", r#"{"fileInfo":{"a.txt":{"f":"aabb","s":1}}}"#, "2026-01-01T00:00:00.000Z")
+            .expect("update entry");
+        let rows = list_pending_rows(&path).expect("list pending");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].extra.contains("aabb"));
+        // A row the sweep already removed is recreated by the update.
+        acknowledge_pending_entry(&path, seq).expect("acknowledge entry");
+        update_pending_entry(&path, seq, "files", "bundle", r#"{}"#, "2026-01-01T00:00:00.000Z")
+            .expect("update entry again");
+        assert_eq!(list_pending_rows(&path).expect("list pending").len(), 1);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn legacy_pending_entries_table_is_recreated() {
+        let directory = std::env::temp_dir().join(format!("cliproam-pending-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        {
+            let connection = Connection::open(&path).expect("open database");
+            connection
+                .execute_batch(
+                    "CREATE TABLE pending_entries (
+                        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                        entry_id TEXT NOT NULL UNIQUE,
+                        queued_at TEXT NOT NULL
+                    );
+                    INSERT INTO pending_entries (entry_id, queued_at) VALUES ('dead', '2026-01-01T00:00:00.000Z');",
+                )
+                .expect("create legacy table");
+        }
+        open_history_database(&path).expect("migrate database");
+        assert!(list_pending_rows(&path).expect("list pending").is_empty());
+        // The new layout accepts captures and survives a reopen.
+        enqueue_pending_entry(&path, "text", "a", "{}", "2026-01-01T00:00:00.000Z").expect("enqueue entry");
+        drop(open_history_database(&path).expect("reopen database"));
+        assert_eq!(list_pending_rows(&path).expect("list pending").len(), 1);
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 }
