@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- 客户端支持直连用户任填的明文 HTTP 服务器（syncClient.ts 默认 http://ip:port），
+         macOS 的 ATS 默认拦截非 HTTPS 连接，这里整体放行，
+         与 Android 的 usesCleartextTraffic="true" 对应。 -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+      <key>NSAllowsArbitraryLoads</key>
+      <true/>
+    </dict>
+  </dict>
+</plist>
