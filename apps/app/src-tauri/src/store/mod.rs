@@ -2,13 +2,17 @@
 //!
 //! Entry metadata, trees and local sources share one row. General history saves
 //! patch only presentation fields, while capture, hashing and remote upsert
-//! explicitly replace the full entry data. Content availability and local-cache
-//! state live once in `files`, keyed by content hash.
+//! explicitly replace the full entry data. `files` tracks which content ids the
+//! server pool holds; local-cache state is derived from the blob directories on
+//! disk, which are the source of truth for it.
 
 mod cache;
 mod queue;
 
-pub use cache::{cached_hash, collect_local_garbage, mark_files_uploaded, register_cached_file, remember_hash};
+pub use cache::{
+    cached_hash, cached_source_for, collect_local_garbage, mark_files_uploaded, remember_hash,
+    scan_cached_blobs,
+};
 pub use queue::{
     acknowledge_pending_entry, enqueue_pending_entry, ensure_pending_entry, list_pending_rows,
     temp_entry_id, temp_entry_seq, update_pending_entry,
@@ -22,7 +26,7 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::content::{cached_file_path, refresh_summary, ClipboardEntry, ClipboardEntryExtra};
+use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
 
 pub const MAX_HISTORY_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
@@ -101,10 +105,7 @@ pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
 }
 
 pub fn cache_dir_for(histories_dir: &Path, key: &str) -> PathBuf {
-    history_path_for_key(histories_dir, key)
-        .parent()
-        .expect("history file always has a parent directory")
-        .join("files")
+    cache_dir_for_path(&history_path_for_key(histories_dir, key))
 }
 
 fn safe_history_directory_name(key: &str) -> String {
@@ -133,6 +134,18 @@ fn stable_key_hash(key: &str) -> u64 {
     })
 }
 
+fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(columns)
+}
+
 pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -145,36 +158,38 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     // client can publish straight from it without re-reading `entries`.
     // Databases written by older builds queued `(seq, entry_id, queued_at)`
     // references instead; that data is not migrated — the table is recreated.
-    let recreate_pending_entries = {
-        let mut statement = connection
-            .prepare("SELECT name FROM pragma_table_info('pending_entries')")
-            .map_err(|error| error.to_string())?;
-        let names = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        !names.iter().any(|name| name == "content")
-    };
-    // Pinning was removed: the column is dropped from databases written by
-    // older builds instead of being recreated.
-    let has_pinned = {
-        let mut statement = connection
-            .prepare("SELECT name FROM pragma_table_info('entries')")
-            .map_err(|error| error.to_string())?;
-        let names = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        names.iter().any(|name| name == "pinned")
-    };
+    let recreate_pending_entries = !table_columns(&connection, "pending_entries")?
+        .iter()
+        .any(|name| name == "content");
+    // Pinning, source_app and the files bookkeeping columns were removed:
+    // they are dropped from databases written by older builds instead of
+    // being recreated.
+    let entry_columns = table_columns(&connection, "entries")?;
+    let files_columns = table_columns(&connection, "files")?;
     let mut schema = String::new();
     if recreate_pending_entries {
         schema.push_str("DROP TABLE IF EXISTS pending_entries;\n");
     }
-    if has_pinned {
-        schema.push_str("ALTER TABLE entries DROP COLUMN pinned;\n");
+    // Dropping an indexed column fails, so the index goes first.
+    schema.push_str("DROP INDEX IF EXISTS entries_source_app_created_at;\n");
+    for column in ["pinned", "source_app"] {
+        if entry_columns.iter().any(|name| name == column) {
+            schema.push_str(&format!("ALTER TABLE entries DROP COLUMN {column};\n"));
+        }
+    }
+    if files_columns.iter().any(|name| name == "available") {
+        schema.push_str("ALTER TABLE files RENAME COLUMN available TO stored;\n");
+    }
+    for column in ["cached", "size"] {
+        if files_columns.iter().any(|name| name == column) {
+            schema.push_str(&format!("ALTER TABLE files DROP COLUMN {column};\n"));
+        }
+    }
+    // Rows that only carried the removed local-cache flag mean nothing now;
+    // every remaining row marks content the server pool holds. A fresh
+    // database has no files table until the schema below creates it.
+    if !files_columns.is_empty() {
+        schema.push_str("DELETE FROM files WHERE stored = 0;\n");
     }
     schema.push_str(
         "
@@ -196,18 +211,14 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             extra TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             source_device_id TEXT NOT NULL,
-            source_app TEXT NOT NULL DEFAULT '',
             sources TEXT NOT NULL DEFAULT '{}'
         );
         CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
         CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
-        CREATE INDEX IF NOT EXISTS entries_source_app_created_at ON entries(source_app, created_at DESC);
         CREATE TABLE IF NOT EXISTS files (
             file_id TEXT PRIMARY KEY,
-            size INTEGER NOT NULL,
             created_at TEXT NOT NULL,
-            available INTEGER NOT NULL DEFAULT 0,
-            cached INTEGER NOT NULL DEFAULT 0
+            stored INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS hash_cache (
             source TEXT NOT NULL,
@@ -276,33 +287,20 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         }
     }
 
+    // Every row marks content the server pool holds; the migration has
+    // already swept rows that only carried the old local-cache flag.
     let mut uploaded_files = HashSet::new();
-    let mut cached_files = HashSet::new();
-    if let Ok(mut statement) = connection.prepare("SELECT file_id, available, cached FROM files") {
-        if let Ok(rows) = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>("file_id")?,
-                row.get::<_, i64>("available")? != 0,
-                row.get::<_, i64>("cached")? != 0,
-            ))
-        }) {
-            for (file_id, available, cached) in rows.flatten() {
-                if available {
-                    uploaded_files.insert(file_id.clone());
-                }
-                if cached {
-                    cached_files.insert(file_id);
-                }
+    if let Ok(mut statement) = connection.prepare("SELECT file_id FROM files") {
+        if let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) {
+            for file_id in rows.flatten() {
+                uploaded_files.insert(file_id);
             }
         }
     }
 
     let cache_dir = cache_dir_for_path(path);
     history.uploaded_files = uploaded_files;
-    history.cached_files = cached_files
-        .into_iter()
-        .filter(|file_id| cached_file_path(&cache_dir, file_id).is_some())
-        .collect();
+    history.cached_files = scan_cached_blobs(&cache_dir);
     history.histories.insert(key.to_string(), entries);
     refresh_summaries(&mut history, &cache_dir);
     history
@@ -589,6 +587,66 @@ mod tests {
         history.active_entries_mut()[0].id = "42".to_string();
         save_history(&path, &history).expect("store history again");
         assert!(list_pending_rows(&path).expect("list pending").is_empty());
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn legacy_columns_are_migrated_on_open() {
+        let directory = std::env::temp_dir().join(format!("cliproam-migrate-test-{}", Uuid::new_v4()));
+        let path = directory.join("history.sqlite");
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        {
+            let connection = Connection::open(&path).expect("open database");
+            connection
+                .execute_batch(
+                    "CREATE TABLE entries (
+                        id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        extra TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        source_device_id TEXT NOT NULL,
+                        source_app TEXT NOT NULL DEFAULT '',
+                        sources TEXT NOT NULL DEFAULT '{}',
+                        pinned INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE INDEX entries_source_app_created_at ON entries(source_app, created_at DESC);
+                    CREATE TABLE files (
+                        file_id TEXT PRIMARY KEY,
+                        size INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        available INTEGER NOT NULL DEFAULT 0,
+                        cached INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO files (file_id, size, created_at, available, cached)
+                        VALUES ('a', 1, 'x', 1, 1), ('b', 2, 'x', 0, 1);",
+                )
+                .expect("create legacy tables");
+        }
+        open_history_database(&path).expect("migrate database");
+        {
+            let connection = Connection::open(&path).expect("reopen database");
+            let mut statement = connection
+                .prepare("SELECT name FROM pragma_table_info('entries') UNION ALL SELECT name FROM pragma_table_info('files')")
+                .expect("read columns");
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("query columns")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read columns");
+            assert!(!names
+                .iter()
+                .any(|name| name == "pinned" || name == "source_app" || name == "available" || name == "cached" || name == "size"));
+            // The uploaded mark survives; the local-cache-only row is swept.
+            let stored: i64 = connection
+                .query_row("SELECT stored FROM files WHERE file_id = 'a'", [], |row| row.get(0))
+                .expect("read stored flag");
+            assert_eq!(stored, 1);
+            assert!(connection
+                .query_row("SELECT COUNT(*) FROM files", [], |row| row.get::<_, i64>(0))
+                .map(|count| count == 1)
+                .unwrap_or(false));
+        }
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }
 

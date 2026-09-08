@@ -16,8 +16,8 @@ use crate::content::{
     upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
 use crate::store::{
-    enqueue_pending_entry, ensure_pending_entry, register_cached_file, refresh_entry_summary,
-    temp_entry_seq, trim_history, history_path_for_key,
+    enqueue_pending_entry, ensure_pending_entry, refresh_entry_summary, temp_entry_seq,
+    trim_history, history_path_for_key,
 };
 use crate::AppState;
 
@@ -341,11 +341,6 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         if !image_path.is_file() {
             fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
         }
-        register_cached_file(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            &file_id,
-            webp.len() as u64,
-        )?;
         history.cached_files.insert(file_id.clone());
         history.last_image_signature = signature;
         history.last_clipboard.clear();

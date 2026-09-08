@@ -14,6 +14,7 @@ use crate::clipboard::output::{
 };
 use crate::content::{local_source_was_lost, readable_path};
 use crate::history::entry_contents_of;
+use crate::store::{cached_source_for, history_path_for_key, open_history_database};
 use crate::{active_cache_dir, AppState};
 
 /// Largest chunk served per `read_file_chunk` call.
@@ -83,13 +84,22 @@ pub(crate) fn read_file_chunk(
             .find(&entry_id)
             .ok_or_else(|| "剪贴板记录不存在".to_string())?;
         let source_was_lost = local_source_was_lost(entry, &file_id);
-        let path = readable_path(&cache_dir, &history.cached_files, entry, &file_id).ok_or_else(|| {
-            if source_was_lost {
-                "复制的源文件已删除或移动".to_string()
-            } else {
-                "本机文件内容不可用".to_string()
-            }
-        })?;
+        let path = readable_path(&cache_dir, &history.cached_files, entry, &file_id)
+            .or_else(|| {
+                // Same fallback the paste snapshot uses: a file hashed here
+                // before can stand in for content that never landed locally.
+                let database_path =
+                    history_path_for_key(&state.histories_dir, &history.active_history);
+                let connection = open_history_database(&database_path).ok()?;
+                cached_source_for(&connection, &file_id)
+            })
+            .ok_or_else(|| {
+                if source_was_lost {
+                    "复制的源文件已删除或移动".to_string()
+                } else {
+                    "本机文件内容不可用".to_string()
+                }
+            })?;
         (path, source_was_lost)
     };
     let mut file = fs::File::open(path).map_err(|error| {

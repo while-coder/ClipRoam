@@ -13,7 +13,7 @@ mod tree;
 pub(crate) mod test_support;
 
 pub use hash::{hash_bytes, hash_file, is_file_id, to_hex};
-pub use paths::{cached_file_path, download_path, upload_image_path};
+pub use paths::{download_path, modified_millis, upload_image_path};
 pub use tree::{
     collect_tree, describe_roots, file_entry_signature, file_signature, local_source_was_lost,
     preserve_local_sources, readable_path, rebuild_tree, refresh_summary, tree_contents,

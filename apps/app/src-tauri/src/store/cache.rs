@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{history_path_for_key, cache_dir_for, now_rfc3339, open_history_database, HistoryData};
-use crate::content::tree_contents;
+use crate::content::{modified_millis, tree_contents};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -47,27 +47,59 @@ pub fn mark_files_uploaded(connection: &Connection, file_ids: &[String]) {
     for file_id in file_ids {
         let _ = connection
             .execute(
-                "INSERT INTO files (file_id, size, created_at, available, cached) VALUES (?, 0, ?, 1, 0) ON CONFLICT(file_id) DO UPDATE SET available = 1",
+                "INSERT INTO files (file_id, created_at, stored) VALUES (?, ?, 1) ON CONFLICT(file_id) DO UPDATE SET stored = 1",
                 params![file_id.as_str(), now_rfc3339()],
             );
     }
 }
 
-/// Records a local content file this machine now holds. The content pool is independent of
-/// entries, so this never rewrites history rows.
-pub fn register_cached_file(
-    database_path: &Path,
-    file_id: &str,
-    size: u64,
-) -> Result<(), String> {
-    let connection = open_history_database(database_path)?;
-    connection
-        .execute(
-            "INSERT INTO files (file_id, size, created_at, available, cached) VALUES (?, ?, ?, 0, 1) ON CONFLICT(file_id) DO UPDATE SET size = excluded.size, cached = 1",
-            params![file_id, size, now_rfc3339()],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
+/// Content ids this machine holds a blob for. The blob directories are the
+/// source of truth, so the set is read straight off the disk; it can never
+/// disagree with what is actually pasteable. Blob file names are the content
+/// hashes themselves, so a directory listing is all it takes.
+pub fn scan_cached_blobs(cache_dir: &Path) -> HashSet<String> {
+    [cache_dir.join("upload").join("images"), cache_dir.join("download")]
+        .into_iter()
+        .filter_map(|directory| fs::read_dir(directory).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|file| file.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Reverse lookup over content this machine has hashed before: any recorded
+/// source file whose bytes still verify against the recorded size and modified
+/// time can stand in for the content, sparing a download. Every candidate is
+/// checked and the first surviving one wins; an unverified match is never
+/// trusted, and no match at all simply falls through to the download path.
+pub fn cached_source_for(connection: &Connection, file_id: &str) -> Option<PathBuf> {
+    let mut statement = connection
+        .prepare("SELECT source, size, modified_at FROM hash_cache WHERE hash = ?")
+        .ok()?;
+    let candidates = statement
+        .query_map([file_id], |row| {
+            Ok((
+                row.get::<_, String>("source")?,
+                row.get::<_, i64>("size")?,
+                row.get::<_, i64>("modified_at")?,
+            ))
+        })
+        .ok()?
+        .flatten();
+    for (source, size, modified_at) in candidates {
+        let Ok(metadata) = fs::symlink_metadata(&source) else {
+            continue;
+        };
+        // `modified_at` is `-1` when the capture could not read it; the size
+        // check alone still screens out replaced files.
+        let unchanged = metadata.is_file()
+            && metadata.len() == u64::try_from(size).unwrap_or(u64::MAX)
+            && (modified_at < 0 || modified_millis(&metadata) == Some(modified_at as u64));
+        if unchanged {
+            return Some(PathBuf::from(source));
+        }
+    }
+    None
 }
 
 /// Mark-sweep over local uploads, downloaded content, and views for entries
@@ -140,18 +172,11 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
     {
         let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
-        for chunk in removed.chunks(500) {
-            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(", ");
-            transaction
-                .execute(
-                    &format!("UPDATE files SET cached = 0 WHERE file_id IN ({placeholders})"),
-                    params_from_iter(chunk.iter()),
-                )
-                .map_err(|error| error.to_string())?;
-        }
+        // Rows are pure server-pool marks; content no entry references no
+        // longer needs one. Locally cached state lives on the disk alone.
         if referenced.is_empty() {
             transaction
-                .execute("DELETE FROM files WHERE cached = 0", [])
+                .execute("DELETE FROM files", [])
                 .map_err(|error| error.to_string())?;
         } else {
             let referenced = referenced.iter().collect::<Vec<_>>();
@@ -161,7 +186,7 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
                 .join(", ");
             transaction
                 .execute(
-                    &format!("DELETE FROM files WHERE cached = 0 AND file_id NOT IN ({placeholders})"),
+                    &format!("DELETE FROM files WHERE file_id NOT IN ({placeholders})"),
                     params_from_iter(referenced),
                 )
                 .map_err(|error| error.to_string())?;
@@ -193,6 +218,32 @@ mod tests {
         remember_hash(&connection, "C:/a.txt", 12, 99, "abc");
         assert_eq!(cached_hash(&connection, "C:/a.txt", 12, 99).as_deref(), Some("abc"));
         assert_eq!(cached_hash(&connection, "C:/a.txt", 13, 99), None);
+        drop(connection);
+        fs::remove_dir_all(&directory).expect("remove temporary database");
+    }
+
+    #[test]
+    fn cached_source_resolves_only_files_that_still_verify() {
+        let directory = std::env::temp_dir().join(format!("cliproam-source-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let path = directory.join("b.txt");
+        fs::write(&path, b"0123456789").expect("write source file");
+        let metadata = fs::metadata(&path).expect("read metadata");
+        let size = metadata.len();
+        let modified_at = modified_millis(&metadata).expect("read mtime") as i64;
+
+        let connection = open_history_database(&directory.join("history.sqlite")).expect("create database");
+        remember_hash(&connection, path.to_string_lossy().as_ref(), size, modified_at, "abc");
+
+        // A stand-in must actually verify: wrong mtime and vanished files are
+        // rejected, the untouched file resolves.
+        remember_hash(&connection, path.to_string_lossy().as_ref(), size, modified_at + 1, "abc");
+        assert_eq!(cached_source_for(&connection, "abc"), Some(path.clone()));
+        remember_hash(&connection, path.to_string_lossy().as_ref(), size - 1, modified_at, "abc");
+        assert_eq!(cached_source_for(&connection, "abc"), Some(path.clone()));
+
+        fs::remove_file(&path).expect("remove source file");
+        assert_eq!(cached_source_for(&connection, "abc"), None);
         drop(connection);
         fs::remove_dir_all(&directory).expect("remove temporary database");
     }

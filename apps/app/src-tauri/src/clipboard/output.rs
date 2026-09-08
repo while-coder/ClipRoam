@@ -2,7 +2,7 @@
 //! that decides when remote contents must be materialized first.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     thread,
@@ -13,7 +13,7 @@ use tauri::{AppHandle, State};
 use tauri::Manager;
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry};
-use crate::store::refresh_entry_summary;
+use crate::store::{cached_source_for, open_history_database, refresh_entry_summary, history_path_for_key};
 use crate::history::entry_contents_of;
 use crate::{active_cache_dir, save_active_history, AppState};
 use crate::transfer::save::MissingFile;
@@ -192,6 +192,13 @@ pub(crate) fn write_clipboard_text(_app: &AppHandle, rich_text: &RichText) -> Re
 pub(crate) struct EntrySnapshot {
     pub entry: ClipboardEntry,
     cached: HashSet<String>,
+    /// Contents neither a cache blob nor a surviving local source covers,
+    /// resolved against the hash cache once at snapshot time: a file this
+    /// machine hashed before can stand in for the content and spare a
+    /// download. Target names come from the entry's tree, never from these
+    /// source files, so a differently named stand-in pastes under the
+    /// original name.
+    hash_sources: HashMap<String, PathBuf>,
     pub cache_dir: PathBuf,
 }
 
@@ -202,9 +209,23 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
         .find(entry_id)
         .cloned()
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+    let hash_sources = match open_history_database(&history_path_for_key(
+        &state.histories_dir,
+        &history.active_history,
+    )) {
+        Ok(connection) => entry_contents_of(&entry)
+            .into_iter()
+            .filter(|(file_id, _)| readable_path(&cache_dir, &history.cached_files, &entry, file_id).is_none())
+            .filter_map(|(file_id, _)| {
+                cached_source_for(&connection, &file_id).map(|path| (file_id, path))
+            })
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
     Ok(EntrySnapshot {
         entry,
         cached: history.cached_files.clone(),
+        hash_sources,
         cache_dir,
     })
 }
@@ -212,6 +233,7 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
 impl EntrySnapshot {
     pub(crate) fn resolve(&self, file_id: &str) -> Option<PathBuf> {
         readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
+            .or_else(|| self.hash_sources.get(file_id).cloned())
     }
 }
 
