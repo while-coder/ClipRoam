@@ -9,7 +9,7 @@ use crate::AppState;
 
 /// Reconciling a fresh install can deliver hundreds of remote entries at once;
 /// a single lock, save and event keeps that from locking up the windows.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn upsert_remote_entries(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -43,7 +43,7 @@ pub(crate) fn upsert_remote_entries(
 
 /// Applies a server-confirmed deletion: drops the entry, then frees the blobs
 /// it referenced.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;

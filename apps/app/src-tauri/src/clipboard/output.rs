@@ -148,7 +148,7 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, payload:
 /// Writes a live clipboard activation received from another device without
 /// synthesizing Paste. File-list entries are deliberately excluded: they stay
 /// in history until the user explicitly chooses where to paste or save them.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn activate_remote_entry(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -244,7 +244,7 @@ pub(crate) fn apply_clipboard_entry(
     crate::platforms::deliver_paste(&window, synthesize)
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn copy_entry(
     window: tauri::WebviewWindow,
     app: AppHandle,
@@ -254,7 +254,7 @@ pub(crate) fn copy_entry(
     apply_clipboard_entry(window, app, state, entry_id, false)
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn paste_entry(
     window: tauri::WebviewWindow,
     app: AppHandle,
