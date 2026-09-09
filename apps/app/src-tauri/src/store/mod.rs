@@ -89,21 +89,9 @@ fn safe_history_directory_name(key: &str) -> String {
     }
 }
 
-pub(crate) fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
-    let mut statement = connection
-        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
-        .map_err(|error| error.to_string())?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(columns)
-}
-
 /// One SQLite connection per history database, reused across writes. Opening
-/// a connection re-runs the whole schema migration, so call sites take the
-/// pooled connection instead of reopening on every statement.
+/// a connection re-runs the whole schema, so call sites take the pooled
+/// connection instead of reopening on every statement.
 #[derive(Default)]
 pub struct DatabasePool {
     connections: HashMap<PathBuf, Connection>,
@@ -122,6 +110,8 @@ impl DatabasePool {
     }
 }
 
+/// 打开一个历史库。当作第一次启动：只建缺失的表，不做任何存在性检测或
+/// 旧数据迁移。
 pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -130,51 +120,49 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
-    // 旧版本残留的表直接删除，本地不迁移旧数据。
-    let entry_columns = table_columns(&connection, "entries")?;
-    let outdated_entries = !entry_columns.is_empty()
-        && (!entry_columns.iter().any(|name| name == "created_ms")
-            || entry_columns.iter().any(|name| matches!(name.as_str(), "pinned" | "source_app")));
-    let mut schema = String::new();
-    schema.push_str("DROP TABLE IF EXISTS files;\n");
-    if outdated_entries {
-        // 索引随表一起消失。
-        schema.push_str("DROP TABLE entries;\n");
-    }
-    schema.push_str(
-        "
-        CREATE TABLE IF NOT EXISTS metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS entries (
-            id TEXT PRIMARY KEY,
-            kind TEXT NOT NULL,
-            content TEXT NOT NULL,
-            extra TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            created_ms INTEGER NOT NULL DEFAULT 0,
-            source_device_id TEXT NOT NULL,
-            sources TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS entries_created_ms ON entries(created_ms DESC);
-        CREATE INDEX IF NOT EXISTS entries_kind_created_ms ON entries(kind, created_ms DESC);
-        CREATE TABLE IF NOT EXISTS hash_cache (
-            source TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            modified_at INTEGER NOT NULL,
-            hash TEXT NOT NULL,
-            PRIMARY KEY (source, size, modified_at)
-        );
-        ",
-    );
-    connection
-        .execute_batch(&schema)
-        .map_err(|error| error.to_string())?;
-    // The durable upload queue owns its table: schema, stale-row sweep and
-    // row CRUD all live in the `pending` module.
-    crate::pending::init_table(&connection)?;
+    init_tables(&connection)?;
     Ok(connection)
+}
+
+/// 全部建表语句，唯一入口。表已存在时 `IF NOT EXISTS` 直接跳过。
+fn init_tables(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS entries (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                extra TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                created_ms INTEGER NOT NULL DEFAULT 0,
+                source_device_id TEXT NOT NULL,
+                sources TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS entries_created_ms ON entries(created_ms DESC);
+            CREATE INDEX IF NOT EXISTS entries_kind_created_ms ON entries(kind, created_ms DESC);
+            CREATE TABLE IF NOT EXISTS hash_cache (
+                source TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                hash TEXT NOT NULL,
+                PRIMARY KEY (source, size, modified_at)
+            );
+            CREATE TABLE IF NOT EXISTS pending_entries (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                extra TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Millisecond timestamp of an RFC3339 `created_at`; 0 when unparseable, so a

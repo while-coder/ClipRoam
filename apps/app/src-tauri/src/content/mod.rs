@@ -71,6 +71,12 @@ pub struct LocalSources {
     pub files: Vec<LocalSource>,
 }
 
+impl LocalSources {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.roots.is_empty() && self.files.is_empty()
+    }
+}
+
 /// Aggregates the UI needs without shipping a whole tree to the frontend.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,6 +134,10 @@ pub struct ClipboardEntryExtra {
     pub file_info: Option<FileInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_info: Option<ImageInfo>,
+    /// 本地来源路径（绝对路径、mtime），只存本地、不发布；files 行解析
+    /// 内容 id 用。
+    #[serde(default, skip_serializing_if = "LocalSources::is_empty")]
+    pub local_sources: LocalSources,
 }
 
 impl ClipboardEntryExtra {
@@ -139,6 +149,7 @@ impl ClipboardEntryExtra {
             rtf: entry.rtf.clone(),
             file_info: entry.file_info.clone(),
             image_info: entry.image_info.clone(),
+            local_sources: entry.sources.clone(),
         }
     }
 
