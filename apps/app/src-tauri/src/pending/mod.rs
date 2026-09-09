@@ -118,7 +118,7 @@ pub(crate) struct PendingRowView {
 
 /// 取最早的可发布行，队列为空时返回 `None`。`skip_seqs` 里的行原地跳过
 /// （不删，等待重试）。
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn peek_pending_entry(
     app: tauri::AppHandle,
     skip_seqs: Option<Vec<i64>>,
@@ -171,7 +171,7 @@ fn publish_extra(extra: &str) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 /// 删除一行队列。payload 只在本行，删即全部删除。
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     {
         let history = state.history.lock().map_err(|error| error.to_string())?;
@@ -191,7 +191,7 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 // ---------------------------------------------------------------------------
 
 /// 队列行数——侧边栏角标的数据，O(1)；进「待同步」视图才拉明细。
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
@@ -206,7 +206,7 @@ pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize,
 }
 
 /// 全部队列行，条目形态——待同步视图的数据。
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let cache_dir = active_cache_dir(&state, &history);

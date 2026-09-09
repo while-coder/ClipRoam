@@ -246,14 +246,19 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         return Ok(());
     }
     let collected = collect_tree(&paths)?;
+    // A short lock takes only the active key, so the reuse lookup and the
+    // transaction below never hold the history lock against a query burst.
+    let history_path = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        history_path_for_key(&state.histories_dir, &history.active_history)
+    };
+    // A re-copy of the same roots refreshes the published entry's timestamp
+    // instead of queueing the tree a second time.
+    let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let created_at = Utc::now().to_rfc3339();
-        capture_transaction(&mut history, CapturedSignature::File(signature.clone()), |history| {
-            let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-            // A re-copy of the same roots refreshes the published entry's
-            // timestamp instead of queueing the tree a second time.
-            let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
+        capture_transaction(&mut history, CapturedSignature::File(signature), |history| {
             match reusable {
                 Some(mut existing) => {
                     existing.created_at = created_at;
@@ -332,17 +337,23 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         local_sources: LocalSources::default(),
     };
     let payload = extra.json()?;
+    // The blob lands outside the history lock: the write is content-addressed
+    // and idempotent, and an orphan (write succeeded, queue row failed) is
+    // dropped by the startup garbage sweep.
+    let cache_dir = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        crate::active_cache_dir(&state, &history)
+    };
+    let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
+    if let Some(parent) = image_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if !image_path.is_file() {
+        fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
+    }
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         capture_transaction(&mut history, CapturedSignature::Image(signature), |history| {
-            let cache_dir = crate::active_cache_dir(&state, &history);
-            let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
-            if let Some(parent) = image_path.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            if !image_path.is_file() {
-                fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
-            }
             history.cached_files.insert(file_id.clone());
             let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
             // One transaction covers the queue row and the metadata.
@@ -359,7 +370,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn capture_current_clipboard_text(app: AppHandle) -> Result<bool, String> {
     let Some(rich_text) = crate::platforms::read_clipboard_text(&app) else {
         return Ok(false);
@@ -443,7 +454,7 @@ pub(crate) struct ShareImportSummary {
     files: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn consume_mobile_shares(app: AppHandle, state: State<'_, AppState>) -> Result<ShareImportSummary, String> {
     let _guard = state.share_import.lock().map_err(|error| error.to_string())?;
     crate::platforms::consume_pending_shares(&app)

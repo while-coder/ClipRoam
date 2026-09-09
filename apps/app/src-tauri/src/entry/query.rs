@@ -106,7 +106,7 @@ fn manifest_query(
     (where_sql, values)
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_entries_manifest(
     state: State<'_, AppState>,
     filter: EntriesManifestFilter,
@@ -145,7 +145,7 @@ pub(crate) fn list_entries_manifest(
 
 /// Every stored entry id, newest first — the local side of the sync
 /// reconcile's manifest diff and the "clear history" total.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_entry_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
@@ -153,7 +153,7 @@ pub(crate) fn list_entry_ids(state: State<'_, AppState>) -> Result<Vec<String>, 
 }
 
 /// The full entry, tree included — used when publishing to the server.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let cache_dir = active_cache_dir(&state, &history);

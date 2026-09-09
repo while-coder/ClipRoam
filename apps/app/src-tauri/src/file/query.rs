@@ -18,7 +18,7 @@ const UPLOAD_CANDIDATE_LIMIT: usize = 500;
 /// upload status; nothing is persisted locally. The derived set is cached on
 /// the history and invalidated by any `entries` write, so repeated calls in a
 /// refresh burst re-parse nothing.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.file_ids.is_none() {
@@ -37,7 +37,7 @@ pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>
 
 /// Files/image entries fully hashed whose uploadable payload fits the
 /// automatic-upload limit; drives the settings page's "upload now" run.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_upload_candidates(
     state: State<'_, AppState>,
     limit_bytes: u64,

@@ -31,7 +31,7 @@ pub(crate) struct SavePreparation {
     missing: Vec<MissingFile>,
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn prepare_save_entry(
     state: State<'_, AppState>,
     entry_id: String,
@@ -92,7 +92,7 @@ pub(crate) fn prepare_save_entry(
     Ok(Some(SavePreparation { save_id, missing }))
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> Result<(), String> {
     let session = state
         .save_sessions
@@ -121,7 +121,7 @@ pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> 
     Ok(())
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usize, String> {
     let session = state
         .save_sessions

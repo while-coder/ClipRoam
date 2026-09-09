@@ -101,7 +101,7 @@ pub(crate) enum DownloadTarget {
     },
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn begin_file_download(
     state: State<'_, AppState>,
     transfer_id: String,
@@ -170,7 +170,7 @@ pub(crate) fn begin_file_download(
     Ok(())
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn append_file_download(
     state: State<'_, AppState>,
     transfer_id: String,
@@ -202,7 +202,7 @@ pub(crate) fn append_file_download(
 /// A completed cache download is registered only after digest verification.
 /// Direct-save downloads stay inside the user-selected destination's staging
 /// directory and never enter the application cache or its database.
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn finish_file_download(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
     let download = state
         .downloads
@@ -267,7 +267,7 @@ pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, f
     }
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn cancel_file_download(
     state: State<'_, AppState>,
     transfer_id: String,
@@ -289,7 +289,7 @@ pub(crate) fn cancel_file_download(
     Ok(())
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn fail_virtual_file_request(
     state: State<'_, AppState>,
     file_id: String,
@@ -313,7 +313,7 @@ pub(crate) struct EntryFileCandidate {
     size: u64,
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_entry_files(
     state: State<'_, AppState>,
     entry_id: String,
@@ -343,12 +343,12 @@ fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<V
     Ok(missing_files(&snapshot))
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
     prepare_entry(&state, &entry_id, false)
 }
 
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
     prepare_entry(&state, &entry_id, true)
 }
@@ -358,7 +358,7 @@ pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) 
 /// local blob cache first, then from the hash cache's reverse lookup of the
 /// original source file (a file hashed here before can stand in for content
 /// that never landed as a blob).
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn read_upload_chunk(
     state: State<'_, AppState>,
     file_id: String,
