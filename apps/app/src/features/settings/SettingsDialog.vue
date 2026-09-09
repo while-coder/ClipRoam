@@ -56,10 +56,6 @@ const {
   updateStatusText,
   checkForUpdate,
 } = useUpdater();
-
-async function checkAppUpdate(): Promise<void> {
-  await checkForUpdate({ silent: false });
-}
 </script>
 
 <template>
@@ -275,7 +271,7 @@ async function checkAppUpdate(): Promise<void> {
                   class="secondary-button about-update-button"
                   type="button"
                   :disabled="!updaterSupported || updateStatus === 'checking' || updateStatus === 'downloading'"
-                  @click="checkAppUpdate"
+                  @click="checkForUpdate({ silent: false })"
                 >
                   <LoaderCircle v-if="updateStatus === 'checking'" :size="17" class="spin" aria-hidden="true" />
                   <RefreshCw v-else :size="17" aria-hidden="true" />

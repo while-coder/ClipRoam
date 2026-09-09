@@ -1,6 +1,7 @@
 import { nextTick, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { runningInTauri, usePlatform } from "../../composables/usePlatform";
+import { errorMessage } from "../../utils/error";
 import {
   quickPasteShortcut,
   quickPasteShortcutStatus,
@@ -157,7 +158,7 @@ async function openAppDataDirectory(): Promise<void> {
   try {
     await invoke("open_app_data_dir");
   } catch (error) {
-    settingsError.value = `无法打开应用数据目录：${error instanceof Error ? error.message : String(error)}`;
+    settingsError.value = `无法打开应用数据目录：${errorMessage(error)}`;
   }
 }
 
@@ -193,7 +194,7 @@ async function saveSettings(): Promise<void> {
     await nextTick();
     await requireBridge().focusSearch();
   } catch (error) {
-    settingsError.value = `无法保存设置：${error instanceof Error ? error.message : String(error)}`;
+    settingsError.value = `无法保存设置：${errorMessage(error)}`;
   } finally {
     savingSettings.value = false;
   }
@@ -241,7 +242,7 @@ async function changePassword(): Promise<void> {
       focus: "password",
     });
   } catch (error) {
-    settingsError.value = `修改密码失败：${error instanceof Error ? error.message : String(error)}`;
+    settingsError.value = `修改密码失败：${errorMessage(error)}`;
   } finally {
     changingPassword.value = false;
   }
@@ -271,7 +272,7 @@ async function signOut(openLogin: boolean): Promise<void> {
       await requireBridge().focusSearch();
     }
   } catch (error) {
-    settingsError.value = `无法退出账号：${error instanceof Error ? error.message : String(error)}`;
+    settingsError.value = `无法退出账号：${errorMessage(error)}`;
   } finally {
     savingSettings.value = false;
   }

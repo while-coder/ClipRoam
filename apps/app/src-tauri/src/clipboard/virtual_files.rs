@@ -584,10 +584,6 @@ impl IDataObject_Impl for VirtualFileDataObject_Impl {
 
 static CLIPBOARD_THREAD: OnceLock<Mutex<Option<mpsc::SyncSender<()>>>> = OnceLock::new();
 
-pub fn initialize() -> Result<(), String> {
-    Ok(())
-}
-
 pub fn set_clipboard(
     app: &AppHandle,
     window_label: &str,

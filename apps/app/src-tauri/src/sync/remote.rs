@@ -41,42 +41,10 @@ pub(crate) fn filter_unknown_file_ids(
 pub(crate) fn upsert_remote_entry(
     app: AppHandle,
     state: State<'_, AppState>,
-    mut entry: ClipboardEntry,
+    entry: ClipboardEntry,
     available_file_ids: Vec<String>,
 ) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        // The caller pre-queried which contents the server's pool holds
-        // (POST /files/query). Those need no re-upload from this device, and
-        // the availability row makes the state survive a restart.
-        let available: Vec<String> = entry_contents_of(&entry)
-            .into_iter()
-            .map(|(file_id, _)| file_id)
-            .filter(|file_id| available_file_ids.contains(file_id))
-            .collect();
-        let entries = history.active_entries_mut();
-        if let Some(local) = entries.iter().find(|item| item.id == entry.id) {
-            preserve_local_sources(&mut entry, local);
-        }
-        entries.retain(|item| item.id != entry.id);
-        let entry_id = entry.id.clone();
-        entries.push(entry);
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        trim_history(entries);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        save_active_history(&state, &history)?;
-        // Existing rows keep their large data during the general history save;
-        // a remote update replaces it explicitly here.
-        if let Some(entry) = history.find(&entry_id) {
-            let connection = open_history_database(&history_path)?;
-            write_entry_data(&connection, entry)?;
-            store_mark_files_uploaded(&connection, &available);
-        }
-    }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
+    upsert_remote_entries(app, state, vec![entry], available_file_ids)
 }
 
 /// Reconciling a fresh install can deliver hundreds of remote entries at once;

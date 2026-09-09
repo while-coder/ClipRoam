@@ -100,7 +100,11 @@ pub fn default_active_history() -> String {
 
 pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
     histories_dir
-        .join(format!("{}-{:016x}", safe_history_directory_name(key), stable_key_hash(key)))
+        .join(format!(
+            "{}-{:016x}",
+            safe_history_directory_name(key),
+            crate::content::fnv1a(key.bytes())
+        ))
         .join("history.sqlite")
 }
 
@@ -126,12 +130,6 @@ fn safe_history_directory_name(key: &str) -> String {
     } else {
         name
     }
-}
-
-fn stable_key_hash(key: &str) -> u64 {
-    key.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-    })
 }
 
 fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -313,6 +311,14 @@ pub fn cache_dir_for_path(path: &Path) -> PathBuf {
 }
 
 pub fn refresh_summaries(history: &mut HistoryData, cache_dir: &Path) {
+    refresh_history_summaries(history, cache_dir, None);
+}
+
+pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_dir: &Path) {
+    refresh_history_summaries(history, cache_dir, Some(entry_id));
+}
+
+fn refresh_history_summaries(history: &mut HistoryData, cache_dir: &Path, only: Option<&str>) {
     let HistoryData {
         histories,
         active_history,
@@ -324,25 +330,9 @@ pub fn refresh_summaries(history: &mut HistoryData, cache_dir: &Path) {
         return;
     };
     for entry in entries.iter_mut() {
-        refresh_summary(entry, cached_files, uploaded_files, cache_dir);
-    }
-}
-
-pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_dir: &Path) {
-    let HistoryData {
-        histories,
-        active_history,
-        cached_files,
-        uploaded_files,
-        ..
-    } = history;
-    let Some(entries) = histories.get_mut(active_history) else {
-        return;
-    };
-    if let Some(entry) = entries
-        .iter_mut()
-        .find(|entry| entry.id == entry_id)
-    {
+        if only.is_some_and(|entry_id| entry_id != entry.id) {
+            continue;
+        }
         refresh_summary(entry, cached_files, uploaded_files, cache_dir);
     }
 }
@@ -372,13 +362,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
     for entry in history.active_entries() {
-        let extra = serde_json::to_string(&ClipboardEntryExtra {
-            html: entry.html.clone(),
-            rtf: entry.rtf.clone(),
-            file_info: entry.file_info.clone(),
-            image_info: entry.image_info.clone(),
-        })
-        .map_err(|error| error.to_string())?;
+        let extra = ClipboardEntryExtra::of(entry).json()?;
         let presentation = serde_json::to_string(&serde_json::json!({
             "html": entry.html,
             "rtf": entry.rtf,
@@ -424,22 +408,18 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             [],
         )
         .map_err(|error| error.to_string())?;
-    for (key, value) in [
-        ("last_clipboard", history.last_clipboard.as_str()),
-        ("last_file_signature", history.last_file_signature.as_str()),
-        ("last_image_signature", history.last_image_signature.as_str()),
-        ("device_id", history.device_id.as_str()),
-        ("device_name", history.device_name.as_str()),
-    ] {
-        transaction
-            .execute(
-                "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    for (key, values) in [("pending_deletions", &history.pending_deletions)] {
-        let value = serde_json::to_string(values).map_err(|error| error.to_string())?;
+    let mut metadata = vec![
+        ("last_clipboard", history.last_clipboard.clone()),
+        ("last_file_signature", history.last_file_signature.clone()),
+        ("last_image_signature", history.last_image_signature.clone()),
+        ("device_id", history.device_id.clone()),
+        ("device_name", history.device_name.clone()),
+    ];
+    metadata.push((
+        "pending_deletions",
+        serde_json::to_string(&history.pending_deletions).map_err(|error| error.to_string())?,
+    ));
+    for (key, value) in metadata {
         transaction
             .execute(
                 "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -451,13 +431,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
 }
 
 pub fn write_entry_data(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
-    let extra = serde_json::to_string(&ClipboardEntryExtra {
-        html: entry.html.clone(),
-        rtf: entry.rtf.clone(),
-        file_info: entry.file_info.clone(),
-        image_info: entry.image_info.clone(),
-    })
-    .map_err(|error| error.to_string())?;
+    let extra = ClipboardEntryExtra::of(entry).json()?;
     let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
     connection
         .execute(

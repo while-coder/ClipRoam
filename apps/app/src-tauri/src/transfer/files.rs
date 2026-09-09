@@ -12,7 +12,7 @@ use tauri::State;
 use crate::clipboard::output::{
     missing_files, refresh_snapshot_summary, snapshot_entry, FilePasteStrategy,
 };
-use crate::content::{local_source_was_lost, readable_path};
+use crate::content::{local_source_was_lost, readable_path, MissingFile};
 use crate::history::entry_contents_of;
 use crate::store::{cached_source_for, history_path_for_key, open_history_database};
 use crate::{active_cache_dir, AppState};
@@ -48,25 +48,28 @@ pub(crate) fn list_entry_files(
 }
 
 /// Contents this machine cannot read yet, de-duplicated — the frontend turns
-/// each one into a download.
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<crate::transfer::save::MissingFile>, String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
-    refresh_snapshot_summary(&state, &snapshot, &entry_id)?;
+/// each one into a download. With `paste_only` only the contents that must
+/// exist before this platform can start a paste are returned, so the frontend
+/// does not need to know which operating system it runs on.
+fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<Vec<MissingFile>, String> {
+    let snapshot = snapshot_entry(state, entry_id)?;
+    refresh_snapshot_summary(state, &snapshot, entry_id)?;
+    if paste_only
+        && !FilePasteStrategy::for_entry(&snapshot.entry).requires_complete_content(&snapshot.entry.kind)
+    {
+        return Ok(Vec::new());
+    }
     Ok(missing_files(&snapshot))
 }
 
-/// Returns only the contents that must exist before this platform can start a
-/// paste. The frontend does not need to know which operating system it runs on.
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) -> Result<Vec<crate::transfer::save::MissingFile>, String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
-    refresh_snapshot_summary(&state, &snapshot, &entry_id)?;
-    if FilePasteStrategy::for_entry(&snapshot.entry).requires_complete_content(&snapshot.entry.kind) {
-        Ok(missing_files(&snapshot))
-    } else {
-        Ok(Vec::new())
-    }
+pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
+    prepare_entry(&state, &entry_id, false)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
+    prepare_entry(&state, &entry_id, true)
 }
 
 #[tauri::command(rename_all = "camelCase")]

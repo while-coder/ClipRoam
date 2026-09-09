@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import { emitTo } from "@tauri-apps/api/event";
+import { errorMessage } from "../../utils/error";
 
 const STORAGE_KEY = "cliproam.quickPasteShortcut";
 export const DEFAULT_QUICK_PASTE_SHORTCUT = "CommandOrControl+Shift+V";
@@ -103,7 +104,7 @@ async function applyShortcut(shortcut: string, persist: boolean): Promise<boolea
     } catch (error) {
       quickPasteShortcutStatus.value = {
         state: "error",
-        message: `快捷键初始化失败：${error instanceof Error ? error.message : String(error)}`,
+        message: `快捷键初始化失败：${errorMessage(error)}`,
       };
     }
   };

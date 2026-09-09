@@ -1,5 +1,12 @@
 /** Pure date/size formatting helpers shared by every window. */
 
+/** Labels for the preset time filters; TimeFilterControl renders the same strings. */
+export const TIME_FILTER_LABELS: Record<string, string> = {
+  today: "今天",
+  "7-days": "近 7 天",
+  "30-days": "近 30 天",
+};
+
 export function formatAge(createdAt: string, now: number): string {
   const elapsed = Math.max(0, now - new Date(createdAt).getTime());
   const seconds = Math.floor(elapsed / 1_000);
@@ -27,6 +34,13 @@ export function parseLocalDate(value: string, endOfDay = false): Date | undefine
   const [year, month, day] = value.split("-").map(Number);
   if (!year || !month || !day) return undefined;
   return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+}
+
+/** Shared custom-date-range validation; returns the error message, or "" when valid. */
+export function validateDateRange(start: string, end: string): string {
+  if (!start || !end) return "请选择完整的开始和结束日期";
+  if (start > end) return "开始日期不能晚于结束日期";
+  return "";
 }
 
 export function formatFileSize(bytes: number): string {

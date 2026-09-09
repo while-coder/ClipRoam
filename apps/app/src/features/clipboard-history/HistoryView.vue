@@ -22,10 +22,13 @@ import PaginationControl from "./PaginationControl.vue";
 import { useHistoryPagination } from "./useHistoryPagination";
 import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
+import { errorMessage } from "../../utils/error";
 import {
   formatAge as formatAgeRelative,
   formatExactDateTime,
   parseLocalDate,
+  TIME_FILTER_LABELS,
+  validateDateRange,
 } from "../../utils/format";
 import {
   canManualUpload,
@@ -91,12 +94,9 @@ const clearHistoryButton = ref<HTMLButtonElement>();
 const clearHistoryCancelButton = ref<HTMLButtonElement>();
 const clearHistoryConfirmButton = ref<HTMLButtonElement>();
 
-const timeRangeError = computed(() => {
-  if (timeFilter.value !== "custom") return "";
-  if (!startDate.value || !endDate.value) return "请选择完整的开始和结束日期";
-  if (startDate.value > endDate.value) return "开始日期不能晚于结束日期";
-  return "";
-});
+const timeRangeError = computed(() => (
+  timeFilter.value === "custom" ? validateDateRange(startDate.value, endDate.value) : ""
+));
 
 const activeTimeRange = computed<{ start?: number; end?: number }>(() => {
   if (timeFilter.value === "all") return {};
@@ -118,9 +118,7 @@ const activeTimeRange = computed<{ start?: number; end?: number }>(() => {
 
 const timeFilterSummary = computed(() => {
   if (timeFilter.value === "all") return "";
-  if (timeFilter.value === "today") return "今天";
-  if (timeFilter.value === "7-days") return "近 7 天";
-  if (timeFilter.value === "30-days") return "近 30 天";
+  if (timeFilter.value !== "custom") return TIME_FILTER_LABELS[timeFilter.value];
   if (!startDate.value || !endDate.value) return "自定义区间";
   return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
 });
@@ -180,10 +178,6 @@ function formatAge(createdAt: string): string {
   return formatAgeRelative(createdAt, props.currentTime);
 }
 
-function entryDeviceName(entry: ClipboardEntry): string {
-  return deviceDisplayName(props.devicesById, entry);
-}
-
 function isEntrySynced(entry: ClipboardEntry): boolean {
   return props.syncedEntryIds.has(entry.id);
 }
@@ -233,7 +227,7 @@ async function captureCurrentClipboard(): Promise<void> {
     emit("refresh");
     showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
   } catch (error) {
-    showToast(`读取剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`读取剪贴板失败：${errorMessage(error)}`, "error");
   } finally {
     capturingClipboard.value = false;
   }
@@ -249,7 +243,7 @@ async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
     await nextTick();
     previewDialog.value?.focus();
   } catch (error) {
-    showToast(`无法预览图片：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`无法预览图片：${errorMessage(error)}`, "error");
   } finally {
     previewLoading.value = false;
   }
@@ -311,7 +305,7 @@ async function confirmClearHistory(): Promise<void> {
     await nextTick();
     searchInput.value?.focus();
   } catch (error) {
-    showToast(`清除历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`清除历史失败：${errorMessage(error)}`, "error");
   } finally {
     clearingHistory.value = false;
   }
@@ -425,7 +419,7 @@ defineExpose({ handleKeydown, focusSearch });
       </div>
     </section>
 
-    <section id="history-content" ref="historyListElement" class="history-list" aria-label="剪贴板历史">
+    <section ref="historyListElement" class="history-list" aria-label="剪贴板历史">
       <div
         v-for="entry in pagedEntries"
         :key="entry.id"
@@ -466,7 +460,7 @@ defineExpose({ handleKeydown, focusSearch });
         <span class="entry-body">
           <span class="entry-content">{{ entry.content }}</span>
           <span class="entry-meta">
-            <Monitor :size="12" /> {{ entryDeviceName(entry) }}
+            <Monitor :size="12" /> {{ deviceDisplayName(props.devicesById, entry) }}
             <span>·</span>
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
             <span>·</span>

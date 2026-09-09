@@ -47,6 +47,7 @@ import {
   EMPTY_SUMMARY,
 } from "./utils/constants";
 import { canManualUpload, canSaveEntry, isHashing } from "./utils/entry";
+import { errorMessage } from "./utils/error";
 import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
 import type {
   Device,
@@ -106,10 +107,7 @@ initSettings({
   persistSyncConfig,
   startSync,
   disconnect: (syncEnabledAfter) => {
-    syncClient?.stop();
-    syncClient = undefined;
-    connected.value = false;
-    syncEnabled.value = syncEnabledAfter;
+    stopSyncClient(syncEnabledAfter);
   },
   uploadNowEligibleEntries,
   openSetup: ({ config, message, focus }) => {
@@ -124,6 +122,14 @@ initSettings({
   },
   focusSearch,
 });
+
+/** Tears the sync client down; the optional argument updates the sync switch with it. */
+function stopSyncClient(syncEnabledAfter?: boolean): void {
+  syncClient?.stop();
+  syncClient = undefined;
+  connected.value = false;
+  if (syncEnabledAfter !== undefined) syncEnabled.value = syncEnabledAfter;
+}
 
 const connectionStatus = computed(() => {
   if (connected.value) {
@@ -187,7 +193,7 @@ function scheduleRefreshEntries(): void {
   refreshEntriesTimer = window.setTimeout(() => {
     refreshEntriesTimer = undefined;
     void refreshEntries().catch((error) => {
-      showToast(`剪贴板历史读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      showToast(`剪贴板历史读取失败：${errorMessage(error)}`, "error");
     });
   }, 200);
 }
@@ -234,27 +240,30 @@ async function serverAvailableFileIds(batch: ClipboardEntry[]): Promise<string[]
     const statuses = await client.fetchFileStatuses(unknown);
     return statuses.filter((file) => file.stored).map((file) => file.fileId);
   } catch (error) {
-    showToast(`查询服务器文件状态失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`查询服务器文件状态失败：${errorMessage(error)}`, "error");
     return [];
   }
+}
+
+/** Browser-preview variant of a remote upsert: plain local list surgery. */
+function upsertLocalEntry(entry: ClipboardEntry): void {
+  entries.value = [
+    { ...entry, summary: EMPTY_SUMMARY },
+    ...entries.value.filter((item) => item.id !== entry.id),
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
   for (const entry of batch) markEntrySynced(entry);
   if (!runningInTauri) {
-    for (const entry of batch) {
-      entries.value = [
-        { ...entry, summary: EMPTY_SUMMARY },
-        ...entries.value.filter((item) => item.id !== entry.id),
-      ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    }
+    for (const entry of batch) upsertLocalEntry(entry);
     return;
   }
   try {
     const availableFileIds = await serverAvailableFileIds(batch);
     await invoke("upsert_remote_entries", { entries: batch, availableFileIds });
   } catch (error) {
-    showToast(`写入同步记录失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
     return;
   }
   scheduleRefreshEntries();
@@ -276,29 +285,25 @@ async function adoptPublishedEntry(localEntryId: string, entry: ClipboardEntry):
     return true;
   } catch (error) {
     // Local and server keys can only re-converge through the next reconcile.
-    showToast(`同步本地记录失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`同步本地记录失败：${errorMessage(error)}`, "error");
     return false;
   }
 }
 
-function rememberDevices(devices: Device[]): void {  devicesById.value = {
+function rememberDevices(devices: Device[]): void {
+  devicesById.value = {
     ...devicesById.value,
     ...Object.fromEntries(devices.map((device) => [device.id, device])),
   };
 }
 
-function entrySyncId(entry: ClipboardEntry): string {
-  return entry.id;
-}
-
 function markEntrySynced(entry: ClipboardEntry): void {
-  const id = entrySyncId(entry);
-  if (syncedEntryIds.value.has(id)) return;
-  syncedEntryIds.value = new Set(syncedEntryIds.value).add(id);
+  if (syncedEntryIds.value.has(entry.id)) return;
+  syncedEntryIds.value = new Set(syncedEntryIds.value).add(entry.id);
 }
 
 function isEntrySynced(entry: ClipboardEntry): boolean {
-  return syncedEntryIds.value.has(entrySyncId(entry));
+  return syncedEntryIds.value.has(entry.id);
 }
 
 function focusSearch(): void {
@@ -379,7 +384,7 @@ async function consumeMobileShares(): Promise<void> {
     await refreshEntries();
     showToast(shareImportMessage(summary), "success");
   } catch (error) {
-    showToast(`接收系统分享失败：${error instanceof Error ? error.message : String(error)}，请重新分享`, "error");
+    showToast(`接收系统分享失败：${errorMessage(error)}，请重新分享`, "error");
   } finally {
     importingShare.value = false;
   }
@@ -390,9 +395,42 @@ async function hideWindow(): Promise<void> {
 }
 
 /**
- * Fetches every content this device is missing. Downloads run through a fixed
- * pool, and one failure no longer aborts the rest — a 3000-file folder should
- * not be lost to a single bad transfer.
+ * Downloads the given contents through the fixed transfer pool, reporting
+ * per-entry progress and failing with the aggregate failure count. One failure
+ * does not abort the rest — a 3000-file folder should not be lost to a single
+ * bad transfer.
+ */
+async function downloadMissingFiles(
+  entryId: string,
+  missing: MissingFile[],
+  downloadOne: (file: MissingFile) => Promise<void>,
+): Promise<void> {
+  let finished = 0;
+  const reportProgress = () => {
+    downloadProgressByEntryId.value = {
+      ...downloadProgressByEntryId.value,
+      [entryId]: { finished, total: missing.length },
+    };
+  };
+  reportProgress();
+  const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
+    await downloadOne(file);
+    finished += 1;
+    reportProgress();
+  });
+  const failures = results.filter((result) => result.status === "rejected").length;
+  if (failures) {
+    throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
+  }
+}
+
+function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T> {
+  const { [id]: _, ...remaining } = record;
+  return remaining;
+}
+
+/**
+ * Fetches every content this device is missing.
  */
 async function downloadRequiredFiles(
   entry: LocalClipboardEntry,
@@ -404,30 +442,11 @@ async function downloadRequiredFiles(
   const client = syncClient;
   if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
 
-  let finished = 0;
-  const reportProgress = () => {
-    downloadProgressByEntryId.value = {
-      ...downloadProgressByEntryId.value,
-      [entry.id]: { finished, total: missing.length },
-    };
-  };
-  reportProgress();
   try {
-    const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
-      await client.downloadFile(entry, {
-        fileId: file.fileId,
-        size: file.size,
-      });
-      finished += 1;
-      reportProgress();
-    });
-    const failures = results.filter((result) => result.status === "rejected").length;
-    if (failures) {
-      throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
-    }
+    await downloadMissingFiles(entry.id, missing, (file) =>
+      client.downloadFile(entry, { fileId: file.fileId, size: file.size }));
   } finally {
-    const { [entry.id]: _, ...remaining } = downloadProgressByEntryId.value;
-    downloadProgressByEntryId.value = remaining;
+    downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
     await invoke("refresh_entry", { entryId: entry.id }).catch(() => undefined);
     await refreshEntries();
   }
@@ -495,7 +514,7 @@ async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
     const stored = await syncClient.upload(await fullEntry(entry));
     await adoptPublishedEntry(entry.id, stored);
   } catch (error) {
-    showToast(`上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`上传失败：${errorMessage(error)}`, "error");
   } finally {
     await refreshEntries();
     uploadingEntryId.value = "";
@@ -523,7 +542,7 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
       await adoptPublishedEntry(entry.id, stored);
     } catch (error) {
       if (syncClient === client) {
-        showToast(`自动上传失败：${error instanceof Error ? error.message : String(error)}`, "error");
+        showToast(`自动上传失败：${errorMessage(error)}`, "error");
       }
     }
   }
@@ -548,30 +567,8 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       if (preparation.missing.length) {
         const client = syncClient;
         if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
-        let finished = 0;
-        const reportProgress = () => {
-          downloadProgressByEntryId.value = {
-            ...downloadProgressByEntryId.value,
-            [entry.id]: { finished, total: preparation.missing.length },
-          };
-        };
-        reportProgress();
-        const results = await mapWithConcurrency(
-          preparation.missing,
-          TRANSFER_CONCURRENCY,
-          async (file) => {
-            await client.downloadFileToSave(entry, {
-              fileId: file.fileId,
-              size: file.size,
-            }, preparation.saveId);
-            finished += 1;
-            reportProgress();
-          },
-        );
-        const failures = results.filter((result) => result.status === "rejected").length;
-        if (failures) {
-          throw new Error(`有 ${failures} 个文件下载失败（共 ${preparation.missing.length} 个）`);
-        }
+        await downloadMissingFiles(entry.id, preparation.missing, (file) =>
+          client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId));
       }
 
       const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
@@ -580,10 +577,9 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
     }
   } catch (error) {
     if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
-    showToast(`${isMobile.value ? "下载" : "另存为"}失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
-    const { [entry.id]: _, ...remaining } = downloadProgressByEntryId.value;
-    downloadProgressByEntryId.value = remaining;
+    downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
     savingEntryId.value = "";
   }
 }
@@ -708,16 +704,13 @@ async function useLocalMode(draft: SetupDraft): Promise<void> {
     activeSyncConfig = config;
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
-    syncClient?.stop();
-    syncClient = undefined;
-    connected.value = false;
-    syncEnabled.value = false;
+    stopSyncClient(false);
     setupVisible.value = false;
     await refreshEntries();
     await nextTick();
     await focusSearch();
   } catch (error) {
-    setupError.value = `无法保存设置：${error instanceof Error ? error.message : String(error)}`;
+    setupError.value = `无法保存设置：${errorMessage(error)}`;
   }
 }
 
@@ -759,7 +752,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await nextTick();
     await focusSearch();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     if (accountCreated) {
       setupWizard.value?.setAuthMode("login");
       setupError.value = `账号已创建，但同步连接失败：${message}。请重新登录`;
@@ -795,15 +788,10 @@ function handleKeys(event: KeyboardEvent): void {
   }
 }
 
+// Only reachable through `activateRemoteClipboard`, which already returns
+// outside Tauri — the browser-preview branch lives in `applyRemoteUpserts`.
 async function upsertRemote(entry: ClipboardEntry): Promise<void> {
   markEntrySynced(entry);
-  if (!runningInTauri) {
-    entries.value = [
-      { ...entry, summary: EMPTY_SUMMARY },
-      ...entries.value.filter((item) => item.id !== entry.id),
-    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return;
-  }
   const availableFileIds = await serverAvailableFileIds([entry]);
   await invoke("upsert_remote_entry", { entry, availableFileIds });
   await refreshEntries();
@@ -844,7 +832,7 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
       && activeSyncConfig === config
       && config.autoReceiveClipboard
     ) {
-      showToast(`自动接收剪贴板失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
     }
   }
 }
@@ -892,7 +880,7 @@ async function refreshPendingUploadStatuses(): Promise<void> {
       }
     }
   } catch (error) {
-    showToast(`刷新上传状态失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`刷新上传状态失败：${errorMessage(error)}`, "error");
   }
 }
 
@@ -942,7 +930,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     if (syncClient === client) client.drainQueue();
   } catch (error) {
     if (syncClient === client) {
-      showToast(`同步历史失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      showToast(`同步历史失败：${errorMessage(error)}`, "error");
     }
   }
 }
@@ -1001,15 +989,12 @@ async function startSync(config: SyncConfig): Promise<void> {
         };
       },
       onUploadFinished: (entryId) => {
-        const { [entryId]: _, ...remaining } = uploadProgressByEntryId.value;
-        uploadProgressByEntryId.value = remaining;
+        uploadProgressByEntryId.value = withoutKey(uploadProgressByEntryId.value, entryId);
       },
       onError: (message) => { showToast(message, "error"); },
       onAuthenticationFailed: (message) => {
         if (syncClient !== client) return;
-        client.stop();
-        syncClient = undefined;
-        connected.value = false;
+        stopSyncClient();
         const alreadyRelogging = setupVisible.value && !activeSyncConfig?.sessionToken;
         const expiredConfig = { ...config, sessionToken: "" };
         activeSyncConfig = expiredConfig;
@@ -1037,9 +1022,7 @@ async function applySavedSyncConfig(): Promise<void> {
   if (config.enabled && config.username && config.sessionToken) {
     await startSync(config);
   } else {
-    syncClient?.stop();
-    syncClient = undefined;
-    connected.value = false;
+    stopSyncClient();
   }
 }
 
@@ -1060,7 +1043,7 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
 }
 
 function readableStartupError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   if (message.includes("state not managed for field `state`")) {
     return "应用初始化尚未完成，请从托盘退出 ClipRoam 后重新启动";
   }
@@ -1104,7 +1087,7 @@ async function initializeTauriServices(): Promise<void> {
       } catch (error) {
         await invoke("fail_virtual_file_request", {
           fileId: payload.fileId,
-          message: error instanceof Error ? error.message : String(error),
+          message: errorMessage(error),
         }).catch(() => undefined);
       }
     }),
@@ -1135,7 +1118,7 @@ async function initializeTauriServices(): Promise<void> {
       );
       await consumeMobileShares();
     } catch (error) {
-      showToast(`系统分享接收初始化失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      showToast(`系统分享接收初始化失败：${errorMessage(error)}`, "error");
     }
   }
 }
@@ -1187,7 +1170,7 @@ onMounted(async () => {
   if (startupWarning) showToast(startupWarning, "error");
   if (!isPasteWindow) void initUpdaterVersion();
   void refreshEntries().catch((error) => {
-    showToast(`剪贴板历史读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    showToast(`剪贴板历史读取失败：${errorMessage(error)}`, "error");
   });
   if (runningInTauri) void initializeTauriServices();
 
@@ -1199,7 +1182,7 @@ onMounted(async () => {
     try {
       await startSync(config);
     } catch (error) {
-      showToast(`同步初始化失败：${error instanceof Error ? error.message : String(error)}`, "error");
+      showToast(`同步初始化失败：${errorMessage(error)}`, "error");
     }
     await focusSearch();
   } else if (config) {

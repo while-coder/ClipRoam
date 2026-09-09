@@ -1,10 +1,12 @@
 //! History queries and lifecycle commands: listing, reading, refreshing,
 //! deleting.
 
+use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::clipboard::capture::lightweight_entry;
 use crate::content::{tree_contents, ClipboardEntry};
-use crate::store::{collect_local_garbage, refresh_entry_summary, temp_entry_seq};
+use crate::store::{collect_local_garbage, refresh_entry_summary, temp_entry_seq, HistoryData};
 use crate::{active_cache_dir, save_active_history, AppState};
 
 /// Every content an entry references, whichever kind carries it.
@@ -28,7 +30,7 @@ pub(crate) fn list_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEn
     Ok(history
         .active_entries()
         .iter()
-        .map(crate::clipboard::lightweight_entry)
+        .map(lightweight_entry)
         .collect())
 }
 
@@ -48,18 +50,6 @@ pub(crate) fn get_device(state: State<'_, AppState>) -> Result<(String, String),
     Ok((history.device_id.clone(), history.device_name.clone()))
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn configure_device(
-    state: State<'_, AppState>,
-    device_id: String,
-    device_name: String,
-) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    history.device_id = device_id;
-    history.device_name = device_name;
-    save_active_history(&state, &history)
-}
-
 /// Recomputes one entry's aggregates. Downloads deliberately skip this so that
 /// finishing a file stays O(1); the caller refreshes once the batch is done.
 #[tauri::command(rename_all = "camelCase")]
@@ -70,46 +60,53 @@ pub(crate) fn refresh_entry(state: State<'_, AppState>, entry_id: String) -> Res
     Ok(())
 }
 
+/// Removes the given ids from the active history, tombstones every published
+/// id and frees the blobs they referenced.
+fn remove_entries_and_enqueue_deletions(
+    state: &AppState,
+    history: &mut HistoryData,
+    entry_ids: &[String],
+) -> Result<(), String> {
+    let removed = entry_ids.iter().cloned().collect::<HashSet<_>>();
+    let existing = history
+        .active_entries()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<HashSet<_>>();
+    history
+        .active_entries_mut()
+        .retain(|entry| !removed.contains(&entry.id));
+    for entry_id in entry_ids {
+        // The server only knows published (numeric) ids; a temporary id was
+        // never uploaded, so removing it merely drops its queue row on the
+        // next save.
+        if existing.contains(entry_id) && temp_entry_seq(entry_id).is_none() {
+            history.pending_deletions.insert(entry_id.clone());
+        }
+    }
+    save_active_history(state, history)?;
+    // Dropping references is what frees disk space, so the sweep runs here.
+    let _ = collect_local_garbage(&state.histories_dir, history);
+    Ok(())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let existed = history.active_entries().iter().any(|entry| entry.id == entry_id);
-        history.active_entries_mut().retain(|entry| entry.id != entry_id);
-        if existed {
-            // The server only knows published (numeric) ids; a temporary id
-            // was never uploaded, so removing it merely drops its queue row
-            // on the next save.
-            if temp_entry_seq(&entry_id).is_none() {
-                history.pending_deletions.insert(entry_id.clone());
-            }
-        }
-        save_active_history(&state, &history)?;
-        // Dropping references is what frees disk space, so the sweep runs here.
-        let _ = collect_local_garbage(&state.histories_dir, &mut history);
-    }
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    remove_entries_and_enqueue_deletions(&state, &mut history, &[entry_id])?;
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub(crate) fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let deleted = history
-            .active_entries()
-            .iter()
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
-        history.active_entries_mut().clear();
-        for entry_id in &deleted {
-            if temp_entry_seq(entry_id).is_none() {
-                history.pending_deletions.insert(entry_id.clone());
-            }
-        }
-        save_active_history(&state, &history)?;
-        let _ = collect_local_garbage(&state.histories_dir, &mut history);
-    }
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let entry_ids = history
+        .active_entries()
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    remove_entries_and_enqueue_deletions(&state, &mut history, &entry_ids)?;
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
 }

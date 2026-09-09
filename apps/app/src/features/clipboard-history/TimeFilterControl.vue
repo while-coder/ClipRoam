@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-vue-next";
+import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange } from "../../utils/format";
 
 type TimeFilterValue = "all" | "today" | "7-days" | "30-days" | "custom";
 type CalendarDay = { key: string; label: number; inMonth: boolean };
@@ -20,9 +21,9 @@ const emit = defineEmits<{
 
 const options: Array<{ value: TimeFilterValue; label: string }> = [
   { value: "all", label: "不限" },
-  { value: "today", label: "今天" },
-  { value: "7-days", label: "近 7 天" },
-  { value: "30-days", label: "近 30 天" },
+  { value: "today", label: TIME_FILTER_LABELS.today },
+  { value: "7-days", label: TIME_FILTER_LABELS["7-days"] },
+  { value: "30-days", label: TIME_FILTER_LABELS["30-days"] },
   { value: "custom", label: "自定义区间" },
 ];
 const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
@@ -42,11 +43,7 @@ const currentLabel = computed(() => (
   options.find((option) => option.value === props.modelValue)?.label ?? "不限"
 ));
 const displayMonthLabel = computed(() => `${displayMonth.value.getFullYear()} 年 ${displayMonth.value.getMonth() + 1} 月`);
-const draftError = computed(() => {
-  if (!draftStartDate.value || !draftEndDate.value) return "请选择完整的开始和结束日期";
-  if (draftStartDate.value > draftEndDate.value) return "开始日期不能晚于结束日期";
-  return "";
-});
+const draftError = computed(() => validateDateRange(draftStartDate.value, draftEndDate.value));
 const calendarDays = computed<CalendarDay[]>(() => {
   const year = displayMonth.value.getFullYear();
   const month = displayMonth.value.getMonth();
@@ -75,12 +72,6 @@ function formatDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function parseDate(value: string): Date | undefined {
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return undefined;
-  return new Date(year, month - 1, day);
-}
-
 function displayDate(value: string): string {
   return value ? value.replace(/-/g, "/") : "请选择";
 }
@@ -93,20 +84,21 @@ function positionMenu(): void {
   menuStyle.value = { left: `${left}px`, top: `${rect.bottom + 6}px`, width: `${width}px` };
 }
 
-async function toggleMenu(): Promise<void> {
-  menuOpen.value = !menuOpen.value;
-  if (!menuOpen.value) return;
+async function openMenu(): Promise<void> {
   await nextTick();
   positionMenu();
   menu.value?.querySelector<HTMLButtonElement>("[aria-selected='true']")?.focus();
 }
 
+async function toggleMenu(): Promise<void> {
+  menuOpen.value = !menuOpen.value;
+  if (menuOpen.value) await openMenu();
+}
+
 async function openMenuFromKeyboard(): Promise<void> {
   if (menuOpen.value) return;
   menuOpen.value = true;
-  await nextTick();
-  positionMenu();
-  menu.value?.querySelector<HTMLButtonElement>("[aria-selected='true']")?.focus();
+  await openMenu();
 }
 
 function handleMenuKeydown(event: KeyboardEvent): void {
@@ -154,7 +146,7 @@ async function openCalendar(): Promise<void> {
   draftStartDate.value = props.startDate || formatDate(defaultStart);
   draftEndDate.value = props.endDate || formatDate(today);
   selectingBoundary.value = "start";
-  displayMonth.value = startOfMonth(parseDate(draftEndDate.value) ?? today);
+  displayMonth.value = startOfMonth(parseLocalDate(draftEndDate.value) ?? today);
   calendarOpen.value = true;
   await nextTick();
   calendarDialog.value?.focus();

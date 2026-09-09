@@ -186,8 +186,8 @@ pub fn refresh_summary(
                 },
                 _ => "mixed".to_string(),
             };
-            summary.file_count = file_count(file_info);
-            summary.hashed_count = hashed_count(file_info);
+            summary.file_count = count_files(file_info, false);
+            summary.hashed_count = count_files(file_info, true);
             tree_contents(file_info)
         }
         (None, Some(image)) => {
@@ -232,28 +232,18 @@ pub fn refresh_summary(
     entry.summary = summary;
 }
 
-fn file_count(file_info: &FileInfo) -> u64 {
-    fn walk(dir: &IndexMap<String, TreeNode>) -> u64 {
+/// Counts the tree's file leaves; `hashed_only` keeps only leaves whose
+/// content id the background hash has already resolved.
+fn count_files(file_info: &FileInfo, hashed_only: bool) -> u64 {
+    fn walk(dir: &IndexMap<String, TreeNode>, hashed_only: bool) -> u64 {
         dir.values()
             .map(|node| match node {
-                TreeNode::File { .. } => 1,
-                TreeNode::Dir(children) => walk(children),
+                TreeNode::File { f, .. } => u64::from(!hashed_only || !f.is_empty()),
+                TreeNode::Dir(children) => walk(children, hashed_only),
             })
             .sum()
     }
-    walk(file_info)
-}
-
-fn hashed_count(file_info: &FileInfo) -> u64 {
-    fn walk(dir: &IndexMap<String, TreeNode>) -> u64 {
-        dir.values()
-            .map(|node| match node {
-                TreeNode::File { f, .. } => u64::from(!f.is_empty()),
-                TreeNode::Dir(children) => walk(children),
-            })
-            .sum()
-    }
-    walk(file_info)
+    walk(file_info, hashed_only)
 }
 
 /// Resolves the original path a content came from, rejecting it when the file

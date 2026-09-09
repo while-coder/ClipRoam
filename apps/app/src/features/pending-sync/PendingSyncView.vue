@@ -40,10 +40,6 @@ const { isMobile } = usePlatform();
 function formatAge(createdAt: string): string {
   return formatAgeRelative(createdAt, props.currentTime);
 }
-
-function entryDeviceName(entry: ClipboardEntry): string {
-  return deviceDisplayName(props.devicesById, entry);
-}
 </script>
 
 <template>
@@ -70,7 +66,7 @@ function entryDeviceName(entry: ClipboardEntry): string {
         <span class="entry-body">
           <span class="entry-content">{{ entry.content }}</span>
           <span class="entry-meta">
-            <Monitor :size="12" /> {{ entryDeviceName(entry) }}
+            <Monitor :size="12" /> {{ deviceDisplayName(props.devicesById, entry) }}
             <span>·</span>
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
           </span>

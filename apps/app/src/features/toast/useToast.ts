@@ -50,4 +50,4 @@ function startToastWindowListener(): Promise<UnlistenFn> {
   });
 }
 
-export { toastPayload, showToast, displayToast, disposeToast, startToastWindowListener };
+export { toastPayload, showToast, disposeToast, startToastWindowListener };
