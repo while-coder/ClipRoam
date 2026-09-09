@@ -1,4 +1,4 @@
-package com.cliproam.mobile
+package com.while.cliproam
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

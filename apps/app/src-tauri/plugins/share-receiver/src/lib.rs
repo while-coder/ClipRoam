@@ -39,7 +39,7 @@ struct AcknowledgeRequest<'a> {
     id: &'a str,
 }
 
-const PLUGIN_IDENTIFIER: &str = "com.cliproam.share";
+const PLUGIN_IDENTIFIER: &str = "com.while.cliproam.share";
 
 fn mobile_init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,

@@ -1,4 +1,4 @@
-package com.cliproam.share
+package com.while.cliproam.share
 
 import android.app.Activity
 import android.content.Intent

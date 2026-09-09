@@ -118,7 +118,7 @@ pub fn run() {
             }
             clipboard::hashing::start_hash_worker(app.handle().clone(), receiver);
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            clipboard::monitor::start_clipboard_monitor(app.handle().clone());
+            clipboard::capture::start_clipboard_monitor(app.handle().clone());
 
             // Hashes that were still pending when the app last closed are
             // persisted, so they simply resume.
@@ -189,10 +189,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             windows::get_platform_capabilities,
             clipboard::capture::capture_current_clipboard_text,
-            clipboard::share::consume_mobile_shares,
+            clipboard::capture::consume_mobile_shares,
             history::list_entries,
             history::get_entry,
-            transfer::files::list_entry_files,
+            transfer::download::list_entry_files,
             sync::remote::filter_unknown_file_ids,
             history::get_device,
             sync::config::get_sync_config,
@@ -206,20 +206,20 @@ pub fn run() {
             history::delete_entry,
             history::clear_history,
             sync::remote::remove_remote_entry,
-            sync::queue::list_pending_deletions,
-            sync::queue::acknowledge_entry_deletion,
-            sync::queue::list_pending_entries,
-            sync::queue::acknowledge_pending_entry,
+            sync::remote::list_pending_deletions,
+            sync::remote::acknowledge_entry_deletion,
+            sync::remote::list_pending_entries,
+            sync::remote::acknowledge_pending_entry,
             windows::start_window_drag,
             windows::hide_paste,
             windows::hide_main,
-            windows::toast::show_toast,
-            windows::toast::hide_toast,
+            windows::show_toast,
+            windows::hide_toast,
             history::refresh_entry,
-            transfer::files::prepare_entry_files,
-            transfer::files::prepare_paste_entry,
+            transfer::download::prepare_entry_files,
+            transfer::download::prepare_paste_entry,
             transfer::save::prepare_save_entry,
-            transfer::files::read_file_chunk,
+            transfer::download::read_file_chunk,
             transfer::download::begin_file_download,
             transfer::download::append_file_download,
             transfer::download::finish_file_download,
