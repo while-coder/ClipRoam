@@ -4,19 +4,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::content::ClipboardEntry;
 use crate::file::collect_local_garbage;
-use crate::store::{
-    delete_entries_by_ids, history_path_for_key, save_metadata, upsert_entry_row,
-};
+use crate::store::{delete_entries_by_ids, history_path_for_key, upsert_entry_row};
 use crate::AppState;
-
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn upsert_remote_entry(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    entry: ClipboardEntry,
-) -> Result<(), String> {
-    upsert_remote_entries(app, state, vec![entry])
-}
 
 /// Reconciling a fresh install can deliver hundreds of remote entries at once;
 /// a single lock, save and event keeps that from locking up the windows.
@@ -60,7 +49,6 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
         state.with_database(&path, |connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
             delete_entries_by_ids(&transaction, std::slice::from_ref(&entry_id))?;
-            save_metadata(&transaction, &history)?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
         })?;

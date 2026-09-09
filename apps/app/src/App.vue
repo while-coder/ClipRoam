@@ -863,14 +863,6 @@ function handleKeys(event: KeyboardEvent): void {
   }
 }
 
-// Only reachable through `activateRemoteClipboard`, which already returns
-// outside Tauri — the browser-preview branch lives in `applyRemoteUpserts`.
-async function upsertRemote(entry: ClipboardEntry): Promise<void> {
-  markEntrySynced(entry);
-  await invoke("upsert_remote_entry", { entry });
-  refreshHistory();
-}
-
 async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   const config = activeSyncConfig;
   if (
@@ -885,8 +877,8 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   try {
     // The activation carries the complete entry so it remains safe even when
     // its history update and activation messages are handled concurrently —
-    // once `upsertRemote` resolves it is durable, no re-read needed.
-    await upsertRemote(entry);
+    // once `applyRemoteUpserts` resolves it is durable, no re-read needed.
+    await applyRemoteUpserts([entry]);
     let localEntry = entry as LocalClipboardEntry;
     if (activeSyncConfig !== config || !config.autoReceiveClipboard) return;
     if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
@@ -1106,7 +1098,6 @@ async function initializeTauriServices(): Promise<void> {
       }
       try {
         await client.downloadVirtualFile(payload);
-        await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
         refreshHistory();
       } catch (error) {
         await invoke("fail_virtual_file_request", {

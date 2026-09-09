@@ -15,7 +15,7 @@ use std::{
 use uuid::Uuid;
 use chrono::DateTime;
 
-use crate::content::{ClipboardEntry, ClipboardEntryExtra};
+use crate::content::{entry_row_extra_json, ClipboardEntry, ClipboardEntryExtra};
 use crate::utils::placeholders;
 
 pub const LOCAL_HISTORY_KEY: &str = "local";
@@ -153,6 +153,7 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
                 hash TEXT NOT NULL,
                 PRIMARY KEY (source, size, modified_at)
             );
+            CREATE INDEX IF NOT EXISTS hash_cache_hash ON hash_cache(hash);
             CREATE TABLE IF NOT EXISTS pending_entries (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
@@ -303,9 +304,11 @@ pub fn cache_dir_for_path(path: &Path) -> PathBuf {
 
 /// Writes one entry row, replacing any row with the same id. The full extra
 /// payload (rich text, trees, thumbnails) rides the row write, so hashing
-/// results and remote updates need no separate pass.
+/// results and remote updates need no separate pass. `sources` lives in its
+/// own column, so the row's extra omits `localSources` (see
+/// [`crate::content::entry_row_extra_json`]).
 pub fn upsert_entry_row(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
-    let extra = ClipboardEntryExtra::of(entry).json()?;
+    let extra = entry_row_extra_json(entry)?;
     let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
     connection
         .execute(

@@ -151,40 +151,6 @@ pub(crate) fn list_entries_manifest(
     })
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn list_entries_query(
-    state: State<'_, AppState>,
-    entry_ids: Vec<String>,
-) -> Result<Vec<ClipboardEntry>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let mut found = if entry_ids.is_empty() {
-        HashMap::new()
-    } else {
-        state.with_database(&path, |connection| {
-            let where_sql = format!("WHERE id IN ({})", crate::utils::placeholders(entry_ids.len()));
-            let values = entry_ids
-                .iter()
-                .map(|id| Value::Text(id.clone()))
-                .collect::<Vec<_>>();
-            select_entries(connection, &where_sql, "", &values)
-        })?
-        .into_iter()
-        .map(|entry| (entry.id.clone(), entry))
-        .collect::<HashMap<_, _>>()
-    };
-    // The caller's id order is preserved; missing ids are simply absent.
-    Ok(entry_ids
-        .iter()
-        .filter_map(|entry_id| {
-            let mut entry = found.remove(entry_id)?;
-            refresh_summary(&mut entry, &history.cached_files, &cache_dir);
-            Some(lightweight_entry(&entry))
-        })
-        .collect())
-}
-
 /// Every stored entry id, newest first — the local side of the sync
 /// reconcile's manifest diff and the "clear history" total.
 #[tauri::command(rename_all = "camelCase")]
@@ -217,13 +183,4 @@ pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
     refresh_summary(&mut entry, &history.cached_files, &cache_dir);
     Ok(entry)
-}
-
-/// Summaries are recomputed from the availability sets every time an entry is
-/// read, so this is a pure re-read trigger for the frontend; it exists to
-/// keep the invoke shape stable across the read-model change.
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn refresh_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let _ = (state, entry_id);
-    Ok(())
 }
