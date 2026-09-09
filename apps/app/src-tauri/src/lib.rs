@@ -3,7 +3,6 @@ mod clipboard;
 mod content;
 mod entry;
 mod file;
-mod history;
 mod pending;
 mod platforms;
 mod store;
@@ -24,7 +23,7 @@ use store::{
     cache_dir_for, default_active_history, history_path_for_key, load_history, DatabasePool,
     HistoryData,
 };
-use sync::config::SyncConfig;
+use sync::SyncConfig;
 use transfer::download::{DownloadState, VirtualDownloads};
 use transfer::save::SaveSession;
 
@@ -70,10 +69,10 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
-            let sync_config = sync::config::load_sync_config(&sync_config_path);
+            let sync_config = sync::load_sync_config(&sync_config_path);
             let history_key = sync_config
                 .as_ref()
-                .map(sync::config::history_key_for_config)
+                .map(sync::history_key_for_config)
                 .unwrap_or_else(default_active_history);
             let history = load_history(&history_path_for_key(&histories_dir, &history_key), &history_key);
             app.manage(AppState {
@@ -127,10 +126,10 @@ pub fn run() {
             file::query::history_file_ids,
             file::query::list_upload_candidates,
             transfer::download::list_entry_files,
-            history::get_device,
-            sync::config::get_sync_config,
+            app_shell::get_device,
+            sync::get_sync_config,
             app_shell::open_app_data_dir,
-            sync::config::save_sync_config,
+            sync::save_sync_config,
             entry::mutate::upsert_remote_entry,
             entry::mutate::upsert_remote_entries,
             entry::mutate::remove_remote_entry,

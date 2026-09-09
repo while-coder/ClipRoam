@@ -107,3 +107,14 @@ pub(crate) fn hide_toast(app: AppHandle) -> Result<(), String> {
     };
     window.hide().map_err(|error| error.to_string())
 }
+
+// ---------------------------------------------------------------------------
+// 设备身份
+// ---------------------------------------------------------------------------
+
+/// 当前设备身份，前端随每条条目显示来源设备名。
+#[tauri::command]
+pub(crate) fn get_device(state: tauri::State<'_, crate::AppState>) -> Result<(String, String), String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    Ok((history.device_id.clone(), history.device_name.clone()))
+}
