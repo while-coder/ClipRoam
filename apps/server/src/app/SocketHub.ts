@@ -6,7 +6,14 @@ import {
   type ServerMessage,
 } from "@cliproam/protocol";
 import { getLogger } from "./Logger.js";
-import type { ClientConnection, ConnectionTarget } from "./Connection.js";
+
+type ClientConnection = {
+  socket: WebSocket;
+  device: Device;
+  userId: string;
+};
+
+type ConnectionTarget = Pick<ClientConnection, "socket">;
 
 const logger = getLogger("SocketHub");
 

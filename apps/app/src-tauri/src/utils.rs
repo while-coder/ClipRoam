@@ -58,3 +58,16 @@ pub fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
 pub fn placeholders(count: usize) -> String {
     std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
 }
+
+/// Escapes LIKE wildcards so a keyword or a path matches literally. Callers
+/// pairing it with a `LIKE ?` must add `ESCAPE '\'`.
+pub fn escape_like(needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for character in needle.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}

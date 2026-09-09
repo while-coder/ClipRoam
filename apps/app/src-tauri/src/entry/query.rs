@@ -46,19 +46,6 @@ pub struct EntriesManifestPage {
     entries: Vec<ClipboardEntry>,
 }
 
-/// Escapes LIKE wildcards so the keyword matches literally, like the
-/// frontend's `String.includes`.
-fn escape_like(needle: &str) -> String {
-    let mut escaped = String::with_capacity(needle.len());
-    for character in needle.chars() {
-        if matches!(character, '%' | '_' | '\\') {
-            escaped.push('\\');
-        }
-        escaped.push(character);
-    }
-    escaped
-}
-
 /// Builds the WHERE clause and parameters for the manifest filters. Keyword
 /// matching mirrors the frontend's `clientManifest`: entry content, or the
 /// device label with the same "未知设备" fallback. SQLite's `lower()` folds
@@ -85,7 +72,7 @@ fn manifest_query(
         // the keyword test passes for all of them.
         if !(unknown_matches && device_names.is_empty()) {
             let mut alternatives = vec!["LOWER(content) LIKE ? ESCAPE '\\'".to_string()];
-            values.push(Value::Text(format!("%{}%", escape_like(needle))));
+            values.push(Value::Text(format!("%{}%", crate::utils::escape_like(needle))));
             if !matching_ids.is_empty() {
                 alternatives.push(format!(
                     "source_device_id IN ({})",
