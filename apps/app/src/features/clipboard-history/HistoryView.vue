@@ -14,7 +14,6 @@ import {
   Search,
   Settings2,
   Trash2,
-  Upload,
   X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
@@ -32,7 +31,6 @@ import {
   validateDateRange,
 } from "../../utils/format";
 import {
-  canManualUpload,
   canSaveEntry,
   deviceName as deviceDisplayName,
   fileEntrySummary,
@@ -68,7 +66,6 @@ const props = defineProps<{
   currentTime: number;
   importingShare: boolean;
   activatingEntryId: string;
-  uploadingEntryId: string;
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
@@ -80,7 +77,6 @@ const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
   remove: [entry: ClipboardEntry];
   save: [entry: LocalClipboardEntry];
-  upload: [entry: LocalClipboardEntry];
   refresh: [];
   "open-settings": [];
 }>();
@@ -505,16 +501,6 @@ defineExpose({ handleKeydown, focusSearch });
             @click.stop="emit('save', entry)"
             @keydown.enter.stop="emit('save', entry)"
           ><LoaderCircle v-if="savingEntryId === entry.id" :size="15" class="spin" /><Download v-else :size="15" /></span>
-          <span
-            v-if="canManualUpload(entry)"
-            class="item-action"
-            role="button"
-            tabindex="0"
-            :title="uploadingEntryId === entry.id ? '正在上传…' : '上传到服务器（小于 100 MB）'"
-            :aria-label="uploadingEntryId === entry.id ? '正在上传' : '上传到服务器'"
-            @click.stop="emit('upload', entry)"
-            @keydown.enter.stop="emit('upload', entry)"
-          ><LoaderCircle v-if="uploadingEntryId === entry.id || uploadProgressByEntryId[entry.id]" :size="15" class="spin" /><Upload v-else :size="15" /></span>
           <span
             class="item-action danger"
             role="button"

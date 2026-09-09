@@ -270,16 +270,7 @@ export class SyncClient {
     // Publish the metadata first. Other devices can then retrieve the original
     // from this online device while the server copy is still uploading.
     const stored = await this.#publishEntry(entry);
-    await this.#uploadEntry(entry, this.autoUploadLimit, false);
-    return stored;
-  }
-
-  async upload(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    // A manual upload can be the first time the server learns about this entry.
-    // Without the reference, garbage collection would reclaim the contents that
-    // were just uploaded.
-    const stored = await this.#publishEntry(entry);
-    await this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, true);
+    await this.#uploadEntry(entry, this.autoUploadLimit);
     return stored;
   }
 
@@ -381,7 +372,7 @@ export class SyncClient {
     const stored = await this.#publishEntry(payload);
     // The upload commands still address the local entry, which keeps its
     // temporary id until `apply_published_entry` swaps it.
-    await this.#uploadEntry({ ...payload, id: row.localId } as ClipboardEntry, this.autoUploadLimit, false);
+    await this.#uploadEntry({ ...payload, id: row.localId } as ClipboardEntry, this.autoUploadLimit);
     const adopted = await invoke<boolean>("apply_published_entry", {
       localEntryId: row.localId,
       entry: stored,
@@ -409,16 +400,11 @@ export class SyncClient {
     return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
   }
 
-  async #uploadEntry(
-    entry: ClipboardEntry,
-    sizeLimit: number,
-    reportFailures: boolean,
-    forceUpload = false,
-  ): Promise<void> {
+  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number, forceUpload = false): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
     if (existingUpload) return existingUpload;
 
-    const upload = this.#uploadFiles(entry, sizeLimit, reportFailures, forceUpload);
+    const upload = this.#uploadFiles(entry, sizeLimit, forceUpload);
     this.#entryUploads.set(entry.id, upload);
     try {
       await upload;
@@ -434,7 +420,6 @@ export class SyncClient {
   async #uploadFiles(
     entry: ClipboardEntry,
     sizeLimit: number,
-    reportFailures: boolean,
     forceUpload: boolean,
   ): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
@@ -442,10 +427,7 @@ export class SyncClient {
     const candidates = files.filter((file) => (
       file.size < sizeLimit && (forceUpload || !file.uploaded)
     ));
-    if (!candidates.length) {
-      if (reportFailures) throw new Error("没有小于 100 MB 的未上传文件");
-      return;
-    }
+    if (!candidates.length) return;
 
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
     const uploadedByFileId = new Map(candidates.map((file) => [file.fileId, 0]));
@@ -478,12 +460,7 @@ export class SyncClient {
       ));
       if (sourceFailure?.status === "rejected") {
         this.handlers.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
-        if (reportFailures) throw sourceFailure.reason;
         return;
-      }
-      if (reportFailures) {
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure?.status === "rejected") throw failure.reason;
       }
     } finally {
       this.handlers.onUploadFinished(entry.id);

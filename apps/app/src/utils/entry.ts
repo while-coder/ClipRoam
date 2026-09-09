@@ -53,14 +53,6 @@ export function uploadStatus(
   return "未上传";
 }
 
-export function canManualUpload(entry: LocalClipboardEntry): boolean {
-  const uploadableSize = entry.summary.uploadableSize;
-  return runningInTauri
-    && !isHashing(entry)
-    && uploadableSize !== undefined
-    && uploadableSize < MANUAL_UPLOAD_LIMIT;
-}
-
 export function fileEntrySummary(entry: LocalClipboardEntry): string | undefined {
   if (entry.kind !== "files" || !entry.summary.fileCount) return undefined;
   const count = `${entry.summary.fileCount} 个文件`;

@@ -21,6 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
+use chrono::DateTime;
 
 use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
 
@@ -186,6 +187,10 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     }
     // Dropping an indexed column fails, so the index goes first.
     schema.push_str("DROP INDEX IF EXISTS entries_source_app_created_at;\n");
+    // Timestamps are ordered by the numeric `created_ms` column (string RFC3339
+    // orders wrongly across variable-length subsecond digits and `Z`/`+00:00`).
+    schema.push_str("DROP INDEX IF EXISTS entries_created_at;\n");
+    schema.push_str("DROP INDEX IF EXISTS entries_kind_created_at;\n");
     for column in ["pinned", "source_app"] {
         if entry_columns.iter().any(|name| name == column) {
             schema.push_str(&format!("ALTER TABLE entries DROP COLUMN {column};\n"));
@@ -224,11 +229,12 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
             content TEXT NOT NULL,
             extra TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
+            created_ms INTEGER NOT NULL DEFAULT 0,
             source_device_id TEXT NOT NULL,
             sources TEXT NOT NULL DEFAULT '{}'
         );
-        CREATE INDEX IF NOT EXISTS entries_created_at ON entries(created_at DESC);
-        CREATE INDEX IF NOT EXISTS entries_kind_created_at ON entries(kind, created_at DESC);
+        CREATE INDEX IF NOT EXISTS entries_created_ms ON entries(created_ms DESC);
+        CREATE INDEX IF NOT EXISTS entries_kind_created_ms ON entries(kind, created_ms DESC);
         CREATE TABLE IF NOT EXISTS files (
             file_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,
@@ -246,7 +252,135 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch(&schema)
         .map_err(|error| error.to_string())?;
+    // Databases written before `created_ms` existed get the column added and
+    // backfilled here; fresh databases created it in the schema above. Columns
+    // are re-read after the schema batch so a crash between the ALTER and the
+    // backfill resumes cleanly instead of failing on a duplicate column. The
+    // timestamps come from two clocks (local `Utc::now().to_rfc3339()` and the
+    // server's publish response), so the parse runs in Rust instead of relying
+    // on SQLite date functions to accept every RFC3339 spelling.
+    let stamped = table_columns(&connection, "entries")?
+        .iter()
+        .any(|name| name == "created_ms");
+    if !stamped {
+        connection
+            .execute("ALTER TABLE entries ADD COLUMN created_ms INTEGER", [])
+            .map_err(|error| error.to_string())?;
+        let unstamped = {
+            let mut statement = connection
+                .prepare("SELECT id, created_at FROM entries WHERE created_ms IS NULL")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        let mut stamp = connection
+            .prepare("UPDATE entries SET created_ms = ? WHERE id = ?")
+            .map_err(|error| error.to_string())?;
+        for (id, created_at) in unstamped {
+            stamp
+                .execute(params![entry_created_ms(&created_at), id])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    // Safety net for the upload queue: rows whose temporary-id entry is gone
+    // (missed explicit cleanup, crash between writes) would otherwise replay
+    // forever. Runs on every open; the drain flow acknowledges leftovers too.
+    connection
+        .execute(
+            "DELETE FROM pending_entries WHERE 'p' || seq NOT IN (SELECT id FROM entries)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
     Ok(connection)
+}
+
+/// Millisecond timestamp of an RFC3339 `created_at`; 0 when unparseable, so a
+/// malformed row sorts last instead of poisoning the index with NULLs.
+pub fn entry_created_ms(created_at: &str) -> i64 {
+    DateTime::parse_from_rfc3339(created_at)
+        .map(|time| time.timestamp_millis())
+        .unwrap_or(0)
+}
+
+const ENTRY_COLUMNS: &str = "id, kind, content, extra, created_at, source_device_id, sources";
+
+/// Builds a `ClipboardEntry` from one `entries` row. `summary` is derived
+/// state and starts empty — recompute with `refresh_summary` before the entry
+/// leaves the backend.
+pub fn entry_from_row(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
+    let extra =
+        serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
+    Ok(ClipboardEntry {
+        id: row.get("id")?,
+        kind: row.get("kind")?,
+        content: row.get("content")?,
+        html: extra.html,
+        rtf: extra.rtf,
+        file_info: extra.file_info,
+        image_info: extra.image_info,
+        source_device_id: row.get("source_device_id")?,
+        created_at: row.get("created_at")?,
+        summary: Default::default(),
+        sources: serde_json::from_str(&row.get::<_, String>("sources")?).unwrap_or_default(),
+    })
+}
+
+/// Reads entries. `where_sql` and `suffix_sql` are appended after the column
+/// list; both are built only from literals and interpolated integers inside
+/// this crate, never from user input (values travel as `?` parameters).
+pub fn select_entries(
+    connection: &Connection,
+    where_sql: &str,
+    suffix_sql: &str,
+    values: &[rusqlite::types::Value],
+) -> Result<Vec<ClipboardEntry>, String> {
+    let sql = format!("SELECT {ENTRY_COLUMNS} FROM entries {where_sql}{suffix_sql}");
+    let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params_from_iter(values), entry_from_row)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+pub fn count_entries(
+    connection: &Connection,
+    where_sql: &str,
+    values: &[rusqlite::types::Value],
+) -> Result<usize, String> {
+    let sql = format!("SELECT COUNT(*) FROM entries {where_sql}");
+    connection
+        .query_row(&sql, params_from_iter(values), |row| row.get::<_, i64>(0))
+        .map(|count| count.max(0) as usize)
+        .map_err(|error| error.to_string())
+}
+
+/// Newest-first ordering with the stable same-millisecond tie-break (rows
+/// inserted later within one millisecond sort first, matching the capture
+/// path's insert-at-front). The optional page limit is interpolated as an
+/// integer only.
+pub fn newest_first_sql(limit: Option<usize>, offset: usize) -> String {
+    let mut sql = " ORDER BY created_ms DESC, rowid DESC".to_string();
+    if let Some(limit) = limit {
+        sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+    }
+    sql
+}
+
+pub fn select_all_entry_ids(connection: &Connection) -> Result<Vec<String>, String> {
+    let sql = format!("SELECT id FROM entries{}", newest_first_sql(None, 0));
+    let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(ids)
 }
 
 pub fn load_history(path: &Path, key: &str) -> HistoryData {
@@ -277,29 +411,7 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         }
     }
 
-    let mut entries = Vec::new();
-    if let Ok(mut statement) = connection.prepare(
-        "SELECT id, kind, content, extra, source_device_id, created_at, sources FROM entries ORDER BY created_at DESC",
-    ) {
-        if let Ok(rows) = statement.query_map([], |row| {
-            let extra = serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
-            Ok(ClipboardEntry {
-                id: row.get("id")?,
-                kind: row.get("kind")?,
-                content: row.get("content")?,
-                html: extra.html,
-                rtf: extra.rtf,
-                file_info: extra.file_info,
-                image_info: extra.image_info,
-                source_device_id: row.get("source_device_id")?,
-                created_at: row.get("created_at")?,
-                summary: Default::default(),
-                sources: serde_json::from_str(&row.get::<_, String>("sources")?).unwrap_or_default(),
-            })
-        }) {
-            entries.extend(rows.flatten());
-        }
-    }
+    let entries = select_entries(&connection, "", &newest_first_sql(None, 0), &[]).unwrap_or_default();
 
     // Every row marks content the server pool holds; the migration has
     // already swept rows that only carried the old local-cache flag.
@@ -390,13 +502,14 @@ pub fn flush_history(
         let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, created_ms, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     entry.id,
                     entry.kind,
                     entry.content,
                     extra,
                     entry.created_at,
+                    entry_created_ms(&entry.created_at),
                     entry.source_device_id,
                     sources,
                 ],
