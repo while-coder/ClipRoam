@@ -1,15 +1,18 @@
-//! 同步时的内容解析：files 条目带着 `f: ""` 占位树进入历史，上传队列的
-//! drain 取到该行时才在这里把内容 id（sha256）解析出来。文本与图片在捕获
-//! 时就已完成，不会走到这里。
+//! 同步时的内容解析：files 队列行带着 `f: ""` 占位树进入队列，上传队列的
+//! drain 取到该行时才在这里把内容 id（sha256）解析出来并写回该行。文本与
+//! 图片在捕获时就已完成，不会走到这里。
 
 use std::{collections::HashMap, path::Path};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::content::{describe_roots, hash_file, tree_parent_at_path, ClipboardEntryExtra, TreeNode};
-use crate::store::{cached_hash, history_path_for_key, remember_hash, select_entry};
+use super::{list_rows, row_entry};
+use crate::content::{
+    describe_roots, hash_file, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
+};
+use crate::store::{cached_hash, history_path_for_key, remember_hash};
 use crate::AppState;
 
-/// How many freshly hashed paths are folded into the entry before the UI is
+/// How many freshly hashed paths are folded into the row before the UI is
 /// told about the progress.
 const HASH_PROGRESS_BATCH: usize = 32;
 
@@ -20,33 +23,36 @@ struct PendingHash {
     modified_at: Option<u64>,
 }
 
-/// Resolves every still-unresolved content id of a `files` entry, folding the
-/// results into its SQLite row. Runs when the upload queue's drain reaches the
-/// entry. A vanished entry — deleted while the queue waited — ends the run
-/// quietly; the caller cleans up the queue row. Idempotent:
-/// already-resolved sources are skipped.
-pub fn resolve_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
+/// Resolves every still-unresolved content id of a `files` queue row, folding
+/// the results back into the row itself. Runs when the upload queue's drain
+/// reaches the row. Idempotent: already-resolved sources are skipped.
+pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let (history_key, pending) = {
+    let (history_key, mut entry) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let Some(entry) = state.with_database(&path, |connection| select_entry(connection, entry_id))? else {
+        let Some(row) = state.with_database(&path, |connection| {
+            Ok(list_rows(connection)?
+                .into_iter()
+                .find(|row| row.seq == seq))
+        })?
+        else {
             return Ok(());
         };
-        let pending = entry
-            .sources
-            .files
-            .iter()
-            .filter(|source| source.file_id.is_none())
-            .map(|source| PendingHash {
-                path: source.path.clone(),
-                source: source.source.clone(),
-                size: source.size,
-                modified_at: source.modified_at,
-            })
-            .collect::<Vec<_>>();
-        (history.active_history.clone(), pending)
+        (history.active_history.clone(), row_entry(&row))
     };
+    let pending = entry
+        .sources
+        .files
+        .iter()
+        .filter(|source| source.file_id.is_none())
+        .map(|source| PendingHash {
+            path: source.path.clone(),
+            source: source.source.clone(),
+            size: source.size,
+            modified_at: source.modified_at,
+        })
+        .collect::<Vec<_>>();
     if pending.is_empty() {
         return Ok(());
     }
@@ -74,36 +80,26 @@ pub fn resolve_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String
             });
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            if apply_hashes(app, entry_id, &batch)?.is_none() {
-                return Ok(());
-            }
+            apply_hashes(app, seq, &mut entry, &batch)?;
             batch.clear();
         }
     }
-    if !batch.is_empty() && apply_hashes(app, entry_id, &batch)?.is_none() {
-        return Ok(());
+    if !batch.is_empty() {
+        apply_hashes(app, seq, &mut entry, &batch)?;
     }
     Ok(())
 }
 
-/// Folds resolved content ids into the entry row. Only the SQLite row is
-/// written — the queue row keeps the capture-time payload, and the publish
-/// flow reads the resolved entry back from here.
+/// Folds resolved content ids into the queue row: the tree leaves, the content
+/// description (so keyword search stays true) and the sources whose files
+/// vanished between copy and hash.
 fn apply_hashes(
     app: &AppHandle,
-    entry_id: &str,
+    seq: i64,
+    entry: &mut ClipboardEntry,
     resolved: &[(String, Option<String>)],
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let Some(mut entry) = state
-        .with_database(&path, |connection| select_entry(connection, entry_id))?
-    else {
-        // The row is gone — the entry was deleted while hashing ran. Drop
-        // silently; the caller stops the run.
-        return Ok(None);
-    };
     let hashes = resolved
         .iter()
         .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
@@ -135,28 +131,25 @@ fn apply_hashes(
         Some(None) => false,
         None => true,
     });
-    // The tree changed, so the stored content description is refreshed too and
-    // the keyword search stays true.
     let content = match &entry.file_info {
         Some(file_info) => describe_roots(file_info),
         None => entry.content.clone(),
     };
-    let extra = ClipboardEntryExtra::of(&entry).json()?;
+    let extra = ClipboardEntryExtra::of(entry).json()?;
     let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
-    let final_entry_id = entry.id.clone();
-    let changed = state.with_database(&path, |connection| {
-        connection
-            .execute(
-                "UPDATE entries SET content = ?, extra = ?, sources = ? WHERE id = ?",
-                rusqlite::params![content, extra, sources, final_entry_id],
-            )
-            .map_err(|error| error.to_string())
-    })?;
-    if changed == 0 {
-        return Ok(None);
+    {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| {
+            connection
+                .execute(
+                    "UPDATE pending_entries SET content = ?, extra = ?, sources = ? WHERE seq = ?",
+                    rusqlite::params![content, extra, sources, seq],
+                )
+                .map_err(|error| error.to_string())
+        })?;
     }
-    drop(history);
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())?;
-    Ok(Some(final_entry_id))
+    Ok(())
 }
