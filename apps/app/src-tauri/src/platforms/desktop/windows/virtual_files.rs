@@ -7,7 +7,8 @@
 
 use crate::{
     clipboard::output::snapshot_entry,
-    content::{download_path, is_file_id, ClipboardEntry, FileInfo, TreeNode},
+    content::{ClipboardEntry, FileInfo, TreeNode},
+    file::{download_path, is_file_id},
     AppState,
 };
 use serde::Serialize;

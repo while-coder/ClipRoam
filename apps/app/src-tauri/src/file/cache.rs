@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{cache_dir_for, HistoryData};
+use crate::store::{cache_dir_for, HistoryData};
 use crate::content::{modified_millis, tree_contents, ClipboardEntryExtra, LocalSources};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;

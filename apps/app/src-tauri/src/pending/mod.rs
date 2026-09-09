@@ -1,17 +1,13 @@
 //! 持久上传队列（pending）：捕获与同步之间的唯一缓冲，与 entries 表零关联。
 //!
-//! 队列只有四个操作：
-//! - **Enqueue**：[`enqueue`]，捕获时追加一行（`sources` 一并入队，供
-//!   `files` 行稍后解析内容 id）；
-//! - **Peek**：[`next_pending_entry`]，同步 drain 取最早一行，`files` 行先
-//!   经 [`resolve_entry_files`] 把 sha256 写回本行；失败的行通过 `skip_seqs`
-//!   暂时跳过（不删，重连后重试）；
-//! - **Dequeue**：[`dequeue_pending_entry`]，同步成功后清理该行；用户在待
-//!   同步页手动删除也走这里（payload 只存在于本行，删即全部删除）；
-//! - **List**：[`list_pending_entries`]，待同步视图的纯展示读取。
+//! 四个操作：
+//! - **Enqueue**：[`enqueue_pending_entry`]，捕获时入队；
+//! - **Peek**：[`peek_pending_entry`]，取最早一行；files 行先把 sha256
+//!   解析写回本行，失败行用 `skip_seqs` 暂时跳过；
+//! - **Dequeue**：[`dequeue_pending_entry`]，同步成功后删除该行；
+//! - **List**：[`list_pending_entries`]，待同步视图的展示数据。
 //!
-//! 发布成功后服务器把新条目经 `clipboard.created` 回显入库（服务器 id），
-//! 本地不再换绑任何 id。
+//! 发布成功后新条目由服务器 `clipboard.created` 回显入库（服务器 id）。
 
 mod resolve;
 
@@ -27,20 +23,12 @@ use crate::{active_cache_dir, AppState};
 
 use rusqlite::{params, Connection};
 
-/// Display identity of a queue row in the pending-sync view: `p` + seq. It
-/// never enters the `entries` table — the server assigns the real id, which
-/// arrives through the publish echo.
-pub fn temp_entry_id(seq: i64) -> String {
-    format!("p{seq}")
-}
-
 // ---------------------------------------------------------------------------
 // Enqueue
 // ---------------------------------------------------------------------------
 
-/// Appends one capture payload to the queue; the returned seq names the row
-/// until it is dequeued.
-pub fn enqueue(
+/// 入队一条捕获 payload，返回该行的 seq。
+pub fn enqueue_pending_entry(
     connection: &Connection,
     kind: &str,
     content: &str,
@@ -57,13 +45,9 @@ pub fn enqueue(
     Ok(connection.last_insert_rowid())
 }
 
-/// Creates the queue table, backfills the `sources` column, and folds any
-/// leftover temporary rows from the old capture design back into the queue.
-/// `open_history_database` calls this once per open.
+/// 建队列表，补齐 `sources` 列。打开历史库时调用。
 pub(crate) fn init_table(connection: &Connection) -> Result<(), String> {
-    // Databases written by older builds queued `(seq, entry_id, queued_at)`
-    // references instead of the payload; that data is not migrated — the
-    // table is recreated.
+    // 更老版本的队列表存的是引用而非 payload，无法迁移，直接重建。
     let columns = crate::store::table_columns(connection, "pending_entries")?;
     let outdated = !columns.iter().any(|name| name == "content");
     if outdated {
@@ -92,44 +76,19 @@ pub(crate) fn init_table(connection: &Connection) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    migrate_legacy_temp_rows(connection)
-}
-
-/// Old builds kept unpublished captures as temporary `p<seq>` rows in
-/// `entries` and re-keyed them on publish. That coupling is gone; any rows a
-/// previous version left behind become queue rows so their payloads survive.
-fn migrate_legacy_temp_rows(connection: &Connection) -> Result<(), String> {
-    let mut statement = connection
-        .prepare("SELECT kind, content, extra, sources, created_at FROM entries WHERE id LIKE 'p%'")
-        .map_err(|error| error.to_string())?;
-    let legacy = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>("kind")?,
-                row.get::<_, String>("content")?,
-                row.get::<_, String>("extra")?,
-                row.get::<_, String>("sources")?,
-                row.get::<_, String>("created_at")?,
-            ))
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    drop(statement);
-    for (kind, content, extra, sources, created_at) in legacy {
-        enqueue(connection, &kind, &content, &extra, &sources, &created_at)?;
-    }
-    connection
-        .execute("DELETE FROM entries WHERE id LIKE 'p%'", [])
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
+/// 待同步视图里队列行的显示 id：`p` + seq，不进 entries 表。
+pub fn temp_entry_id(seq: i64) -> String {
+    format!("p{seq}")
+}
+
 // ---------------------------------------------------------------------------
-// 存储：行读取与行→条目视图
+// 存储
 // ---------------------------------------------------------------------------
 
-/// One queue row as stored.
+/// 一行队列数据的存储形态。
 #[derive(Clone)]
 pub(crate) struct PendingRow {
     pub(crate) seq: i64,
@@ -140,7 +99,7 @@ pub(crate) struct PendingRow {
     pub(crate) created_at: String,
 }
 
-/// Every queue row, oldest first. Shared by Peek and List.
+/// 全部队列行，最早在前。Peek 与 List 共用。
 pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, String> {
     let mut statement = connection
         .prepare("SELECT seq, kind, content, extra, sources, created_at FROM pending_entries ORDER BY seq ASC")
@@ -162,8 +121,7 @@ pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, Stri
     Ok(rows)
 }
 
-/// The queue row as an entry-shaped view: the display id is `p{seq}` and the
-/// payload comes straight from the row.
+/// 队列行转条目视图：显示 id 为 `p{seq}`，payload 取自行本身。
 pub(crate) fn row_entry(row: &PendingRow) -> ClipboardEntry {
     let extra: ClipboardEntryExtra = serde_json::from_str(&row.extra).unwrap_or_default();
     let sources: LocalSources = serde_json::from_str(&row.sources).unwrap_or_default();
@@ -186,9 +144,7 @@ pub(crate) fn row_entry(row: &PendingRow) -> ClipboardEntry {
 // Peek
 // ---------------------------------------------------------------------------
 
-/// One publishable queue row for the sync client. Capture already wrote the
-/// complete payload, and files resolution folds its result back into the row,
-/// so the publish request needs nothing else.
+/// 给同步客户端的一个可发布队列行。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PendingRowView {
@@ -198,30 +154,32 @@ pub(crate) struct PendingRowView {
     extra: serde_json::Value,
 }
 
-/// The oldest publishable row, or `None` when the queue is empty. Rows whose
-/// seq is in `skip_seqs` are left in place for a later retry — a row that
-/// keeps failing must not block the rest of the queue, and it must not be
-/// dropped either: the queue row is the payload's only home.
+/// 取最早的可发布行，队列为空时返回 `None`。`skip_seqs` 里的行原地跳过
+/// （不删，等待重试）。
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn next_pending_entry(
+pub(crate) fn peek_pending_entry(
     app: tauri::AppHandle,
     skip_seqs: Option<Vec<i64>>,
 ) -> Result<Option<PendingRowView>, String> {
     let skip = skip_seqs.unwrap_or_default();
-    let rows = read_rows(&app.state::<AppState>())?;
-    for row in rows {
+    let state = app.state::<AppState>();
+    // files 行解析前后各读一次队列，读时只短暂持锁。
+    let read = |state: &tauri::State<'_, AppState>| -> Result<Vec<PendingRow>, String> {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| list_rows(connection))
+    };
+    for row in read(&state)? {
         if skip.contains(&row.seq) {
             continue;
         }
         if row.kind == "files" {
-            // Resolving a large tree can take a while, so the history lock is
-            // released for it (`resolve_entry_files` re-locks per batch). The
-            // resolved payload is written back to the row, so it is re-read.
+            // 解析大目录耗时，期间不持锁；结果写回本行，所以要重读。
             resolve_entry_files(&app, row.seq)?;
-            let resolved = read_rows(&app.state::<AppState>())?
-                .into_iter()
-                .find(|resolved| resolved.seq == row.seq);
-            let Some(resolved) = resolved else { continue };
+            let Some(resolved) = read(&state)?.into_iter().find(|resolved| resolved.seq == row.seq)
+            else {
+                continue;
+            };
             return Ok(Some(PendingRowView {
                 seq: resolved.seq,
                 kind: resolved.kind,
@@ -239,12 +197,7 @@ pub(crate) fn next_pending_entry(
     Ok(None)
 }
 
-fn read_rows(state: &tauri::State<'_, AppState>) -> Result<Vec<PendingRow>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| list_rows(connection))
-}
-
+/// 行内 extra 转发布 payload；损坏的行发空 extra，不卡住后面的队列。
 fn publish_extra(extra: &str) -> serde_json::Value {
     serde_json::from_str(extra).unwrap_or_else(|_| {
         serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
@@ -255,9 +208,7 @@ fn publish_extra(extra: &str) -> serde_json::Value {
 // Dequeue
 // ---------------------------------------------------------------------------
 
-/// Removes one queue row — the sync client after a successful publish, or the
-/// user from the pending-sync view. The payload lives nowhere else, so this
-/// is the whole delete.
+/// 删除一行队列。payload 只在本行，删即全部删除。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     {
@@ -277,8 +228,7 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 // List
 // ---------------------------------------------------------------------------
 
-/// Every queue row as an entry-shaped view — the durable pending list behind
-/// the sidebar badge and the pending-sync view.
+/// 全部队列行，条目形态——待同步视图与侧边栏角标的数据。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;

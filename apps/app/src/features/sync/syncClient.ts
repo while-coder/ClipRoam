@@ -309,7 +309,7 @@ export class SyncClient {
   async #runDrain(): Promise<void> {
     while (!this.#stopped) {
       const skipSeqs = [...this.#skippedRows];
-      const row = await invoke<PendingQueueRow | null>("next_pending_entry", {
+      const row = await invoke<PendingQueueRow | null>("peek_pending_entry", {
         skipSeqs: skipSeqs.length ? skipSeqs : null,
       });
       if (!row) return;

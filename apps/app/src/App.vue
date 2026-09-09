@@ -71,10 +71,9 @@ const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform(
 const { initUpdaterVersion } = useUpdater();
 
 /**
- * Entries the server manifest does not know about: captured offline, queued for
- * publishing, or waiting for their content ids (hashing). Served by Rust's
- * `list_unpublished_entries` (every entry still carrying a temporary id) —
- * never derived from a whole-history read.
+ * The durable upload queue's rows: captured offline or waiting to publish.
+ * Served by Rust's `list_pending_entries` (every queue row as an entry-shaped
+ * view with a temporary `p{seq}` id) — never derived from a whole-history read.
  */
 const pendingEntries = ref<LocalClipboardEntry[]>([]);
 /** Total entries across every filter; backs the clear-history affordance. */
@@ -229,7 +228,7 @@ async function refreshPendingEntries(): Promise<void> {
     return;
   }
   try {
-    pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_unpublished_entries");
+    pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_pending_entries");
   } catch (error) {
     showToast(`待同步记录读取失败：${errorMessage(error)}`, "error");
   }
@@ -336,27 +335,6 @@ async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
     return;
   }
   refreshHistory();
-}
-
-/**
- * A publish response carries the server's identity: its id and timestamp
- * replace the local content-hash id so every later operation keys on the
- * server's space. Returns false only when the local record could not be
- * updated to the server's key — callers keeping an upload queue must keep
- * the entry queued in that case. An entry deleted locally while the publish
- * was in flight still adopts fine; the just-created server row follows it.
- */
-async function adoptPublishedEntry(localEntryId: string, entry: ClipboardEntry): Promise<boolean> {
-  if (!runningInTauri) return true;
-  try {
-    const adopted = await invoke<boolean>("apply_published_entry", { localEntryId, entry });
-    if (!adopted) await syncClient?.delete(entry.id).catch(() => undefined);
-    return true;
-  } catch (error) {
-    // Local and server keys can only re-converge through the next reconcile.
-    showToast(`同步本地记录失败：${errorMessage(error)}`, "error");
-    return false;
-  }
 }
 
 function rememberDevices(devices: Device[]): void {
@@ -573,8 +551,8 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
 
 /**
  * A larger automatic-upload limit can make old local files newly eligible.
- * Reuse the normal publish path so entries that already exist on the server
- * only transfer their missing contents and keep the usual progress feedback.
+ * Nothing is published — these entries already live on the server — so this
+ * only re-uploads their contents, which the content-addressed pool absorbs.
  */
 async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
   const client = syncClient;
@@ -592,8 +570,8 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
   for (const entry of candidates) {
     if (syncClient !== client) return;
     try {
-      const stored = await client.publish(await fullEntry(entry));
-      await adoptPublishedEntry(entry.id, stored);
+      // Uploads need the directory tree, so it is fetched per entry.
+      await client.uploadEntryContents(await fullEntry(entry));
     } catch (error) {
       if (syncClient === client) {
         showToast(`自动上传失败：${errorMessage(error)}`, "error");
@@ -657,10 +635,23 @@ function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   }
 }
 
+/** A pending row's display id is `p{seq}`; extract the seq its Dequeue takes. */
+function pendingSeqOf(entryId: string): number | null {
+  return /^p\d+$/.test(entryId) ? Number(entryId.slice(1)) : null;
+}
+
 // Deletion is server-authoritative: the request goes out, and the local entry
 // is only cleaned up when the `clipboard.deleted` echo arrives (the server
-// broadcasts to every device, including the initiator).
+// broadcasts to every device, including the initiator). A pending queue row
+// never reached the server, so it is dequeued outright.
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
+  const seq = pendingSeqOf(entry.id);
+  if (seq !== null) {
+    await invoke("dequeue_pending_entry", { seq }).catch((error) => {
+      showToast(`删除失败：${errorMessage(error)}`, "error");
+    });
+    return;
+  }
   const client = syncClient;
   if (!client) {
     showToast("网络异常，暂时无法删除，请检查同步连接", "error");
@@ -696,7 +687,18 @@ async function clearHistory(): Promise<void> {
     await client.delete(entryId).catch(() => { failures += 1; });
   }
   if (failures > 0) throw new Error(`${failures} 条记录删除失败，请重试`);
-  // Each entry's local cleanup rides its own `clipboard.deleted` echo.
+  // Each entry's local cleanup rides its own `clipboard.deleted` echo. Pending
+  // rows never reached the server; they are dropped locally, or the drain
+  // would republish them right after the clear.
+  if (runningInTauri) {
+    const pending = await invoke<LocalClipboardEntry[]>("list_pending_entries").catch(() => []);
+    for (const entry of pending) {
+      const seq = pendingSeqOf(entry.id);
+      if (seq !== null) {
+        await invoke("dequeue_pending_entry", { seq }).catch(() => undefined);
+      }
+    }
+  }
 }
 
 async function getDevice(): Promise<Device> {

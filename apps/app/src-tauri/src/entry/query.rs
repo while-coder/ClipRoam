@@ -1,4 +1,4 @@
-//! 条目读取：manifest / query / ids / 候选上传 / 单条读取。
+//! 条目读取：manifest / query / ids / 单条读取。
 //! Entries live in SQLite; every read goes through SQL, and each row's derived
 //! `summary` is recomputed just before it leaves the backend.
 
@@ -9,8 +9,7 @@ use tauri::State;
 
 use crate::content::{refresh_summary, ClipboardEntry};
 use crate::store::{
-    count_entries, history_file_ids as store_history_file_ids, history_path_for_key,
-    newest_first_sql, select_all_entry_ids, select_entries,
+    count_entries, history_path_for_key, newest_first_sql, select_all_entry_ids, select_entries,
 };
 use crate::{active_cache_dir, AppState};
 
@@ -21,9 +20,6 @@ const MANIFEST_PAGE_SIZE: usize = 50;
 /// Matches the fallback in the frontend's `deviceName` helper, so searching by
 /// it finds the same entries in both places.
 const UNKNOWN_DEVICE_LABEL: &str = "未知设备";
-/// Upper bound for `list_upload_candidates`, so a huge library cannot turn a
-/// settings toggle into an unbounded publish run.
-const UPLOAD_CANDIDATE_LIMIT: usize = 500;
 
 /// Filters for `list_entries_manifest`, mirroring `GET /entries/manifest` on
 /// the server: keyword, kind and time range, then a page of the matches. An
@@ -204,50 +200,6 @@ pub(crate) fn total_entry_count(state: State<'_, AppState>) -> Result<usize, Str
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     state.with_database(&path, |connection| count_entries(connection, "", &[]))
-}
-
-/// Every content id the durable history references, derived from the entries'
-/// extras Rust-side so the whole history never crosses the IPC boundary. The
-/// frontend asks the pool (`/files/query`) which of these it holds to render
-/// upload status; nothing is persisted locally.
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| Ok(store_history_file_ids(connection)))
-}
-
-/// Files/image entries fully hashed whose uploadable payload fits the
-/// automatic-upload limit; drives the settings page's "upload now" run.
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn list_upload_candidates(
-    state: State<'_, AppState>,
-    limit_bytes: u64,
-) -> Result<Vec<ClipboardEntry>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    // Files entries still hashing carry an unresolved `"fileId":null` source;
-    // images have no hashing step.
-    let mut entries = state.with_database(&path, |connection| {
-        select_entries(
-            connection,
-            "WHERE kind IN ('files', 'image') AND (kind = 'image' OR sources NOT LIKE '%\"fileId\":null%')",
-            "",
-            &[],
-        )
-    })?;
-    let mut candidates = Vec::new();
-    for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &cache_dir);
-        if entry.summary.uploadable_size.is_some_and(|size| size < limit_bytes) {
-            candidates.push(lightweight_entry(entry));
-            if candidates.len() >= UPLOAD_CANDIDATE_LIMIT {
-                break;
-            }
-        }
-    }
-    Ok(candidates)
 }
 
 /// The full entry, tree included — used when publishing to the server.

@@ -198,30 +198,9 @@ pub fn hash_file(path: &Path) -> Result<String, String> {
     Ok(to_hex(&hasher.finalize()))
 }
 
-pub fn is_file_id(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 // ---------------------------------------------------------------------------
-// 路径：内容 id 落盘位置与相对路径安全
+// 路径：相对路径安全
 // ---------------------------------------------------------------------------
-
-/// Content ids decide where bytes land on disk, so the shape is validated
-/// before it is ever turned into a path.
-pub fn upload_image_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
-    is_file_id(file_id).then(|| cache_dir.join("upload").join("images").join(file_id))
-}
-
-pub fn download_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
-    is_file_id(file_id).then(|| cache_dir.join("download").join(file_id))
-}
-
-pub fn cached_file_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
-    [upload_image_path(cache_dir, file_id), download_path(cache_dir, file_id)]
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_file())
-}
 
 pub fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
     metadata

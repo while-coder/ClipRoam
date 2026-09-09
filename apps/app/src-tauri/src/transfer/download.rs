@@ -13,9 +13,10 @@ use std::{
 use tauri::State;
 
 use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
-use crate::content::{cached_file_path, download_path, MissingFile};
+use crate::content::MissingFile;
 use crate::entry::entry_contents_of;
-use crate::store::{cached_source_for, history_path_for_key, select_entry};
+use crate::file::{cached_file_path, cached_source_for, download_path};
+use crate::store::{history_path_for_key, select_entry};
 use crate::{active_cache_dir, AppState};
 
 #[derive(Default)]
@@ -302,7 +303,7 @@ pub(crate) fn fail_virtual_file_request(
 // 为前端提供条目内容：上传用分块读取，以及驱动下载的可用性快照。
 // ---------------------------------------------------------------------------
 
-/// Largest chunk served per `read_file_chunk` call.
+/// Largest chunk served per `read_upload_chunk` call.
 const FILE_CHUNK_LIMIT: usize = 128 * 1024;
 
 #[derive(Serialize, Clone)]
