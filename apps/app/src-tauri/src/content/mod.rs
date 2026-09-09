@@ -12,7 +12,7 @@ mod tree;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use hash::{hash_bytes, hash_file, is_file_id, to_hex};
+pub use hash::{fnv1a, hash_bytes, hash_file, is_file_id, to_hex};
 pub use paths::{download_path, modified_millis, upload_image_path};
 pub use tree::{
     collect_tree, describe_roots, file_entry_signature, file_signature, local_source_was_lost,
@@ -119,6 +119,18 @@ pub struct ClipboardEntry {
     pub sources: LocalSources,
 }
 
+impl ClipboardEntry {
+    /// True while any source file's content id is still unresolved. The hash
+    /// worker's resume list and the sync queue's readiness check share this
+    /// rule: an entry whose payload is not final must not be published yet.
+    pub(crate) fn hashing_pending(&self) -> bool {
+        self.sources
+            .files
+            .iter()
+            .any(|source| source.file_id.is_none())
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntryExtra {
@@ -130,7 +142,34 @@ pub struct ClipboardEntryExtra {
     pub image_info: Option<ImageInfo>,
 }
 
+impl ClipboardEntryExtra {
+    /// The entry's large fields — everything persisted in queue rows and the
+    /// `extra` column, alongside the small entry fields.
+    pub(crate) fn of(entry: &ClipboardEntry) -> Self {
+        Self {
+            html: entry.html.clone(),
+            rtf: entry.rtf.clone(),
+            file_info: entry.file_info.clone(),
+            image_info: entry.image_info.clone(),
+        }
+    }
+
+    pub(crate) fn json(&self) -> Result<String, String> {
+        serde_json::to_string(self).map_err(|error| error.to_string())
+    }
+}
+
 pub struct CollectedTree {
     pub file_info: FileInfo,
     pub sources: LocalSources,
+}
+
+/// A content this machine still needs before an entry is fully usable, as
+/// reported by the paste/save/download preparation commands.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingFile {
+    pub file_id: String,
+    pub size: u64,
+    pub source_device_id: String,
 }

@@ -9,14 +9,12 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::content::{hash_file, tree_parent_at_path, TreeNode};
+use crate::content::{hash_file, tree_parent_at_path, ClipboardEntryExtra, TreeNode};
 use crate::store::{
     cached_hash, history_path_for_key, open_history_database, refresh_entry_summary,
     remember_hash, temp_entry_seq, update_pending_entry, HistoryData,
 };
 use crate::{active_cache_dir, save_active_history, AppState};
-
-use super::capture::entry_extra;
 
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
@@ -39,7 +37,7 @@ pub(crate) fn pending_entry_ids(history: &HistoryData) -> Vec<String> {
     history
         .active_entries()
         .iter()
-        .filter(|entry| entry.sources.files.iter().any(|source| source.file_id.is_none()))
+        .filter(|entry| entry.hashing_pending())
         .map(|entry| entry.id.clone())
         .collect()
 }
@@ -165,7 +163,7 @@ fn apply_hashes(
         // once its content ids are known.
         if let Some(seq) = temp_entry_seq(&final_entry_id) {
             if let Some(entry) = history.find(&final_entry_id) {
-                let payload = entry_extra(entry)?;
+                let payload = ClipboardEntryExtra::of(entry).json()?;
                 if let Err(error) = update_pending_entry(
                     &history_path_for_key(&state.histories_dir, &history.active_history),
                     seq,

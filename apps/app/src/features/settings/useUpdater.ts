@@ -12,10 +12,8 @@ async function initUpdaterVersion(): Promise<void> {
   if (versionInitialized) return;
   versionInitialized = true;
 
-  if (!updater.runningInTauri) {
-    appVersion.value = fallbackAppVersion;
-    return;
-  }
+  // Outside Tauri the ref already holds the fallback version.
+  if (!updater.runningInTauri) return;
 
   try {
     appVersion.value = (await getVersion()) || fallbackAppVersion;

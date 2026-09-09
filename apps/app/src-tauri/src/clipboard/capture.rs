@@ -12,7 +12,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::content::{
-    collect_tree, describe_roots, file_entry_signature, file_signature, hash_bytes,
+    collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
     upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
 use crate::store::{
@@ -44,7 +44,6 @@ pub(crate) fn safe_file_name(name: &str) -> String {
 }
 
 pub(crate) fn rich_text_signature(rich_text: &RichText) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
     // arboard wraps HTML on macOS to force UTF-8 interpretation. Treat that
     // transport wrapper as equivalent to the original fragment so paste does
     // not get captured back as a second history item.
@@ -56,15 +55,16 @@ pub(crate) fn rich_text_signature(rich_text: &RichText) -> String {
             .and_then(|html| html.strip_suffix(MAC_HTML_SUFFIX))
             .unwrap_or(html)
     });
-    for value in [
+    let values = [
         Some(rich_text.text.as_str()),
         html,
         rich_text.rtf.as_deref(),
-    ] {
-        for byte in value.unwrap_or_default().bytes().chain(std::iter::once(0)) {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
-    }
+    ];
+    let hash = fnv1a(
+        values
+            .into_iter()
+            .flat_map(|value| value.unwrap_or_default().bytes().chain(std::iter::once(0))),
+    );
     format!("{hash:016x}")
 }
 
@@ -82,9 +82,7 @@ pub(crate) fn image_signature(image: &[u8]) -> String {
         None => (image.len().to_string(), image.to_vec()),
     };
     // FNV-1a is sufficient here: this only suppresses repeated reads of the current clipboard.
-    let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    });
+    let hash = fnv1a(bytes.iter().copied());
     format!("{prefix}:{hash:016x}")
 }
 
@@ -118,7 +116,7 @@ fn queue_entry_payload(
     extra: &ClipboardEntryExtra,
     created_at: &str,
 ) -> Result<i64, String> {
-    let payload = serde_json::to_string(extra).map_err(|error| error.to_string())?;
+    let payload = extra.json()?;
     enqueue_pending_entry(
         &history_path_for_key(&state.histories_dir, &history.active_history),
         kind,
@@ -126,18 +124,6 @@ fn queue_entry_payload(
         &payload,
         created_at,
     )
-}
-
-/// Re-serializes an entry's large fields the way `save_history` stores them,
-/// so queue rows and entry rows carry identical payloads.
-pub(crate) fn entry_extra(entry: &ClipboardEntry) -> Result<String, String> {
-    serde_json::to_string(&ClipboardEntryExtra {
-        html: entry.html.clone(),
-        rtf: entry.rtf.clone(),
-        file_info: entry.file_info.clone(),
-        image_info: entry.image_info.clone(),
-    })
-    .map_err(|error| error.to_string())
 }
 
 /// The frontend renders lists of hundreds of entries; shipping their trees
@@ -255,7 +241,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 // still unpublished. Recreate the row if it went missing, so
                 // the copy is not silently never synced.
                 if let Some(seq) = temp_entry_seq(&existing.id) {
-                    let payload = entry_extra(&existing)?;
+                    let payload = ClipboardEntryExtra::of(&existing).json()?;
                     if let Err(error) = ensure_pending_entry(
                         &history_path,
                         seq,
@@ -280,7 +266,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                     file_info: Some(collected.file_info.clone()),
                     image_info: None,
                 };
-                let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
+                let payload = extra.json()?;
                 let seq = match enqueue_pending_entry(&history_path, "files", &content, &payload, &created_at)
                 {
                     Ok(seq) => seq,
@@ -362,7 +348,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             file_info: None,
             image_info: Some(image_info.clone()),
         };
-        let payload = serde_json::to_string(&extra).map_err(|error| error.to_string())?;
+        let payload = extra.json()?;
         let seq = match enqueue_pending_entry(
             &history_path_for_key(&state.histories_dir, &history.active_history),
             "image",
@@ -418,11 +404,6 @@ pub(crate) fn read_clipboard_files(app: &AppHandle) -> Option<Vec<PathBuf>> {
         .read_files()
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-pub(crate) fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
-    None
-}
-
 #[cfg(target_os = "windows")]
 pub(crate) fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
     use clipboard_win::{formats::Bitmap, Clipboard, Getter};
@@ -436,11 +417,6 @@ pub(crate) fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn read_clipboard_image(app: &AppHandle) -> Option<Vec<u8>> {
     app.state::<AppState>().platform_clipboard.read_image_as_bmp()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-pub(crate) fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
-    None
 }
 
 #[cfg(target_os = "windows")]

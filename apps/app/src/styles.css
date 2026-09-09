@@ -6,12 +6,7 @@
   --color-foreground: #f8fafc;
   --color-secondary-text: #94a3b8;
   --color-border: rgba(255, 255, 255, 0.1);
-  --fg: var(--color-foreground);
-  --fg-muted: var(--color-secondary-text);
-  --card: #111c31;
   --border: rgba(148, 163, 184, 0.24);
-  --primary: #2563eb;
-  --radius: 10px;
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
   color: var(--color-foreground);
   background: var(--color-background);
@@ -234,11 +229,10 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 }
 .titlebar:active { cursor: grabbing; }
 .titlebar button { cursor: pointer; }
-.brand, .titlebar-actions, .connection, .entry-meta, .footer-hint, .filter-row {
+.titlebar-actions, .entry-meta, .footer-hint, .filter-row {
   display: flex;
   align-items: center;
 }
-.brand { gap: 8px; font-size: 14px; letter-spacing: 0.01em; }
 .brand-mark {
   display: grid;
   place-items: center;
@@ -252,18 +246,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .titlebar-actions { align-self: stretch; gap: 8px; }
 .paste-drag-strip { height: 6px; cursor: grab; }
 .paste-drag-strip:active { cursor: grabbing; }
-.connection { gap: 5px; color: #94a3b8; font-size: 11px; }
-.connection.online { color: #4ade80; }
-.connection-button {
-  min-height: 30px;
-  padding: 0 7px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 150ms ease, border-color 150ms ease;
-}
-.connection-button:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.07); }
 .icon-button {
   display: grid;
   place-items: center;

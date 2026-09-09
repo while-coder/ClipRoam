@@ -59,13 +59,9 @@ pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<Pen
             let local_id = temp_entry_id(row.seq);
             let entry = history.find(&local_id);
             let ready = match entry {
-                // Same rule as the hash-resume list: any unresolved source
-                // file means the payload is not final yet.
-                Some(entry) if entry.kind == "files" => !entry
-                    .sources
-                    .files
-                    .iter()
-                    .any(|source| source.file_id.is_none()),
+                // Same rule as the hash-resume list (`hashing_pending`): any
+                // unresolved source file means the payload is not final yet.
+                Some(entry) if entry.kind == "files" => !entry.hashing_pending(),
                 Some(_) => true,
                 None => false,
             };

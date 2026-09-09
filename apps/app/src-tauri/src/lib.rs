@@ -70,8 +70,6 @@ pub fn run() {
 
     let builder = builder
         .setup(|app| {
-            #[cfg(target_os = "windows")]
-            clipboard::virtual_files::initialize()?;
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             let window_configs = app.config().app.windows.clone();
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
@@ -197,7 +195,6 @@ pub fn run() {
             transfer::files::list_entry_files,
             sync::remote::filter_unknown_file_ids,
             history::get_device,
-            history::configure_device,
             sync::config::get_sync_config,
             windows::open_app_data_dir,
             sync::config::save_sync_config,

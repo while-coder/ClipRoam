@@ -7,5 +7,3 @@ pub(crate) mod platform_clipboard;
 pub(crate) mod share;
 #[cfg(target_os = "windows")]
 pub(crate) mod virtual_files;
-
-pub(crate) use capture::lightweight_entry;

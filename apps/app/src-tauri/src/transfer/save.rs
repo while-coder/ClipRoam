@@ -10,7 +10,7 @@ use std::{
 use tauri::State;
 
 use crate::clipboard::output::{missing_files, snapshot_entry};
-use crate::content::{rebuild_tree, tree_contents, TreeNode};
+use crate::content::{rebuild_tree, tree_contents, MissingFile, TreeNode};
 use crate::transfer::download::DownloadTarget;
 use crate::AppState;
 
@@ -22,14 +22,6 @@ pub(crate) struct SaveSession {
     pub(crate) expected: HashMap<String, u64>,
     pub(crate) in_progress: HashSet<String>,
     pub(crate) downloaded: HashSet<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MissingFile {
-    pub file_id: String,
-    pub size: u64,
-    pub source_device_id: String,
 }
 
 #[derive(Serialize)]

@@ -51,5 +51,5 @@ export function useHistoryPagination(
     if (page.value > pageCount.value) page.value = pageCount.value;
   });
 
-  return { page, pageCount, pagedEntries, goToPage, goToPageOf, changePage };
+  return { page, pageCount, pagedEntries, goToPageOf, changePage };
 }

@@ -12,11 +12,10 @@ use tauri::{AppHandle, State};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use tauri::Manager;
 
-use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry};
+use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
 use crate::store::{cached_source_for, open_history_database, refresh_entry_summary, history_path_for_key};
 use crate::history::entry_contents_of;
 use crate::{active_cache_dir, save_active_history, AppState};
-use crate::transfer::save::MissingFile;
 
 use super::capture::{decode_image_as_bmp, image_signature, rich_text_signature, safe_file_name, RichText};
 
@@ -84,11 +83,6 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn synthesize_paste() -> Result<(), String> {
     crate::clipboard::platform_clipboard::synthesize_paste()
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-pub(crate) fn synthesize_paste() -> Result<(), String> {
-    Ok(())
 }
 
 pub(crate) enum ClipboardPayload {
@@ -255,6 +249,45 @@ pub(crate) fn refresh_snapshot_summary(state: &AppState, snapshot: &EntrySnapsho
     Ok(())
 }
 
+fn image_payload(snapshot: &EntrySnapshot) -> Result<ClipboardPayload, String> {
+    let file_id = snapshot
+        .entry
+        .image_info
+        .as_ref()
+        .map(|image| image.file_id.clone())
+        .ok_or_else(|| "图片内容不可用".to_string())?;
+    let path = snapshot
+        .resolve(&file_id)
+        .ok_or_else(|| "图片内容不可用".to_string())?;
+    Ok(ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?))
+}
+
+fn text_payload(entry: &ClipboardEntry) -> ClipboardPayload {
+    ClipboardPayload::Text(RichText {
+        text: entry.content.clone(),
+        html: entry.html.clone(),
+        rtf: entry.rtf.clone(),
+    })
+}
+
+/// Records which signature suppresses re-capturing what was just written,
+/// clearing the other two so a different payload kind is still captured.
+fn record_activation_signature(history: &mut crate::store::HistoryData, payload: &ClipboardPayload) {
+    let (file, clipboard, image) = match payload {
+        ClipboardPayload::Files(paths) => {
+            let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+            (file_signature(&paths), String::new(), String::new())
+        }
+        #[cfg(target_os = "windows")]
+        ClipboardPayload::VirtualFiles(_) => (String::new(), String::new(), String::new()),
+        ClipboardPayload::Image(image) => (String::new(), String::new(), image_signature(image)),
+        ClipboardPayload::Text(rich_text) => (String::new(), rich_text_signature(rich_text), String::new()),
+    };
+    history.last_file_signature = file;
+    history.last_clipboard = clipboard;
+    history.last_image_signature = image;
+}
+
 /// Writes a live clipboard activation received from another device without
 /// synthesizing Paste. File-list entries are deliberately excluded: they stay
 /// in history until the user explicitly chooses where to paste or save them.
@@ -267,51 +300,20 @@ pub(crate) fn activate_remote_entry(
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let payload = match snapshot.entry.kind.as_str() {
         "files" => return Err("文件和文件夹不会自动写入漫游剪贴板".to_string()),
-        "image" => {
-            let file_id = snapshot
-                .entry
-                .image_info
-                .as_ref()
-                .map(|image| image.file_id.clone())
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            let path = snapshot
-                .resolve(&file_id)
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
-        }
-        _ => ClipboardPayload::Text(RichText {
-            text: snapshot.entry.content.clone(),
-            html: snapshot.entry.html.clone(),
-            rtf: snapshot.entry.rtf.clone(),
-        }),
+        "image" => image_payload(&snapshot)?,
+        _ => text_payload(&snapshot.entry),
     };
 
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        match &payload {
-            ClipboardPayload::Image(image) => {
-                history.last_image_signature = image_signature(image);
-                history.last_clipboard.clear();
-                history.last_file_signature.clear();
-            }
-            ClipboardPayload::Text(rich_text) => {
-                history.last_clipboard = rich_text_signature(rich_text);
-                history.last_file_signature.clear();
-                history.last_image_signature.clear();
-            }
-            ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
-            #[cfg(target_os = "windows")]
-            ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
-        }
+        record_activation_signature(&mut history, &payload);
         save_active_history(&state, &history)?;
     }
 
     match payload {
         ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text),
         ClipboardPayload::Image(image) => write_clipboard_image(&app, &image),
-        ClipboardPayload::Files(_) => unreachable!("file activations are rejected above"),
-        #[cfg(target_os = "windows")]
-        ClipboardPayload::VirtualFiles(_) => unreachable!("file activations are rejected above"),
+        _ => unreachable!("file activations are rejected above"),
     }
 }
 
@@ -364,51 +366,13 @@ pub(crate) fn apply_clipboard_entry(
                 }
             }
         }
-        "image" => {
-            let file_id = snapshot
-                .entry
-                .image_info
-                .as_ref()
-                .map(|image| image.file_id.clone())
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            let path = snapshot
-                .resolve(&file_id)
-                .ok_or_else(|| "图片内容不可用".to_string())?;
-            ClipboardPayload::Image(fs::read(path).map_err(|error| error.to_string())?)
-        }
-        _ => ClipboardPayload::Text(RichText {
-            text: snapshot.entry.content.clone(),
-            html: snapshot.entry.html.clone(),
-            rtf: snapshot.entry.rtf.clone(),
-        }),
+        "image" => image_payload(&snapshot)?,
+        _ => text_payload(&snapshot.entry),
     };
 
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        match &payload {
-            ClipboardPayload::Files(paths) => {
-                let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-                history.last_file_signature = file_signature(&paths);
-                history.last_clipboard.clear();
-                history.last_image_signature.clear();
-            }
-            #[cfg(target_os = "windows")]
-            ClipboardPayload::VirtualFiles(_) => {
-                history.last_file_signature.clear();
-                history.last_clipboard.clear();
-                history.last_image_signature.clear();
-            }
-            ClipboardPayload::Image(image) => {
-                history.last_image_signature = image_signature(image);
-                history.last_clipboard.clear();
-                history.last_file_signature.clear();
-            }
-            ClipboardPayload::Text(rich_text) => {
-                history.last_clipboard = rich_text_signature(rich_text);
-                history.last_file_signature.clear();
-                history.last_image_signature.clear();
-            }
-        }
+        record_activation_signature(&mut history, &payload);
         save_active_history(&state, &history)?;
     }
 

@@ -15,6 +15,7 @@ export type SetupDraft = {
 import { ref } from "vue";
 import { ArrowLeft, LoaderCircle, Server, ShieldCheck } from "lucide-vue-next";
 import { normalizeServerAddress } from "../sync/syncClient";
+import { errorMessage } from "../../utils/error";
 import { CONFIGURED_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import type { SyncConfig } from "../../types";
 
@@ -60,7 +61,7 @@ function validateServerField(): string | undefined {
     serverFieldError.value = "";
     return normalized;
   } catch (error) {
-    serverFieldError.value = error instanceof Error ? error.message : String(error);
+    serverFieldError.value = errorMessage(error);
     return undefined;
   }
 }

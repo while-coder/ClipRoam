@@ -3,6 +3,16 @@ use std::{fs, io::Read, path::Path};
 
 use super::HASH_READ_BUFFER;
 
+/// FNV-1a: enough for non-cryptographic local identities (clipboard
+/// signatures, history keys) where only repeat detection matters.
+pub fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes
+        .into_iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
 pub fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
