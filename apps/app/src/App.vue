@@ -45,6 +45,7 @@ import {
   DEFAULT_SERVER_ADDRESS,
   DESKTOP_CAPABILITIES,
   EMPTY_SUMMARY,
+  PAGE_SIZE,
 } from "./utils/constants";
 import { canManualUpload, canSaveEntry, isHashing } from "./utils/entry";
 import { errorMessage } from "./utils/error";
@@ -52,6 +53,8 @@ import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./com
 import type {
   Device,
   DownloadProgress,
+  EntriesManifestFilter,
+  EntriesManifestPage,
   LocalClipboardEntry,
   MissingFile,
   PlatformCapabilities,
@@ -68,6 +71,8 @@ const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform(
 const { initUpdaterVersion } = useUpdater();
 
 const entries = ref<LocalClipboardEntry[]>([]);
+/** Bumped whenever the history may have changed; the history view refetches its page on it. */
+const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
 const activeView = ref<"history" | "pending-sync">("history");
 const devicesById = ref<Record<string, Device>>({
@@ -173,12 +178,47 @@ const pendingEntries = computed(() => (
   entries.value.filter((entry) => !isEntrySynced(entry))
 ));
 
+/**
+ * Browser-preview stand-in for `list_entries_manifest`: the same filters the
+ * Rust command applies, over the local demo list.
+ */
+function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<string, string>): EntriesManifestPage {
+  const needle = (filter.query ?? "").trim().toLowerCase();
+  const matched = entries.value.filter((entry) => {
+    if (filter.kind && filter.kind !== "all" && entry.kind !== filter.kind) return false;
+    if (needle) {
+      const deviceLabel = (deviceNames[entry.sourceDeviceId] ?? "未知设备").toLowerCase();
+      const matches = entry.content.toLowerCase().includes(needle) || deviceLabel.includes(needle);
+      if (!matches) return false;
+    }
+    const createdAt = new Date(entry.createdAt).getTime();
+    if (filter.start !== undefined && createdAt < filter.start) return false;
+    if (filter.end !== undefined && createdAt > filter.end) return false;
+    return true;
+  });
+  const page = filter.page;
+  return {
+    total: matched.length,
+    entries: page ? matched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : matched,
+  };
+}
+
+async function fetchManifest(
+  filter: EntriesManifestFilter,
+  deviceNames: Record<string, string>,
+): Promise<EntriesManifestPage> {
+  if (!runningInTauri) return clientManifest(filter, deviceNames);
+  return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
+}
+
 async function refreshEntries(): Promise<void> {
   if (!runningInTauri) {
     entries.value = demoEntries;
+    historyRevision.value += 1;
     return;
   }
-  entries.value = await invoke<LocalClipboardEntry[]>("list_entries");
+  entries.value = (await fetchManifest({}, {})).entries;
+  historyRevision.value += 1;
 }
 
 let refreshEntriesTimer: number | undefined;
@@ -907,7 +947,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     // Read the durable history rather than the rendered list. The latter can
     // be stale while another Tauri window is refreshing it.
     const localEntries = runningInTauri
-      ? await invoke<LocalClipboardEntry[]>("list_entries")
+      ? (await fetchManifest({}, {})).entries
       : [...entries.value];
     const localClientIds = new Set(localEntries.map((entry) => entry.id));
     const remoteOnlyEntryIds = manifest
@@ -1281,7 +1321,9 @@ onBeforeUnmount(() => {
     <HistoryView
       v-if="activeView === 'history'"
       ref="historyView"
-      :entries="entries"
+      :fetch-manifest="fetchManifest"
+      :revision="historyRevision"
+      :total-entries="entries.length"
       :devices-by-id="devicesById"
       :synced-entry-ids="syncedEntryIds"
       :connection-status="connectionStatus"

@@ -8,11 +8,11 @@ use tauri::{AppHandle, Emitter, State};
 use crate::content::{preserve_local_sources, ClipboardEntry};
 use crate::store::{
     acknowledge_pending_entry as acknowledge_queue_row, collect_local_garbage, history_path_for_key,
-    list_pending_rows, mark_files_uploaded as store_mark_files_uploaded, open_history_database,
-    refresh_entry_summary, temp_entry_id, trim_history, write_entry_data,
+    list_pending_rows, mark_files_uploaded as store_mark_files_uploaded, refresh_entry_summary,
+    temp_entry_id,
 };
 use crate::history::{entry_contents_of, entry_references};
-use crate::{active_cache_dir, save_active_history, AppState};
+use crate::{active_cache_dir, flush_active_history, AppState};
 
 /// File ids this device knows nothing about: neither a local blob in the cache
 /// nor an "available" mark from the server pool. The sync flow queries server
@@ -88,22 +88,22 @@ pub(crate) fn upsert_remote_entries(
                 upserted_ids.push(entry_id);
             }
             slot.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            trim_history(slot);
         }
         for entry_id in &upserted_ids {
             refresh_entry_summary(&mut history, entry_id, &cache_dir);
         }
-        save_active_history(&state, &history)?;
-        // Existing rows keep their large data during the general history save;
-        // a remote update replaces it explicitly here.
-        let connection = open_history_database(&history_path)?;
-        for entry_id in &upserted_ids {
-            if let Some(entry) = history.find(entry_id) {
-                write_entry_data(&connection, entry)?;
-            }
-        }
-        let available_vec = available.into_iter().collect::<Vec<_>>();
-        store_mark_files_uploaded(&connection, &available_vec);
+        // The rows carry the full payload (tree, sources, rich text), so a
+        // remote update lands in the same write as the rest of the flush.
+        let upserts = upserted_ids
+            .iter()
+            .filter_map(|entry_id| history.find(entry_id))
+            .collect::<Vec<_>>();
+        flush_active_history(&state, &history, &upserts)?;
+        state.with_database(&history_path, |connection| {
+            let available_vec = available.iter().cloned().collect::<Vec<_>>();
+            store_mark_files_uploaded(connection, &available_vec);
+            Ok(())
+        })?;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -124,7 +124,7 @@ pub(crate) fn apply_published_entry(
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.pending_deletions.remove(&local_entry_id) {
-            save_active_history(&state, &history)?;
+            flush_active_history(&state, &history, &[])?;
             return Ok(false);
         }
         // A deletion can land while the publish is in flight — including of an
@@ -134,7 +134,6 @@ pub(crate) fn apply_published_entry(
             return Ok(false);
         }
         let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         if let Some(local) = history.find(&local_entry_id) {
             preserve_local_sources(&mut entry, local);
         }
@@ -145,15 +144,11 @@ pub(crate) fn apply_published_entry(
         let entry_id = entry.id.clone();
         entries.push(entry);
         entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        // The id changed, so the save's INSERT OR IGNORE writes a fresh row
-        // and the mark-sweep deletes the old one.
-        save_active_history(&state, &history)?;
-        if let Some(entry) = history.find(&entry_id) {
-            let connection = open_history_database(&history_path)?;
-            write_entry_data(&connection, entry)?;
-        }
+        // The id changed, so the upsert writes a fresh row and the mark-sweep
+        // deletes the old one.
+        let upserts = history.find(&entry_id).into_iter().collect::<Vec<_>>();
+        flush_active_history(&state, &history, &upserts)?;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())?;
@@ -173,8 +168,10 @@ pub(crate) fn mark_files_uploaded(
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let uploaded = file_ids.into_iter().collect::<Vec<_>>();
         history.uploaded_files.extend(uploaded.iter().cloned());
-        let connection = open_history_database(&history_path)?;
-        store_mark_files_uploaded(&connection, &uploaded);
+        state.with_database(&history_path, |connection| {
+            store_mark_files_uploaded(connection, &uploaded);
+            Ok(())
+        })?;
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
     }
     app.emit("cliproam://history-changed", ())
@@ -204,8 +201,10 @@ pub(crate) fn mark_file_available(
             .map(|entry| entry.id.clone())
             .collect::<Vec<_>>();
         history.uploaded_files.insert(file_id.clone());
-        let connection = open_history_database(&history_path)?;
-        store_mark_files_uploaded(&connection, &[file_id]);
+        state.with_database(&history_path, |connection| {
+            store_mark_files_uploaded(connection, std::slice::from_ref(&file_id));
+            Ok(())
+        })?;
         for entry_id in &changed_ids {
             refresh_entry_summary(&mut history, entry_id, &cache_dir);
         }
@@ -220,8 +219,11 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         history.active_entries_mut().retain(|entry| entry.id != entry_id);
-        save_active_history(&state, &history)?;
-        let _ = collect_local_garbage(&state.histories_dir, &mut history);
+        flush_active_history(&state, &history, &[])?;
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let _ = state.with_database(&path, |connection| {
+            collect_local_garbage(connection, &state.histories_dir, &mut history)
+        });
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -243,7 +245,7 @@ pub(crate) fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<S
 pub(crate) fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.pending_deletions.remove(&entry_id) {
-        save_active_history(&state, &history)?;
+        flush_active_history(&state, &history, &[])?;
     }
     Ok(())
 }
@@ -270,10 +272,10 @@ pub(crate) struct PendingQueueRowView {
 #[tauri::command]
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<PendingQueueRowView>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let rows = list_pending_rows(&history_path_for_key(
-        &state.histories_dir,
-        &history.active_history,
-    ))?;
+    let rows = state.with_database(
+        &history_path_for_key(&state.histories_dir, &history.active_history),
+        |connection| list_pending_rows(connection),
+    )?;
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -306,9 +308,7 @@ pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<Pen
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn acknowledge_pending_entry(state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    acknowledge_queue_row(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        seq,
-    )?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| acknowledge_queue_row(connection, seq))?;
     Ok(())
 }

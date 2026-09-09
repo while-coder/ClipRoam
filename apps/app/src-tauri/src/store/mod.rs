@@ -1,10 +1,11 @@
 //! Local persistence for the clipboard history.
 //!
-//! Entry metadata, trees and local sources share one row. General history saves
-//! patch only presentation fields, while capture, hashing and remote upsert
-//! explicitly replace the full entry data. `files` tracks which content ids the
-//! server pool holds; local-cache state is derived from the blob directories on
-//! disk, which are the source of truth for it.
+//! Entry metadata, trees and local sources share one row. A flush writes only
+//! the rows the mutation actually touched; a mark-sweep keeps the `entries`
+//! and `pending_entries` tables aligned with the in-memory working set by
+//! deleting rows the history no longer holds. `files` tracks which content ids
+//! the server pool holds; local-cache state is derived from the blob
+//! directories on disk, which are the source of truth for it.
 
 mod cache;
 
@@ -23,7 +24,6 @@ use uuid::Uuid;
 
 use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
 
-pub const MAX_HISTORY_ENTRIES: usize = 200;
 pub const LOCAL_HISTORY_KEY: &str = "local";
 
 #[derive(Debug)]
@@ -137,6 +137,27 @@ fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, St
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(columns)
+}
+
+/// One SQLite connection per history database, reused across writes. Opening
+/// a connection re-runs the whole schema migration, so call sites take the
+/// pooled connection instead of reopening on every statement.
+#[derive(Default)]
+pub struct DatabasePool {
+    connections: HashMap<PathBuf, Connection>,
+}
+
+impl DatabasePool {
+    pub fn connection(&mut self, path: &Path) -> Result<&mut Connection, String> {
+        if !self.connections.contains_key(path) {
+            let connection = open_history_database(path)?;
+            self.connections.insert(path.to_path_buf(), connection);
+        }
+        Ok(self
+            .connections
+            .get_mut(path)
+            .expect("connection was inserted above"))
+    }
 }
 
 pub fn open_history_database(path: &Path) -> Result<Connection, String> {
@@ -332,11 +353,17 @@ fn refresh_history_summaries(history: &mut HistoryData, cache_dir: &Path, only: 
     }
 }
 
-/// Writes small entry fields plus metadata. Existing trees, local sources and
-/// content rows are changed only by `write_entry_data`, so trimming
-/// cannot overwrite work completed by the background hash worker.
-pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
-    let mut connection = open_history_database(path)?;
+/// Flushes the in-memory history into its SQLite projection: the sweeps that
+/// keep the `entries` and `pending_entries` tables aligned with the working
+/// set, history-level metadata, and the entry rows the mutation actually
+/// touched. Rows outside `upserts` are only ever deleted by the sweep, never
+/// rewritten, so a steady-state change stays O(touched rows) instead of
+/// O(history).
+pub fn flush_history(
+    connection: &mut Connection,
+    history: &HistoryData,
+    upserts: &[&ClipboardEntry],
+) -> Result<(), String> {
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     let entry_ids = history
         .active_entries()
@@ -348,7 +375,7 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             .execute("DELETE FROM entries", [])
             .map_err(|error| error.to_string())?;
     } else {
-        let placeholders = std::iter::repeat("?").take(entry_ids.len()).collect::<Vec<_>>().join(", ");
+        let placeholders = std::iter::repeat_n("?", entry_ids.len()).collect::<Vec<_>>().join(", ");
         transaction
             .execute(
                 &format!("DELETE FROM entries WHERE id NOT IN ({placeholders})"),
@@ -356,17 +383,14 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    for entry in history.active_entries() {
+    for entry in upserts {
+        // The full extra payload (rich text, trees, thumbnails) rides the row
+        // write, so hashing results and remote updates need no separate pass.
         let extra = ClipboardEntryExtra::of(entry).json()?;
-        let presentation = serde_json::to_string(&serde_json::json!({
-            "html": entry.html,
-            "rtf": entry.rtf,
-        }))
-        .map_err(|error| error.to_string())?;
         let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "INSERT OR IGNORE INTO entries (id, kind, content, extra, created_at, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     entry.id,
                     entry.kind,
@@ -378,25 +402,11 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
                 ],
             )
             .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "UPDATE entries SET kind = ?, content = ?, extra = json_patch(extra, ?), created_at = ?, source_device_id = ? WHERE id = ?",
-                params![
-                    entry.kind,
-                    entry.content,
-                    presentation,
-                    entry.created_at,
-                    entry.source_device_id,
-                    entry.id,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
     }
-    // Every path that removes or re-keys an entry goes through this save: the
-    // publish swap, trim eviction, content dedup and deletions all drop the
-    // queue row that no longer has a matching temporary-id entry. This runs
-    // after the rows above are written, so freshly captured entries keep
-    // theirs.
+    // Every path that removes or re-keys an entry goes through this flush: the
+    // publish swap, content dedup and deletions all drop the queue row that no
+    // longer has a matching temporary-id entry. This runs after the rows above
+    // are written, so freshly captured entries keep theirs.
     transaction
         .execute(
             "DELETE FROM pending_entries WHERE 'p' || seq NOT IN (SELECT id FROM entries)",
@@ -425,26 +435,8 @@ pub fn save_history(path: &Path, history: &HistoryData) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
-pub fn write_entry_data(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
-    let extra = ClipboardEntryExtra::of(entry).json()?;
-    let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "UPDATE entries SET extra = ?, sources = ? WHERE id = ?",
-            params![extra, sources, entry.id],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-pub fn trim_history(entries: &mut Vec<ClipboardEntry>) {
-    entries.truncate(MAX_HISTORY_ENTRIES);
-}
-
 pub fn retain_single_history(history: &mut HistoryData, key: &str) {
-    let entries = history.histories.remove(key).unwrap_or_default();
-    history.histories.clear();
-    history.histories.insert(key.to_string(), entries);
+    history.histories.retain(|name, _| name == key);
     history.active_history = key.to_string();
 }
 
@@ -481,17 +473,16 @@ pub struct PendingQueueRow {
 }
 
 /// Durable upload queue. Rows are appended in capture order with the complete
-/// entry payload, and removed by the `save_history` sweep (publish swap,
-/// eviction, deletion) or an explicit acknowledge, so an offline capture
+/// entry payload, and removed by the `flush_history` sweep (publish swap,
+/// dedup, deletion) or an explicit acknowledge, so an offline capture
 /// replays in order on the next connection.
 pub fn enqueue_pending_entry(
-    database_path: &Path,
+    connection: &Connection,
     kind: &str,
     content: &str,
     extra: &str,
     created_at: &str,
 ) -> Result<i64, String> {
-    let connection = open_history_database(database_path)?;
     connection
         .execute(
             "INSERT INTO pending_entries (kind, content, extra, created_at) VALUES (?, ?, ?, ?)",
@@ -505,14 +496,13 @@ pub fn enqueue_pending_entry(
 /// rare case where the entry survived but its row did not. A row already
 /// occupying the seq is kept.
 pub fn ensure_pending_entry(
-    database_path: &Path,
+    connection: &Connection,
     seq: i64,
     kind: &str,
     content: &str,
     extra: &str,
     created_at: &str,
 ) -> Result<(), String> {
-    let connection = open_history_database(database_path)?;
     connection
         .execute(
             "INSERT OR IGNORE INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -525,14 +515,13 @@ pub fn ensure_pending_entry(
 /// Folds updated payload (resolved content ids after hashing) back into the
 /// queue row, recreating it if the sweep removed it in the meantime.
 pub fn update_pending_entry(
-    database_path: &Path,
+    connection: &Connection,
     seq: i64,
     kind: &str,
     content: &str,
     extra: &str,
     created_at: &str,
 ) -> Result<(), String> {
-    let connection = open_history_database(database_path)?;
     connection
         .execute(
             "INSERT INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)
@@ -543,8 +532,7 @@ pub fn update_pending_entry(
     Ok(())
 }
 
-pub fn list_pending_rows(database_path: &Path) -> Result<Vec<PendingQueueRow>, String> {
-    let connection = open_history_database(database_path)?;
+pub fn list_pending_rows(connection: &Connection) -> Result<Vec<PendingQueueRow>, String> {
     let mut statement = connection
         .prepare("SELECT seq, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
         .map_err(|error| error.to_string())?;
@@ -565,8 +553,7 @@ pub fn list_pending_rows(database_path: &Path) -> Result<Vec<PendingQueueRow>, S
 }
 
 /// Returns whether a row was actually removed.
-pub fn acknowledge_pending_entry(database_path: &Path, seq: i64) -> Result<bool, String> {
-    let connection = open_history_database(database_path)?;
+pub fn acknowledge_pending_entry(connection: &Connection, seq: i64) -> Result<bool, String> {
     let changed = connection
         .execute(
             "DELETE FROM pending_entries WHERE seq = ?",

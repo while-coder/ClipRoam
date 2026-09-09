@@ -19,8 +19,8 @@ use crate::content::{
     upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
 use crate::store::{
-    enqueue_pending_entry, ensure_pending_entry, refresh_entry_summary, temp_entry_seq,
-    trim_history, history_path_for_key,
+    enqueue_pending_entry, ensure_pending_entry, history_path_for_key, refresh_entry_summary,
+    temp_entry_seq,
 };
 use crate::AppState;
 
@@ -120,27 +120,30 @@ fn queue_entry_payload(
     created_at: &str,
 ) -> Result<i64, String> {
     let payload = extra.json()?;
-    enqueue_pending_entry(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        kind,
-        content,
-        &payload,
-        created_at,
-    )
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| {
+        enqueue_pending_entry(connection, kind, content, &payload, created_at)
+    })
 }
 
 /// The frontend renders lists of hundreds of entries; shipping their trees
 /// would mean tens of thousands of nodes per refresh.
 pub(crate) fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     // html/rtf can be hundreds of kilobytes per rich-text entry and the list
-    // never renders them, so they stay behind `get_entry`.
+    // never renders them, so they stay behind `get_entry`. Built field by
+    // field: a struct-update clone would copy those strings just to drop them.
     let mut lightweight = ClipboardEntry {
-        file_info: None,
-        image_info: None,
+        id: entry.id.clone(),
+        kind: entry.kind.clone(),
+        content: entry.content.clone(),
         html: None,
         rtf: None,
+        file_info: None,
+        image_info: None,
+        source_device_id: entry.source_device_id.clone(),
+        created_at: entry.created_at.clone(),
+        summary: entry.summary.clone(),
         sources: LocalSources::default(),
-        ..entry.clone()
     };
     if lightweight.kind == "files" {
         if let Some(file_info) = &entry.file_info {
@@ -155,6 +158,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         return Ok(());
     }
     let signature = rich_text_signature(&rich_text);
+    let RichText { text, html, rtf } = rich_text;
     let state = app.state::<AppState>();
     let entry = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
@@ -164,15 +168,15 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         let device_id = history.device_id.clone();
         let created_at = Utc::now().to_rfc3339();
         let extra = ClipboardEntryExtra {
-            html: rich_text.html.clone(),
-            rtf: rich_text.rtf.clone(),
+            html,
+            rtf,
             file_info: None,
             image_info: None,
         };
         // The payload lands in the durable queue first: the seq it gets back
         // is the entry's local id until the server's id is adopted. Without a
         // queue row there is nothing to sync later, so the capture is skipped.
-        let seq = match queue_entry_payload(&state, &history, "text", &rich_text.text, &extra, &created_at) {
+        let seq = match queue_entry_payload(&state, &history, "text", &text, &extra, &created_at) {
             Ok(seq) => seq,
             Err(error) => {
                 eprintln!("ClipRoam: 记录待上传条目失败：{error}");
@@ -182,15 +186,14 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         history.last_clipboard = signature;
         history.last_file_signature.clear();
         history.last_image_signature.clear();
-        let mut entry = new_entry(seq, "text", rich_text.text, device_id);
+        let mut entry = new_entry(seq, "text", text, device_id);
         entry.html = extra.html;
         entry.rtf = extra.rtf;
         entry.created_at = created_at;
         let entries = history.active_entries_mut();
         entries.retain(|item| item.content != entry.content);
         entries.insert(0, entry.clone());
-        trim_history(entries);
-        crate::save_active_history(&state, &history)?;
+        crate::flush_active_history(&state, &history, &[&entry])?;
         entry
     };
     // Text has no contents to hash, so it is publishable the moment it lands —
@@ -245,14 +248,16 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 // the copy is not silently never synced.
                 if let Some(seq) = temp_entry_seq(&existing.id) {
                     let payload = ClipboardEntryExtra::of(&existing).json()?;
-                    if let Err(error) = ensure_pending_entry(
-                        &history_path,
-                        seq,
-                        &existing.kind,
-                        &existing.content,
-                        &payload,
-                        &existing.created_at,
-                    ) {
+                    if let Err(error) = state.with_database(&history_path, |connection| {
+                        ensure_pending_entry(
+                            connection,
+                            seq,
+                            &existing.kind,
+                            &existing.content,
+                            &payload,
+                            &existing.created_at,
+                        )
+                    }) {
                         eprintln!("ClipRoam: 记录待上传条目失败：{error}");
                     }
                 }
@@ -270,8 +275,9 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                     image_info: None,
                 };
                 let payload = extra.json()?;
-                let seq = match enqueue_pending_entry(&history_path, "files", &content, &payload, &created_at)
-                {
+                let seq = match state.with_database(&history_path, |connection| {
+                    enqueue_pending_entry(connection, "files", &content, &payload, &created_at)
+                }) {
                     Ok(seq) => seq,
                     Err(error) => {
                         eprintln!("ClipRoam: 记录待上传条目失败：{error}");
@@ -287,11 +293,11 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 entry_id
             }
         };
-        trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        crate::save_active_history(&state, &history)?;
-        let entry = history
-            .find(&entry_id)
+        let row = history.find(&entry_id);
+        let upserts = row.into_iter().collect::<Vec<_>>();
+        crate::flush_active_history(&state, &history, &upserts)?;
+        let entry = row
             .map(lightweight_entry)
             .ok_or_else(|| "剪贴板记录不存在".to_string())?;
         (entry, entry_id)
@@ -352,13 +358,10 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             image_info: Some(image_info.clone()),
         };
         let payload = extra.json()?;
-        let seq = match enqueue_pending_entry(
-            &history_path_for_key(&state.histories_dir, &history.active_history),
-            "image",
-            &content,
-            &payload,
-            &created_at,
-        ) {
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let seq = match state.with_database(&history_path, |connection| {
+            enqueue_pending_entry(connection, "image", &content, &payload, &created_at)
+        }) {
             Ok(seq) => seq,
             Err(error) => {
                 eprintln!("ClipRoam: 记录待上传条目失败：{error}");
@@ -371,12 +374,11 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         let entry_id = entry.id.clone();
         let entries = history.active_entries_mut();
         entries.insert(0, entry);
-        trim_history(entries);
         refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        crate::save_active_history(&state, &history)?;
-        history
-            .find(&entry_id)
-            .map(lightweight_entry)
+        let row = history.find(&entry_id);
+        let upserts = row.into_iter().collect::<Vec<_>>();
+        crate::flush_active_history(&state, &history, &upserts)?;
+        row.map(lightweight_entry)
             .ok_or_else(|| "剪贴板记录不存在".to_string())?
     };
     let entry_id = entry.id.clone();

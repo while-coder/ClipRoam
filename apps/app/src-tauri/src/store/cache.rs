@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{history_path_for_key, cache_dir_for, now_rfc3339, open_history_database, HistoryData};
+use super::{cache_dir_for, now_rfc3339, HistoryData};
 use crate::content::{modified_millis, tree_contents};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
@@ -104,7 +104,11 @@ pub fn cached_source_for(connection: &Connection, file_id: &str) -> Option<PathB
 
 /// Mark-sweep over local uploads, downloaded content, and views for entries
 /// that are gone. Incomplete downloads expire after one day.
-pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) -> Result<usize, String> {
+pub fn collect_local_garbage(
+    connection: &mut Connection,
+    histories_dir: &Path,
+    history: &mut HistoryData,
+) -> Result<usize, String> {
     let cache_dir = cache_dir_for(histories_dir, &history.active_history);
     let share_dir = cache_dir.join("share");
     let mut referenced = HashSet::new();
@@ -145,10 +149,10 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|time| now_millis().saturating_sub(time.as_millis() as u64) > DOWNLOAD_TTL_MS)
                 .unwrap_or(true);
-            if !referenced.contains(&file_id) || expired {
-                if fs::remove_file(file.path()).is_ok() {
-                    removed.push(file_id);
-                }
+            if (!referenced.contains(&file_id) || expired)
+                && fs::remove_file(file.path()).is_ok()
+            {
+                removed.push(file_id);
             }
         }
     }
@@ -170,7 +174,6 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
         }
     }
     {
-        let mut connection = open_history_database(&history_path_for_key(histories_dir, &history.active_history))?;
         let transaction = connection.transaction().map_err(|error| error.to_string())?;
         // Rows are pure server-pool marks; content no entry references no
         // longer needs one. Locally cached state lives on the disk alone.
@@ -180,8 +183,7 @@ pub fn collect_local_garbage(histories_dir: &Path, history: &mut HistoryData) ->
                 .map_err(|error| error.to_string())?;
         } else {
             let referenced = referenced.iter().collect::<Vec<_>>();
-            let placeholders = std::iter::repeat("?")
-                .take(referenced.len())
+            let placeholders = std::iter::repeat_n("?", referenced.len())
                 .collect::<Vec<_>>()
                 .join(", ");
             transaction
