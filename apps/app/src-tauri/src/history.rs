@@ -1,15 +1,17 @@
 //! History queries and lifecycle commands: listing, reading, refreshing,
-//! deleting.
+//! deleting. Entries live in SQLite; every read goes through SQL, and each
+//! row's derived `summary` is recomputed just before it leaves the backend.
 
 use std::collections::{HashMap, HashSet};
-use chrono::DateTime;
+use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::clipboard::capture::lightweight_entry;
-use crate::content::{tree_contents, ClipboardEntry};
+use crate::content::{refresh_summary, tree_contents, ClipboardEntry};
 use crate::store::{
-    collect_local_garbage, history_path_for_key, refresh_entry_summary, temp_entry_seq, HistoryData,
+    collect_local_garbage, count_entries, history_path_for_key, newest_first_sql,
+    refresh_entry_summary, select_all_entry_ids, select_entries, temp_entry_seq, HistoryData,
 };
 use crate::{active_cache_dir, flush_active_history, AppState};
 
@@ -18,6 +20,9 @@ const MANIFEST_PAGE_SIZE: usize = 50;
 /// Matches the fallback in the frontend's `deviceName` helper, so searching by
 /// it finds the same entries in both places.
 const UNKNOWN_DEVICE_LABEL: &str = "未知设备";
+/// Upper bound for `list_upload_candidates`, so a huge library cannot turn a
+/// settings toggle into an unbounded publish run.
+const UPLOAD_CANDIDATE_LIMIT: usize = 500;
 
 /// Filters for `list_entries_manifest`, mirroring `GET /entries/manifest` on
 /// the server: keyword, kind and time range, then a page of the matches. An

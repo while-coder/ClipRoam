@@ -7,12 +7,10 @@ import {
   FileText,
   FolderOpen,
   Image,
-  LoaderCircle,
   Monitor,
   Trash2,
-  Upload,
 } from "lucide-vue-next";
-import { canManualUpload, deviceName as deviceDisplayName } from "../../utils/entry";
+import { deviceName as deviceDisplayName } from "../../utils/entry";
 import { formatAge as formatAgeRelative, formatExactDateTime } from "../../utils/format";
 import { usePlatform } from "../../composables/usePlatform";
 import type { ClipboardEntry, Device, LocalClipboardEntry } from "../../types";
@@ -26,11 +24,9 @@ const props = defineProps<{
   entries: LocalClipboardEntry[];
   devicesById: Record<string, Device>;
   currentTime: number;
-  uploadingEntryId: string;
 }>();
 
 const emit = defineEmits<{
-  upload: [entry: LocalClipboardEntry];
   remove: [entry: ClipboardEntry];
   back: [];
 }>();
@@ -72,16 +68,6 @@ function formatAge(createdAt: string): string {
           </span>
         </span>
         <span class="entry-actions">
-          <span
-            v-if="canManualUpload(entry)"
-            class="item-action"
-            role="button"
-            tabindex="0"
-            :title="uploadingEntryId === entry.id ? '正在上传…' : '上传到服务器（小于 100 MB）'"
-            :aria-label="uploadingEntryId === entry.id ? '正在上传' : '上传到服务器'"
-            @click.stop="emit('upload', entry)"
-            @keydown.enter.stop="emit('upload', entry)"
-          ><LoaderCircle v-if="uploadingEntryId === entry.id" :size="15" class="spin" /><Upload v-else :size="15" /></span>
           <span
             class="item-action danger"
             role="button"

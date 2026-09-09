@@ -47,7 +47,7 @@ import {
   EMPTY_SUMMARY,
   PAGE_SIZE,
 } from "./utils/constants";
-import { canManualUpload, canSaveEntry, isHashing } from "./utils/entry";
+import { canSaveEntry, isHashing } from "./utils/entry";
 import { errorMessage } from "./utils/error";
 import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
 import type {
@@ -89,7 +89,6 @@ const testingConnection = ref(false);
 const currentUsername = ref("");
 const importingShare = ref(false);
 const activatingEntryId = ref("");
-const uploadingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
 const savingEntryId = ref("");
@@ -540,25 +539,6 @@ function copyEntry(entry?: LocalClipboardEntry): Promise<void> {
 
 function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
   return activateEntry(entry, "paste_entry");
-}
-
-async function uploadEntry(entry: LocalClipboardEntry): Promise<void> {
-  if (!syncClient) {
-    showToast("同步服务未连接，无法上传文件", "error");
-    return;
-  }
-  if (uploadingEntryId.value || uploadProgressByEntryId.value[entry.id] || !canManualUpload(entry)) return;
-  uploadingEntryId.value = entry.id;
-  try {
-    // Publishing needs the tree, which the rendered list does not carry.
-    const stored = await syncClient.upload(await fullEntry(entry));
-    await adoptPublishedEntry(entry.id, stored);
-  } catch (error) {
-    showToast(`上传失败：${errorMessage(error)}`, "error");
-  } finally {
-    await refreshEntries();
-    uploadingEntryId.value = "";
-  }
 }
 
 /**
@@ -1330,7 +1310,6 @@ onBeforeUnmount(() => {
       :current-time="currentTime"
       :importing-share="importingShare"
       :activating-entry-id="activatingEntryId"
-      :uploading-entry-id="uploadingEntryId"
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
@@ -1339,7 +1318,6 @@ onBeforeUnmount(() => {
       @activate="activateFromView"
       @remove="removeEntry"
       @save="saveEntry"
-      @upload="uploadEntry"
       @refresh="refreshEntries"
       @open-settings="openSettings"
     />
@@ -1349,8 +1327,6 @@ onBeforeUnmount(() => {
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"
-      :uploading-entry-id="uploadingEntryId"
-      @upload="uploadEntry"
       @remove="removeEntry"
       @back="activeView = 'history'"
     />
