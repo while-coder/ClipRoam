@@ -7,7 +7,8 @@ use std::{
 };
 
 use crate::store::{cache_dir_for, HistoryData};
-use crate::content::{modified_millis, tree_contents, ClipboardEntryExtra, LocalSources};
+use crate::content::{tree_contents, ClipboardEntryExtra, LocalSources};
+use crate::utils::modified_millis;
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;

@@ -8,6 +8,7 @@ mod platforms;
 mod store;
 mod sync;
 mod transfer;
+mod utils;
 
 use std::{
     collections::HashMap,

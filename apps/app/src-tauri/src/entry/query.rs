@@ -86,14 +86,14 @@ fn manifest_query(
             if !matching_ids.is_empty() {
                 alternatives.push(format!(
                     "source_device_id IN ({})",
-                    crate::store::placeholders(matching_ids.len())
+                    crate::utils::placeholders(matching_ids.len())
                 ));
                 values.extend(matching_ids.into_iter().map(Value::Text));
             }
             if unknown_matches {
                 alternatives.push(format!(
                     "source_device_id NOT IN ({})",
-                    crate::store::placeholders(device_names.len())
+                    crate::utils::placeholders(device_names.len())
                 ));
                 values.extend(device_names.keys().map(|id| Value::Text(id.clone())));
             }
@@ -163,7 +163,7 @@ pub(crate) fn list_entries_query(
         HashMap::new()
     } else {
         state.with_database(&path, |connection| {
-            let where_sql = format!("WHERE id IN ({})", crate::store::placeholders(entry_ids.len()));
+            let where_sql = format!("WHERE id IN ({})", crate::utils::placeholders(entry_ids.len()));
             let values = entry_ids
                 .iter()
                 .map(|id| Value::Text(id.clone()))
