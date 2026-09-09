@@ -20,6 +20,12 @@ export type RelaySession = {
   stream: PassThrough;
   claimed: boolean;
   createdAt: number;
+  // Last byte the sender fed in; a claimed session with no activity for
+  // SESSION_IDLE_MS is a half-open transfer and gets swept like an idle one.
+  lastActivity: number;
+  // Serializes `push` calls: backpressure waits happen on this chain, so two
+  // concurrent PUTs cannot interleave their writes and corrupt the byte order.
+  queue: Promise<unknown>;
 };
 
 /**
@@ -32,8 +38,23 @@ export type RelaySession = {
 export class FileRelayService {
   readonly #sessions = new Map<string, RelaySession>();
 
-  create(userId: string, entryId: string, fileId: string, size: number, stream: PassThrough): RelaySession {
+  constructor() {
+    // Session lifecycle is driven by the requester's GET and the sender's
+    // PUTs, neither of which guarantees a `create` to prune after — so the
+    // sweep runs on its own (unref'd, purely advisory) timer as well.
+    const timer = setInterval(() => this.#prune(), SESSION_IDLE_MS / 2);
+    timer.unref?.();
+  }
+
+  // Returns undefined when the user already pins the session cap: a misbehaving
+  // client must not be able to hold unbounded streams. The route answers 429.
+  create(userId: string, entryId: string, fileId: string, size: number, stream: PassThrough): RelaySession | undefined {
     this.#prune();
+    let held = 0;
+    for (const session of this.#sessions.values()) {
+      if (session.userId === userId) held += 1;
+    }
+    if (held >= MAX_SESSIONS_PER_USER) return undefined;
     const session: RelaySession = {
       id: randomUUID(),
       userId,
@@ -43,6 +64,8 @@ export class FileRelayService {
       stream,
       claimed: false,
       createdAt: Date.now(),
+      lastActivity: Date.now(),
+      queue: Promise.resolve(),
     };
     this.#sessions.set(session.id, session);
     return session;
@@ -62,12 +85,24 @@ export class FileRelayService {
   }
 
   // Write one chunk into the requester's pipe, respecting its backpressure.
-  // Resolves false when the stream is gone (requester disconnected): the
-  // sender reads that as "stop sending".
+  // Chunks join the session's write queue, so concurrent PUTs keep byte order
+  // even while one is parked on a `drain`. Resolves false when the stream is
+  // gone (requester disconnected): the sender reads that as "stop sending".
   async push(sessionId: string, chunk: Buffer): Promise<boolean> {
     const session = this.#sessions.get(sessionId);
     if (!session || session.stream.destroyed) return false;
+    const run = session.queue.then(() => this.#write(session, chunk));
+    session.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #write(session: RelaySession, chunk: Buffer): Promise<boolean> {
     const stream = session.stream;
+    if (stream.destroyed) return false;
+    session.lastActivity = Date.now();
     if (!stream.write(chunk)) {
       await Promise.race([
         once(stream, "drain"),
@@ -98,7 +133,8 @@ export class FileRelayService {
   #prune(): void {
     const now = Date.now();
     for (const [id, session] of this.#sessions) {
-      if (!session.claimed && now - session.createdAt > SESSION_IDLE_MS) {
+      const idleSince = session.claimed ? session.lastActivity : session.createdAt;
+      if (now - idleSince > SESSION_IDLE_MS) {
         this.#sessions.delete(id);
         if (!session.stream.destroyed) session.stream.destroy();
       }

@@ -186,7 +186,13 @@ async function saveSettings(): Promise<void> {
     }
     await requireBridge().persistSyncConfig(config);
     requireBridge().setActiveConfig(config);
-    if (config.enabled && config.username && config.sessionToken) await requireBridge().startSync(config);
+    // 保存点是同步引擎的唯一驱动：显式决定连接或断开，不再依赖
+    // save_sync_config 的事件回环（那个回环会造成双重连接）。
+    if (config.enabled && config.username && config.sessionToken) {
+      await requireBridge().startSync(config);
+    } else {
+      requireBridge().disconnect(false);
+    }
     if (config.autoUploadLimitMb > previousAutoUploadLimitMb) {
       requireBridge().uploadNowEligibleEntries(config.autoUploadLimitMb * 1024 * 1024);
     }

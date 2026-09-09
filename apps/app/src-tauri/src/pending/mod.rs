@@ -190,7 +190,22 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 // List
 // ---------------------------------------------------------------------------
 
-/// 全部队列行，条目形态——待同步视图与侧边栏角标的数据。
+/// 队列行数——侧边栏角标的数据，O(1)；进「待同步」视图才拉明细。
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| {
+        connection
+            .query_row("SELECT COUNT(*) FROM pending_entries", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count.max(0) as usize)
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// 全部队列行，条目形态——待同步视图的数据。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;

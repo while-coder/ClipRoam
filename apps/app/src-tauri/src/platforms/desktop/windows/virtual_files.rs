@@ -18,7 +18,10 @@ use std::{
     io::{Read, Seek, SeekFrom},
     mem::{size_of, ManuallyDrop},
     ptr,
-    sync::{mpsc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc, Mutex, OnceLock,
+    },
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -216,7 +219,16 @@ struct VirtualFileStream {
     source_device_id: String,
     file_id: String,
     size: Option<u64>,
-    position: Mutex<u64>,
+    /// Explorer reads a stream sequentially; a plain atomic keeps `Seek` and
+    /// `Clone` responsive even while a `Read` waits up to STREAM_WAIT_TIMEOUT
+    /// inside the download loop (a held mutex used to block them for that
+    /// whole window). `Read` re-checks the position it observed before
+    /// committing its advance, so a concurrent `Seek` wins.
+    position: AtomicU64,
+    /// The path of the first successful content resolution, cached so the
+    /// steady read loop after a download finishes stops re-deriving it through
+    /// the history lock and the database on every single `Read`.
+    resolved: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl VirtualFileStream {
@@ -235,7 +247,8 @@ impl VirtualFileStream {
             source_device_id,
             file_id: item.file_id.clone().unwrap_or_default(),
             size: item.size,
-            position: Mutex::new(position),
+            position: AtomicU64::new(position),
+            resolved: Mutex::new(None),
         }
         .into()
     }
@@ -262,32 +275,68 @@ impl VirtualFileStream {
     }
 
     fn resolved_path(&self) -> Option<std::path::PathBuf> {
+        if let Some(path) = self
+            .resolved
+            .lock()
+            .ok()
+            .and_then(|resolved| resolved.clone())
+        {
+            return Some(path);
+        }
         let state = self.app.state::<AppState>();
         let snapshot = snapshot_entry(&state, &self.entry_id).ok()?;
-        snapshot.resolve(&self.file_id)
+        let path = snapshot.resolve(&self.file_id)?;
+        // Cache only a success: an unresolved content keeps the download path
+        // as its source of truth, and the first success is exactly what marks
+        // the transition out of that waiting loop.
+        if let Ok(mut resolved) = self.resolved.lock() {
+            *resolved = Some(path.clone());
+        }
+        Some(path)
+    }
+
+    fn forget_resolved_path(&self) {
+        if let Ok(mut resolved) = self.resolved.lock() {
+            *resolved = None;
+        }
+    }
+
+    fn read_file_at(&self, path: &std::path::Path, position: u64, target: &mut [u8]) -> Result<usize, String> {
+        let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::Start(position))
+            .map_err(|error| error.to_string())?;
+        file.read(target).map_err(|error| error.to_string())
     }
 
     fn read_at(&self, target: &mut [u8], position: u64) -> Result<usize, String> {
         if let Some(path) = self.resolved_path() {
-            let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-            file.seek(SeekFrom::Start(position))
-                .map_err(|error| error.to_string())?;
-            return file.read(target).map_err(|error| error.to_string());
+            match self.read_file_at(&path, position, target) {
+                Ok(count) => return Ok(count),
+                Err(error) => {
+                    // A cached resolution can go stale (the local source moved,
+                    // the blob was swept); forget it and fall through to the
+                    // download path like an unresolved content would.
+                    self.forget_resolved_path();
+                    let _ = error;
+                }
+            }
         }
 
         self.request_download()?;
         let state = self.app.state::<AppState>();
+        // The partial buffer lives beside the cache; one lock read gives the
+        // active profile's cache dir without re-deriving the whole snapshot.
+        let cache_dir = {
+            let history = state.history.lock().map_err(|error| error.to_string())?;
+            crate::active_cache_dir(&state, &history)
+        };
+        let partial = download_path(&cache_dir, &self.file_id)
+            .ok_or_else(|| "内容标识不合法".to_string())?;
         loop {
             if let Some(path) = self.resolved_path() {
-                let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-                file.seek(SeekFrom::Start(position))
-                    .map_err(|error| error.to_string())?;
-                return file.read(target).map_err(|error| error.to_string());
+                return self.read_file_at(&path, position, target);
             }
 
-            let snapshot = snapshot_entry(&state, &self.entry_id)?;
-            let partial = download_path(&snapshot.cache_dir, &self.file_id)
-                .ok_or_else(|| "内容标识不合法".to_string())?;
             if let Ok(length) = fs::metadata(&partial).map(|metadata| metadata.len()) {
                 if length > position {
                     let mut file =
@@ -341,14 +390,19 @@ impl ISequentialStream_Impl for VirtualFileStream_Impl {
         if pv.is_null() {
             return STG_E_READFAULT;
         }
-        let mut position = match self.position.lock() {
-            Ok(position) => position,
-            Err(_) => return STG_E_READFAULT,
-        };
+        let position = self.position.load(Ordering::Relaxed);
         let target = unsafe { std::slice::from_raw_parts_mut(pv.cast::<u8>(), cb as usize) };
-        match self.read_at(target, *position) {
+        match self.read_at(target, position) {
             Ok(count) => {
-                *position += count as u64;
+                // The position is a hint, not a lock: a concurrent Seek during
+                // the read wins, and this read's advance is dropped rather than
+                // undoing it.
+                let _ = self.position.compare_exchange(
+                    position,
+                    position + count as u64,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
                 if !pcbread.is_null() {
                     unsafe { *pcbread = count as u32 };
                 }
@@ -372,14 +426,11 @@ impl ISequentialStream_Impl for VirtualFileStream_Impl {
 
 impl IStream_Impl for VirtualFileStream_Impl {
     fn Seek(&self, move_by: i64, origin: STREAM_SEEK, new_position: *mut u64) -> WinResult<()> {
-        let mut position = self
-            .position
-            .lock()
-            .map_err(|_| Error::from_hresult(STG_E_SEEKERROR))?;
+        let current = self.position.load(Ordering::Relaxed);
         let base = if origin == STREAM_SEEK_SET {
             0i128
         } else if origin == STREAM_SEEK_CUR {
-            *position as i128
+            current as i128
         } else if origin == STREAM_SEEK_END {
             self.size
                 .ok_or_else(|| Error::from_hresult(STG_E_SEEKERROR))? as i128
@@ -390,9 +441,9 @@ impl IStream_Impl for VirtualFileStream_Impl {
         if next < 0 || next > u64::MAX as i128 {
             return Err(Error::from_hresult(STG_E_SEEKERROR));
         }
-        *position = next as u64;
+        self.position.store(next as u64, Ordering::Relaxed);
         if !new_position.is_null() {
-            unsafe { *new_position = *position };
+            unsafe { *new_position = next as u64 };
         }
         Ok(())
     }
@@ -443,10 +494,7 @@ impl IStream_Impl for VirtualFileStream_Impl {
     }
 
     fn Clone(&self) -> WinResult<IStream> {
-        let position = *self
-            .position
-            .lock()
-            .map_err(|_| Error::from_hresult(STG_E_READFAULT))?;
+        let position = self.position.load(Ordering::Relaxed);
         Ok(VirtualFileStream {
             app: self.app.clone(),
             window_label: self.window_label.clone(),
@@ -454,7 +502,8 @@ impl IStream_Impl for VirtualFileStream_Impl {
             source_device_id: self.source_device_id.clone(),
             file_id: self.file_id.clone(),
             size: self.size,
-            position: Mutex::new(position),
+            position: AtomicU64::new(position),
+            resolved: Mutex::new(None),
         }
         .into())
     }

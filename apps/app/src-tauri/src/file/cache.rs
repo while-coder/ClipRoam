@@ -44,10 +44,10 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
 /// Every content id the durable history references (image contents plus file
 /// tree leaves), streamed row by row so the entries themselves never load.
 /// This is the input of the frontend's live pool-availability query.
-pub fn history_file_ids(connection: &Connection) -> Vec<String> {
+pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
     let mut statement = match connection.prepare("SELECT extra FROM entries") {
         Ok(statement) => statement,
-        Err(_) => return Vec::new(),
+        Err(_) => return HashSet::new(),
     };
     let rows = statement
         .query_map([], |row| row.get::<_, String>("extra"))
@@ -64,7 +64,7 @@ pub fn history_file_ids(connection: &Connection) -> Vec<String> {
             ids.insert(file_id);
         }
     }
-    ids.into_iter().collect()
+    ids
 }
 
 /// Content ids this machine holds a blob for. The blob directories are the

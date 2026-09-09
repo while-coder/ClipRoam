@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, monitorFromPoint, PhysicalPosition, type Monitor } from "@tauri-apps/api/window";
@@ -73,8 +73,11 @@ const { initUpdaterVersion } = useUpdater();
  * The durable upload queue's rows: captured offline or waiting to publish.
  * Served by Rust's `list_pending_entries` (every queue row as an entry-shaped
  * view with a temporary `p{seq}` id) — never derived from a whole-history read.
+ * Details load only while the pending-sync view is open; refresh bursts
+ * elsewhere carry the O(1) `count_pending_entries` instead.
  */
 const pendingEntries = ref<LocalClipboardEntry[]>([]);
+const pendingCount = ref(0);
 /** Total entries across every filter; backs the clear-history affordance. */
 const totalEntryCount = ref(0);
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
@@ -208,6 +211,7 @@ function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<strin
   const page = filter.page;
   return {
     total: matched.length,
+    allTotal: previewEntries.value.length,
     entries: page ? matched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : matched,
   };
 }
@@ -216,34 +220,50 @@ async function fetchManifest(
   filter: EntriesManifestFilter,
   deviceNames: Record<string, string>,
 ): Promise<EntriesManifestPage> {
-  if (!runningInTauri) return clientManifest(filter, deviceNames);
-  return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
+  if (!runningInTauri) {
+    const page = clientManifest(filter, deviceNames);
+    totalEntryCount.value = previewEntries.value.length;
+    return page;
+  }
+  const page = await invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
+  totalEntryCount.value = page.allTotal;
+  return page;
 }
 
 /** The pending-sync list re-queries Rust; the browser preview derives it. */
 async function refreshPendingEntries(): Promise<void> {
   if (!runningInTauri) {
     pendingEntries.value = previewEntries.value.filter((entry) => !isEntrySynced(entry));
+    pendingCount.value = pendingEntries.value.length;
     return;
   }
   try {
     pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_pending_entries");
+    pendingCount.value = pendingEntries.value.length;
   } catch (error) {
     showToast(`待同步记录读取失败：${errorMessage(error)}`, "error");
   }
 }
 
-async function refreshTotalEntryCount(): Promise<void> {
+/**
+ * Sidebar badge only: an O(1) count, so refresh bursts outside the pending
+ * view never haul the queue rows across the IPC boundary.
+ */
+async function refreshPendingCount(): Promise<void> {
   if (!runningInTauri) {
-    totalEntryCount.value = previewEntries.value.length;
+    pendingCount.value = previewEntries.value.filter((entry) => !isEntrySynced(entry)).length;
     return;
   }
   try {
-    totalEntryCount.value = await invoke<number>("total_entry_count");
-  } catch (error) {
-    showToast(`剪贴板记录统计失败：${errorMessage(error)}`, "error");
+    pendingCount.value = await invoke<number>("count_pending_entries");
+  } catch {
+    // The badge is auxiliary; a failed refresh keeps the previous value.
   }
 }
+
+watch(activeView, (view) => {
+  if (view === "pending-sync") void refreshPendingEntries();
+});
 
 let refreshTimer: number | undefined;
 
@@ -251,15 +271,16 @@ let refreshTimer: number | undefined;
  * Background events (captures, remote upserts, file availability) arrive in
  * bursts; each one only invalidates views. A burst coalesces into one pass:
  * the history view refetches its current page on the revision bump, while the
- * pending list and the total re-query Rust-side. Nothing reads whole history.
+ * pending badge (and, when its view is open, the queue details) re-query
+ * Rust-side. Nothing reads whole history.
  */
 function refreshHistory(): void {
   if (refreshTimer !== undefined) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = undefined;
     historyRevision.value += 1;
-    void refreshPendingEntries();
-    void refreshTotalEntryCount();
+    void refreshPendingCount();
+    if (activeView.value === "pending-sync") void refreshPendingEntries();
     void refreshStoredFileIds();
   }, 200);
 }
@@ -1037,19 +1058,6 @@ async function startSync(config: SyncConfig): Promise<void> {
   client.connect();
 }
 
-async function applySavedSyncConfig(): Promise<void> {
-  const config = await loadSyncConfig();
-  if (!config) return;
-  activeSyncConfig = config;
-  syncEnabled.value = config.enabled;
-  currentUsername.value = config.username;
-  if (config.enabled && config.username && config.sessionToken) {
-    await startSync(config);
-  } else {
-    stopSyncClient();
-  }
-}
-
 function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(message)), 5_000);
@@ -1086,7 +1094,6 @@ async function initializeTauriServices(): Promise<void> {
     }),
     listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
-    listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
     listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
       const client = syncClient;
       if (!client) {
@@ -1185,9 +1192,8 @@ onMounted(async () => {
   if (startupWarning) showToast(startupWarning, "error");
   if (!isPasteWindow) void initUpdaterVersion();
   // The history view fetches its first page itself (revision watch with
-  // `immediate`); only the aggregate views need an initial query.
-  void refreshPendingEntries();
-  void refreshTotalEntryCount();
+  // `immediate`); only the pending badge needs an initial query.
+  void refreshPendingCount();
   if (runningInTauri) void initializeTauriServices();
 
   if (setupVisible.value) {
@@ -1277,7 +1283,7 @@ onBeforeUnmount(() => {
         >
           <CloudUpload :size="17" aria-hidden="true" />
           <span>待同步</span>
-          <span v-if="pendingEntries.length" class="nav-count">{{ pendingEntries.length }}</span>
+          <span v-if="pendingCount" class="nav-count">{{ pendingCount }}</span>
         </button>
       </nav>
 
