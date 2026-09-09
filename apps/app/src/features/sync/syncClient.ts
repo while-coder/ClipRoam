@@ -404,7 +404,6 @@ export class SyncClient {
     if (entry.kind !== "files" && entry.kind !== "image") return;
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
-    if (!candidates.length) return;
 
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
     const uploadedByFileId = new Map(candidates.map((file) => [file.fileId, 0]));

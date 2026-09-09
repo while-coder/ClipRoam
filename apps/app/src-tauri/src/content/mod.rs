@@ -135,8 +135,9 @@ pub struct ClipboardEntryExtra {
 }
 
 impl ClipboardEntryExtra {
-    /// The entry's large fields — everything persisted in queue rows and the
-    /// `extra` column, alongside the small entry fields.
+    /// The entry's large fields as persisted in queue rows (`pending_entries`
+    /// keeps the sources inside `extra`; the `entries` table has its own
+    /// `sources` column and uses [`entry_row_extra_json`]).
     pub(crate) fn of(entry: &ClipboardEntry) -> Self {
         Self {
             html: entry.html.clone(),
@@ -150,6 +151,33 @@ impl ClipboardEntryExtra {
     pub(crate) fn json(&self) -> Result<String, String> {
         serde_json::to_string(self).map_err(|error| error.to_string())
     }
+}
+
+/// The `entries`-row shape of `extra`: `localSources` is omitted because the
+/// table keeps sources in its own `sources` column — only pending rows carry
+/// them inside `extra`. Borrows the large fields, so upserting never clones a
+/// tree or a rich-text body. Reading rows stays on [`ClipboardEntryExtra`],
+/// whose defaults absorb the missing field in both old and new rows.
+pub(crate) fn entry_row_extra_json(entry: &ClipboardEntry) -> Result<String, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RowExtra<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        html: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rtf: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_info: &'a Option<FileInfo>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image_info: &'a Option<ImageInfo>,
+    }
+    let extra = RowExtra {
+        html: &entry.html,
+        rtf: &entry.rtf,
+        file_info: &entry.file_info,
+        image_info: &entry.image_info,
+    };
+    serde_json::to_string(&extra).map_err(|error| error.to_string())
 }
 
 pub struct CollectedTree {

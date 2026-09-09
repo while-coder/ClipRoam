@@ -213,6 +213,14 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         if history.last_file_signature == signature {
             return Ok(());
         }
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let created_at = Utc::now().to_rfc3339();
+        // A re-copy of the same roots refreshes the published entry's
+        // timestamp instead of queueing the tree a second time. This lookup
+        // runs before the signatures are recorded: a failed lookup returns
+        // without ever touching them, so memory cannot claim a capture the
+        // database never received.
+        let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
         // Signatures roll back on a failed write, keeping memory aligned with
         // the database the transaction never touched.
         let previous_signatures = (
@@ -223,11 +231,6 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         history.last_file_signature = signature.clone();
         history.last_clipboard.clear();
         history.last_image_signature.clear();
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let created_at = Utc::now().to_rfc3339();
-        // A re-copy of the same roots refreshes the published entry's
-        // timestamp instead of queueing the tree a second time.
-        let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
         let outcome = match reusable {
             Some(mut existing) => {
                 existing.created_at = created_at;
