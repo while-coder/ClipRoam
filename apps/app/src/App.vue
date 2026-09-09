@@ -22,7 +22,6 @@ import {
   authenticateAccount,
   getServerUrls,
   testSyncConnection,
-  type ServerProtocol,
 } from "./features/sync/syncClient";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./features/sync/concurrency";
 import {
@@ -736,19 +735,12 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
   }
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
-  let serverAddress = typeof value.serverAddress === "string" ? value.serverAddress : "";
-  let serverProtocol: ServerProtocol = value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL;
-  if (serverAddress.includes("://")) {
-    try {
-      const url = new URL(serverAddress);
-      serverAddress = url.host;
-      if (value.serverProtocol === undefined && url.protocol === "https:") serverProtocol = "https";
-    } catch { serverAddress = ""; }
-  }
   return {
     enabled: value.enabled === true,
-    serverAddress: serverAddress || DEFAULT_SERVER_ADDRESS,
-    serverProtocol,
+    serverAddress: typeof value.serverAddress === "string" && value.serverAddress
+      ? value.serverAddress
+      : DEFAULT_SERVER_ADDRESS,
+    serverProtocol: value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL,
     username: typeof value.username === "string" ? value.username : "",
     sessionToken: typeof value.sessionToken === "string" ? value.sessionToken : "",
     autoUploadLimitMb: typeof value.autoUploadLimitMb === "number"
