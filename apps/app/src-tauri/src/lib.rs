@@ -1,13 +1,12 @@
+mod app_shell;
 mod clipboard;
 mod content;
 mod history;
+mod platforms;
 mod store;
 mod sync;
 mod transfer;
-mod windows;
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -15,8 +14,6 @@ use std::{
     thread,
 };
 use tauri::Manager;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use tauri::WebviewWindowBuilder;
 
 use store::{
     cache_dir_for, collect_local_garbage, default_active_history, history_path_for_key,
@@ -34,13 +31,9 @@ struct AppState {
     downloads: Mutex<HashMap<String, DownloadState>>,
     save_sessions: Mutex<HashMap<String, SaveSession>>,
     virtual_downloads: VirtualDownloads,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    platform_clipboard: crate::clipboard::platform_clipboard::PlatformClipboard,
     /// `Sender` is not `Sync`, so managed state has to guard it.
     hash_queue: Mutex<mpsc::Sender<String>>,
     share_import: Mutex<()>,
-    #[cfg(target_os = "windows")]
-    paste_drag_focus_guard: Mutex<Option<Instant>>,
 }
 
 fn save_active_history(
@@ -60,18 +53,11 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
-    #[cfg(target_os = "android")]
-    let builder = builder.plugin(tauri_plugin_cliproam_share_receiver::init());
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    let builder = builder
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+    let builder = platforms::register_plugins(builder);
     let builder = tauri_updater_kit::attach_updater(builder);
 
     let builder = builder
         .setup(|app| {
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            let window_configs = app.config().app.windows.clone();
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
@@ -84,8 +70,6 @@ pub fn run() {
             retain_single_history(&mut history, &history_key);
             save_history(&history_path_for_key(&histories_dir, &history_key), &history)?;
             let (sender, receiver) = mpsc::channel::<String>();
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            let platform_clipboard = clipboard::platform_clipboard::PlatformClipboard::new()?;
             app.manage(AppState {
                 history: Mutex::new(history),
                 histories_dir,
@@ -94,31 +78,19 @@ pub fn run() {
                 downloads: Mutex::new(HashMap::new()),
                 save_sessions: Mutex::new(HashMap::new()),
                 virtual_downloads: VirtualDownloads::default(),
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                platform_clipboard,
                 hash_queue: Mutex::new(sender),
                 share_import: Mutex::new(()),
-                #[cfg(target_os = "windows")]
-                paste_drag_focus_guard: Mutex::new(None),
             });
+            platforms::manage_platform_state(app.handle())?;
 
             // Desktop windows use `create: false`, so create them after managed
-            // state exists. Android already creates its main webview before
-            // this hook and rebuilding it would fail with a duplicate label.
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            for window_config in window_configs {
-                WebviewWindowBuilder::from_config(app.handle(), &window_config)?.build()?;
-            }
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            {
-                windows::setup_tray(app.handle())?;
-                if let Some(window) = app.get_webview_window("toast") {
-                    let _ = window.set_ignore_cursor_events(true);
-                }
-            }
+            // state exists. Mobile is a no-op: the system creates the main
+            // webview before this hook and rebuilding it would fail with a
+            // duplicate label.
+            platforms::create_windows(app.handle())?;
+            platforms::setup_desktop_shell(app.handle())?;
             clipboard::hashing::start_hash_worker(app.handle().clone(), receiver);
-            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-            clipboard::capture::start_clipboard_monitor(app.handle().clone());
+            platforms::start_clipboard_monitor(app.handle().clone());
 
             // Hashes that were still pending when the app last closed are
             // persisted, so they simply resume.
@@ -137,57 +109,12 @@ pub fn run() {
                 }
             });
             Ok(())
-        });
-
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    let builder = builder.on_window_event(|window, event| match event {
-        tauri::WindowEvent::CloseRequested { api, .. } => {
-            api.prevent_close();
-            let _ = window.hide();
-        }
-        tauri::WindowEvent::Focused(true) if window.label() == "paste" => {
-            #[cfg(target_os = "windows")]
-            if let Ok(mut guard) = window.state::<AppState>().paste_drag_focus_guard.lock() {
-                *guard = None;
-            }
-        }
-        tauri::WindowEvent::Focused(false) if window.label() == "paste" => {
-            let app = window.app_handle().clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(100));
-                let Some(window) = app.get_webview_window("paste") else {
-                    return;
-                };
-                #[cfg(target_os = "windows")]
-                {
-                    let state = window.state::<AppState>();
-                    let ignore_drag_focus_loss = state
-                        .paste_drag_focus_guard
-                        .lock()
-                        .map(|mut guard| match *guard {
-                            Some(deadline) if Instant::now() <= deadline => true,
-                            Some(_) => {
-                                *guard = None;
-                                false
-                            }
-                            None => false,
-                        })
-                        .unwrap_or(false);
-                    if ignore_drag_focus_loss {
-                        return;
-                    }
-                }
-                if matches!(window.is_focused(), Ok(false)) {
-                    let _ = window.hide();
-                }
-            });
-        }
-        _ => {}
-    });
+        })
+        .on_window_event(platforms::on_window_event);
 
     builder
         .invoke_handler(tauri::generate_handler![
-            windows::get_platform_capabilities,
+            app_shell::get_platform_capabilities,
             clipboard::capture::capture_current_clipboard_text,
             clipboard::capture::consume_mobile_shares,
             history::list_entries,
@@ -196,7 +123,7 @@ pub fn run() {
             sync::remote::filter_unknown_file_ids,
             history::get_device,
             sync::config::get_sync_config,
-            windows::open_app_data_dir,
+            app_shell::open_app_data_dir,
             sync::config::save_sync_config,
             sync::remote::upsert_remote_entry,
             sync::remote::upsert_remote_entries,
@@ -210,11 +137,11 @@ pub fn run() {
             sync::remote::acknowledge_entry_deletion,
             sync::remote::list_pending_entries,
             sync::remote::acknowledge_pending_entry,
-            windows::start_window_drag,
-            windows::hide_paste,
-            windows::hide_main,
-            windows::show_toast,
-            windows::hide_toast,
+            app_shell::start_window_drag,
+            app_shell::hide_paste,
+            app_shell::hide_main,
+            app_shell::show_toast,
+            app_shell::hide_toast,
             history::refresh_entry,
             transfer::download::prepare_entry_files,
             transfer::download::prepare_paste_entry,

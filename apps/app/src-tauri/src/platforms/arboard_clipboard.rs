@@ -1,15 +1,17 @@
-//! macOS/Linux clipboard integration.
+//! macOS/Linux 剪贴板集成（arboard）。
 //!
-//! These platforms receive materialized local paths. macOS publishes NSURL
-//! objects and Linux publishes `text/uri-list` through arboard's native
-//! X11/Wayland backends. Images use RGBA in memory and are converted at the
-//! existing WebP/BMP storage boundary.
+//! 这些平台通过本地物化路径传输文件：macOS 发布 NSURL 对象，Linux 通过
+//! arboard 的原生 X11/Wayland 后端发布 `text/uri-list`。图片在内存中以
+//! RGBA 表示，在现有的 WebP/BMP 存储边界完成转换。
 
 #![cfg_attr(all(test, target_os = "windows"), allow(dead_code))]
 
 use arboard::{Clipboard, ImageData};
 use image::{DynamicImage, ImageFormat, RgbaImage};
-use std::{borrow::Cow, io::Cursor, path::PathBuf, process::Command, sync::Mutex};
+use std::{borrow::Cow, io::Cursor, path::PathBuf, sync::Mutex};
+use tauri::{AppHandle, Manager};
+
+use crate::clipboard::capture::RichText;
 
 pub struct PlatformClipboard {
     inner: Mutex<Clipboard>,
@@ -102,65 +104,32 @@ impl PlatformClipboard {
     }
 }
 
-fn run_paste_command(program: &str, arguments: &[&str]) -> Result<(), String> {
-    let output = Command::new(program)
-        .args(arguments)
-        .output()
-        .map_err(|error| format!("{program}: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if message.is_empty() {
-        format!("{program} 退出码：{}", output.status)
-    } else {
-        format!("{program}: {message}")
+pub(crate) fn read_clipboard_files(app: &AppHandle) -> Option<Vec<PathBuf>> {
+    app.state::<PlatformClipboard>().read_files()
+}
+
+pub(crate) fn read_clipboard_image(app: &AppHandle) -> Option<Vec<u8>> {
+    app.state::<PlatformClipboard>().read_image_as_bmp()
+}
+
+pub(crate) fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
+    let clipboard = app.state::<PlatformClipboard>();
+    clipboard.read_text().map(|text| RichText {
+        html: clipboard.read_html(),
+        text,
+        rtf: None,
     })
 }
 
-#[cfg(target_os = "macos")]
-pub fn synthesize_paste() -> Result<(), String> {
-    run_paste_command(
-        "osascript",
-        &[
-            "-e",
-            "tell application \"System Events\" to keystroke \"v\" using command down",
-        ],
-    )
-    .map_err(|error| {
-        format!("无法模拟 Command+V，请在系统设置中允许 ClipRoam 使用辅助功能：{error}")
-    })
+pub(crate) fn write_clipboard_text(app: &AppHandle, rich_text: &RichText) -> Result<(), String> {
+    app.state::<PlatformClipboard>()
+        .write_text(&rich_text.text, rich_text.html.as_deref())
 }
 
-#[cfg(any(target_os = "linux", all(test, target_os = "windows")))]
-pub fn synthesize_paste() -> Result<(), String> {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    let attempts: &[(&str, &[&str])] = if wayland {
-        &[
-            ("wtype", &["-M", "ctrl", "-k", "v", "-m", "ctrl"]),
-            ("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
-            ("xdotool", &["key", "--clearmodifiers", "ctrl+v"]),
-        ]
-    } else {
-        &[
-            ("xdotool", &["key", "--clearmodifiers", "ctrl+v"]),
-            ("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]),
-        ]
-    };
-    let mut errors = Vec::new();
-    for (program, arguments) in attempts {
-        match run_paste_command(program, arguments) {
-            Ok(()) => return Ok(()),
-            Err(error) => errors.push(error),
-        }
-    }
-    Err(format!(
-        "剪贴板已写入，但无法模拟 Ctrl+V；请安装 {}。{}",
-        if wayland {
-            "wtype 或 ydotool"
-        } else {
-            "xdotool"
-        },
-        errors.join("；")
-    ))
+pub(crate) fn write_clipboard_files(app: &AppHandle, paths: &[String]) -> Result<(), String> {
+    app.state::<PlatformClipboard>().write_files(paths)
+}
+
+pub(crate) fn write_clipboard_image(app: &AppHandle, image: &[u8]) -> Result<(), String> {
+    app.state::<PlatformClipboard>().write_image(image)
 }
