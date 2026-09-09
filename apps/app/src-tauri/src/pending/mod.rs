@@ -45,11 +45,12 @@ pub fn enqueue_pending_entry(
     Ok(connection.last_insert_rowid())
 }
 
-/// 建队列表，补齐 `sources` 列。打开历史库时调用。
+/// 建队列表。旧结构直接重建。打开历史库时调用。
 pub(crate) fn init_table(connection: &Connection) -> Result<(), String> {
-    // 更老版本的队列表存的是引用而非 payload，无法迁移，直接重建。
     let columns = crate::store::table_columns(connection, "pending_entries")?;
-    let outdated = !columns.iter().any(|name| name == "content");
+    let outdated = !columns.is_empty()
+        && (!columns.iter().any(|name| name == "content")
+            || !columns.iter().any(|name| name == "sources"));
     if outdated {
         connection
             .execute("DROP TABLE IF EXISTS pending_entries", [])
@@ -67,15 +68,6 @@ pub(crate) fn init_table(connection: &Connection) -> Result<(), String> {
             );",
         )
         .map_err(|error| error.to_string())?;
-    let columns = crate::store::table_columns(connection, "pending_entries")?;
-    if !columns.iter().any(|name| name == "sources") {
-        connection
-            .execute(
-                "ALTER TABLE pending_entries ADD COLUMN sources TEXT NOT NULL DEFAULT '{}'",
-                [],
-            )
-            .map_err(|error| error.to_string())?;
-    }
     Ok(())
 }
 

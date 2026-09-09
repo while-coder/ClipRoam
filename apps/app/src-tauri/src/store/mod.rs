@@ -130,23 +130,16 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
-    // Pinning and source_app columns were removed: they are dropped from
-    // databases written by older builds instead of being recreated.
+    // 旧版本残留的表直接删除，本地不迁移旧数据。
     let entry_columns = table_columns(&connection, "entries")?;
+    let outdated_entries = !entry_columns.is_empty()
+        && (!entry_columns.iter().any(|name| name == "created_ms")
+            || entry_columns.iter().any(|name| matches!(name.as_str(), "pinned" | "source_app")));
     let mut schema = String::new();
-    // The `files` availability table is gone — server-pool state is queried
-    // live by the frontend and never persisted locally again.
     schema.push_str("DROP TABLE IF EXISTS files;\n");
-    // Dropping an indexed column fails, so the index goes first.
-    schema.push_str("DROP INDEX IF EXISTS entries_source_app_created_at;\n");
-    // Timestamps are ordered by the numeric `created_ms` column (string RFC3339
-    // orders wrongly across variable-length subsecond digits and `Z`/`+00:00`).
-    schema.push_str("DROP INDEX IF EXISTS entries_created_at;\n");
-    schema.push_str("DROP INDEX IF EXISTS entries_kind_created_at;\n");
-    for column in ["pinned", "source_app"] {
-        if entry_columns.iter().any(|name| name == column) {
-            schema.push_str(&format!("ALTER TABLE entries DROP COLUMN {column};\n"));
-        }
+    if outdated_entries {
+        // 索引随表一起消失。
+        schema.push_str("DROP TABLE entries;\n");
     }
     schema.push_str(
         "
@@ -181,40 +174,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     // The durable upload queue owns its table: schema, stale-row sweep and
     // row CRUD all live in the `pending` module.
     crate::pending::init_table(&connection)?;
-    // Databases written before `created_ms` existed get the column added and
-    // backfilled here; fresh databases created it in the schema above. Columns
-    // are re-read after the schema batch so a crash between the ALTER and the
-    // backfill resumes cleanly instead of failing on a duplicate column. The
-    // timestamps come from two clocks (local `Utc::now().to_rfc3339()` and the
-    // server's publish response), so the parse runs in Rust instead of relying
-    // on SQLite date functions to accept every RFC3339 spelling.
-    let stamped = table_columns(&connection, "entries")?
-        .iter()
-        .any(|name| name == "created_ms");
-    if !stamped {
-        connection
-            .execute("ALTER TABLE entries ADD COLUMN created_ms INTEGER", [])
-            .map_err(|error| error.to_string())?;
-        let unstamped = {
-            let mut statement = connection
-                .prepare("SELECT id, created_at FROM entries WHERE created_ms IS NULL")
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-                .map_err(|error| error.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?;
-            rows
-        };
-        let mut stamp = connection
-            .prepare("UPDATE entries SET created_ms = ? WHERE id = ?")
-            .map_err(|error| error.to_string())?;
-        for (id, created_at) in unstamped {
-            stamp
-                .execute(params![entry_created_ms(&created_at), id])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     Ok(connection)
 }
 
