@@ -5,19 +5,15 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    thread,
-    time::Duration,
 };
 use tauri::{AppHandle, State};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use tauri::Manager;
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
 use crate::store::{cached_source_for, open_history_database, refresh_entry_summary, history_path_for_key};
 use crate::history::entry_contents_of;
 use crate::{active_cache_dir, save_active_history, AppState};
 
-use super::capture::{decode_image_as_bmp, image_signature, rich_text_signature, safe_file_name, RichText};
+use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePasteStrategy {
@@ -27,11 +23,9 @@ pub(crate) enum FilePasteStrategy {
 
 impl FilePasteStrategy {
     pub(crate) fn for_entry(entry: &ClipboardEntry) -> Self {
-        #[cfg(target_os = "windows")]
-        if entry.kind == "files" && crate::clipboard::virtual_files::supports_entry(entry) {
+        if entry.kind == "files" && crate::platforms::supports_virtual_file_paste(entry) {
             return Self::VirtualStream;
         }
-        let _ = entry;
         Self::MaterializedPaths
     }
 
@@ -40,145 +34,14 @@ impl FilePasteStrategy {
     }
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn synthesize_paste() -> Result<(), String> {
-    use std::mem::size_of;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL, VK_V,
-    };
-    fn key(vk: u16, flags: u32) -> INPUT {
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    wScan: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        }
-    }
-    let inputs = [
-        key(VK_CONTROL, 0),
-        key(VK_V, 0),
-        key(VK_V, KEYEVENTF_KEYUP),
-        key(VK_CONTROL, KEYEVENTF_KEYUP),
-    ];
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            size_of::<INPUT>() as i32,
-        )
-    };
-    if sent == inputs.len() as u32 {
-        Ok(())
-    } else {
-        Err(format!("SendInput inserted {sent} of {} events", inputs.len()))
-    }
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn synthesize_paste() -> Result<(), String> {
-    crate::clipboard::platform_clipboard::synthesize_paste()
-}
 
 pub(crate) enum ClipboardPayload {
     Text(RichText),
     Files(Vec<String>),
-    #[cfg(target_os = "windows")]
+    /// 仅在 `FilePasteStrategy::VirtualStream`（当前只有 Windows）下构造；
+    /// 非 Windows 上写入时由平台适配层返回错误。
     VirtualFiles(Box<ClipboardEntry>),
     Image(Vec<u8>),
-}
-
-#[cfg(target_os = "windows")]
-fn write_clipboard_files(_app: &AppHandle, paths: &[String]) -> Result<(), String> {
-    use clipboard_win::{formats::FileList, Clipboard, Setter};
-
-    let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-    FileList
-        .write_clipboard(paths)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn write_clipboard_files(app: &AppHandle, paths: &[String]) -> Result<(), String> {
-    app.state::<AppState>().platform_clipboard.write_files(paths)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn write_clipboard_files(_app: &AppHandle, _paths: &[String]) -> Result<(), String> {
-    Err("当前平台暂不支持文件粘贴".to_string())
-}
-
-#[cfg(target_os = "windows")]
-fn write_clipboard_image(_app: &AppHandle, image: &[u8]) -> Result<(), String> {
-    use clipboard_win::{options::DoClear, raw, Clipboard};
-
-    let bitmap = decode_image_as_bmp(image)?;
-    let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-    // clipboard-win 5.x keeps existing formats when setting a bitmap. Clear
-    // them explicitly so a text-only target cannot paste stale Unicode text
-    // from the previous clipboard value when it rejects the image format.
-    raw::set_bitmap_with(&bitmap, DoClear)
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn write_clipboard_image(app: &AppHandle, image: &[u8]) -> Result<(), String> {
-    app.state::<AppState>().platform_clipboard.write_image(image)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn write_clipboard_image(_app: &AppHandle, _image: &[u8]) -> Result<(), String> {
-    Err("当前平台暂不支持图片粘贴".to_string())
-}
-
-pub(crate) fn write_clipboard_text(_app: &AppHandle, rich_text: &RichText) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use clipboard_win::{
-            formats::{Html, Unicode},
-            raw, Clipboard, Setter,
-        };
-
-        let _clipboard = Clipboard::new_attempts(10).map_err(|error| error.to_string())?;
-        Unicode
-            .write_clipboard(&rich_text.text)
-            .map_err(|error| error.to_string())?;
-        if let Some(html) = &rich_text.html {
-            if let Some(format) = Html::new() {
-                format
-                    .write_clipboard(html)
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        if let Some(rtf) = &rich_text.rtf {
-            let format = raw::register_format("Rich Text Format")
-                .ok_or_else(|| "无法注册 RTF 剪贴板格式".to_string())?;
-            let mut rtf = rtf.clone().into_bytes();
-            rtf.push(0);
-            raw::set_without_clear(format.get(), &rtf).map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        _app
-            .state::<AppState>()
-            .platform_clipboard
-            .write_text(&rich_text.text, rich_text.html.as_deref())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        _app.clipboard()
-            .write_text(&rich_text.text)
-            .map_err(|error| error.to_string())
-    }
 }
 
 /// A snapshot taken under the history lock so file dialogs and disk work never
@@ -278,7 +141,6 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, payload:
             let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
             (file_signature(&paths), String::new(), String::new())
         }
-        #[cfg(target_os = "windows")]
         ClipboardPayload::VirtualFiles(_) => (String::new(), String::new(), String::new()),
         ClipboardPayload::Image(image) => (String::new(), String::new(), image_signature(image)),
         ClipboardPayload::Text(rich_text) => (String::new(), rich_text_signature(rich_text), String::new()),
@@ -311,8 +173,8 @@ pub(crate) fn activate_remote_entry(
     }
 
     match payload {
-        ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text),
-        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image),
+        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
+        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
         _ => unreachable!("file activations are rejected above"),
     }
 }
@@ -343,12 +205,7 @@ pub(crate) fn apply_clipboard_entry(
             } else {
                 match FilePasteStrategy::for_entry(&snapshot.entry) {
                     FilePasteStrategy::VirtualStream => {
-                        #[cfg(target_os = "windows")]
-                        {
-                            ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        unreachable!("virtual file paste is only available on Windows")
+                        ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
                     }
                     FilePasteStrategy::MaterializedPaths => {
                         let view = snapshot
@@ -377,40 +234,15 @@ pub(crate) fn apply_clipboard_entry(
     }
 
     match payload {
-        ClipboardPayload::Text(rich_text) => write_clipboard_text(&app, &rich_text)?,
-        ClipboardPayload::Files(paths) => write_clipboard_files(&app, &paths)?,
-        #[cfg(target_os = "windows")]
+        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text)?,
+        ClipboardPayload::Files(paths) => crate::platforms::write_clipboard_files(&app, &paths)?,
         ClipboardPayload::VirtualFiles(entry) => {
-            crate::clipboard::virtual_files::set_clipboard(&app, window.label(), *entry)?
+            crate::platforms::set_virtual_file_clipboard(&app, window.label(), *entry)?
         }
-        ClipboardPayload::Image(image) => write_clipboard_image(&app, &image)?,
+        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image)?,
     }
 
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        // Mobile operating systems do not let a normal app inject a paste into
-        // another app. Keep ClipRoam visible and treat activation as Copy.
-        let _ = window;
-        let _ = synthesize;
-        return Ok(());
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        if !synthesize {
-            return Ok(());
-        }
-        window.hide().map_err(|error| error.to_string())?;
-        thread::sleep(Duration::from_millis(90));
-        if let Err(error) = synthesize_paste() {
-            // The clipboard content is still valid, but the user needs to see why
-            // automatic delivery failed (for example missing Linux helpers or
-            // macOS Accessibility permission).
-            let _ = window.show();
-            return Err(error);
-        }
-        Ok(())
-    }
+    crate::platforms::deliver_paste(&window, synthesize)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -430,8 +262,7 @@ pub(crate) fn paste_entry(
     state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    if window.label() != "paste" {
+    if crate::platforms::requires_paste_window() && window.label() != "paste" {
         return Err("只有快捷粘贴窗口可以执行自动粘贴".to_string());
     }
 

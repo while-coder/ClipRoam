@@ -32,11 +32,13 @@ pub(crate) struct SavePreparation {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn prepare_save_entry(
     state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<Option<SavePreparation>, String> {
+    if !crate::platforms::supports_native_file_export() {
+        return Err("移动端文件已保存在应用缓存中，请使用系统分享或文件导出入口".to_string());
+    }
     let snapshot = snapshot_entry(&state, &entry_id)?;
     let file_info = snapshot
         .entry
@@ -49,20 +51,9 @@ pub(crate) fn prepare_save_entry(
 
     let single_file = file_info.len() == 1
         && matches!(file_info.values().next(), Some(TreeNode::File { .. }));
-    let destination = if single_file {
-        let name = file_info.keys().next().expect("count is one");
-        let Some(destination) = rfd::FileDialog::new()
-            .set_file_name(name)
-            .save_file()
-        else {
-            return Ok(None);
-        };
-        destination
-    } else {
-        let Some(destination) = rfd::FileDialog::new().pick_folder() else {
-            return Ok(None);
-        };
-        destination
+    let name = file_info.keys().next().expect("count is one").clone();
+    let Some(destination) = crate::platforms::prompt_save_destination(single_file, &name) else {
+        return Ok(None);
     };
 
     let save_id = uuid::Uuid::new_v4().to_string();
@@ -99,15 +90,6 @@ pub(crate) fn prepare_save_entry(
             },
         );
     Ok(Some(SavePreparation { save_id, missing }))
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) fn prepare_save_entry(
-    _state: State<'_, AppState>,
-    _entry_id: String,
-) -> Result<Option<SavePreparation>, String> {
-    Err("移动端文件已保存在应用缓存中，请使用系统分享或文件导出入口".to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -14,13 +14,6 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
-#[cfg(target_os = "android")]
-use std::path::Path;
-#[cfg(target_os = "android")]
-use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
-#[cfg(target_os = "android")]
-use super::output::write_clipboard_text;
-
 use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
     upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
@@ -395,90 +388,11 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
 
 #[tauri::command]
 pub(crate) fn capture_current_clipboard_text(app: AppHandle) -> Result<bool, String> {
-    let Some(rich_text) = read_clipboard_text(&app) else {
+    let Some(rich_text) = crate::platforms::read_clipboard_text(&app) else {
         return Ok(false);
     };
     capture_text(&app, rich_text)?;
     Ok(true)
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn read_clipboard_files(_app: &AppHandle) -> Option<Vec<PathBuf>> {
-    clipboard_win::get_clipboard(clipboard_win::formats::FileList).ok()
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn read_clipboard_files(app: &AppHandle) -> Option<Vec<PathBuf>> {
-    app.state::<AppState>()
-        .platform_clipboard
-        .read_files()
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn read_clipboard_image(_app: &AppHandle) -> Option<Vec<u8>> {
-    use clipboard_win::{formats::Bitmap, Clipboard, Getter};
-
-    let _clipboard = Clipboard::new_attempts(10).ok()?;
-    let mut image = Vec::new();
-    Bitmap.read_clipboard(&mut image).ok()?;
-    (!image.is_empty()).then_some(image)
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn read_clipboard_image(app: &AppHandle) -> Option<Vec<u8>> {
-    app.state::<AppState>().platform_clipboard.read_image_as_bmp()
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn read_clipboard_text(_app: &AppHandle) -> Option<RichText> {
-    use clipboard_win::{
-        formats::{Html, RawData, Unicode},
-        raw, Clipboard, Getter,
-    };
-
-    let _clipboard = Clipboard::new_attempts(10).ok()?;
-    let mut text = String::new();
-    Unicode.read_clipboard(&mut text).ok()?;
-    if text.trim().is_empty() {
-        return None;
-    }
-
-    let html = Html::new().and_then(|format| {
-        let mut value = String::new();
-        format
-            .read_clipboard(&mut value)
-            .ok()
-            .filter(|_| !value.is_empty())
-            .map(|_| value)
-    });
-    let rtf = raw::register_format("Rich Text Format").and_then(|format| {
-        let mut value = Vec::new();
-        RawData(format.get())
-            .read_clipboard(&mut value)
-            .ok()
-            .and_then(|_| String::from_utf8(value).ok())
-            .map(|value| value.trim_end_matches('\0').to_string())
-            .filter(|value| !value.is_empty())
-    });
-
-    Some(RichText { text, html, rtf })
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
-    let clipboard = &app.state::<AppState>().platform_clipboard;
-    clipboard.read_text().map(|text| RichText {
-        html: clipboard.read_html(),
-        text,
-        rtf: None,
-    })
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-pub(crate) fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
-    app.clipboard().read_text().ok().and_then(|text| {
-        (!text.trim().is_empty()).then_some(RichText { text, html: None, rtf: None })
-    })
 }
 
 pub(crate) fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32, Option<String>), String> {
@@ -521,28 +435,20 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
     thread::spawn(move || {
         // Every pass reads the full clipboard and re-decodes its contents for
         // the signatures (a bitmap can be tens of megabytes), so Windows gates
-        // each pass on the clipboard sequence number: an unchanged clipboard —
-        // a screenshot sitting idle for hours, for example — is skipped without
+        // each pass on the clipboard sequence number (see
+        // platforms::should_skip_clipboard_poll): an unchanged clipboard — a
+        // screenshot sitting idle for hours, for example — is skipped without
         // even opening it.
-        #[cfg(target_os = "windows")]
         let mut last_clipboard_sequence = 0u32;
         loop {
-            #[cfg(target_os = "windows")]
-            {
-                let sequence = unsafe {
-                    windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-                };
-                if sequence != 0 && sequence == last_clipboard_sequence {
-                    thread::sleep(Duration::from_millis(350));
-                    continue;
-                }
-                last_clipboard_sequence = sequence;
+            if crate::platforms::should_skip_clipboard_poll(&mut last_clipboard_sequence) {
+                continue;
             }
-            if let Some(paths) = read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
+            if let Some(paths) = crate::platforms::read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
                 let _ = capture_files(&app, paths);
-            } else if let Some(rich_text) = read_clipboard_text(&app) {
+            } else if let Some(rich_text) = crate::platforms::read_clipboard_text(&app) {
                 let _ = capture_text(&app, rich_text);
-            } else if let Some(image) = read_clipboard_image(&app) {
+            } else if let Some(image) = crate::platforms::read_clipboard_image(&app) {
                 let _ = capture_image(&app, image);
             }
             thread::sleep(Duration::from_millis(350));
@@ -552,6 +458,7 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
 
 // ---------------------------------------------------------------------------
 // Android 分享接收：分享项先进入待处理队列，再按本地捕获一样导入历史。
+// 各系统的导入实现见 platforms/<系统>；这里只负责串行化导入。
 // ---------------------------------------------------------------------------
 
 #[derive(Default, Serialize)]
@@ -563,93 +470,8 @@ pub(crate) struct ShareImportSummary {
     files: usize,
 }
 
-#[cfg(target_os = "android")]
-fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<PathBuf>, String> {
-    let state = app.state::<AppState>();
-    let cache_dir = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        crate::active_cache_dir(&state, &history)
-    };
-    let request_id = uuid::Uuid::parse_str(&share.id).map_err(|_| "分享请求标识不合法".to_string())?;
-    let directory = cache_dir.join("share").join(request_id.to_string());
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-
-    let mut paths = Vec::with_capacity(share.items.len());
-    for (index, item) in share.items.iter().enumerate() {
-        let source = PathBuf::from(&item.path);
-        if !source.is_file() {
-            return Err(format!("分享文件已失效：{}", item.name));
-        }
-        let name = Path::new(&item.name)
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .map(|name| name.to_owned())
-            .unwrap_or_else(|| format!("shared-{}", index + 1).into());
-        let target = directory.join(name);
-        let source_size = fs::metadata(&source).map_err(|error| error.to_string())?.len();
-        let target_matches = fs::metadata(&target)
-            .map(|metadata| metadata.is_file() && metadata.len() == source_size)
-            .unwrap_or(false);
-        if !target_matches {
-            fs::copy(&source, &target).map_err(|error| format!("无法保存分享文件 {}：{error}", item.name))?;
-        }
-        paths.push(target);
-    }
-    Ok(paths)
-}
-
-#[cfg(target_os = "android")]
-fn import_android_share(app: &AppHandle, share: &PendingShare) -> Result<ShareImportSummary, String> {
-    let mut summary = ShareImportSummary::default();
-    if let Some(text) = share.text.as_ref().filter(|text| !text.trim().is_empty()) {
-        let rich_text = RichText {
-            text: text.clone(),
-            html: share.html.clone(),
-            rtf: None,
-        };
-        // A share is the mobile equivalent of a fresh local clipboard capture.
-        // Keep the OS clipboard useful too, but never discard the history item
-        // just because a particular device rejected the clipboard write.
-        let _ = write_clipboard_text(app, &rich_text);
-        capture_text(app, rich_text)?;
-        summary.texts = 1;
-    }
-
-    if share.items.len() == 1 && share.items[0].mime_type.starts_with("image/") {
-        let image = fs::read(&share.items[0].path)
-            .map_err(|error| format!("无法读取分享图片：{error}"))?;
-        capture_image(app, image)?;
-        summary.images = 1;
-    } else if !share.items.is_empty() {
-        let paths = persist_shared_files(app, share)?;
-        capture_files(app, paths)?;
-        summary.files = share.items.len();
-    }
-    summary.shares = 1;
-    Ok(summary)
-}
-
 #[tauri::command]
 pub(crate) fn consume_mobile_shares(app: AppHandle, state: State<'_, AppState>) -> Result<ShareImportSummary, String> {
     let _guard = state.share_import.lock().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "android")]
-    {
-        let mut imported = ShareImportSummary::default();
-        for share in app.share_receiver().pending().map_err(|error| error.to_string())? {
-            let summary = import_android_share(&app, &share)?;
-            app.share_receiver()
-                .acknowledge(&share.id)
-                .map_err(|error| error.to_string())?;
-            imported.shares += summary.shares;
-            imported.texts += summary.texts;
-            imported.images += summary.images;
-            imported.files += summary.files;
-        }
-        Ok(imported)
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(ShareImportSummary::default())
-    }
+    crate::platforms::consume_pending_shares(&app)
 }
