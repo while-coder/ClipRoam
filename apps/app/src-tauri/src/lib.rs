@@ -2,6 +2,7 @@ mod app_shell;
 mod clipboard;
 mod content;
 mod entry;
+mod file;
 mod history;
 mod pending;
 mod platforms;
@@ -18,9 +19,10 @@ use std::{
 use rusqlite::Connection;
 use tauri::Manager;
 
+use file::collect_local_garbage;
 use store::{
-    cache_dir_for, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, DatabasePool, HistoryData,
+    cache_dir_for, default_active_history, history_path_for_key, load_history, DatabasePool,
+    HistoryData,
 };
 use sync::config::SyncConfig;
 use transfer::download::{DownloadState, VirtualDownloads};
@@ -121,9 +123,9 @@ pub fn run() {
             entry::query::list_entries_query,
             entry::query::list_entry_ids,
             entry::query::total_entry_count,
-            entry::query::history_file_ids,
-            entry::query::list_upload_candidates,
             entry::query::get_entry,
+            file::query::history_file_ids,
+            file::query::list_upload_candidates,
             transfer::download::list_entry_files,
             history::get_device,
             sync::config::get_sync_config,
@@ -132,7 +134,7 @@ pub fn run() {
             entry::mutate::upsert_remote_entry,
             entry::mutate::upsert_remote_entries,
             entry::mutate::remove_remote_entry,
-            pending::next_pending_entry,
+            pending::peek_pending_entry,
             pending::dequeue_pending_entry,
             pending::list_pending_entries,
             app_shell::start_window_drag,

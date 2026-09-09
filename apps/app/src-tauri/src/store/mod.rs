@@ -6,13 +6,6 @@
 //! availability is queried live by the frontend; local-cache state is derived
 //! from the blob directories on disk, which are the source of truth for it.
 
-mod cache;
-
-pub use cache::{
-    cached_hash, cached_source_for, collect_local_garbage, history_file_ids, remember_hash,
-    scan_cached_blobs,
-};
-
 use rusqlite::{params, params_from_iter, Connection};
 use std::{
     collections::{HashMap, HashSet},
@@ -350,7 +343,7 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
     }
 
     let cache_dir = cache_dir_for_path(path);
-    history.cached_files = scan_cached_blobs(&cache_dir);
+    history.cached_files = crate::file::scan_cached_blobs(&cache_dir);
     history
 }
 

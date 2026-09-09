@@ -16,9 +16,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
-    upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo,
+    ClipboardEntry, ClipboardEntryExtra, ImageInfo,
 };
-use crate::pending::enqueue;
+use crate::file::upload_image_path;
+use crate::pending::enqueue_pending_entry;
 use crate::store::{history_path_for_key, save_metadata, select_entries, upsert_entry_row};
 use crate::AppState;
 
@@ -169,7 +170,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
             transaction
                 .execute("DELETE FROM pending_entries WHERE content = ?", [&text])
                 .map_err(|error| error.to_string())?;
-            enqueue(&transaction, "text", &text, &payload, "{}", &created_at)?;
+            enqueue_pending_entry(&transaction, "text", &text, &payload, "{}", &created_at)?;
             save_metadata(&transaction, &history)?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
@@ -252,7 +253,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 let sources = serde_json::to_string(&collected.sources).map_err(|error| error.to_string())?;
                 state.with_database(&history_path, |connection| {
                     let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                    enqueue(&transaction, "files", &content, &payload, &sources, &created_at)?;
+                    enqueue_pending_entry(&transaction, "files", &content, &payload, &sources, &created_at)?;
                     save_metadata(&transaction, &history)?;
                     transaction.commit().map_err(|error| error.to_string())?;
                     Ok(())
@@ -332,7 +333,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         if let Err(error) = state.with_database(&history_path, |connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            enqueue(&transaction, "image", &content, &payload, "{}", &created_at)?;
+            enqueue_pending_entry(&transaction, "image", &content, &payload, "{}", &created_at)?;
             save_metadata(&transaction, &history)?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())

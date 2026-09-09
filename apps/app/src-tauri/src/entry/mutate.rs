@@ -3,9 +3,9 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::content::ClipboardEntry;
+use crate::file::collect_local_garbage;
 use crate::store::{
-    collect_local_garbage, delete_entries_by_ids, history_path_for_key, save_metadata,
-    upsert_entry_row,
+    delete_entries_by_ids, history_path_for_key, save_metadata, upsert_entry_row,
 };
 use crate::AppState;
 

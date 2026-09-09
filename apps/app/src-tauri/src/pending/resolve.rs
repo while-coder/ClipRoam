@@ -9,7 +9,8 @@ use super::{list_rows, row_entry};
 use crate::content::{
     describe_roots, hash_file, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
 };
-use crate::store::{cached_hash, history_path_for_key, remember_hash};
+use crate::file::{cached_hash, remember_hash};
+use crate::store::history_path_for_key;
 use crate::AppState;
 
 /// How many freshly hashed paths are folded into the row before the UI is
