@@ -215,7 +215,7 @@ pub(crate) fn finish_file_download(state: State<'_, AppState>, transfer_id: Stri
         fail_download_target(&state, &download, "文件下载不完整");
         return Err("文件下载不完整".to_string());
     }
-    if crate::content::to_hex(&download.hasher.clone().finalize()) != download.file_id {
+    if crate::utils::to_hex(&download.hasher.clone().finalize()) != download.file_id {
         let _ = fs::remove_file(&download.path);
         fail_download_target(&state, &download, "文件内容校验失败");
         return Err("文件内容校验失败".to_string());

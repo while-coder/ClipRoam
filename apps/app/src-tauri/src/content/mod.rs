@@ -15,16 +15,10 @@ pub use tree::{
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs,
-    io::Read,
     path::{Component, Path, PathBuf},
-    time::UNIX_EPOCH,
 };
-
-pub const HASH_READ_BUFFER: usize = 512 * 1024;
 
 /// A `files` entry's structure is one nested map. A file leaf carries the
 /// content id and byte size; a directory is another such map keyed by child
@@ -174,52 +168,8 @@ pub struct MissingFile {
 }
 
 // ---------------------------------------------------------------------------
-// 哈希：内容 id 与本地签名
-// ---------------------------------------------------------------------------
-
-/// FNV-1a: enough for non-cryptographic local identities (clipboard
-/// signatures, history keys) where only repeat detection matters.
-pub fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    bytes
-        .into_iter()
-        .fold(0xcbf29ce484222325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-        })
-}
-
-pub fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-pub fn hash_bytes(bytes: &[u8]) -> String {
-    to_hex(&Sha256::digest(bytes))
-}
-
-pub fn hash_file(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; HASH_READ_BUFFER];
-    loop {
-        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(to_hex(&hasher.finalize()))
-}
-
-// ---------------------------------------------------------------------------
 // 路径：相对路径安全
 // ---------------------------------------------------------------------------
-
-pub fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_millis() as u64)
-}
 
 pub fn clipboard_relative_path(relative_path: &str) -> Result<PathBuf, String> {
     let mut path = PathBuf::new();

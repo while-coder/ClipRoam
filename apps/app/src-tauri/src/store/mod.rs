@@ -16,6 +16,7 @@ use uuid::Uuid;
 use chrono::DateTime;
 
 use crate::content::{ClipboardEntry, ClipboardEntryExtra};
+use crate::utils::placeholders;
 
 pub const LOCAL_HISTORY_KEY: &str = "local";
 
@@ -60,7 +61,7 @@ pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
         .join(format!(
             "{}-{:016x}",
             safe_history_directory_name(key),
-            crate::content::fnv1a(key.bytes())
+            crate::utils::fnv1a(key.bytes())
         ))
         .join("history.sqlite")
 }
@@ -337,11 +338,6 @@ pub fn delete_entries_by_ids(connection: &Connection, entry_ids: &[String]) -> R
         )
         .map_err(|error| error.to_string())?;
     Ok(())
-}
-
-/// Comma-separated `?` marks for an IN clause.
-pub fn placeholders(count: usize) -> String {
-    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
 }
 
 /// Persists the history-level metadata: the activation signatures and the

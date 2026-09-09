@@ -6,10 +6,11 @@ use std::{
 };
 
 use super::{
-    clipboard_relative_path, modified_millis, sanitize_root_name, unique_root_name,
+    clipboard_relative_path, sanitize_root_name, unique_root_name,
     ClipboardEntry, CollectedTree, EntrySummary, FileInfo, LocalSource, LocalSources, TreeNode,
 };
 use crate::file::cached_file_path;
+use crate::utils::modified_millis;
 
 /// Every content the map references, de-duplicated in encounter order, with
 /// the size each leaf reports.

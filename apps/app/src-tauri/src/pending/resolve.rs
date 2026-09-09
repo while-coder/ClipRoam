@@ -7,9 +7,10 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::{list_rows, row_entry};
 use crate::content::{
-    describe_roots, hash_file, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
+    describe_roots, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
 };
 use crate::file::{cached_hash, remember_hash};
+use crate::utils::hash_file;
 use crate::store::history_path_for_key;
 use crate::AppState;
 

@@ -15,9 +15,10 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::content::{
-    collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
+    collect_tree, describe_roots, file_entry_signature, file_signature,
     ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
+use crate::utils::{fnv1a, hash_bytes};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{history_path_for_key, save_metadata, select_entries, upsert_entry_row};
