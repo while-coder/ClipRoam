@@ -9,7 +9,7 @@ pub(crate) use super::arboard_clipboard::{
     read_clipboard_files, read_clipboard_image, read_clipboard_text, write_clipboard_files,
     write_clipboard_image, write_clipboard_text,
 };
-pub(crate) use super::desktop::{
+pub(crate) use super::{
     begin_window_drag, consume_pending_shares, create_windows, deliver_paste, on_paste_window_focus,
     on_window_event, prompt_save_destination, register_plugins, requires_paste_window,
     setup_desktop_shell, should_ignore_paste_focus_loss, should_skip_clipboard_poll,
@@ -39,7 +39,7 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
     };
     let mut errors = Vec::new();
     for (program, arguments) in attempts {
-        match super::desktop::run_paste_command(program, arguments) {
+        match super::run_paste_command(program, arguments) {
             Ok(()) => return Ok(()),
             Err(error) => errors.push(error),
         }
@@ -56,5 +56,5 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
 }
 
 pub(crate) fn open_data_directory(app: &AppHandle) -> Result<(), String> {
-    super::desktop::open_data_directory_with(app, "xdg-open")
+    super::open_data_directory_with(app, "xdg-open")
 }

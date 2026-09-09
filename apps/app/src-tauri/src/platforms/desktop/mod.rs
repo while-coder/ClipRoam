@@ -2,8 +2,20 @@
 //! 个别系统差异（粘贴合成、打开数据目录的命令）由各系统目录覆盖。
 
 // `run_paste_command` 与 `begin_window_drag` 只被 macOS/Linux 路径使用，
-// Windows 构建下它们由 platforms/windows 覆盖，因此是预期中的死代码。
+// Windows 构建下它们由 platforms/desktop/windows 覆盖，因此是预期中的死代码。
 #![cfg_attr(target_os = "windows", allow(dead_code))]
+
+// 各桌面系统目录；macos/linux 额外在 Windows 测试构建下编译以保持类型检查
+// （见 platforms/mod.rs 顶部说明）。
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) mod linux;
+// arboard_clipboard 由 macos/linux 使用，跟随它们一起编译。
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) mod arboard_clipboard;
 
 use std::path::PathBuf;
 use std::{thread, time::Duration};

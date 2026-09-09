@@ -10,7 +10,7 @@ use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
 use crate::clipboard::capture::{capture_files, capture_image, capture_text, RichText, ShareImportSummary};
 use crate::{active_cache_dir, AppState};
 
-pub(crate) use super::mobile::{
+pub(crate) use super::{
     begin_window_drag, create_windows, deliver_paste, manage_platform_state, on_paste_window_focus,
     on_window_event, open_data_directory, prompt_save_destination, read_clipboard_files,
     read_clipboard_image, read_clipboard_text, requires_paste_window, setup_desktop_shell,
