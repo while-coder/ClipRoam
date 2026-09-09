@@ -2,24 +2,24 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-vue-next";
 import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange } from "../../utils/format";
+import type { TimeFilter } from "../../types";
 
-type TimeFilterValue = "all" | "today" | "7-days" | "30-days" | "custom";
 type CalendarDay = { key: string; label: number; inMonth: boolean };
 
 const props = defineProps<{
-  modelValue: TimeFilterValue;
+  modelValue: TimeFilter;
   startDate: string;
   endDate: string;
   error?: string;
 }>();
 
 const emit = defineEmits<{
-  "update:modelValue": [value: TimeFilterValue];
+  "update:modelValue": [value: TimeFilter];
   "update:startDate": [value: string];
   "update:endDate": [value: string];
 }>();
 
-const options: Array<{ value: TimeFilterValue; label: string }> = [
+const options: Array<{ value: TimeFilter; label: string }> = [
   { value: "all", label: "不限" },
   { value: "today", label: TIME_FILTER_LABELS.today },
   { value: "7-days", label: TIME_FILTER_LABELS["7-days"] },
@@ -129,7 +129,7 @@ function handleMenuKeydown(event: KeyboardEvent): void {
   buttons[targetIndex]?.focus();
 }
 
-function selectOption(value: TimeFilterValue): void {
+function selectOption(value: TimeFilter): void {
   menuOpen.value = false;
   if (value === "custom") {
     openCalendar();

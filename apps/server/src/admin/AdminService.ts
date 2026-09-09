@@ -1,15 +1,14 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { AttemptThrottle } from "../common/AttemptThrottle.js";
 
 const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
 const maxAttempts = 5;
 const attemptWindowMs = 5 * 60 * 1_000;
 const blockedForMs = 60 * 1_000;
 
-type LoginAttempt = { failures: number; windowStarted: number; blockedUntil: number };
-
 export class AdminService {
   #sessions = new Map<string, number>();
-  #attempts = new Map<string, LoginAttempt>();
+  #throttle = new AttemptThrottle({ maxAttempts, windowMs: attemptWindowMs, blockedForMs });
   readonly #password: string;
 
   constructor(password = process.env.CLIPROAM_ADMIN_PASSWORD ?? "") {
@@ -27,15 +26,14 @@ export class AdminService {
   login(ip: string, password: unknown): { token: string } | { error: "NOT_CONFIGURED" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" } {
     if (!this.isConfigured) return { error: "NOT_CONFIGURED" };
     const now = Date.now();
-    const attempt = this.#attempts.get(ip);
-    if (attempt && attempt.blockedUntil > now) return { error: "TOO_MANY_ATTEMPTS" };
+    if (this.#throttle.isBlocked(ip, now)) return { error: "TOO_MANY_ATTEMPTS" };
 
     if (typeof password !== "string" || !sameSecret(this.password, password)) {
-      this.#recordFailure(ip, now);
+      this.#throttle.recordFailure(ip, now);
       return { error: "INVALID_CREDENTIALS" };
     }
 
-    this.#attempts.delete(ip);
+    this.#throttle.reset(ip);
     this.#removeExpiredSessions(now);
     const token = randomBytes(32).toString("base64url");
     this.#sessions.set(token, now + sessionLifetimeMs);
@@ -54,16 +52,6 @@ export class AdminService {
 
   logout(token: string | undefined): void {
     if (token) this.#sessions.delete(token);
-  }
-
-  #recordFailure(ip: string, now: number): void {
-    const previous = this.#attempts.get(ip);
-    const current = !previous || now - previous.windowStarted > attemptWindowMs
-      ? { failures: 0, windowStarted: now, blockedUntil: 0 }
-      : previous;
-    current.failures += 1;
-    if (current.failures >= maxAttempts) current.blockedUntil = now + blockedForMs;
-    this.#attempts.set(ip, current);
   }
 
   #removeExpiredSessions(now: number): void {

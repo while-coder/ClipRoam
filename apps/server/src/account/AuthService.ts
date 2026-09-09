@@ -1,11 +1,12 @@
 import { AuthCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol";
+import { AttemptThrottle } from "../common/AttemptThrottle.js";
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 
-type LoginAttempt = { failures: number; windowStarted: number; blockedUntil: number };
 export type HttpResult = { statusCode: number; payload: unknown };
 
 export class AuthService {
-  #loginAttempts = new Map<string, LoginAttempt>();
+  // 5 bad credentials in 5 minutes block the key (ip + username) for a minute.
+  #throttle = new AttemptThrottle({ maxAttempts: 5, windowMs: 5 * 60_000, blockedForMs: 60_000 });
 
   constructor(private readonly store: ClipRoamStore) {}
 
@@ -35,18 +36,17 @@ export class AuthService {
 
     const attemptKey = `${ip}:${parsed.data.username.toLocaleLowerCase()}`;
     const now = Date.now();
-    const attempt = this.#loginAttempts.get(attemptKey);
-    if (attempt && attempt.blockedUntil > now) {
+    if (this.#throttle.isBlocked(attemptKey, now)) {
       return { statusCode: 429, payload: { code: "TOO_MANY_ATTEMPTS", message: "登录尝试过多，请稍后再试" } };
     }
 
     try {
       const session = await this.store.login(parsed.data.username, parsed.data.password, parsed.data.deviceId);
-      this.#loginAttempts.delete(attemptKey);
+      this.#throttle.reset(attemptKey);
       return { statusCode: 200, payload: session };
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
-        this.#recordLoginFailure(attemptKey, now);
+        this.#throttle.recordFailure(attemptKey, now);
         return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: error.message } };
       }
       throw error;
@@ -65,8 +65,7 @@ export class AuthService {
 
     const attemptKey = `${ip}:${user.username.toLocaleLowerCase()}`;
     const now = Date.now();
-    const attempt = this.#loginAttempts.get(attemptKey);
-    if (attempt && attempt.blockedUntil > now) {
+    if (this.#throttle.isBlocked(attemptKey, now)) {
       return { statusCode: 429, payload: { code: "TOO_MANY_ATTEMPTS", message: "密码验证尝试过多，请稍后再试" } };
     }
 
@@ -76,11 +75,11 @@ export class AuthService {
         parsed.data.currentPassword,
         parsed.data.newPassword,
       );
-      this.#loginAttempts.delete(attemptKey);
+      this.#throttle.reset(attemptKey);
       return { statusCode: 204, payload: undefined };
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
-        this.#recordLoginFailure(attemptKey, now);
+        this.#throttle.recordFailure(attemptKey, now);
         return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: "当前密码错误" } };
       }
       throw error;
@@ -89,15 +88,5 @@ export class AuthService {
 
   authenticateSession(token: string): { id: string; username: string } | undefined {
     return this.store.authenticateSession(token);
-  }
-
-  #recordLoginFailure(key: string, now: number): void {
-    const previous = this.#loginAttempts.get(key);
-    const current = !previous || now - previous.windowStarted > 5 * 60_000
-      ? { failures: 0, windowStarted: now, blockedUntil: 0 }
-      : previous;
-    current.failures += 1;
-    if (current.failures >= 5) current.blockedUntil = now + 60_000;
-    this.#loginAttempts.set(key, current);
   }
 }
