@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
 use crate::store::{cached_source_for, history_path_for_key, save_metadata, select_entry};
-use crate::history::entry_contents_of;
+use crate::entry::entry_contents_of;
 use crate::{active_cache_dir, AppState};
 
 use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};

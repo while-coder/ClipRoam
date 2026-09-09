@@ -1,6 +1,7 @@
 mod app_shell;
 mod clipboard;
 mod content;
+mod entry;
 mod history;
 mod pending;
 mod platforms;
@@ -116,24 +117,26 @@ pub fn run() {
             app_shell::get_platform_capabilities,
             clipboard::capture::capture_current_clipboard_text,
             clipboard::capture::consume_mobile_shares,
-            history::list_entries_manifest,
-            history::list_entries_query,
-            history::list_entry_ids,
-            history::list_unpublished_entries,
-            history::list_upload_candidates,
-            history::get_entry,
+            entry::query::list_entries_manifest,
+            entry::query::list_entries_query,
+            entry::query::list_entry_ids,
+            entry::query::total_entry_count,
+            entry::query::unuploaded_file_ids,
+            entry::query::list_unpublished_entries,
+            entry::query::list_upload_candidates,
+            entry::query::get_entry,
             transfer::download::list_entry_files,
             sync::remote::filter_unknown_file_ids,
             history::get_device,
             sync::config::get_sync_config,
             app_shell::open_app_data_dir,
             sync::config::save_sync_config,
-            sync::remote::upsert_remote_entry,
-            sync::remote::upsert_remote_entries,
-            sync::remote::apply_published_entry,
+            entry::mutate::upsert_remote_entry,
+            entry::mutate::upsert_remote_entries,
+            entry::mutate::apply_published_entry,
             sync::remote::mark_files_uploaded,
             sync::remote::mark_file_available,
-            sync::remote::remove_remote_entry,
+            entry::mutate::remove_remote_entry,
             pending::next_pending_entry,
             pending::acknowledge_pending_entry,
             app_shell::start_window_drag,
@@ -141,7 +144,7 @@ pub fn run() {
             app_shell::hide_main,
             app_shell::show_toast,
             app_shell::hide_toast,
-            history::refresh_entry,
+            entry::query::refresh_entry,
             transfer::download::prepare_entry_files,
             transfer::download::prepare_paste_entry,
             transfer::save::prepare_save_entry,

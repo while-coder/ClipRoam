@@ -14,7 +14,7 @@ use tauri::State;
 
 use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
 use crate::content::{download_path, local_source_was_lost, readable_path, MissingFile};
-use crate::history::entry_contents_of;
+use crate::entry::entry_contents_of;
 use crate::store::{cached_source_for, history_path_for_key, select_entry};
 use crate::{active_cache_dir, AppState};
 
