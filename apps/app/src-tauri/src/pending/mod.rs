@@ -16,7 +16,7 @@ pub(crate) use resolve::resolve_entry_files;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, LocalSources};
+use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
 use crate::entry::lightweight_entry;
 use crate::store::history_path_for_key;
 use crate::{active_cache_dir, AppState};
@@ -33,42 +33,15 @@ pub fn enqueue_pending_entry(
     kind: &str,
     content: &str,
     extra: &str,
-    sources: &str,
     created_at: &str,
 ) -> Result<i64, String> {
     connection
         .execute(
-            "INSERT INTO pending_entries (kind, content, extra, sources, created_at) VALUES (?, ?, ?, ?, ?)",
-            params![kind, content, extra, sources, created_at],
+            "INSERT INTO pending_entries (kind, content, extra, created_at) VALUES (?, ?, ?, ?)",
+            params![kind, content, extra, created_at],
         )
         .map_err(|error| error.to_string())?;
     Ok(connection.last_insert_rowid())
-}
-
-/// 建队列表。旧结构直接重建。打开历史库时调用。
-pub(crate) fn init_table(connection: &Connection) -> Result<(), String> {
-    let columns = crate::store::table_columns(connection, "pending_entries")?;
-    let outdated = !columns.is_empty()
-        && (!columns.iter().any(|name| name == "content")
-            || !columns.iter().any(|name| name == "sources"));
-    if outdated {
-        connection
-            .execute("DROP TABLE IF EXISTS pending_entries", [])
-            .map_err(|error| error.to_string())?;
-    }
-    connection
-        .execute_batch(
-            "CREATE TABLE IF NOT EXISTS pending_entries (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind TEXT NOT NULL,
-                content TEXT NOT NULL,
-                extra TEXT NOT NULL DEFAULT '{}',
-                sources TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            );",
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 /// 待同步视图里队列行的显示 id：`p` + seq，不进 entries 表。
@@ -87,14 +60,13 @@ pub(crate) struct PendingRow {
     pub(crate) kind: String,
     pub(crate) content: String,
     pub(crate) extra: String,
-    pub(crate) sources: String,
     pub(crate) created_at: String,
 }
 
 /// 全部队列行，最早在前。Peek 与 List 共用。
 pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, String> {
     let mut statement = connection
-        .prepare("SELECT seq, kind, content, extra, sources, created_at FROM pending_entries ORDER BY seq ASC")
+        .prepare("SELECT seq, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
@@ -103,7 +75,6 @@ pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, Stri
                 kind: row.get("kind")?,
                 content: row.get("content")?,
                 extra: row.get("extra")?,
-                sources: row.get("sources")?,
                 created_at: row.get("created_at")?,
             })
         })
@@ -116,7 +87,6 @@ pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, Stri
 /// 队列行转条目视图：显示 id 为 `p{seq}`，payload 取自行本身。
 pub(crate) fn row_entry(row: &PendingRow) -> ClipboardEntry {
     let extra: ClipboardEntryExtra = serde_json::from_str(&row.extra).unwrap_or_default();
-    let sources: LocalSources = serde_json::from_str(&row.sources).unwrap_or_default();
     ClipboardEntry {
         id: temp_entry_id(row.seq),
         kind: row.kind.clone(),
@@ -127,7 +97,7 @@ pub(crate) fn row_entry(row: &PendingRow) -> ClipboardEntry {
         image_info: extra.image_info,
         source_device_id: String::new(),
         created_at: row.created_at.clone(),
-        sources,
+        sources: extra.local_sources,
         summary: Default::default(),
     }
 }

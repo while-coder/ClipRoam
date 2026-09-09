@@ -136,16 +136,16 @@ fn apply_hashes(
         Some(file_info) => describe_roots(file_info),
         None => entry.content.clone(),
     };
+    // sources 已并入 extra（localSources），随 extra 一起写回。
     let extra = ClipboardEntryExtra::of(entry).json()?;
-    let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
     {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
         state.with_database(&path, |connection| {
             connection
                 .execute(
-                    "UPDATE pending_entries SET content = ?, extra = ?, sources = ? WHERE seq = ?",
-                    rusqlite::params![content, extra, sources, seq],
+                    "UPDATE pending_entries SET content = ?, extra = ? WHERE seq = ?",
+                    rusqlite::params![content, extra, seq],
                 )
                 .map_err(|error| error.to_string())
         })?;
