@@ -99,7 +99,7 @@ fn safe_history_directory_name(key: &str) -> String {
     }
 }
 
-fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
+pub(crate) fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut statement = connection
         .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
         .map_err(|error| error.to_string())?;
@@ -140,22 +140,12 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
-    // The durable upload queue carries the full capture payload, so the sync
-    // client can publish straight from it without re-reading `entries`.
-    // Databases written by older builds queued `(seq, entry_id, queued_at)`
-    // references instead; that data is not migrated — the table is recreated.
-    let recreate_pending_entries = !table_columns(&connection, "pending_entries")?
-        .iter()
-        .any(|name| name == "content");
     // Pinning, source_app and the files bookkeeping columns were removed:
     // they are dropped from databases written by older builds instead of
     // being recreated.
     let entry_columns = table_columns(&connection, "entries")?;
     let files_columns = table_columns(&connection, "files")?;
     let mut schema = String::new();
-    if recreate_pending_entries {
-        schema.push_str("DROP TABLE IF EXISTS pending_entries;\n");
-    }
     // Dropping an indexed column fails, so the index goes first.
     schema.push_str("DROP INDEX IF EXISTS entries_source_app_created_at;\n");
     // Timestamps are ordered by the numeric `created_ms` column (string RFC3339
@@ -183,13 +173,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     }
     schema.push_str(
         "
-        CREATE TABLE IF NOT EXISTS pending_entries (
-            seq INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL,
-            content TEXT NOT NULL,
-            extra TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -223,6 +206,9 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch(&schema)
         .map_err(|error| error.to_string())?;
+    // The durable upload queue owns its table: schema, stale-row sweep and
+    // row CRUD all live in the `pending` module.
+    crate::pending::init_table(&connection)?;
     // Databases written before `created_ms` existed get the column added and
     // backfilled here; fresh databases created it in the schema above. Columns
     // are re-read after the schema batch so a crash between the ALTER and the
@@ -257,15 +243,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
                 .map_err(|error| error.to_string())?;
         }
     }
-    // Safety net for the upload queue: rows whose temporary-id entry is gone
-    // (missed explicit cleanup, crash between writes) would otherwise replay
-    // forever. Runs on every open; the drain flow acknowledges leftovers too.
-    connection
-        .execute(
-            "DELETE FROM pending_entries WHERE 'p' || seq NOT IN (SELECT id FROM entries)",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(connection)
 }
 
@@ -455,24 +432,6 @@ pub fn delete_entries_by_ids(connection: &Connection, entry_ids: &[String]) -> R
     Ok(())
 }
 
-/// Drops the upload-queue rows belonging to the given entry ids; only
-/// temporary (`p<seq>`) ids ever have one. Every path that removes or re-keys
-/// an entry calls this — the publish swap, content dedup and deletions.
-pub fn delete_queue_rows_for(connection: &Connection, entry_ids: &[String]) -> Result<(), String> {
-    let seqs = entry_ids.iter().filter_map(|id| temp_entry_seq(id)).collect::<Vec<_>>();
-    if seqs.is_empty() {
-        return Ok(());
-    }
-    let marks = placeholders(seqs.len());
-    connection
-        .execute(
-            &format!("DELETE FROM pending_entries WHERE seq IN ({marks})"),
-            params_from_iter(seqs),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 /// Comma-separated `?` marks for an IN clause.
 pub fn placeholders(count: usize) -> String {
     std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
@@ -502,96 +461,4 @@ pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(
 
 pub(crate) fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
-}
-
-// ---------------------------------------------------------------------------
-// 持久上传队列：完整捕获载荷按序追加，发布/清理或显式确认时移除，
-// 离线捕获在下次连接时按序重放。
-// ---------------------------------------------------------------------------
-
-/// Temporary, pre-publish entry identity. The server assigns the real id on
-/// first publish and `apply_published_entry` swaps it in, so this only has to
-/// stay stable until then. The `p` prefix keeps it from colliding with the
-/// server's numeric ids.
-pub fn temp_entry_id(seq: i64) -> String {
-    format!("p{seq}")
-}
-
-/// Parses a temporary id back into its queue row seq.
-pub fn temp_entry_seq(id: &str) -> Option<i64> {
-    id.strip_prefix('p')?.parse::<i64>().ok().filter(|seq| *seq > 0)
-}
-
-/// One durable upload-queue row's identity. The payload never rides the row —
-/// the publish flow reads the entry the seq names.
-#[derive(Debug)]
-pub struct PendingQueueRow {
-    pub seq: i64,
-}
-
-/// Durable upload queue. Rows are appended in capture order with the capture
-/// payload, and removed explicitly — publish swap, dedup, deletion, drain
-/// acknowledge — so an offline capture replays in order on the next
-/// connection.
-pub fn enqueue_pending_entry(
-    connection: &Connection,
-    kind: &str,
-    content: &str,
-    extra: &str,
-    created_at: &str,
-) -> Result<i64, String> {
-    connection
-        .execute(
-            "INSERT INTO pending_entries (kind, content, extra, created_at) VALUES (?, ?, ?, ?)",
-            params![kind, content, extra, created_at],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(connection.last_insert_rowid())
-}
-
-/// Recreates the queue row an existing temporary-id entry should have, for the
-/// rare case where the entry survived but its row did not. A row already
-/// occupying the seq is kept.
-pub fn ensure_pending_entry(
-    connection: &Connection,
-    seq: i64,
-    kind: &str,
-    content: &str,
-    extra: &str,
-    created_at: &str,
-) -> Result<(), String> {
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)",
-            params![seq, kind, content, extra, created_at],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-pub fn list_pending_rows(connection: &Connection) -> Result<Vec<PendingQueueRow>, String> {
-    let mut statement = connection
-        .prepare("SELECT seq FROM pending_entries ORDER BY seq ASC")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(PendingQueueRow {
-                seq: row.get("seq")?,
-            })
-        })
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(rows)
-}
-
-/// Returns whether a row was actually removed.
-pub fn acknowledge_pending_entry(connection: &Connection, seq: i64) -> Result<bool, String> {
-    let changed = connection
-        .execute(
-            "DELETE FROM pending_entries WHERE seq = ?",
-            params![seq],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(changed > 0)
 }

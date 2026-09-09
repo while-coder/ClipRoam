@@ -19,9 +19,9 @@ use crate::content::{
     refresh_summary, upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo,
     LocalSources,
 };
+use crate::pending::{delete_rows_for, enqueue};
 use crate::store::{
-    delete_entries_by_ids, delete_queue_rows_for, enqueue_pending_entry, ensure_pending_entry,
-    history_path_for_key, save_metadata, select_entries, temp_entry_seq, upsert_entry_row,
+    delete_entries_by_ids, history_path_for_key, save_metadata, select_entries, upsert_entry_row,
 };
 use crate::AppState;
 
@@ -96,7 +96,7 @@ pub(crate) fn image_signature(image: &[u8]) -> String {
 /// then.
 pub(crate) fn new_entry(seq: i64, kind: &str, content: String, device_id: String) -> ClipboardEntry {
     ClipboardEntry {
-        id: crate::store::temp_entry_id(seq),
+        id: crate::pending::temp_entry_id(seq),
         kind: kind.to_string(),
         content,
         html: None,
@@ -215,7 +215,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         // failure here skips the capture entirely.
         let entry = match state.with_database(&path, |connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            let seq = enqueue_pending_entry(&transaction, "text", &text, &payload, &created_at)?;
+            let seq = enqueue(&transaction, "text", &text, &payload, &created_at)?;
             let mut entry = new_entry(seq, "text", text.clone(), device_id.clone());
             entry.html = extra.html.clone();
             entry.rtf = extra.rtf.clone();
@@ -229,7 +229,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
             .into_iter()
             .map(|item| item.id)
             .collect::<Vec<_>>();
-            delete_queue_rows_for(&transaction, &duplicates)?;
+            delete_rows_for(&transaction, &duplicates)?;
             delete_entries_by_ids(&transaction, &duplicates)?;
             upsert_entry_row(&transaction, &entry)?;
             save_metadata(&transaction, &history)?;
@@ -297,22 +297,9 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 existing.created_at = created_at;
                 // One transaction: the entry row (new timestamp, so it moves
                 // back to the top) and the metadata; a reused entry keeps its
-                // id — and its queue row when it is still unpublished, which
-                // is recreated if it went missing, so the copy is not
-                // silently never synced.
+                // id — and its queue row when it is still unpublished.
                 if let Err(error) = state.with_database(&history_path, |connection| {
                     let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                    if let Some(seq) = temp_entry_seq(&existing.id) {
-                        let payload = ClipboardEntryExtra::of(&existing).json()?;
-                        ensure_pending_entry(
-                            &transaction,
-                            seq,
-                            &existing.kind,
-                            &existing.content,
-                            &payload,
-                            &existing.created_at,
-                        )?;
-                    }
                     upsert_entry_row(&transaction, &existing)?;
                     save_metadata(&transaction, &history)?;
                     transaction.commit().map_err(|error| error.to_string())?;
@@ -342,14 +329,14 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 entry.sources = collected.sources;
                 if let Err(error) = state.with_database(&history_path, |connection| {
                     let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                    let seq = enqueue_pending_entry(
+                    let seq = enqueue(
                         &transaction,
                         "files",
                         &entry.content,
                         &payload,
                         &entry.created_at,
                     )?;
-                    entry.id = crate::store::temp_entry_id(seq);
+                    entry.id = crate::pending::temp_entry_id(seq);
                     upsert_entry_row(&transaction, &entry)?;
                     save_metadata(&transaction, &history)?;
                     transaction.commit().map_err(|error| error.to_string())?;
@@ -433,7 +420,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let entry = match state.with_database(&history_path, |connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            let seq = enqueue_pending_entry(&transaction, "image", &content, &payload, &created_at)?;
+            let seq = enqueue(&transaction, "image", &content, &payload, &created_at)?;
             let mut entry = new_entry(seq, "image", content, device_id);
             entry.created_at = created_at;
             entry.image_info = Some(image_info);

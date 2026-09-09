@@ -22,10 +22,10 @@ struct PendingHash {
 
 /// Resolves every still-unresolved content id of a `files` entry, folding the
 /// results into its SQLite row. Runs when the upload queue's drain reaches the
-/// entry, or when a manual upload picks it. A vanished entry — deleted while
-/// the queue waited — ends the run quietly; the caller cleans up the queue
-/// row. Idempotent: already-resolved sources are skipped.
-pub(crate) fn resolve_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
+/// entry. A vanished entry — deleted while the queue waited — ends the run
+/// quietly; the caller cleans up the queue row. Idempotent:
+/// already-resolved sources are skipped.
+pub fn resolve_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let (history_key, pending) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;

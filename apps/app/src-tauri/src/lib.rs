@@ -2,6 +2,7 @@ mod app_shell;
 mod clipboard;
 mod content;
 mod history;
+mod pending;
 mod platforms;
 mod store;
 mod sync;
@@ -133,8 +134,8 @@ pub fn run() {
             sync::remote::mark_files_uploaded,
             sync::remote::mark_file_available,
             sync::remote::remove_remote_entry,
-            sync::remote::next_pending_entry,
-            sync::remote::acknowledge_pending_entry,
+            pending::next_pending_entry,
+            pending::acknowledge_pending_entry,
             app_shell::start_window_drag,
             app_shell::hide_paste,
             app_shell::hide_main,
