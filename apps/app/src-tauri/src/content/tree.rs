@@ -169,12 +169,7 @@ pub fn file_entry_signature(entry: &ClipboardEntry) -> String {
 
 /// Never stats tree nodes: with hundreds of entries holding thousands of paths
 /// each, a single `stat` per node would stall startup.
-pub fn refresh_summary(
-    entry: &mut ClipboardEntry,
-    cached: &HashSet<String>,
-    uploaded: &HashSet<String>,
-    cache_dir: &Path,
-) {
+pub fn refresh_summary(entry: &mut ClipboardEntry, cached: &HashSet<String>, cache_dir: &Path) {
     let mut summary = EntrySummary::default();
     let contents = match (&entry.file_info, &entry.image_info) {
         (Some(file_info), _) => {
@@ -208,16 +203,12 @@ pub fn refresh_summary(
     for (file_id, size) in &contents {
         summary.total_size += size;
         summary.max_file_size = summary.max_file_size.max(*size);
-        if uploaded.contains(file_id) {
-            summary.uploaded_count += 1;
-        }
-        if uploaded.contains(file_id) || cached.contains(file_id) || local.contains(file_id.as_str())
-        {
+        // Server-pool availability is not visible here — the frontend queries
+        // it live. A locally readable content is uploadable from this device;
+        // everything else still pends a download or a source re-hash.
+        if cached.contains(file_id) || local.contains(file_id.as_str()) {
             summary.ready_count += 1;
-            if !uploaded.contains(file_id) {
-                summary.uploadable_size =
-                    Some(summary.uploadable_size.unwrap_or(u64::MAX).min(*size));
-            }
+            summary.uploadable_size = Some(summary.uploadable_size.unwrap_or(u64::MAX).min(*size));
         } else {
             summary.pending_count += 1;
             summary.pending_size += size;

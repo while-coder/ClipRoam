@@ -8,7 +8,7 @@ import type {
   ClipboardEntry,
   ClipboardManifestEntry,
 } from "@cliproam/protocol";
-import { entryContents, DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
 import {
   Clipboard,
   Cloud,
@@ -70,7 +70,15 @@ const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform(
 
 const { initUpdaterVersion } = useUpdater();
 
-const entries = ref<LocalClipboardEntry[]>([]);
+/**
+ * Entries the server manifest does not know about: captured offline, queued for
+ * publishing, or waiting for their content ids (hashing). Served by Rust's
+ * `list_unpublished_entries` (every entry still carrying a temporary id) —
+ * never derived from a whole-history read.
+ */
+const pendingEntries = ref<LocalClipboardEntry[]>([]);
+/** Total entries across every filter; backs the clear-history affordance. */
+const totalEntryCount = ref(0);
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
@@ -91,6 +99,13 @@ const importingShare = ref(false);
 const activatingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
+/**
+ * Contents the server pool holds, refreshed live from `/files/query` on every
+ * history read and `file.available` push. Deliberately never persisted — it is
+ * server state that would go stale — so `undefined` (no sync client) means the
+ * upload status is unknown and stays hidden instead of misreporting.
+ */
+const storedFileIds = ref<Set<string> | undefined>(undefined);
 const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
@@ -169,13 +184,10 @@ const demoEntries: LocalClipboardEntry[] = [
 ];
 
 /**
- * Entries the server manifest does not know about: captured offline, queued for
- * publishing, or waiting for their content ids (hashing). Text syncs on its
- * own; files and images additionally need a content upload.
+ * Browser-preview only: the stand-in list `clientManifest` filters, standing in
+ * for the durable history that lives in SQLite when running inside Tauri.
  */
-const pendingEntries = computed(() => (
-  entries.value.filter((entry) => !isEntrySynced(entry))
-));
+const previewEntries = ref<LocalClipboardEntry[]>(demoEntries);
 
 /**
  * Browser-preview stand-in for `list_entries_manifest`: the same filters the
@@ -183,7 +195,7 @@ const pendingEntries = computed(() => (
  */
 function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<string, string>): EntriesManifestPage {
   const needle = (filter.query ?? "").trim().toLowerCase();
-  const matched = entries.value.filter((entry) => {
+  const matched = previewEntries.value.filter((entry) => {
     if (filter.kind && filter.kind !== "all" && entry.kind !== filter.kind) return false;
     if (needle) {
       const deviceLabel = (deviceNames[entry.sourceDeviceId] ?? "未知设备").toLowerCase();
@@ -210,31 +222,76 @@ async function fetchManifest(
   return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
 }
 
-async function refreshEntries(): Promise<void> {
+/** The pending-sync list re-queries Rust; the browser preview derives it. */
+async function refreshPendingEntries(): Promise<void> {
   if (!runningInTauri) {
-    entries.value = demoEntries;
-    historyRevision.value += 1;
+    pendingEntries.value = previewEntries.value.filter((entry) => !isEntrySynced(entry));
     return;
   }
-  entries.value = (await fetchManifest({}, {})).entries;
-  historyRevision.value += 1;
+  try {
+    pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_unpublished_entries");
+  } catch (error) {
+    showToast(`待同步记录读取失败：${errorMessage(error)}`, "error");
+  }
 }
 
-let refreshEntriesTimer: number | undefined;
+async function refreshTotalEntryCount(): Promise<void> {
+  if (!runningInTauri) {
+    totalEntryCount.value = previewEntries.value.length;
+    return;
+  }
+  try {
+    totalEntryCount.value = await invoke<number>("total_entry_count");
+  } catch (error) {
+    showToast(`剪贴板记录统计失败：${errorMessage(error)}`, "error");
+  }
+}
+
+let refreshTimer: number | undefined;
 
 /**
- * Background events (hashing, remote upserts, file availability) arrive in
- * bursts. Each `list_entries` round-trip re-serializes the whole history, so a
- * burst coalesces into one refresh instead of one per event.
+ * Background events (captures, remote upserts, file availability) arrive in
+ * bursts; each one only invalidates views. A burst coalesces into one pass:
+ * the history view refetches its current page on the revision bump, while the
+ * pending list and the total re-query Rust-side. Nothing reads whole history.
  */
-function scheduleRefreshEntries(): void {
-  if (refreshEntriesTimer !== undefined) return;
-  refreshEntriesTimer = window.setTimeout(() => {
-    refreshEntriesTimer = undefined;
-    void refreshEntries().catch((error) => {
-      showToast(`剪贴板历史读取失败：${errorMessage(error)}`, "error");
-    });
+function refreshHistory(): void {
+  if (refreshTimer !== undefined) return;
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = undefined;
+    historyRevision.value += 1;
+    void refreshPendingEntries();
+    void refreshTotalEntryCount();
+    void refreshStoredFileIds();
   }, 200);
+}
+
+/**
+ * Upload status is derived, never stored: the content ids come from the
+ * durable history's extras (computed Rust-side) and the pool is asked live
+ * which ones it holds. Contents already known stored skip the query, so a
+ * steady state costs nothing; a failure clears the set so the status text
+ * hides instead of misreporting.
+ */
+async function refreshStoredFileIds(): Promise<void> {
+  const client = syncClient;
+  if (!client) {
+    storedFileIds.value = undefined;
+    return;
+  }
+  try {
+    const fileIds = await invoke<string[]>("history_file_ids");
+    const unchecked = fileIds.filter((fileId) => !storedFileIds.value?.has(fileId));
+    if (!unchecked.length) return;
+    const statuses = await client.fetchFileStatuses(unchecked);
+    const next = new Set(storedFileIds.value);
+    for (const file of statuses) {
+      if (file.stored) next.add(file.fileId);
+    }
+    storedFileIds.value = next;
+  } catch {
+    storedFileIds.value = undefined;
+  }
 }
 
 const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
@@ -258,37 +315,11 @@ function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
   return remoteUpsertFlush;
 }
 
-/**
- * Which of a batch's contents the server's pool holds. This replaces the
- * per-entry `missing` list the protocol dropped: one query per upsert batch,
- * and a failure degrades to "nothing is uploaded" — re-beginning an upload of
- * content the server actually has costs one cheap `stored` answer. Contents
- * this device already caches or knows are stored are filtered out Rust-side,
- * so they never ride the request.
- */
-async function serverAvailableFileIds(batch: ClipboardEntry[]): Promise<string[]> {
-  const client = syncClient;
-  if (!client) return [];
-  const fileIds = [...new Set(batch.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId)))];
-  if (!fileIds.length) return [];
-  try {
-    const unknown = runningInTauri
-      ? await invoke<string[]>("filter_unknown_file_ids", { fileIds })
-      : fileIds;
-    if (!unknown.length) return [];
-    const statuses = await client.fetchFileStatuses(unknown);
-    return statuses.filter((file) => file.stored).map((file) => file.fileId);
-  } catch (error) {
-    showToast(`查询服务器文件状态失败：${errorMessage(error)}`, "error");
-    return [];
-  }
-}
-
 /** Browser-preview variant of a remote upsert: plain local list surgery. */
 function upsertLocalEntry(entry: ClipboardEntry): void {
-  entries.value = [
+  previewEntries.value = [
     { ...entry, summary: EMPTY_SUMMARY },
-    ...entries.value.filter((item) => item.id !== entry.id),
+    ...previewEntries.value.filter((item) => item.id !== entry.id),
   ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -299,13 +330,12 @@ async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
     return;
   }
   try {
-    const availableFileIds = await serverAvailableFileIds(batch);
-    await invoke("upsert_remote_entries", { entries: batch, availableFileIds });
+    await invoke("upsert_remote_entries", { entries: batch });
   } catch (error) {
     showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
     return;
   }
-  scheduleRefreshEntries();
+  refreshHistory();
 }
 
 /**
@@ -420,7 +450,7 @@ async function consumeMobileShares(): Promise<void> {
   try {
     const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
     if (!summary.shares) return;
-    await refreshEntries();
+    refreshHistory();
     showToast(shareImportMessage(summary), "success");
   } catch (error) {
     showToast(`接收系统分享失败：${errorMessage(error)}，请重新分享`, "error");
@@ -486,10 +516,10 @@ async function downloadRequiredFiles(
       client.downloadFile(entry, { fileId: file.fileId, size: file.size }));
   } finally {
     downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
-    await invoke("refresh_entry", { entryId: entry.id }).catch(() => undefined);
-    await refreshEntries();
+    refreshHistory();
   }
-  return entries.value.find((candidate) => candidate.id === entry.id) ?? entry;
+  // Re-read the persisted entry: its availability summary changed on disk.
+  return (await fullEntry(entry)) as LocalClipboardEntry;
 }
 
 async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
@@ -524,7 +554,7 @@ async function activateEntry(
     showToast(command === "copy_entry" ? "已复制到系统剪贴板" : "已粘贴到当前应用", "success");
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
-      await refreshEntries();
+      refreshHistory();
       return;
     }
     showToast(String(error), "error");
@@ -549,12 +579,16 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
 async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
   const client = syncClient;
   if (!client || sizeLimit <= 0) return;
-  const candidates = entries.value.filter((entry) => (
-    (entry.kind === "files" || entry.kind === "image")
-    && !isHashing(entry)
-    && entry.summary.uploadableSize !== undefined
-    && entry.summary.uploadableSize < sizeLimit
-  ));
+  // The candidate filter (kind, hashing state, size limit) runs Rust-side over
+  // the durable history; the browser preview filters its demo list instead.
+  const candidates = runningInTauri
+    ? await invoke<LocalClipboardEntry[]>("list_upload_candidates", { limitBytes: sizeLimit }).catch(() => [])
+    : previewEntries.value.filter((entry) => (
+      (entry.kind === "files" || entry.kind === "image")
+      && !isHashing(entry)
+      && entry.summary.uploadableSize !== undefined
+      && entry.summary.uploadableSize < sizeLimit
+    ));
   for (const entry of candidates) {
     if (syncClient !== client) return;
     try {
@@ -566,7 +600,7 @@ async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
       }
     }
   }
-  if (syncClient === client) await refreshEntries();
+  if (syncClient === client) refreshHistory();
 }
 
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
@@ -642,7 +676,9 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
   // the response); cleanup stays a no-op if the echo already handled it.
   if (runningInTauri) {
     setTimeout(() => {
-      void invoke("remove_remote_entry", { entryId: entry.id }).then(scheduleRefreshEntries);
+      // The command emits `cliproam://history-changed`, which refreshes the
+      // views; no explicit invalidation needed here.
+      void invoke("remove_remote_entry", { entryId: entry.id });
     }, 5000);
   }
 }
@@ -654,7 +690,7 @@ async function clearHistory(): Promise<void> {
   if (!client) throw new Error("网络异常，暂时无法清空，请检查同步连接");
   const entryIds = runningInTauri
     ? await invoke<string[]>("list_entry_ids")
-    : entries.value.map((entry) => entry.id);
+    : previewEntries.value.map((entry) => entry.id);
   let failures = 0;
   for (const entryId of entryIds) {
     await client.delete(entryId).catch(() => { failures += 1; });
@@ -751,7 +787,7 @@ async function useLocalMode(draft: SetupDraft): Promise<void> {
     hasSavedSyncConfig.value = true;
     stopSyncClient(false);
     setupVisible.value = false;
-    await refreshEntries();
+    refreshHistory();
     await nextTick();
     await focusSearch();
   } catch (error) {
@@ -792,7 +828,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
     setupVisible.value = false;
-    await refreshEntries();
+    refreshHistory();
     await startSync(config);
     await nextTick();
     await focusSearch();
@@ -837,9 +873,8 @@ function handleKeys(event: KeyboardEvent): void {
 // outside Tauri — the browser-preview branch lives in `applyRemoteUpserts`.
 async function upsertRemote(entry: ClipboardEntry): Promise<void> {
   markEntrySynced(entry);
-  const availableFileIds = await serverAvailableFileIds([entry]);
-  await invoke("upsert_remote_entry", { entry, availableFileIds });
-  await refreshEntries();
+  await invoke("upsert_remote_entry", { entry });
+  refreshHistory();
 }
 
 async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
@@ -855,10 +890,10 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   const startingLocalRevision = localClipboardRevision;
   try {
     // The activation carries the complete entry so it remains safe even when
-    // its history update and activation messages are handled concurrently.
+    // its history update and activation messages are handled concurrently —
+    // once `upsertRemote` resolves it is durable, no re-read needed.
     await upsertRemote(entry);
-    let localEntry = entries.value.find((candidate) => candidate.id === entry.id);
-    if (!localEntry) throw new Error("剪贴板记录不存在");
+    let localEntry = entry as LocalClipboardEntry;
     if (activeSyncConfig !== config || !config.autoReceiveClipboard) return;
     if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
 
@@ -891,44 +926,6 @@ async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEn
   return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
 }
 
-/**
- * Upload marks are local bookkeeping, so they can go stale: a `file.available`
- * push missed while offline, or a failed pool query when a remote entry was
- * upserted, leaves contents marked unuploaded that the server has long since
- * stored. Each reconcile re-asks the pool about what this history still
- * believes is missing; the Rust side refreshes the affected summaries.
- */
-async function refreshPendingUploadStatuses(): Promise<void> {
-  const client = syncClient;
-  if (!client || !runningInTauri) return;
-  const pending = entries.value.filter((entry) => (
-    entry.summary.contentCount > entry.summary.uploadedCount
-  ));
-  if (!pending.length) return;
-  const pendingFileIds = [
-    ...new Set(pending.flatMap((entry) => entryContents(entry).map(({ fileId }) => fileId))),
-  ];
-  try {
-    // Contents already cached or known stored are skipped Rust-side; what
-    // remains is all the pool query can still correct.
-    const unknown = await invoke<string[]>("filter_unknown_file_ids", { fileIds: pendingFileIds });
-    if (!unknown.length) return;
-    const statuses = await client.fetchFileStatuses(unknown);
-    const stored = new Set(statuses.filter((file) => file.stored).map((file) => file.fileId));
-    if (!stored.size) return;
-    for (const entry of pending) {
-      const fileIds = entryContents(entry)
-        .map(({ fileId }) => fileId)
-        .filter((fileId) => stored.has(fileId));
-      if (fileIds.length) {
-        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds });
-      }
-    }
-  } catch (error) {
-    showToast(`刷新上传状态失败：${errorMessage(error)}`, "error");
-  }
-}
-
 async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<void> {
   const client = syncClient;
   if (!client) return;
@@ -944,11 +941,12 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     }
     syncedEntryIds.value = knownSynced;
     // Read the durable history rather than the rendered list. The latter can
-    // be stale while another Tauri window is refreshing it.
-    const localEntries = runningInTauri
-      ? (await fetchManifest({}, {})).entries
-      : [...entries.value];
-    const localClientIds = new Set(localEntries.map((entry) => entry.id));
+    // be stale while another Tauri window is refreshing it; ids alone suffice
+    // for the diff, so no whole-history read is needed.
+    const localEntryIds = runningInTauri
+      ? await invoke<string[]>("list_entry_ids")
+      : previewEntries.value.map((entry) => entry.id);
+    const localClientIds = new Set(localEntryIds);
     const remoteOnlyEntryIds = manifest
       .filter((entry) => !localClientIds.has(entry.id))
       .map((entry) => entry.id);
@@ -960,10 +958,10 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       await applyRemoteUpserts(remoteEntries);
     }
 
-    await refreshEntries();
-    // A reconcile is also the moment stale "unuploaded" marks get corrected
-    // against the pool; the drain afterwards can then skip re-uploading.
-    if (syncClient === client) await refreshPendingUploadStatuses();
+    refreshHistory();
+    // A reconcile is also the moment the live availability view is re-derived
+    // against the pool before the drain republishes the capture queue.
+    if (syncClient === client) await refreshStoredFileIds();
     // Deletions and remote upserts have been replayed; now publish whatever
     // the durable capture queue still holds (single-flight, no-op if running).
     if (syncClient === client) client.drainQueue();
@@ -1010,11 +1008,17 @@ async function startSync(config: SyncConfig): Promise<void> {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
         syncedEntryIds.value = remaining;
-        if (runningInTauri) void invoke("remove_remote_entry", { entryId }).then(scheduleRefreshEntries);
-        else entries.value = entries.value.filter((entry) => entry.id !== entryId);
+        if (runningInTauri) void invoke("remove_remote_entry", { entryId });
+        else previewEntries.value = previewEntries.value.filter((entry) => entry.id !== entryId);
       },
       onFileAvailable: (fileId) => {
-        if (runningInTauri) void invoke("mark_file_available", { fileId });
+        // Content-addressed push: the server now holds this content. Kept
+        // in-memory only — nothing survives a restart; the next pool query
+        // re-derives it.
+        const next = new Set(storedFileIds.value);
+        next.add(fileId);
+        storedFileIds.value = next;
+        refreshHistory();
       },
       onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
         uploadProgressByEntryId.value = {
@@ -1089,12 +1093,12 @@ async function initializeTauriServices(): Promise<void> {
     startToastWindowListener(),
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
-      scheduleRefreshEntries();
+      refreshHistory();
       // Hashing (for files) and publishing both happen inside the drain, which
       // Rust restarts after each row it resolves.
       syncClient?.drainQueue();
     }),
-    listen("cliproam://history-changed", scheduleRefreshEntries),
+    listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
     listen("cliproam://sync-config-changed", () => { void applySavedSyncConfig(); }),
     listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
@@ -1109,7 +1113,7 @@ async function initializeTauriServices(): Promise<void> {
       try {
         await client.downloadVirtualFile(payload);
         await invoke("refresh_entry", { entryId: payload.entryId }).catch(() => undefined);
-        scheduleRefreshEntries();
+        refreshHistory();
       } catch (error) {
         await invoke("fail_virtual_file_request", {
           fileId: payload.fileId,
@@ -1195,9 +1199,10 @@ onMounted(async () => {
 
   if (startupWarning) showToast(startupWarning, "error");
   if (!isPasteWindow) void initUpdaterVersion();
-  void refreshEntries().catch((error) => {
-    showToast(`剪贴板历史读取失败：${errorMessage(error)}`, "error");
-  });
+  // The history view fetches its first page itself (revision watch with
+  // `immediate`); only the aggregate views need an initial query.
+  void refreshPendingEntries();
+  void refreshTotalEntryCount();
   if (runningInTauri) void initializeTauriServices();
 
   if (setupVisible.value) {
@@ -1219,7 +1224,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
   disposeToast();
-  if (refreshEntriesTimer !== undefined) window.clearTimeout(refreshEntriesTimer);
+  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
   if (pendingRemoteUpserts.size) {
     void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
     pendingRemoteUpserts.clear();
@@ -1309,7 +1314,7 @@ onBeforeUnmount(() => {
       ref="historyView"
       :fetch-manifest="fetchManifest"
       :revision="historyRevision"
-      :total-entries="entries.length"
+      :total-entries="totalEntryCount"
       :devices-by-id="devicesById"
       :synced-entry-ids="syncedEntryIds"
       :connection-status="connectionStatus"
@@ -1319,12 +1324,13 @@ onBeforeUnmount(() => {
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
+      :stored-file-ids="storedFileIds"
       :ensure-local-files="ensureLocalFiles"
       :clear-history="clearHistory"
       @activate="activateFromView"
       @remove="removeEntry"
       @save="saveEntry"
-      @refresh="refreshEntries"
+      @refresh="refreshHistory"
       @open-settings="openSettings"
     />
 

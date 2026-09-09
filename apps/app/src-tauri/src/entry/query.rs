@@ -2,16 +2,19 @@
 //! Entries live in SQLite; every read goes through SQL, and each row's derived
 //! `summary` is recomputed just before it leaves the backend.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::content::{refresh_summary, ClipboardEntry};
-use crate::store::{count_entries, history_path_for_key, newest_first_sql, select_all_entry_ids, select_entries};
+use crate::store::{
+    count_entries, history_file_ids as store_history_file_ids, history_path_for_key,
+    newest_first_sql, select_all_entry_ids, select_entries,
+};
 use crate::{active_cache_dir, AppState};
 
-use super::{entry_contents_of, lightweight_entry};
+use super::lightweight_entry;
 
 /// Page size for `list_entries_manifest`; mirrors `PAGE_SIZE` in the frontend.
 const MANIFEST_PAGE_SIZE: usize = 50;
@@ -144,7 +147,7 @@ pub(crate) fn list_entries_manifest(
     })?;
     let mut entries = entries;
     for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        refresh_summary(entry, &history.cached_files, &cache_dir);
     }
     Ok(EntriesManifestPage {
         total,
@@ -180,7 +183,7 @@ pub(crate) fn list_entries_query(
         .iter()
         .filter_map(|entry_id| {
             let mut entry = found.remove(entry_id)?;
-            refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+            refresh_summary(&mut entry, &history.cached_files, &cache_dir);
             Some(lightweight_entry(&entry))
         })
         .collect())
@@ -203,25 +206,15 @@ pub(crate) fn total_entry_count(state: State<'_, AppState>) -> Result<usize, Str
     state.with_database(&path, |connection| count_entries(connection, "", &[]))
 }
 
-/// Content ids the history references that this device has neither cached nor
-/// marked as stored — the input of a reconcile's pool re-check. Computed
-/// Rust-side so the whole history never crosses the IPC boundary.
-#[tauri::command]
-pub(crate) fn unuploaded_file_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+/// Every content id the durable history references, derived from the entries'
+/// extras Rust-side so the whole history never crosses the IPC boundary. The
+/// frontend asks the pool (`/files/query`) which of these it holds to render
+/// upload status; nothing is persisted locally.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let entries = state.with_database(&path, |connection| select_entries(connection, "", "", &[]))?;
-    let mut unknown = HashSet::new();
-    for entry in &entries {
-        for (file_id, _) in entry_contents_of(entry) {
-            if !history.cached_files.contains(&file_id)
-                && !history.uploaded_files.contains(&file_id)
-            {
-                unknown.insert(file_id);
-            }
-        }
-    }
-    Ok(unknown.into_iter().collect())
+    state.with_database(&path, |connection| Ok(store_history_file_ids(connection)))
 }
 
 /// Entries that still carry a temporary pre-publish id — the durable pending
@@ -236,7 +229,7 @@ pub(crate) fn list_unpublished_entries(
     let mut entries =
         state.with_database(&path, |connection| select_entries(connection, "WHERE id LIKE 'p%'", "", &[]))?;
     for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        refresh_summary(entry, &history.cached_files, &cache_dir);
     }
     Ok(entries.iter().map(lightweight_entry).collect())
 }
@@ -263,7 +256,7 @@ pub(crate) fn list_upload_candidates(
     })?;
     let mut candidates = Vec::new();
     for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        refresh_summary(entry, &history.cached_files, &cache_dir);
         if entry.summary.uploadable_size.is_some_and(|size| size < limit_bytes) {
             candidates.push(lightweight_entry(entry));
             if candidates.len() >= UPLOAD_CANDIDATE_LIMIT {
@@ -287,7 +280,7 @@ pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<
         .into_iter()
         .next()
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+    refresh_summary(&mut entry, &history.cached_files, &cache_dir);
     Ok(entry)
 }
 

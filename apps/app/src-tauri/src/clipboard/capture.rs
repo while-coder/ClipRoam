@@ -325,7 +325,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 entry
             }
         };
-        refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        refresh_summary(&mut entry, &history.cached_files, &cache_dir);
         lightweight_entry(&entry)
     };
     app.emit("cliproam://entry-created", entry)
@@ -413,7 +413,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             }
         };
         let mut entry = entry;
-        refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        refresh_summary(&mut entry, &history.cached_files, &cache_dir);
         lightweight_entry(&entry)
     };
     app.emit("cliproam://entry-created", entry)

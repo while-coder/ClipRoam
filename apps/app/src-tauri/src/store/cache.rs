@@ -1,4 +1,4 @@
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{
     collections::HashSet,
     fs,
@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{cache_dir_for, now_rfc3339, HistoryData};
+use super::{cache_dir_for, HistoryData};
 use crate::content::{modified_millis, tree_contents, ClipboardEntryExtra, LocalSources};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
@@ -40,17 +40,30 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
     }
 }
 
-/// Event-driven record that the server now holds a content, replacing the old
-/// per-entry batch write driven by `entry.files`. Availability is entry-shaped
-/// state no more; it lives in this table and the in-memory set.
-pub fn mark_files_uploaded(connection: &Connection, file_ids: &[String]) {
-    for file_id in file_ids {
-        let _ = connection
-            .execute(
-                "INSERT INTO files (file_id, created_at, stored) VALUES (?, ?, 1) ON CONFLICT(file_id) DO UPDATE SET stored = 1",
-                params![file_id.as_str(), now_rfc3339()],
-            );
+/// Every content id the durable history references (image contents plus file
+/// tree leaves), streamed row by row so the entries themselves never load.
+/// This is the input of the frontend's live pool-availability query.
+pub fn history_file_ids(connection: &Connection) -> Vec<String> {
+    let mut statement = match connection.prepare("SELECT extra FROM entries") {
+        Ok(statement) => statement,
+        Err(_) => return Vec::new(),
+    };
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>("extra"))
+        .into_iter()
+        .flatten()
+        .flatten();
+    let mut ids = HashSet::new();
+    for extra in rows {
+        let extra: ClipboardEntryExtra = serde_json::from_str(&extra).unwrap_or_default();
+        if let Some(image_info) = &extra.image_info {
+            ids.insert(image_info.file_id.clone());
+        }
+        for (file_id, _) in extra.file_info.as_ref().map(tree_contents).unwrap_or_default() {
+            ids.insert(file_id);
+        }
     }
+    ids.into_iter().collect()
 }
 
 /// Content ids this machine holds a blob for. The blob directories are the
@@ -191,30 +204,8 @@ pub fn collect_local_garbage(
             }
         }
     }
-    {
-        let transaction = connection.transaction().map_err(|error| error.to_string())?;
-        // Rows are pure server-pool marks; content no entry references no
-        // longer needs one. Locally cached state lives on the disk alone.
-        if referenced.is_empty() {
-            transaction
-                .execute("DELETE FROM files", [])
-                .map_err(|error| error.to_string())?;
-        } else {
-            let referenced = referenced.iter().collect::<Vec<_>>();
-            let placeholders = std::iter::repeat_n("?", referenced.len())
-                .collect::<Vec<_>>()
-                .join(", ");
-            transaction
-                .execute(
-                    &format!("DELETE FROM files WHERE file_id NOT IN ({placeholders})"),
-                    params_from_iter(referenced),
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        transaction.commit().map_err(|error| error.to_string())?;
-        for file_id in &removed {
-            history.cached_files.remove(file_id);
-        }
+    for file_id in &removed {
+        history.cached_files.remove(file_id);
     }
     Ok(removed.len() + removed_share_requests)
 }

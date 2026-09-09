@@ -69,6 +69,8 @@ const props = defineProps<{
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
+  /** Contents the server pool holds, queried live; undefined when offline. */
+  storedFileIds: Set<string> | undefined;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
   clearHistory: () => Promise<void>;
 }>();
@@ -190,7 +192,7 @@ function isEntrySynced(entry: ClipboardEntry): boolean {
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
-  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
+  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId, props.storedFileIds);
 }
 
 function entrySaveLabel(entry: LocalClipboardEntry): string {

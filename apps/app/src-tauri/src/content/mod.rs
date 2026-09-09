@@ -85,12 +85,11 @@ pub struct EntrySummary {
     pub content_count: u64,
     pub total_size: u64,
     pub max_file_size: u64,
-    pub uploaded_count: u64,
     pub ready_count: u64,
     pub pending_count: u64,
     pub pending_size: u64,
-    /// Size of the smallest content this device could still upload, so the UI
-    /// can tell "nothing left to upload" from "everything is too large".
+    /// Size of the smallest locally readable content, so the UI can tell
+    /// "nothing left to upload" from "everything is too large".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploadable_size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -45,7 +45,7 @@ function errorMessageFromBody(body: unknown, status: number): string {
 }
 
 /** One content an entry references, with what this device last knew the server to hold. */
-type UploadCandidate = { fileId: string; size: number; uploaded: boolean };
+type UploadCandidate = { fileId: string; size: number };
 
 /** The file-shape fields a download or upload transfer needs. */
 type FileReference = { fileId: string; size: number };
@@ -385,11 +385,11 @@ export class SyncClient {
     return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
   }
 
-  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number, forceUpload = false): Promise<void> {
+  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
     if (existingUpload) return existingUpload;
 
-    const upload = this.#uploadFiles(entry, sizeLimit, forceUpload);
+    const upload = this.#uploadFiles(entry, sizeLimit);
     this.#entryUploads.set(entry.id, upload);
     try {
       await upload;
@@ -400,18 +400,14 @@ export class SyncClient {
 
   /**
    * Content ids are known before publishing, so a finished upload never changes
-   * the entry — the server just learns it now holds those bytes.
+   * the entry — the server just learns it now holds those bytes. Everything is
+   * uploaded unconditionally: the server's content-addressed store absorbs
+   * duplicates, and locally cached availability marks would go stale anyway.
    */
-  async #uploadFiles(
-    entry: ClipboardEntry,
-    sizeLimit: number,
-    forceUpload: boolean,
-  ): Promise<void> {
+  async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
     const files = await invoke<UploadCandidate[]>("list_entry_files", { entryId: entry.id });
-    const candidates = files.filter((file) => (
-      file.size < sizeLimit && (forceUpload || !file.uploaded)
-    ));
+    const candidates = files.filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
 
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
@@ -436,8 +432,10 @@ export class SyncClient {
       const uploaded = results.flatMap((result) => (
         result.status === "fulfilled" ? [result.value] : []
       ));
-      if (uploaded.length) {
-        await invoke("mark_files_uploaded", { fileIds: uploaded });
+      // The server now holds these contents; the UI's live availability set
+      // picks this up without waiting for the next pool query.
+      for (const fileId of uploaded) {
+        this.handlers.onFileAvailable(fileId);
       }
       const sourceFailure = results.find((result) => (
         result.status === "rejected"

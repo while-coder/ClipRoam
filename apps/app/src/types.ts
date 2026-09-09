@@ -48,7 +48,6 @@ export type EntrySummary = {
   contentCount: number;
   totalSize: number;
   maxFileSize: number;
-  uploadedCount: number;
   readyCount: number;
   pendingCount: number;
   pendingSize: number;
