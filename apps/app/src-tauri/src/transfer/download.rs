@@ -13,7 +13,7 @@ use std::{
 use tauri::State;
 
 use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
-use crate::content::{download_path, local_source_was_lost, readable_path, MissingFile};
+use crate::content::{cached_file_path, download_path, MissingFile};
 use crate::entry::entry_contents_of;
 use crate::store::{cached_source_for, history_path_for_key, select_entry};
 use crate::{active_cache_dir, AppState};
@@ -352,51 +352,37 @@ pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) 
     prepare_entry(&state, &entry_id, true)
 }
 
+/// Reads one chunk of a content by content id alone — the upload HTTP is
+/// content-addressed and never involves an entry. The path comes from the
+/// local blob cache first, then from the hash cache's reverse lookup of the
+/// original source file (a file hashed here before can stand in for content
+/// that never landed as a blob).
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn read_file_chunk(
+pub(crate) fn read_upload_chunk(
     state: State<'_, AppState>,
-    entry_id: String,
     file_id: String,
     offset: u64,
     length: usize,
 ) -> Result<String, String> {
-    let (path, source_was_lost) = {
+    let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let entry = state
-            .with_database(&history_path, |connection| select_entry(connection, &entry_id))?
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        let source_was_lost = local_source_was_lost(&entry, &file_id);
-        let path = readable_path(&cache_dir, &history.cached_files, &entry, &file_id)
+        (history.cached_files.contains(&file_id))
+            .then(|| cached_file_path(&cache_dir, &file_id))
+            .flatten()
             .or_else(|| {
-                // Same fallback the paste snapshot uses: a file hashed here
-                // before can stand in for content that never landed locally.
-                let database_path =
+                let history_path =
                     history_path_for_key(&state.histories_dir, &history.active_history);
                 state
-                    .with_database(&database_path, |connection| {
+                    .with_database(&history_path, |connection| {
                         Ok(cached_source_for(connection, &file_id))
                     })
                     .ok()
                     .flatten()
             })
-            .ok_or_else(|| {
-                if source_was_lost {
-                    "复制的源文件已删除或移动".to_string()
-                } else {
-                    "本机文件内容不可用".to_string()
-                }
-            })?;
-        (path, source_was_lost)
-    };
-    let mut file = fs::File::open(path).map_err(|error| {
-        if source_was_lost {
-            "复制的源文件已删除或移动".to_string()
-        } else {
-            error.to_string()
-        }
-    })?;
+    }
+    .ok_or_else(|| "本机文件内容不可用".to_string())?;
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     file.seek(SeekFrom::Start(offset))
         .map_err(|error| error.to_string())?;
     let mut bytes = vec![0; length.min(FILE_CHUNK_LIMIT)];

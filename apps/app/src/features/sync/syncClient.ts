@@ -9,6 +9,7 @@ import {
   EntryPublishResponseSchema,
   type EntryPublishInput,
   EntryQueryResponseSchema,
+  entryContents,
   FileQueryResponseSchema,
   ServerMessageSchema,
   UploadBeginResponseSchema,
@@ -44,18 +45,14 @@ function errorMessageFromBody(body: unknown, status: number): string {
     : `服务器返回错误 ${status}`;
 }
 
-/** One content an entry references, with what this device last knew the server to hold. */
-type UploadCandidate = { fileId: string; size: number };
-
 /** The file-shape fields a download or upload transfer needs. */
 type FileReference = { fileId: string; size: number };
 
 /**
- * One publishable row of the Rust-side durable capture queue. The payload is
- * the local entry's resolved extra — a files row keeps its capture-time
- * placeholder tree until the drain resolves it, so the row's own extra is
- * deliberately not what gets published. The local entry id mirrors the
- * Rust-side `temp_entry_id`: `p${seq}`.
+ * One publishable row of the Rust-side durable capture queue. The row is
+ * self-contained: a files row's placeholder tree is resolved back into the
+ * row itself before Peek hands it over, so `extra` is published as-is. The
+ * local display id mirrors the Rust-side `temp_entry_id`: `p${seq}`.
  */
 type PendingQueueRow = {
   seq: number;
@@ -230,6 +227,10 @@ export class SyncClient {
   #drainRunning = false;
   #drainAgain = false;
   #queueFailures = new Map<number, { at: number; count: number }>();
+  // Rows that exhausted their retries stay in the queue but are skipped for
+  // this session so they cannot block the rows behind them; a reconnect
+  // clears the set and gives them another chance.
+  #skippedRows = new Set<number>();
 
   constructor(
     private readonly httpUrl: string,
@@ -268,12 +269,11 @@ export class SyncClient {
   // Every write returns the server's stored entry: its id and timestamp are
   // server-assigned, and the caller must adopt it into local state.
 
-  async publish(entry: ClipboardEntry): Promise<ClipboardEntry> {
-    // Publish the metadata first. Other devices can then retrieve the original
-    // from this online device while the server copy is still uploading.
-    const stored = await this.#publishEntry(entry);
-    await this.#uploadEntry(entry, this.autoUploadLimit);
-    return stored;
+  // Re-uploads an already-published entry's contents — the settings page's
+  // "upload now" run. Nothing is published: the entry row already lives on
+  // the server, and the upload itself is purely content-addressed.
+  async uploadEntryContents(entry: ClipboardEntry): Promise<void> {
+    return this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT);
   }
 
   // The durable capture queue is the single replay mechanism: captures land
@@ -302,14 +302,16 @@ export class SyncClient {
   }
 
   // One row per step: Rust hands back the oldest publishable row — resolving
-  // a files entry's content ids on the way, deleting rows whose entry already
-  // vanished — and this publishes it, acknowledges it and asks for the next.
-  // The pass ends (without error) at the first row that cannot proceed right
-  // now — a recent failure backoff, a lost connection — and a later trigger
-  // restarts it.
+  // a files row's content ids into the row itself on the way — and this
+  // publishes it, dequeues it and asks for the next. The pass ends (without
+  // error) at the first row that cannot proceed right now — a recent failure
+  // backoff, a lost connection — and a later trigger restarts it.
   async #runDrain(): Promise<void> {
     while (!this.#stopped) {
-      const row = await invoke<PendingQueueRow | null>("next_pending_entry");
+      const skipSeqs = [...this.#skippedRows];
+      const row = await invoke<PendingQueueRow | null>("next_pending_entry", {
+        skipSeqs: skipSeqs.length ? skipSeqs : null,
+      });
       if (!row) return;
       const failure = this.#queueFailures.get(row.seq);
       if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) return;
@@ -325,12 +327,13 @@ export class SyncClient {
         }
         const attempts = (failure?.count ?? 0) + 1;
         if (attempts >= QUEUE_FAILURE_LIMIT) {
-          // Give up on the row (the entry stays local) instead of blocking
-          // the whole queue behind it forever.
+          // Stop retrying for this session: the row stays in the queue (its
+          // payload lives nowhere else) but no longer blocks the rows behind
+          // it. Reconnecting clears the skip set and retries it.
           this.#queueFailures.delete(row.seq);
-          await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
+          this.#skippedRows.add(row.seq);
           this.handlers.onError(
-            `剪贴板记录同步失败，已跳过：${errorMessage(error)}`,
+            `剪贴板记录同步失败，已暂时跳过：${errorMessage(error)}`,
           );
           continue;
         }
@@ -340,9 +343,11 @@ export class SyncClient {
     }
   }
 
-  // Publishes one queue row: metadata first, then contents under the local id,
-  // then the server's id is adopted (or the just-created server row deleted if
-  // the entry vanished mid-publish), then the broadcast activation.
+  // Publishes one queue row: the metadata goes first (other devices can start
+  // pulling while the contents upload), then the contents — the upload HTTP is
+  // content-addressed and needs no entry id — then the broadcast activation,
+  // and the row leaves the queue. The new history entry itself arrives through
+  // the server's `clipboard.created` echo.
   async #publishQueueRow(row: PendingQueueRow): Promise<void> {
     const payload: EntryPublishInput = {
       kind: row.kind,
@@ -354,22 +359,11 @@ export class SyncClient {
       sourceDeviceId: this.device.id,
     };
     const stored = await this.#publishEntry(payload);
-    // The upload commands still address the local entry, which keeps its
-    // temporary id until `apply_published_entry` swaps it.
-    const localId = `p${row.seq}`;
-    await this.#uploadEntry({ ...payload, id: localId } as ClipboardEntry, this.autoUploadLimit);
-    const adopted = await invoke<boolean>("apply_published_entry", {
-      localEntryId: localId,
-      entry: stored,
-    });
-    if (!adopted) {
-      // The entry was deleted while the publish was in flight.
-      await this.delete(stored.id).catch(() => undefined);
-    }
-    else if (stored.kind !== "files") {
+    await this.#uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
+    if (stored.kind !== "files") {
       await this.activate(stored.id).catch(() => undefined);
     }
-    await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
+    await invoke("dequeue_pending_entry", { seq: row.seq }).catch(() => undefined);
   }
 
   // Splits a long id list into fixed-size batches, collecting per-batch results.
@@ -403,11 +397,13 @@ export class SyncClient {
    * the entry — the server just learns it now holds those bytes. Everything is
    * uploaded unconditionally: the server's content-addressed store absorbs
    * duplicates, and locally cached availability marks would go stale anyway.
+   * The candidates derive from the entry payload itself, so this works for a
+   * published row and for a queue row that has no local entry yet alike.
    */
   async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
-    const files = await invoke<UploadCandidate[]>("list_entry_files", { entryId: entry.id });
-    const candidates = files.filter((file) => file.size < sizeLimit);
+    const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
+    if (!candidates.length) return;
     if (!candidates.length) return;
 
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
@@ -418,7 +414,7 @@ export class SyncClient {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadFile(entry, file, (fileUploadedBytes) => {
+          await this.#uploadFile(file, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -743,13 +739,12 @@ export class SyncClient {
   }
 
   async #uploadFile(
-    entry: ClipboardEntry,
     file: FileReference,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
     while (!this.#stopped) {
       try {
-        await this.#uploadContent(entry.id, file, onProgress);
+        await this.#uploadContent(file, onProgress);
         return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
@@ -767,7 +762,6 @@ export class SyncClient {
   // that each answer with the authoritative ledger. No socket correlation and
   // no ordering constraint — a chunk only needs its index.
   async #uploadContent(
-    entryId: string,
     file: FileReference,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
@@ -794,8 +788,8 @@ export class SyncClient {
         const index = missing[0]!;
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-        const data = await invoke<string>("read_file_chunk", {
-          entryId, fileId: file.fileId, offset, length,
+        const data = await invoke<string>("read_upload_chunk", {
+          fileId: file.fileId, offset, length,
         });
         if (!data) throw new Error("本机文件内容不可用");
         // A concurrent upload may store the same content mid-transfer; the
@@ -888,8 +882,7 @@ export class SyncClient {
     // Probing the first byte first: a device that cannot actually provide the
     // content stays quiet instead of poisoning the session for another holder.
     if (request.size > 0) {
-      const probe = await invoke<string>("read_file_chunk", {
-        entryId: request.entryId,
+      const probe = await invoke<string>("read_upload_chunk", {
         fileId: request.fileId,
         offset: 0,
         length: 1,
@@ -904,8 +897,7 @@ export class SyncClient {
       let offset = 0;
       for (;;) {
         const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
-        const data = await invoke<string>("read_file_chunk", {
-          entryId: request.entryId,
+        const data = await invoke<string>("read_upload_chunk", {
           fileId: request.fileId,
           offset,
           length,
@@ -965,6 +957,8 @@ export class SyncClient {
       case "auth.ack":
         this.#markConnected();
         this.handlers.onConnected(true);
+        // A fresh session gives previously skipped rows another chance.
+        this.#skippedRows.clear();
         // The socket only confirms the session; the manifest and device list
         // ride HTTP. A reconnect re-acks and so re-runs this fetch.
         void this.#fetchConnectionState().catch((error: unknown) => {

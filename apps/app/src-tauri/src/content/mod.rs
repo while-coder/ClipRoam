@@ -9,9 +9,8 @@
 mod tree;
 
 pub use tree::{
-    collect_tree, describe_roots, file_entry_signature, file_signature, local_source_was_lost,
-    preserve_local_sources, readable_path, rebuild_tree, refresh_summary, tree_contents,
-    tree_parent_at_path,
+    collect_tree, describe_roots, file_entry_signature, file_signature, readable_path,
+    rebuild_tree, refresh_summary, tree_contents, tree_parent_at_path,
 };
 
 use indexmap::IndexMap;

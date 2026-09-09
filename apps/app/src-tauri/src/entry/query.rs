@@ -217,23 +217,6 @@ pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>
     state.with_database(&path, |connection| Ok(store_history_file_ids(connection)))
 }
 
-/// Entries that still carry a temporary pre-publish id — the durable pending
-/// list behind the sidebar badge and the pending-sync view.
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn list_unpublished_entries(
-    state: State<'_, AppState>,
-) -> Result<Vec<ClipboardEntry>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let mut entries =
-        state.with_database(&path, |connection| select_entries(connection, "WHERE id LIKE 'p%'", "", &[]))?;
-    for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &cache_dir);
-    }
-    Ok(entries.iter().map(lightweight_entry).collect())
-}
-
 /// Files/image entries fully hashed whose uploadable payload fits the
 /// automatic-upload limit; drives the settings page's "upload now" run.
 #[tauri::command(rename_all = "camelCase")]

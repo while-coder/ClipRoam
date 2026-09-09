@@ -255,18 +255,6 @@ pub fn local_source_of(entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf>
         })
 }
 
-/// A recorded source existed for this content, but it no longer resolves to
-/// the same file. This is distinct from content that only lives on another
-/// device and therefore must be downloaded rather than discarded.
-pub fn local_source_was_lost(entry: &ClipboardEntry, file_id: &str) -> bool {
-    entry
-        .sources
-        .files
-        .iter()
-        .any(|source| source.file_id.as_deref() == Some(file_id))
-        && local_source_of(entry, file_id).is_none()
-}
-
 pub fn readable_path(
     cache_dir: &Path,
     cached: &HashSet<String>,
@@ -328,46 +316,4 @@ fn build_dir(
         }
     }
     Ok(())
-}
-
-/// Keeps the local paths of an entry that came back from the server, but only
-/// when the structure still matches what this machine copied.
-pub fn preserve_local_sources(remote: &mut ClipboardEntry, local: &ClipboardEntry) {
-    let Some(file_info) = remote.file_info.as_ref() else {
-        return;
-    };
-    if local.sources.roots.len() != file_info.len() {
-        return;
-    }
-    let paths = collect_paths(file_info);
-    let mut sources = LocalSources {
-        roots: local.sources.roots.clone(),
-        files: local
-            .sources
-            .files
-            .iter()
-            .filter(|source| paths.contains(source.path.as_str()))
-            .cloned()
-            .collect(),
-    };
-    sources.files.shrink_to_fit();
-    remote.sources = sources;
-}
-
-/// Every `/`-separated path the map's leaves live at.
-fn collect_paths(file_info: &FileInfo) -> HashSet<String> {
-    let mut paths = HashSet::new();
-    fn walk(dir: &IndexMap<String, TreeNode>, prefix: &str, paths: &mut HashSet<String>) {
-        for (name, node) in dir {
-            let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
-            match node {
-                TreeNode::File { .. } => {
-                    paths.insert(path);
-                }
-                TreeNode::Dir(children) => walk(children, &path, paths),
-            }
-        }
-    }
-    walk(file_info, "", &mut paths);
-    paths
 }
