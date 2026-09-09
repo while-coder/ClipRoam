@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{cache_dir_for, now_rfc3339, HistoryData};
-use crate::content::{modified_millis, tree_contents};
+use crate::content::{modified_millis, tree_contents, ClipboardEntryExtra, LocalSources};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -114,21 +114,39 @@ pub fn collect_local_garbage(
     let mut referenced = HashSet::new();
     let mut entry_ids = HashSet::new();
     let mut referenced_share_requests = HashSet::new();
-    for entry in history.active_entries() {
-        entry_ids.insert(entry.id.clone());
-        for root in &entry.sources.roots {
-            let path = PathBuf::from(root);
-            if let Ok(relative) = path.strip_prefix(&share_dir) {
-                if let Some(component) = relative.components().next() {
-                    referenced_share_requests.insert(component.as_os_str().to_owned());
+    // Streamed row by row: only the derived id sets stay in memory, never the
+    // entries themselves.
+    {
+        let mut statement = connection
+            .prepare("SELECT id, extra, sources FROM entries")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>("id")?,
+                    row.get::<_, String>("extra")?,
+                    row.get::<_, String>("sources")?,
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        for (entry_id, extra, sources) in rows.flatten() {
+            entry_ids.insert(entry_id);
+            let sources: LocalSources = serde_json::from_str(&sources).unwrap_or_default();
+            for root in &sources.roots {
+                let path = PathBuf::from(root);
+                if let Ok(relative) = path.strip_prefix(&share_dir) {
+                    if let Some(component) = relative.components().next() {
+                        referenced_share_requests.insert(component.as_os_str().to_owned());
+                    }
                 }
             }
-        }
-        if let Some(image_info) = &entry.image_info {
-            referenced.insert(image_info.file_id.clone());
-        }
-        for (file_id, _) in entry.file_info.as_ref().map(tree_contents).unwrap_or_default() {
-            referenced.insert(file_id);
+            let extra: ClipboardEntryExtra = serde_json::from_str(&extra).unwrap_or_default();
+            if let Some(image_info) = &extra.image_info {
+                referenced.insert(image_info.file_id.clone());
+            }
+            for (file_id, _) in extra.file_info.as_ref().map(tree_contents).unwrap_or_default() {
+                referenced.insert(file_id);
+            }
         }
     }
 

@@ -623,19 +623,44 @@ function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   }
 }
 
+// Deletion is server-authoritative: the request goes out, and the local entry
+// is only cleaned up when the `clipboard.deleted` echo arrives (the server
+// broadcasts to every device, including the initiator).
 async function removeEntry(entry: ClipboardEntry): Promise<void> {
-  if (runningInTauri) await invoke("delete_entry", { entryId: entry.id });
-  else entries.value = entries.value.filter((item) => item.id !== entry.id);
-  void syncClient?.delete(entry.id).catch(() => undefined);
-  await refreshEntries();
+  const client = syncClient;
+  if (!client) {
+    showToast("网络异常，暂时无法删除，请检查同步连接", "error");
+    return;
+  }
+  try {
+    await client.delete(entry.id);
+  } catch (error) {
+    showToast(`删除失败：${errorMessage(error)}`, "error");
+    return;
+  }
+  // Idempotent fallback in case the echo is lost (e.g. disconnect right after
+  // the response); cleanup stays a no-op if the echo already handled it.
+  if (runningInTauri) {
+    setTimeout(() => {
+      void invoke("remove_remote_entry", { entryId: entry.id }).then(scheduleRefreshEntries);
+    }, 5000);
+  }
 }
 
 // Invoked from the history view once its confirm dialog was accepted; the view
 // owns the dialog state, the toast and the post-clear focus.
 async function clearHistory(): Promise<void> {
-  if (runningInTauri) await invoke("clear_history");
-  else entries.value = [];
-  await refreshEntries();
+  const client = syncClient;
+  if (!client) throw new Error("网络异常，暂时无法清空，请检查同步连接");
+  const entryIds = runningInTauri
+    ? await invoke<string[]>("list_entry_ids")
+    : entries.value.map((entry) => entry.id);
+  let failures = 0;
+  for (const entryId of entryIds) {
+    await client.delete(entryId).catch(() => { failures += 1; });
+  }
+  if (failures > 0) throw new Error(`${failures} 条记录删除失败，请重试`);
+  // Each entry's local cleanup rides its own `clipboard.deleted` echo.
 }
 
 async function getDevice(): Promise<Device> {
@@ -909,19 +934,13 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
   if (!client) return;
 
   try {
-    const pendingDeletions = runningInTauri
-      ? new Set(await invoke<string[]>("list_pending_deletions"))
-      : new Set<string>();
-    // Best effort: a failed delete keeps the id in the pending list and the
-    // next reconcile retries it.
-    for (const entryId of pendingDeletions) await client.delete(entryId).catch(() => undefined);
     // The manifest covers only the newest page of server rows, so marks merge
     // instead of rebuilding: entries older than that page keep the "synced"
     // state they were given when last seen in a manifest. Remote deletions
     // still clear marks through the `clipboard.deleted` push.
     const knownSynced = new Set(syncedEntryIds.value);
     for (const entry of manifest) {
-      if (!pendingDeletions.has(entry.id)) knownSynced.add(entry.id);
+      knownSynced.add(entry.id);
     }
     syncedEntryIds.value = knownSynced;
     // Read the durable history rather than the rendered list. The latter can
@@ -931,7 +950,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       : [...entries.value];
     const localClientIds = new Set(localEntries.map((entry) => entry.id));
     const remoteOnlyEntryIds = manifest
-      .filter((entry) => !localClientIds.has(entry.id) && !pendingDeletions.has(entry.id))
+      .filter((entry) => !localClientIds.has(entry.id))
       .map((entry) => entry.id);
     const remoteEntries = await client.fetchEntries(remoteOnlyEntryIds);
 
@@ -991,12 +1010,7 @@ async function startSync(config: SyncConfig): Promise<void> {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
         syncedEntryIds.value = remaining;
-        if (runningInTauri) {
-          void Promise.all([
-            invoke("acknowledge_entry_deletion", { entryId }),
-            invoke("remove_remote_entry", { entryId }),
-          ]).then(scheduleRefreshEntries);
-        }
+        if (runningInTauri) void invoke("remove_remote_entry", { entryId }).then(scheduleRefreshEntries);
         else entries.value = entries.value.filter((entry) => entry.id !== entryId);
       },
       onFileAvailable: (fileId) => {
@@ -1076,16 +1090,8 @@ async function initializeTauriServices(): Promise<void> {
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
       scheduleRefreshEntries();
-      // The queue row already carries the full payload; hashing (for files) and
-      // publishing both happen inside the drain.
-      syncClient?.drainQueue();
-    }),
-    // Emitted once every content of an entry has a known id, which for a
-    // folder happens after background hashing finishes. The drain treats the
-    // row as ready only then, so this restarts any pass blocked on it.
-    listen<string>("cliproam://entry-ready", async () => {
-      scheduleRefreshEntries();
-      if (isPasteWindow) return;
+      // Hashing (for files) and publishing both happen inside the drain, which
+      // Rust restarts after each row it resolves.
       syncClient?.drainQueue();
     }),
     listen("cliproam://history-changed", scheduleRefreshEntries),

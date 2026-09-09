@@ -9,9 +9,9 @@ use std::{
 use tauri::{AppHandle, State};
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
-use crate::store::{cached_source_for, refresh_entry_summary, history_path_for_key};
+use crate::store::{cached_source_for, history_path_for_key, save_metadata, select_entry};
 use crate::history::entry_contents_of;
-use crate::{active_cache_dir, flush_active_history, AppState};
+use crate::{active_cache_dir, AppState};
 
 use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};
 
@@ -62,11 +62,10 @@ pub(crate) struct EntrySnapshot {
 pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let cache_dir = active_cache_dir(state, &history);
-    let entry = history
-        .find(entry_id)
-        .cloned()
-        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
     let hash_database = history_path_for_key(&state.histories_dir, &history.active_history);
+    let entry = state
+        .with_database(&hash_database, |connection| select_entry(connection, entry_id))?
+        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
     let hash_sources = state
         .with_database(&hash_database, |connection| {
             Ok(entry_contents_of(&entry)
@@ -105,12 +104,6 @@ pub(crate) fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
             source_device_id: snapshot.entry.source_device_id.clone(),
         })
         .collect()
-}
-
-pub(crate) fn refresh_snapshot_summary(state: &AppState, snapshot: &EntrySnapshot, entry_id: &str) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    refresh_entry_summary(&mut history, entry_id, &snapshot.cache_dir);
-    Ok(())
 }
 
 fn image_payload(snapshot: &EntrySnapshot) -> Result<ClipboardPayload, String> {
@@ -170,7 +163,9 @@ pub(crate) fn activate_remote_entry(
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         record_activation_signature(&mut history, &payload);
-        flush_active_history(&state, &history, &[])?;
+        // Only the activation signatures changed — persist the metadata rows.
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| save_metadata(connection, &history))?;
     }
 
     match payload {
@@ -231,7 +226,9 @@ pub(crate) fn apply_clipboard_entry(
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         record_activation_signature(&mut history, &payload);
-        flush_active_history(&state, &history, &[])?;
+        // Only the activation signatures changed — persist the metadata rows.
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| save_metadata(connection, &history))?;
     }
 
     match payload {

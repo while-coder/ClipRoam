@@ -1,11 +1,10 @@
 //! Local persistence for the clipboard history.
 //!
-//! Entry metadata, trees and local sources share one row. A flush writes only
-//! the rows the mutation actually touched; a mark-sweep keeps the `entries`
-//! and `pending_entries` tables aligned with the in-memory working set by
-//! deleting rows the history no longer holds. `files` tracks which content ids
-//! the server pool holds; local-cache state is derived from the blob
-//! directories on disk, which are the source of truth for it.
+//! SQLite is the only store: every entry lives in the `entries` table, reads
+//! go through SQL, and every mutation writes exactly the rows it touched —
+//! there is no in-memory window and no full-table sweep. `files` tracks which
+//! content ids the server pool holds; local-cache state is derived from the
+//! blob directories on disk, which are the source of truth for it.
 
 mod cache;
 
@@ -23,22 +22,21 @@ use std::{
 use uuid::Uuid;
 use chrono::DateTime;
 
-use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
+use crate::content::{ClipboardEntry, ClipboardEntryExtra};
 
 pub const LOCAL_HISTORY_KEY: &str = "local";
 
+/// History-level state that is not per-entry: the active profile key, the
+/// activation signatures, the device identity and the two content-availability
+/// sets. Entry rows live in SQLite alone.
 #[derive(Debug)]
 pub struct HistoryData {
-    pub histories: HashMap<String, Vec<ClipboardEntry>>,
     pub active_history: String,
     pub last_clipboard: String,
     pub last_file_signature: String,
     pub last_image_signature: String,
     pub device_id: String,
     pub device_name: String,
-    /// Locally initiated deletions are kept until the server echoes the
-    /// deletion, otherwise an offline delete would be restored on reconnect.
-    pub pending_deletions: HashSet<String>,
     /// Content ids this machine has a blob for. Kept in memory so refreshing a
     /// summary never touches the disk.
     pub cached_files: HashSet<String>,
@@ -49,7 +47,6 @@ pub struct HistoryData {
 impl Default for HistoryData {
     fn default() -> Self {
         Self {
-            histories: HashMap::new(),
             active_history: default_active_history(),
             last_clipboard: String::new(),
             last_file_signature: String::new(),
@@ -58,35 +55,9 @@ impl Default for HistoryData {
             device_name: std::env::var("COMPUTERNAME")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "This device".to_string()),
-            pending_deletions: HashSet::new(),
             cached_files: HashSet::new(),
             uploaded_files: HashSet::new(),
         }
-    }
-}
-
-impl HistoryData {
-    pub fn active_entries(&self) -> &[ClipboardEntry] {
-        self.histories
-            .get(&self.active_history)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    pub fn active_entries_mut(&mut self) -> &mut Vec<ClipboardEntry> {
-        self.histories.entry(self.active_history.clone()).or_default()
-    }
-
-    pub fn find(&self, entry_id: &str) -> Option<&ClipboardEntry> {
-        self.active_entries()
-            .iter()
-            .find(|entry| entry.id == entry_id)
-    }
-
-    pub fn find_mut(&mut self, entry_id: &str) -> Option<&mut ClipboardEntry> {
-        self.active_entries_mut()
-            .iter_mut()
-            .find(|entry| entry.id == entry_id)
     }
 }
 
@@ -348,6 +319,21 @@ pub fn select_entries(
     Ok(rows)
 }
 
+/// Reads one entry by id; absent ids come back as `None`.
+pub fn select_entry(
+    connection: &Connection,
+    entry_id: &str,
+) -> Result<Option<ClipboardEntry>, String> {
+    Ok(select_entries(
+        connection,
+        "WHERE id = ?",
+        "",
+        &[rusqlite::types::Value::Text(entry_id.to_string())],
+    )?
+    .into_iter()
+    .next())
+}
+
 pub fn count_entries(
     connection: &Connection,
     where_sql: &str,
@@ -389,7 +375,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         ..HistoryData::default()
     };
     let Ok(connection) = open_history_database(path) else {
-        history.histories.insert(key.to_string(), Vec::new());
         return history;
     };
 
@@ -402,16 +387,11 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                     "last_image_signature" => history.last_image_signature = value,
                     "device_id" => history.device_id = value,
                     "device_name" => history.device_name = value,
-                    "pending_deletions" => {
-                        history.pending_deletions = serde_json::from_str(&value).unwrap_or_default()
-                    }
                     _ => {}
                 }
             }
         }
     }
-
-    let entries = select_entries(&connection, "", &newest_first_sql(None, 0), &[]).unwrap_or_default();
 
     // Every row marks content the server pool holds; the migration has
     // already swept rows that only carried the old local-cache flag.
@@ -427,8 +407,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
     let cache_dir = cache_dir_for_path(path);
     history.uploaded_files = uploaded_files;
     history.cached_files = scan_cached_blobs(&cache_dir);
-    history.histories.insert(key.to_string(), entries);
-    refresh_summaries(&mut history, &cache_dir);
     history
 }
 
@@ -438,120 +416,89 @@ pub fn cache_dir_for_path(path: &Path) -> PathBuf {
         .join("files")
 }
 
-pub fn refresh_summaries(history: &mut HistoryData, cache_dir: &Path) {
-    refresh_history_summaries(history, cache_dir, None);
-}
-
-pub fn refresh_entry_summary(history: &mut HistoryData, entry_id: &str, cache_dir: &Path) {
-    refresh_history_summaries(history, cache_dir, Some(entry_id));
-}
-
-fn refresh_history_summaries(history: &mut HistoryData, cache_dir: &Path, only: Option<&str>) {
-    let HistoryData {
-        histories,
-        active_history,
-        cached_files,
-        uploaded_files,
-        ..
-    } = history;
-    let Some(entries) = histories.get_mut(active_history) else {
-        return;
-    };
-    for entry in entries.iter_mut() {
-        if only.is_some_and(|entry_id| entry_id != entry.id) {
-            continue;
-        }
-        refresh_summary(entry, cached_files, uploaded_files, cache_dir);
-    }
-}
-
-/// Flushes the in-memory history into its SQLite projection: the sweeps that
-/// keep the `entries` and `pending_entries` tables aligned with the working
-/// set, history-level metadata, and the entry rows the mutation actually
-/// touched. Rows outside `upserts` are only ever deleted by the sweep, never
-/// rewritten, so a steady-state change stays O(touched rows) instead of
-/// O(history).
-pub fn flush_history(
-    connection: &mut Connection,
-    history: &HistoryData,
-    upserts: &[&ClipboardEntry],
-) -> Result<(), String> {
-    let transaction = connection.transaction().map_err(|error| error.to_string())?;
-    let entry_ids = history
-        .active_entries()
-        .iter()
-        .map(|entry| entry.id.as_str())
-        .collect::<Vec<_>>();
-    if entry_ids.is_empty() {
-        transaction
-            .execute("DELETE FROM entries", [])
-            .map_err(|error| error.to_string())?;
-    } else {
-        let placeholders = std::iter::repeat_n("?", entry_ids.len()).collect::<Vec<_>>().join(", ");
-        transaction
-            .execute(
-                &format!("DELETE FROM entries WHERE id NOT IN ({placeholders})"),
-                params_from_iter(entry_ids),
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    for entry in upserts {
-        // The full extra payload (rich text, trees, thumbnails) rides the row
-        // write, so hashing results and remote updates need no separate pass.
-        let extra = ClipboardEntryExtra::of(entry).json()?;
-        let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, created_ms, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    entry.id,
-                    entry.kind,
-                    entry.content,
-                    extra,
-                    entry.created_at,
-                    entry_created_ms(&entry.created_at),
-                    entry.source_device_id,
-                    sources,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-    }
-    // Every path that removes or re-keys an entry goes through this flush: the
-    // publish swap, content dedup and deletions all drop the queue row that no
-    // longer has a matching temporary-id entry. This runs after the rows above
-    // are written, so freshly captured entries keep theirs.
-    transaction
+/// Writes one entry row, replacing any row with the same id. The full extra
+/// payload (rich text, trees, thumbnails) rides the row write, so hashing
+/// results and remote updates need no separate pass.
+pub fn upsert_entry_row(connection: &Connection, entry: &ClipboardEntry) -> Result<(), String> {
+    let extra = ClipboardEntryExtra::of(entry).json()?;
+    let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
+    connection
         .execute(
-            "DELETE FROM pending_entries WHERE 'p' || seq NOT IN (SELECT id FROM entries)",
-            [],
+            "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, created_ms, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                entry.id,
+                entry.kind,
+                entry.content,
+                extra,
+                entry.created_at,
+                entry_created_ms(&entry.created_at),
+                entry.source_device_id,
+                sources,
+            ],
         )
         .map_err(|error| error.to_string())?;
-    let mut metadata = vec![
+    Ok(())
+}
+
+/// Removes entry rows by id; absent ids are ignored.
+pub fn delete_entries_by_ids(connection: &Connection, entry_ids: &[String]) -> Result<(), String> {
+    if entry_ids.is_empty() {
+        return Ok(());
+    }
+    let marks = placeholders(entry_ids.len());
+    connection
+        .execute(
+            &format!("DELETE FROM entries WHERE id IN ({marks})"),
+            params_from_iter(entry_ids),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Drops the upload-queue rows belonging to the given entry ids; only
+/// temporary (`p<seq>`) ids ever have one. Every path that removes or re-keys
+/// an entry calls this — the publish swap, content dedup and deletions.
+pub fn delete_queue_rows_for(connection: &Connection, entry_ids: &[String]) -> Result<(), String> {
+    let seqs = entry_ids.iter().filter_map(|id| temp_entry_seq(id)).collect::<Vec<_>>();
+    if seqs.is_empty() {
+        return Ok(());
+    }
+    let marks = placeholders(seqs.len());
+    connection
+        .execute(
+            &format!("DELETE FROM pending_entries WHERE seq IN ({marks})"),
+            params_from_iter(seqs),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Comma-separated `?` marks for an IN clause.
+pub fn placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
+}
+
+/// Persists the history-level metadata: the activation signatures and the
+/// device identity.
+pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(), String> {
+    let metadata = vec![
         ("last_clipboard", history.last_clipboard.clone()),
         ("last_file_signature", history.last_file_signature.clone()),
         ("last_image_signature", history.last_image_signature.clone()),
         ("device_id", history.device_id.clone()),
         ("device_name", history.device_name.clone()),
     ];
-    metadata.push((
-        "pending_deletions",
-        serde_json::to_string(&history.pending_deletions).map_err(|error| error.to_string())?,
-    ));
     for (key, value) in metadata {
-        transaction
+        connection
             .execute(
                 "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![key, value],
             )
             .map_err(|error| error.to_string())?;
     }
-    transaction.commit().map_err(|error| error.to_string())
+    Ok(())
 }
 
-pub fn retain_single_history(history: &mut HistoryData, key: &str) {
-    history.histories.retain(|name, _| name == key);
-    history.active_history = key.to_string();
-}
 
 pub(crate) fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
@@ -575,20 +522,17 @@ pub fn temp_entry_seq(id: &str) -> Option<i64> {
     id.strip_prefix('p')?.parse::<i64>().ok().filter(|seq| *seq > 0)
 }
 
-/// One durable upload-queue row: the full capture payload.
+/// One durable upload-queue row's identity. The payload never rides the row —
+/// the publish flow reads the entry the seq names.
 #[derive(Debug)]
 pub struct PendingQueueRow {
     pub seq: i64,
-    pub kind: String,
-    pub content: String,
-    pub extra: String,
-    pub created_at: String,
 }
 
-/// Durable upload queue. Rows are appended in capture order with the complete
-/// entry payload, and removed by the `flush_history` sweep (publish swap,
-/// dedup, deletion) or an explicit acknowledge, so an offline capture
-/// replays in order on the next connection.
+/// Durable upload queue. Rows are appended in capture order with the capture
+/// payload, and removed explicitly — publish swap, dedup, deletion, drain
+/// acknowledge — so an offline capture replays in order on the next
+/// connection.
 pub fn enqueue_pending_entry(
     connection: &Connection,
     kind: &str,
@@ -625,38 +569,14 @@ pub fn ensure_pending_entry(
     Ok(())
 }
 
-/// Folds updated payload (resolved content ids after hashing) back into the
-/// queue row, recreating it if the sweep removed it in the meantime.
-pub fn update_pending_entry(
-    connection: &Connection,
-    seq: i64,
-    kind: &str,
-    content: &str,
-    extra: &str,
-    created_at: &str,
-) -> Result<(), String> {
-    connection
-        .execute(
-            "INSERT INTO pending_entries (seq, kind, content, extra, created_at) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(seq) DO UPDATE SET kind = excluded.kind, content = excluded.content, extra = excluded.extra",
-            params![seq, kind, content, extra, created_at],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 pub fn list_pending_rows(connection: &Connection) -> Result<Vec<PendingQueueRow>, String> {
     let mut statement = connection
-        .prepare("SELECT seq, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
+        .prepare("SELECT seq FROM pending_entries ORDER BY seq ASC")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(PendingQueueRow {
                 seq: row.get("seq")?,
-                kind: row.get("kind")?,
-                content: row.get("content")?,
-                extra: row.get("extra")?,
-                created_at: row.get("created_at")?,
             })
         })
         .map_err(|error| error.to_string())?

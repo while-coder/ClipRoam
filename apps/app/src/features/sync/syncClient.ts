@@ -50,16 +50,18 @@ type UploadCandidate = { fileId: string; size: number; uploaded: boolean };
 /** The file-shape fields a download or upload transfer needs. */
 type FileReference = { fileId: string; size: number };
 
-/** One row of the Rust-side durable capture queue, with the local entry state the publish flow needs. */
+/**
+ * One publishable row of the Rust-side durable capture queue. The payload is
+ * the local entry's resolved extra — a files row keeps its capture-time
+ * placeholder tree until the drain resolves it, so the row's own extra is
+ * deliberately not what gets published. The local entry id mirrors the
+ * Rust-side `temp_entry_id`: `p${seq}`.
+ */
 type PendingQueueRow = {
   seq: number;
   kind: ClipboardEntry["kind"];
   content: string;
   extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
-  createdAt: string;
-  localId: string;
-  exists: boolean;
-  ready: boolean;
 };
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
@@ -299,60 +301,42 @@ export class SyncClient {
       });
   }
 
-  // One pass over the queue, head to tail. The pass ends (without error) at
-  // the first row that cannot proceed right now — not-ready payload, a recent
-  // failure backoff, a lost connection — and a later trigger restarts it.
+  // One row per step: Rust hands back the oldest publishable row — resolving
+  // a files entry's content ids on the way, deleting rows whose entry already
+  // vanished — and this publishes it, acknowledges it and asks for the next.
+  // The pass ends (without error) at the first row that cannot proceed right
+  // now — a recent failure backoff, a lost connection — and a later trigger
+  // restarts it.
   async #runDrain(): Promise<void> {
     while (!this.#stopped) {
-      const rows = await invoke<PendingQueueRow[]>("list_pending_entries");
-      if (!rows.length) return;
-      let blocked = false;
-      for (const row of rows) {
-        if (this.#stopped) return;
-        if (!row.exists) {
-          // The entry was already adopted, evicted or deleted, so the publish
-          // outcome is decided; only the queue row itself is left to clean up.
+      const row = await invoke<PendingQueueRow | null>("next_pending_entry");
+      if (!row) return;
+      const failure = this.#queueFailures.get(row.seq);
+      if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) return;
+      try {
+        await this.#publishQueueRow(row);
+        this.#queueFailures.delete(row.seq);
+      } catch (error) {
+        if (this.#isRecoverableUploadError(error)) {
+          // Bounded wait for the socket, then end the pass — the row keeps
+          // its place in line for the next trigger.
+          await this.#waitForConnection().catch(() => undefined);
+          return;
+        }
+        const attempts = (failure?.count ?? 0) + 1;
+        if (attempts >= QUEUE_FAILURE_LIMIT) {
+          // Give up on the row (the entry stays local) instead of blocking
+          // the whole queue behind it forever.
+          this.#queueFailures.delete(row.seq);
           await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
+          this.handlers.onError(
+            `剪贴板记录同步失败，已跳过：${errorMessage(error)}`,
+          );
           continue;
         }
-        if (!row.ready) {
-          // Strict insertion order: a files entry still hashing blocks the
-          // whole tail; `entry-ready` restarts the pass when it resolves.
-          blocked = true;
-          break;
-        }
-        const failure = this.#queueFailures.get(row.seq);
-        if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) {
-          blocked = true;
-          break;
-        }
-        try {
-          await this.#publishQueueRow(row);
-          this.#queueFailures.delete(row.seq);
-        } catch (error) {
-          if (this.#isRecoverableUploadError(error)) {
-            // Bounded wait for the socket, then end the pass — the row keeps
-            // its place in line for the next trigger.
-            await this.#waitForConnection().catch(() => undefined);
-            return;
-          }
-          const attempts = (failure?.count ?? 0) + 1;
-          if (attempts >= QUEUE_FAILURE_LIMIT) {
-            // Give up on the row (the entry stays local) instead of blocking
-            // the whole queue behind it forever.
-            this.#queueFailures.delete(row.seq);
-            await invoke("acknowledge_pending_entry", { seq: row.seq }).catch(() => undefined);
-            this.handlers.onError(
-              `剪贴板记录同步失败，已跳过：${errorMessage(error)}`,
-            );
-            continue;
-          }
-          this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
-          blocked = true;
-          break;
-        }
+        this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
+        return;
       }
-      if (blocked) return;
     }
   }
 
@@ -372,9 +356,10 @@ export class SyncClient {
     const stored = await this.#publishEntry(payload);
     // The upload commands still address the local entry, which keeps its
     // temporary id until `apply_published_entry` swaps it.
-    await this.#uploadEntry({ ...payload, id: row.localId } as ClipboardEntry, this.autoUploadLimit);
+    const localId = `p${row.seq}`;
+    await this.#uploadEntry({ ...payload, id: localId } as ClipboardEntry, this.autoUploadLimit);
     const adopted = await invoke<boolean>("apply_published_entry", {
-      localEntryId: row.localId,
+      localEntryId: localId,
       entry: stored,
     });
     if (!adopted) {
@@ -452,7 +437,7 @@ export class SyncClient {
         result.status === "fulfilled" ? [result.value] : []
       ));
       if (uploaded.length) {
-        await invoke("mark_files_uploaded", { entryId: entry.id, fileIds: uploaded });
+        await invoke("mark_files_uploaded", { fileIds: uploaded });
       }
       const sourceFailure = results.find((result) => (
         result.status === "rejected"

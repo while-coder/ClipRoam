@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::store::{history_path_for_key, load_history, retain_single_history, LOCAL_HISTORY_KEY};
-use crate::{flush_active_history, AppState};
+use crate::store::{history_path_for_key, load_history, save_metadata, LOCAL_HISTORY_KEY};
+use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,27 +78,27 @@ pub(crate) fn save_sync_config(
     config: SyncConfig,
 ) -> Result<(), String> {
     let history_key = history_key_for_config(&config);
-    let pending = {
+    {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.active_history != history_key {
-            flush_active_history(&state, &history, &[])?;
+            // Persist the outgoing profile's metadata before switching to it.
+            let current_path = history_path_for_key(&state.histories_dir, &history.active_history);
+            state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
             let next_path = history_path_for_key(&state.histories_dir, &history_key);
             let profile_exists = next_path.exists();
             let device_id = history.device_id.clone();
             let device_name = history.device_name.clone();
             let mut next_history = load_history(&next_path, &history_key);
-            retain_single_history(&mut next_history, &history_key);
             if !profile_exists {
                 next_history.device_id = device_id;
                 next_history.device_name = device_name;
             }
             *history = next_history;
         }
-        flush_active_history(&state, &history, &[])?;
-        crate::clipboard::hashing::pending_entry_ids(&history)
-    };
-    for entry_id in pending {
-        crate::clipboard::hashing::queue_hashing(&state, &entry_id);
+        // A fresh profile has no device identity row yet; the metadata write
+        // lands it.
+        let active_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
     }
     let config = Some(config);
     write_sync_config(&state.sync_config_path, &config)?;
