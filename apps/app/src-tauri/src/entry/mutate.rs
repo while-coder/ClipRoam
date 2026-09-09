@@ -1,27 +1,23 @@
 //! 条目更新与删除：远端来源的写入（upsert、发布换 id）与服务器确认的删除。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::content::{preserve_local_sources, ClipboardEntry};
 use crate::pending::delete_rows_for;
 use crate::store::{
-    collect_local_garbage, delete_entries_by_ids, history_path_for_key,
-    mark_files_uploaded as store_mark_files_uploaded, placeholders, save_metadata,
-    select_entries, select_entry, upsert_entry_row,
+    collect_local_garbage, delete_entries_by_ids, history_path_for_key, placeholders,
+    save_metadata, select_entries, select_entry, upsert_entry_row,
 };
 use crate::AppState;
-
-use super::entry_contents_of;
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn upsert_remote_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     entry: ClipboardEntry,
-    available_file_ids: Vec<String>,
 ) -> Result<(), String> {
-    upsert_remote_entries(app, state, vec![entry], available_file_ids)
+    upsert_remote_entries(app, state, vec![entry])
 }
 
 /// Reconciling a fresh install can deliver hundreds of remote entries at once;
@@ -31,13 +27,12 @@ pub(crate) fn upsert_remote_entries(
     app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<ClipboardEntry>,
-    available_file_ids: Vec<String>,
 ) -> Result<(), String> {
     if entries.is_empty() {
         return Ok(());
     }
     {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let history = state.history.lock().map_err(|error| error.to_string())?;
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         // Existing rows' sources survive a remote overwrite: the remote copy
         // has no idea which local paths still hold the content here.
@@ -56,16 +51,6 @@ pub(crate) fn upsert_remote_entries(
             .map(|row| (row.id.clone(), row))
             .collect::<HashMap<_, _>>()
         };
-        // The caller pre-queried which contents the server's pool holds
-        // (POST /files/query). Those need no re-upload from this device, and
-        // the availability rows make the state survive a restart.
-        let available: HashSet<String> = entries
-            .iter()
-            .flat_map(entry_contents_of)
-            .map(|(file_id, _)| file_id)
-            .filter(|file_id| available_file_ids.contains(file_id))
-            .collect();
-        history.uploaded_files.extend(available.iter().cloned());
         let mut upserts = Vec::with_capacity(entries.len());
         for mut entry in entries {
             if let Some(local) = local_rows.get(&entry.id) {
@@ -73,18 +58,15 @@ pub(crate) fn upsert_remote_entries(
             }
             upserts.push(entry);
         }
-        // One transaction: entry rows plus the availability rows. The rows go
-        // in ascending created_at order, so within one millisecond the newest
-        // insert gets the highest rowid and the created_ms DESC, rowid DESC
-        // index yields a stable newest-first order.
+        // The rows go in ascending created_at order, so within one millisecond
+        // the newest insert gets the highest rowid and the created_ms DESC,
+        // rowid DESC index yields a stable newest-first order.
         upserts.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-        let available_vec = available.into_iter().collect::<Vec<_>>();
         state.with_database(&history_path, |connection| {
             let transaction = connection.transaction().map_err(|error| error.to_string())?;
             for entry in &upserts {
                 upsert_entry_row(&transaction, entry)?;
             }
-            store_mark_files_uploaded(&transaction, &available_vec);
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
         })?;

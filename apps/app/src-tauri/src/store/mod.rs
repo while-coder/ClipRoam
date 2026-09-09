@@ -2,14 +2,14 @@
 //!
 //! SQLite is the only store: every entry lives in the `entries` table, reads
 //! go through SQL, and every mutation writes exactly the rows it touched —
-//! there is no in-memory window and no full-table sweep. `files` tracks which
-//! content ids the server pool holds; local-cache state is derived from the
-//! blob directories on disk, which are the source of truth for it.
+//! there is no in-memory window and no full-table sweep. Server-pool
+//! availability is queried live by the frontend; local-cache state is derived
+//! from the blob directories on disk, which are the source of truth for it.
 
 mod cache;
 
 pub use cache::{
-    cached_hash, cached_source_for, collect_local_garbage, mark_files_uploaded, remember_hash,
+    cached_hash, cached_source_for, collect_local_garbage, history_file_ids, remember_hash,
     scan_cached_blobs,
 };
 
@@ -27,8 +27,8 @@ use crate::content::{ClipboardEntry, ClipboardEntryExtra};
 pub const LOCAL_HISTORY_KEY: &str = "local";
 
 /// History-level state that is not per-entry: the active profile key, the
-/// activation signatures, the device identity and the two content-availability
-/// sets. Entry rows live in SQLite alone.
+/// activation signatures, the device identity and the local-cache set. Entry
+/// rows live in SQLite alone.
 #[derive(Debug)]
 pub struct HistoryData {
     pub active_history: String,
@@ -40,8 +40,6 @@ pub struct HistoryData {
     /// Content ids this machine has a blob for. Kept in memory so refreshing a
     /// summary never touches the disk.
     pub cached_files: HashSet<String>,
-    /// Content ids the server pool already holds, as far as this device knows.
-    pub uploaded_files: HashSet<String>,
 }
 
 impl Default for HistoryData {
@@ -56,7 +54,6 @@ impl Default for HistoryData {
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "This device".to_string()),
             cached_files: HashSet::new(),
-            uploaded_files: HashSet::new(),
         }
     }
 }
@@ -140,12 +137,13 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
-    // Pinning, source_app and the files bookkeeping columns were removed:
-    // they are dropped from databases written by older builds instead of
-    // being recreated.
+    // Pinning and source_app columns were removed: they are dropped from
+    // databases written by older builds instead of being recreated.
     let entry_columns = table_columns(&connection, "entries")?;
-    let files_columns = table_columns(&connection, "files")?;
     let mut schema = String::new();
+    // The `files` availability table is gone — server-pool state is queried
+    // live by the frontend and never persisted locally again.
+    schema.push_str("DROP TABLE IF EXISTS files;\n");
     // Dropping an indexed column fails, so the index goes first.
     schema.push_str("DROP INDEX IF EXISTS entries_source_app_created_at;\n");
     // Timestamps are ordered by the numeric `created_ms` column (string RFC3339
@@ -156,20 +154,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
         if entry_columns.iter().any(|name| name == column) {
             schema.push_str(&format!("ALTER TABLE entries DROP COLUMN {column};\n"));
         }
-    }
-    if files_columns.iter().any(|name| name == "available") {
-        schema.push_str("ALTER TABLE files RENAME COLUMN available TO stored;\n");
-    }
-    for column in ["cached", "size"] {
-        if files_columns.iter().any(|name| name == column) {
-            schema.push_str(&format!("ALTER TABLE files DROP COLUMN {column};\n"));
-        }
-    }
-    // Rows that only carried the removed local-cache flag mean nothing now;
-    // every remaining row marks content the server pool holds. A fresh
-    // database has no files table until the schema below creates it.
-    if !files_columns.is_empty() {
-        schema.push_str("DELETE FROM files WHERE stored = 0;\n");
     }
     schema.push_str(
         "
@@ -189,11 +173,6 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
         );
         CREATE INDEX IF NOT EXISTS entries_created_ms ON entries(created_ms DESC);
         CREATE INDEX IF NOT EXISTS entries_kind_created_ms ON entries(kind, created_ms DESC);
-        CREATE TABLE IF NOT EXISTS files (
-            file_id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            stored INTEGER NOT NULL DEFAULT 0
-        );
         CREATE TABLE IF NOT EXISTS hash_cache (
             source TEXT NOT NULL,
             size INTEGER NOT NULL,
@@ -370,19 +349,7 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         }
     }
 
-    // Every row marks content the server pool holds; the migration has
-    // already swept rows that only carried the old local-cache flag.
-    let mut uploaded_files = HashSet::new();
-    if let Ok(mut statement) = connection.prepare("SELECT file_id FROM files") {
-        if let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) {
-            for file_id in rows.flatten() {
-                uploaded_files.insert(file_id);
-            }
-        }
-    }
-
     let cache_dir = cache_dir_for_path(path);
-    history.uploaded_files = uploaded_files;
     history.cached_files = scan_cached_blobs(&cache_dir);
     history
 }
@@ -456,9 +423,4 @@ pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-
-pub(crate) fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339()
 }

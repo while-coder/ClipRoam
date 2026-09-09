@@ -1,3 +1,4 @@
+import { entryContents } from "@cliproam/protocol";
 import { MANUAL_UPLOAD_LIMIT } from "../features/sync/syncClient";
 import { runningInTauri } from "../composables/usePlatform";
 import { formatFileSize } from "./format";
@@ -23,10 +24,16 @@ export function isHashing(entry: LocalClipboardEntry): boolean {
   return entry.summary.hashedCount < entry.summary.fileCount;
 }
 
+/**
+ * Server-pool availability lives in `storedFileIds`, refreshed live from
+ * `/files/query` — never persisted, so `undefined` (no sync client) means the
+ * upload state is simply unknown and stays hidden rather than misreported.
+ */
 export function uploadStatus(
   entry: LocalClipboardEntry,
   uploadProgress: Record<string, UploadProgress>,
   downloadProgress: Record<string, DownloadProgress>,
+  storedFileIds: Set<string> | undefined,
 ): string | undefined {
   const summary = entry.summary;
   if (!summary.fileCount) return undefined;
@@ -42,10 +49,12 @@ export function uploadStatus(
       : 0;
     return `上传中 ${percent}%`;
   }
-  if (!summary.contentCount) return undefined;
-  if (summary.uploadedCount === summary.contentCount) return "已上传";
-  if (summary.uploadedCount) {
-    return `部分上传（${summary.uploadedCount}/${summary.contentCount}）`;
+  if (!summary.contentCount || !storedFileIds) return undefined;
+  const uploadedCount = entryContents(entry)
+    .filter(({ fileId }) => storedFileIds.has(fileId)).length;
+  if (uploadedCount === summary.contentCount) return "已上传";
+  if (uploadedCount) {
+    return `部分上传（${uploadedCount}/${summary.contentCount}）`;
   }
   if (summary.uploadableSize !== undefined && summary.uploadableSize >= MANUAL_UPLOAD_LIMIT) {
     return "未上传（超过 100 MB）";

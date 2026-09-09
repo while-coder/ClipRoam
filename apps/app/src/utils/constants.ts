@@ -16,7 +16,6 @@ export const EMPTY_SUMMARY: EntrySummary = {
   contentCount: 0,
   totalSize: 0,
   maxFileSize: 0,
-  uploadedCount: 0,
   readyCount: 0,
   pendingCount: 0,
   pendingSize: 0,

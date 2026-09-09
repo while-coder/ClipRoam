@@ -310,7 +310,6 @@ const FILE_CHUNK_LIMIT: usize = 128 * 1024;
 pub(crate) struct EntryFileCandidate {
     file_id: String,
     size: u64,
-    uploaded: bool,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -325,11 +324,7 @@ pub(crate) fn list_entry_files(
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
     Ok(entry_contents_of(&entry)
         .into_iter()
-        .map(|(file_id, size)| EntryFileCandidate {
-            uploaded: history.uploaded_files.contains(&file_id),
-            file_id,
-            size,
-        })
+        .map(|(file_id, size)| EntryFileCandidate { file_id, size })
         .collect())
 }
 
