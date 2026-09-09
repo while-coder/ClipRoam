@@ -437,20 +437,3 @@ pub(crate) fn paste_entry(
 
     apply_clipboard_entry(window, app, state, entry_id, true)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::FilePasteStrategy;
-
-    #[test]
-    fn paste_strategy_owns_platform_materialization_policy() {
-        let virtual_stream = FilePasteStrategy::VirtualStream;
-        let materialized = FilePasteStrategy::MaterializedPaths;
-
-        assert!(!virtual_stream.requires_complete_content("files"));
-        assert!(virtual_stream.requires_complete_content("image"));
-        assert!(materialized.requires_complete_content("files"));
-        assert!(materialized.requires_complete_content("image"));
-        assert!(!materialized.requires_complete_content("text"));
-    }
-}

@@ -29,12 +29,12 @@ fun signingProp(fileKey: String, envKey: String): String? =
 
 android {
     compileSdk = 36
-    namespace = "com.cliproam.mobile"
+    namespace = "com.while.cliproam"
     defaultConfig {
         // 客户端支持直连局域网 HTTP 服务器（syncClient.ts 默认 http://ip:port），
         // release 也必须放行明文流量，否则 Android 9+ 拦截 http/ws 请求。
         manifestPlaceholders["usesCleartextTraffic"] = "true"
-        applicationId = "com.cliproam.mobile"
+        applicationId = "com.while.cliproam"
         minSdk = 24
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

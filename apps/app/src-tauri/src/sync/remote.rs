@@ -1,13 +1,15 @@
 //! Applying remote (server-originated) entry and file-availability changes to
 //! the local history.
 
+use serde::Serialize;
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::content::{preserve_local_sources, ClipboardEntry};
 use crate::store::{
-    collect_local_garbage, history_path_for_key, mark_files_uploaded as store_mark_files_uploaded,
-    open_history_database, refresh_entry_summary, trim_history, write_entry_data,
+    acknowledge_pending_entry as acknowledge_queue_row, collect_local_garbage, history_path_for_key,
+    list_pending_rows, mark_files_uploaded as store_mark_files_uploaded, open_history_database,
+    refresh_entry_summary, temp_entry_id, trim_history, write_entry_data,
 };
 use crate::history::{entry_contents_of, entry_references};
 use crate::{active_cache_dir, save_active_history, AppState};
@@ -223,4 +225,90 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// 同步客户端视图：上传队列与删除墓碑
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub(crate) fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut pending = history.pending_deletions.iter().cloned().collect::<Vec<_>>();
+    pending.sort();
+    Ok(pending)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.pending_deletions.remove(&entry_id) {
+        save_active_history(&state, &history)?;
+    }
+    Ok(())
+}
+
+/// One durable upload-queue row for the sync client, enriched with the local
+/// entry state the publish flow needs.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingQueueRowView {
+    seq: i64,
+    kind: String,
+    content: String,
+    extra: serde_json::Value,
+    created_at: String,
+    /// The temporary id the local entry carries until the server's is adopted.
+    local_id: String,
+    /// False once the entry was adopted, evicted or deleted — the row only
+    /// needs acknowledging then.
+    exists: bool,
+    /// Files entries are publishable only once every content id is resolved.
+    ready: bool,
+}
+
+#[tauri::command]
+pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<PendingQueueRowView>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let rows = list_pending_rows(&history_path_for_key(
+        &state.histories_dir,
+        &history.active_history,
+    ))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let local_id = temp_entry_id(row.seq);
+            let entry = history.find(&local_id);
+            let ready = match entry {
+                // Same rule as the hash-resume list (`hashing_pending`): any
+                // unresolved source file means the payload is not final yet.
+                Some(entry) if entry.kind == "files" => !entry.hashing_pending(),
+                Some(_) => true,
+                None => false,
+            };
+            let extra = serde_json::from_str(&row.extra).unwrap_or_else(|_| {
+                serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
+            });
+            PendingQueueRowView {
+                seq: row.seq,
+                kind: row.kind,
+                content: row.content,
+                extra,
+                created_at: row.created_at,
+                exists: entry.is_some(),
+                ready,
+                local_id,
+            }
+        })
+        .collect())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn acknowledge_pending_entry(state: State<'_, AppState>, seq: i64) -> Result<(), String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    acknowledge_queue_row(
+        &history_path_for_key(&state.histories_dir, &history.active_history),
+        seq,
+    )?;
+    Ok(())
 }

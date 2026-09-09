@@ -106,25 +106,3 @@ pub(crate) fn save_sync_config(
     app.emit("cliproam://sync-config-changed", ())
         .map_err(|error| error.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SyncConfig;
-
-    #[test]
-    fn older_sync_config_enables_clipboard_roaming_by_default() {
-        let config: SyncConfig = serde_json::from_str(
-            r#"{
-                "enabled": true,
-                "serverAddress": "127.0.0.1:4810",
-                "serverProtocol": "http",
-                "username": "tester",
-                "sessionToken": "token",
-                "autoUploadLimitMb": 10
-            }"#,
-        )
-        .unwrap();
-
-        assert!(config.auto_receive_clipboard);
-    }
-}

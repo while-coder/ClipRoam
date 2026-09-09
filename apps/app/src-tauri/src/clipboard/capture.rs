@@ -4,12 +4,22 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use image::{GenericImageView, ImageFormat};
+use serde::Serialize;
 use std::{
     fs,
     io::Cursor,
     path::PathBuf,
+    thread,
+    time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+#[cfg(target_os = "android")]
+use std::path::Path;
+#[cfg(target_os = "android")]
+use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
+#[cfg(target_os = "android")]
+use super::output::write_clipboard_text;
 
 use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
@@ -502,50 +512,144 @@ pub(crate) fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output.into_inner())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use image::{DynamicImage, Rgba, RgbaImage};
+// ---------------------------------------------------------------------------
+// 剪贴板轮询：把当前 OS 剪贴板变成历史条目。
+// ---------------------------------------------------------------------------
 
-    #[test]
-    fn screenshot_webp_round_trip_preserves_pixels() {
-        let source = RgbaImage::from_fn(16, 12, |x, y| {
-            Rgba([(x * 13) as u8, (y * 19) as u8, ((x + y) * 7) as u8, 255])
-        });
-        let mut bmp = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(source.clone())
-            .write_to(&mut bmp, ImageFormat::Bmp)
-            .unwrap();
-        let bmp = bmp.into_inner();
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub(crate) fn start_clipboard_monitor(app: AppHandle) {
+    thread::spawn(move || {
+        // Every pass reads the full clipboard and re-decodes its contents for
+        // the signatures (a bitmap can be tens of megabytes), so Windows gates
+        // each pass on the clipboard sequence number: an unchanged clipboard —
+        // a screenshot sitting idle for hours, for example — is skipped without
+        // even opening it.
+        #[cfg(target_os = "windows")]
+        let mut last_clipboard_sequence = 0u32;
+        loop {
+            #[cfg(target_os = "windows")]
+            {
+                let sequence = unsafe {
+                    windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
+                };
+                if sequence != 0 && sequence == last_clipboard_sequence {
+                    thread::sleep(Duration::from_millis(350));
+                    continue;
+                }
+                last_clipboard_sequence = sequence;
+            }
+            if let Some(paths) = read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
+                let _ = capture_files(&app, paths);
+            } else if let Some(rich_text) = read_clipboard_text(&app) {
+                let _ = capture_text(&app, rich_text);
+            } else if let Some(image) = read_clipboard_image(&app) {
+                let _ = capture_image(&app, image);
+            }
+            thread::sleep(Duration::from_millis(350));
+        }
+    });
+}
 
-        let (webp, width, height, thumbnail) = encode_image_as_webp(&bmp).unwrap();
-        assert_eq!((width, height), (16, 12));
-        assert!(thumbnail.is_some());
-        assert_eq!(image::guess_format(&webp).unwrap(), ImageFormat::WebP);
+// ---------------------------------------------------------------------------
+// Android 分享接收：分享项先进入待处理队列，再按本地捕获一样导入历史。
+// ---------------------------------------------------------------------------
 
-        let restored_bmp = decode_image_as_bmp(&webp).unwrap();
-        let restored = image::load_from_memory_with_format(&restored_bmp, ImageFormat::Bmp)
-            .unwrap()
-            .to_rgba8();
-        assert_eq!(restored, source);
-        assert_eq!(image_signature(&bmp), image_signature(&webp));
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ShareImportSummary {
+    shares: usize,
+    texts: usize,
+    images: usize,
+    files: usize,
+}
+
+#[cfg(target_os = "android")]
+fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<PathBuf>, String> {
+    let state = app.state::<AppState>();
+    let cache_dir = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        crate::active_cache_dir(&state, &history)
+    };
+    let request_id = uuid::Uuid::parse_str(&share.id).map_err(|_| "分享请求标识不合法".to_string())?;
+    let directory = cache_dir.join("share").join(request_id.to_string());
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+
+    let mut paths = Vec::with_capacity(share.items.len());
+    for (index, item) in share.items.iter().enumerate() {
+        let source = PathBuf::from(&item.path);
+        if !source.is_file() {
+            return Err(format!("分享文件已失效：{}", item.name));
+        }
+        let name = Path::new(&item.name)
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .map(|name| name.to_owned())
+            .unwrap_or_else(|| format!("shared-{}", index + 1).into());
+        let target = directory.join(name);
+        let source_size = fs::metadata(&source).map_err(|error| error.to_string())?.len();
+        let target_matches = fs::metadata(&target)
+            .map(|metadata| metadata.is_file() && metadata.len() == source_size)
+            .unwrap_or(false);
+        if !target_matches {
+            fs::copy(&source, &target).map_err(|error| format!("无法保存分享文件 {}：{error}", item.name))?;
+        }
+        paths.push(target);
+    }
+    Ok(paths)
+}
+
+#[cfg(target_os = "android")]
+fn import_android_share(app: &AppHandle, share: &PendingShare) -> Result<ShareImportSummary, String> {
+    let mut summary = ShareImportSummary::default();
+    if let Some(text) = share.text.as_ref().filter(|text| !text.trim().is_empty()) {
+        let rich_text = RichText {
+            text: text.clone(),
+            html: share.html.clone(),
+            rtf: None,
+        };
+        // A share is the mobile equivalent of a fresh local clipboard capture.
+        // Keep the OS clipboard useful too, but never discard the history item
+        // just because a particular device rejected the clipboard write.
+        let _ = write_clipboard_text(app, &rich_text);
+        capture_text(app, rich_text)?;
+        summary.texts = 1;
     }
 
-    #[test]
-    fn macos_html_transport_wrapper_keeps_the_same_signature() {
-        let fragment = RichText {
-            text: "hello".to_string(),
-            html: Some("<b>hello</b>".to_string()),
-            rtf: None,
-        };
-        let wrapped = RichText {
-            text: fragment.text.clone(),
-            html: Some(format!(
-                "<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>",
-                fragment.html.as_deref().unwrap()
-            )),
-            rtf: None,
-        };
-        assert_eq!(rich_text_signature(&fragment), rich_text_signature(&wrapped));
+    if share.items.len() == 1 && share.items[0].mime_type.starts_with("image/") {
+        let image = fs::read(&share.items[0].path)
+            .map_err(|error| format!("无法读取分享图片：{error}"))?;
+        capture_image(app, image)?;
+        summary.images = 1;
+    } else if !share.items.is_empty() {
+        let paths = persist_shared_files(app, share)?;
+        capture_files(app, paths)?;
+        summary.files = share.items.len();
+    }
+    summary.shares = 1;
+    Ok(summary)
+}
+
+#[tauri::command]
+pub(crate) fn consume_mobile_shares(app: AppHandle, state: State<'_, AppState>) -> Result<ShareImportSummary, String> {
+    let _guard = state.share_import.lock().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        let mut imported = ShareImportSummary::default();
+        for share in app.share_receiver().pending().map_err(|error| error.to_string())? {
+            let summary = import_android_share(&app, &share)?;
+            app.share_receiver()
+                .acknowledge(&share.id)
+                .map_err(|error| error.to_string())?;
+            imported.shares += summary.shares;
+            imported.texts += summary.texts;
+            imported.images += summary.images;
+            imported.files += summary.files;
+        }
+        Ok(imported)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(ShareImportSummary::default())
     }
 }

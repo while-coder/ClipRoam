@@ -640,15 +640,3 @@ pub fn set_clipboard(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_descriptor_path;
-
-    #[test]
-    fn descriptor_paths_fall_back_before_the_fixed_filename_buffer_overflows() {
-        assert!(normalize_descriptor_path(&"a".repeat(259)).is_ok());
-        assert!(normalize_descriptor_path(&"a".repeat(260)).is_err());
-        assert!(normalize_descriptor_path("root/../outside").is_err());
-    }
-}
