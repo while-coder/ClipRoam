@@ -12,12 +12,10 @@ use std::{
 };
 use tauri::State;
 
-use crate::clipboard::output::{
-    missing_files, refresh_snapshot_summary, snapshot_entry, FilePasteStrategy,
-};
+use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
 use crate::content::{download_path, local_source_was_lost, readable_path, MissingFile};
 use crate::history::entry_contents_of;
-use crate::store::{cached_source_for, history_path_for_key};
+use crate::store::{cached_source_for, history_path_for_key, select_entry};
 use crate::{active_cache_dir, AppState};
 
 #[derive(Default)]
@@ -321,10 +319,11 @@ pub(crate) fn list_entry_files(
     entry_id: String,
 ) -> Result<Vec<EntryFileCandidate>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let entry = history
-        .find(&entry_id)
+    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let entry = state
+        .with_database(&history_path, |connection| select_entry(connection, &entry_id))?
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    Ok(entry_contents_of(entry)
+    Ok(entry_contents_of(&entry)
         .into_iter()
         .map(|(file_id, size)| EntryFileCandidate {
             uploaded: history.uploaded_files.contains(&file_id),
@@ -340,7 +339,6 @@ pub(crate) fn list_entry_files(
 /// does not need to know which operating system it runs on.
 fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<Vec<MissingFile>, String> {
     let snapshot = snapshot_entry(state, entry_id)?;
-    refresh_snapshot_summary(state, &snapshot, entry_id)?;
     if paste_only
         && !FilePasteStrategy::for_entry(&snapshot.entry).requires_complete_content(&snapshot.entry.kind)
     {
@@ -370,11 +368,12 @@ pub(crate) fn read_file_chunk(
     let (path, source_was_lost) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
-        let entry = history
-            .find(&entry_id)
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let entry = state
+            .with_database(&history_path, |connection| select_entry(connection, &entry_id))?
             .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        let source_was_lost = local_source_was_lost(entry, &file_id);
-        let path = readable_path(&cache_dir, &history.cached_files, entry, &file_id)
+        let source_was_lost = local_source_was_lost(&entry, &file_id);
+        let path = readable_path(&cache_dir, &history.cached_files, &entry, &file_id)
             .or_else(|| {
                 // Same fallback the paste snapshot uses: a file hashed here
                 // before can stand in for content that never landed locally.

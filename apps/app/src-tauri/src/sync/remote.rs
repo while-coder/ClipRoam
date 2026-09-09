@@ -2,17 +2,18 @@
 //! the local history.
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::content::{preserve_local_sources, ClipboardEntry};
+use crate::content::{preserve_local_sources, ClipboardEntry, ClipboardEntryExtra};
 use crate::store::{
-    acknowledge_pending_entry as acknowledge_queue_row, collect_local_garbage, history_path_for_key,
-    list_pending_rows, mark_files_uploaded as store_mark_files_uploaded, refresh_entry_summary,
-    temp_entry_id,
+    acknowledge_pending_entry as acknowledge_queue_row, collect_local_garbage,
+    delete_entries_by_ids, delete_queue_rows_for, history_path_for_key, list_pending_rows,
+    mark_files_uploaded as store_mark_files_uploaded, placeholders, save_metadata,
+    select_entries, select_entry, temp_entry_id, upsert_entry_row,
 };
-use crate::history::{entry_contents_of, entry_references};
-use crate::{active_cache_dir, flush_active_history, AppState};
+use crate::history::entry_contents_of;
+use crate::AppState;
 
 /// File ids this device knows nothing about: neither a local blob in the cache
 /// nor an "available" mark from the server pool. The sync flow queries server
@@ -63,9 +64,24 @@ pub(crate) fn upsert_remote_entries(
     }
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let mut upserted_ids = Vec::with_capacity(entries.len());
+        // Existing rows' sources survive a remote overwrite: the remote copy
+        // has no idea which local paths still hold the content here.
+        let local_rows = if entries.is_empty() {
+            HashMap::new()
+        } else {
+            state.with_database(&history_path, |connection| {
+                let where_sql = format!("WHERE id IN ({})", placeholders(entries.len()));
+                let values = entries
+                    .iter()
+                    .map(|entry| rusqlite::types::Value::Text(entry.id.clone()))
+                    .collect::<Vec<_>>();
+                select_entries(connection, &where_sql, "", &values)
+            })?
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<_, _>>()
+        };
         // The caller pre-queried which contents the server's pool holds
         // (POST /files/query). Those need no re-upload from this device, and
         // the availability rows make the state survive a restart.
@@ -76,32 +92,26 @@ pub(crate) fn upsert_remote_entries(
             .filter(|file_id| available_file_ids.contains(file_id))
             .collect();
         history.uploaded_files.extend(available.iter().cloned());
-        {
-            let slot = history.active_entries_mut();
-            for mut entry in entries {
-                if let Some(local) = slot.iter().find(|item| item.id == entry.id) {
-                    preserve_local_sources(&mut entry, local);
-                }
-                let entry_id = entry.id.clone();
-                slot.retain(|item| item.id != entry.id);
-                slot.push(entry);
-                upserted_ids.push(entry_id);
+        let mut upserts = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            if let Some(local) = local_rows.get(&entry.id) {
+                preserve_local_sources(&mut entry, local);
             }
-            slot.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            upserts.push(entry);
         }
-        for entry_id in &upserted_ids {
-            refresh_entry_summary(&mut history, entry_id, &cache_dir);
-        }
-        // The rows carry the full payload (tree, sources, rich text), so a
-        // remote update lands in the same write as the rest of the flush.
-        let upserts = upserted_ids
-            .iter()
-            .filter_map(|entry_id| history.find(entry_id))
-            .collect::<Vec<_>>();
-        flush_active_history(&state, &history, &upserts)?;
+        // One transaction: entry rows plus the availability rows. The rows go
+        // in ascending created_at order, so within one millisecond the newest
+        // insert gets the highest rowid and the created_ms DESC, rowid DESC
+        // index yields a stable newest-first order.
+        upserts.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        let available_vec = available.into_iter().collect::<Vec<_>>();
         state.with_database(&history_path, |connection| {
-            let available_vec = available.iter().cloned().collect::<Vec<_>>();
-            store_mark_files_uploaded(connection, &available_vec);
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            for entry in &upserts {
+                upsert_entry_row(&transaction, entry)?;
+            }
+            store_mark_files_uploaded(&transaction, &available_vec);
+            transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
         })?;
     }
@@ -122,33 +132,33 @@ pub(crate) fn apply_published_entry(
     mut entry: ClipboardEntry,
 ) -> Result<bool, String> {
     {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.pending_deletions.remove(&local_entry_id) {
-            flush_active_history(&state, &history, &[])?;
-            return Ok(false);
-        }
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         // A deletion can land while the publish is in flight — including of an
         // entry that was still unpublished. Without the local entry there is
         // nothing to adopt, and the caller must delete the server row.
-        if history.find(&local_entry_id).is_none() {
+        let Some(local) = state.with_database(&history_path, |connection| select_entry(connection, &local_entry_id))?
+        else {
             return Ok(false);
-        }
-        let cache_dir = active_cache_dir(&state, &history);
-        if let Some(local) = history.find(&local_entry_id) {
-            preserve_local_sources(&mut entry, local);
-        }
+        };
+        preserve_local_sources(&mut entry, &local);
         // The WS echo may have inserted the server id before the publish
-        // response arrived; drop both keys so only one row survives.
-        let entries = history.active_entries_mut();
-        entries.retain(|item| item.id != local_entry_id && item.id != entry.id);
+        // response arrived; drop both ids so only one row survives. The
+        // response carries the server's timestamp, so the full response row
+        // replaces both ids in one transaction — a pure id swap would leave a
+        // stale timestamp behind.
         let entry_id = entry.id.clone();
-        entries.push(entry);
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        // The id changed, so the upsert writes a fresh row and the mark-sweep
-        // deletes the old one.
-        let upserts = history.find(&entry_id).into_iter().collect::<Vec<_>>();
-        flush_active_history(&state, &history, &upserts)?;
+        let adopted = entry.clone();
+        state.with_database(&history_path, |connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let removed = vec![local_entry_id.clone(), entry_id.clone()];
+            delete_entries_by_ids(&transaction, &removed)?;
+            delete_queue_rows_for(&transaction, std::slice::from_ref(&local_entry_id))?;
+            upsert_entry_row(&transaction, &adopted)?;
+            save_metadata(&transaction, &history)?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(())
+        })?;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())?;
@@ -159,12 +169,10 @@ pub(crate) fn apply_published_entry(
 pub(crate) fn mark_files_uploaded(
     app: AppHandle,
     state: State<'_, AppState>,
-    entry_id: String,
     file_ids: Vec<String>,
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         let uploaded = file_ids.into_iter().collect::<Vec<_>>();
         history.uploaded_files.extend(uploaded.iter().cloned());
@@ -172,15 +180,14 @@ pub(crate) fn mark_files_uploaded(
             store_mark_files_uploaded(connection, &uploaded);
             Ok(())
         })?;
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
 }
 
 /// Server storage is content-addressed, so another device can finish uploading
-/// a file after this entry was already received locally. Update every local
-/// entry that references the now-available content.
+/// a file after this entry was already received locally. Availability is read
+/// back into every summary on the next read, so only the mark needs writing.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn mark_file_available(
     app: AppHandle,
@@ -189,38 +196,36 @@ pub(crate) fn mark_file_available(
 ) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         if history.uploaded_files.contains(&file_id) {
             return Ok(());
         }
-        let changed_ids = history
-            .active_entries()
-            .iter()
-            .filter(|entry| entry_references(entry, &file_id))
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>();
         history.uploaded_files.insert(file_id.clone());
         state.with_database(&history_path, |connection| {
             store_mark_files_uploaded(connection, std::slice::from_ref(&file_id));
             Ok(())
         })?;
-        for entry_id in &changed_ids {
-            refresh_entry_summary(&mut history, entry_id, &cache_dir);
-        }
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
 }
 
-/// Applies a server-confirmed deletion without creating a new local tombstone.
+/// Applies a server-confirmed deletion: drops the entry and its queue row,
+/// then frees the blobs it referenced.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        history.active_entries_mut().retain(|entry| entry.id != entry_id);
-        flush_active_history(&state, &history, &[])?;
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            delete_entries_by_ids(&transaction, std::slice::from_ref(&entry_id))?;
+            delete_queue_rows_for(&transaction, std::slice::from_ref(&entry_id))?;
+            save_metadata(&transaction, &history)?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(())
+        })?;
+        // Dropping references is what frees disk space, so the sweep runs here.
         let _ = state.with_database(&path, |connection| {
             collect_local_garbage(connection, &state.histories_dir, &mut history)
         });
@@ -230,28 +235,13 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
 }
 
 // ---------------------------------------------------------------------------
-// 同步客户端视图：上传队列与删除墓碑
+// 同步客户端视图：上传队列
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub(crate) fn list_pending_deletions(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let mut pending = history.pending_deletions.iter().cloned().collect::<Vec<_>>();
-    pending.sort();
-    Ok(pending)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn acknowledge_entry_deletion(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    if history.pending_deletions.remove(&entry_id) {
-        flush_active_history(&state, &history, &[])?;
-    }
-    Ok(())
-}
-
-/// One durable upload-queue row for the sync client, enriched with the local
-/// entry state the publish flow needs.
+/// One publishable upload-queue row for the sync client. The payload comes
+/// from the local entry after content resolution, not from the raw row — a
+/// files row keeps its capture-time tree (`f: ""`) until the drain resolves
+/// it, so the two extras are deliberately not the same.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PendingQueueRowView {
@@ -259,56 +249,83 @@ pub(crate) struct PendingQueueRowView {
     kind: String,
     content: String,
     extra: serde_json::Value,
-    created_at: String,
-    /// The temporary id the local entry carries until the server's is adopted.
-    local_id: String,
-    /// False once the entry was adopted, evicted or deleted — the row only
-    /// needs acknowledging then.
-    exists: bool,
-    /// Files entries are publishable only once every content id is resolved.
-    ready: bool,
 }
 
+/// The oldest publishable queue row, or `None` when the queue is empty or its
+/// head cannot proceed yet. Rows whose entry vanished while waiting — adopted,
+/// deduped or deleted — are acknowledged on the way, so the caller never sees
+/// one. Strict order: a files entry whose content ids still resolve right
+/// here blocks the tail, and the next `entry-created` event restarts the
+/// drain afterwards.
 #[tauri::command]
-pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<PendingQueueRowView>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let rows = state.with_database(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        |connection| list_pending_rows(connection),
-    )?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let local_id = temp_entry_id(row.seq);
-            let entry = history.find(&local_id);
-            let ready = match entry {
-                // Same rule as the hash-resume list (`hashing_pending`): any
-                // unresolved source file means the payload is not final yet.
-                Some(entry) if entry.kind == "files" => !entry.hashing_pending(),
-                Some(_) => true,
-                None => false,
-            };
-            let extra = serde_json::from_str(&row.extra).unwrap_or_else(|_| {
-                serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
-            });
-            PendingQueueRowView {
-                seq: row.seq,
-                kind: row.kind,
-                content: row.content,
-                extra,
-                created_at: row.created_at,
-                exists: entry.is_some(),
-                ready,
-                local_id,
+pub(crate) fn next_pending_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<PendingQueueRowView>, String> {
+    let rows = {
+        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| list_pending_rows(connection))?
+    };
+    for row in rows {
+        let entry_id = temp_entry_id(row.seq);
+        let mut entry = match read_entry(&state, &entry_id)? {
+            Some(entry) => entry,
+            None => {
+                drop_stale_row(&state, row.seq)?;
+                continue;
             }
-        })
-        .collect())
+        };
+        if entry.kind == "files" {
+            // Resolving a large tree can take a while, so the history lock is
+            // released for it (`resolve_entry_files` re-locks per batch).
+            crate::clipboard::hashing::resolve_entry_files(&app, &entry_id)?;
+            entry = match read_entry(&state, &entry_id)? {
+                Some(entry) => entry,
+                // Deleted while the resolution ran: the row is stale now.
+                None => {
+                    drop_stale_row(&state, row.seq)?;
+                    continue;
+                }
+            };
+        }
+        let extra = ClipboardEntryExtra::of(&entry).json()?;
+        return Ok(Some(PendingQueueRowView {
+            seq: row.seq,
+            kind: entry.kind,
+            content: entry.content,
+            extra: serde_json::from_str(&extra).unwrap_or_else(|_| {
+                serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
+            }),
+        }));
+    }
+    Ok(None)
+}
+
+/// One entry row read under the history lock, which also pins the active
+/// history the pooled connection is keyed by.
+fn read_entry(state: &AppState, entry_id: &str) -> Result<Option<ClipboardEntry>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| select_entry(connection, entry_id))
+}
+
+/// Removes a queue row whose entry is gone. Deleting it here — before any
+/// later row is returned — keeps a repeated drain pass from republishing the
+/// row onto a fresh server entry the caller would then have to delete again.
+fn drop_stale_row(state: &AppState, seq: i64) -> Result<(), String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state
+        .with_database(&path, |connection| acknowledge_queue_row(connection, seq))
+        .map(|_| ())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn acknowledge_pending_entry(state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| acknowledge_queue_row(connection, seq))?;
+    state
+        .with_database(&path, |connection| acknowledge_queue_row(connection, seq))?;
     Ok(())
 }

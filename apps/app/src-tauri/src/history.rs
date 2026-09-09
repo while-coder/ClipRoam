@@ -1,19 +1,17 @@
-//! History queries and lifecycle commands: listing, reading, refreshing,
-//! deleting. Entries live in SQLite; every read goes through SQL, and each
-//! row's derived `summary` is recomputed just before it leaves the backend.
+//! History queries and lifecycle commands: listing, reading, refreshing.
+//! Entries live in SQLite; every read goes through SQL, and each row's derived
+//! `summary` is recomputed just before it leaves the backend. Deletions always
+//! arrive as server broadcasts, so removal lives in `sync::remote`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 
 use crate::clipboard::capture::lightweight_entry;
 use crate::content::{refresh_summary, tree_contents, ClipboardEntry};
-use crate::store::{
-    collect_local_garbage, count_entries, history_path_for_key, newest_first_sql,
-    refresh_entry_summary, select_all_entry_ids, select_entries, temp_entry_seq, HistoryData,
-};
-use crate::{active_cache_dir, flush_active_history, AppState};
+use crate::store::{count_entries, history_path_for_key, newest_first_sql, select_all_entry_ids, select_entries};
+use crate::{active_cache_dir, AppState};
 
 /// Page size for `list_entries_manifest`; mirrors `PAGE_SIZE` in the frontend.
 const MANIFEST_PAGE_SIZE: usize = 50;
@@ -46,64 +44,81 @@ pub struct EntriesManifestPage {
     entries: Vec<ClipboardEntry>,
 }
 
-fn manifest_matches(
-    entry: &ClipboardEntry,
+/// Escapes LIKE wildcards so the keyword matches literally, like the
+/// frontend's `String.includes`.
+fn escape_like(needle: &str) -> String {
+    let mut escaped = String::with_capacity(needle.len());
+    for character in needle.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+fn placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
+}
+
+/// Builds the WHERE clause and parameters for the manifest filters. Keyword
+/// matching mirrors the frontend's `clientManifest`: entry content, or the
+/// device label with the same "未知设备" fallback. SQLite's `lower()` folds
+/// ASCII only — identical behaviour for CJK, narrower for accented Latin.
+fn manifest_query(
     filter: &EntriesManifestFilter,
     device_names: &HashMap<String, String>,
     needle: &str,
-) -> bool {
-    if filter.kind != "all" && entry.kind != filter.kind {
-        return false;
+) -> (String, Vec<Value>) {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut values: Vec<Value> = Vec::new();
+    if filter.kind != "all" {
+        clauses.push("kind = ?".to_string());
+        values.push(Value::Text(filter.kind.clone()));
     }
     if !needle.is_empty() {
-        let device_label = device_names
-            .get(&entry.source_device_id)
-            .map(String::as_str)
-            .unwrap_or(UNKNOWN_DEVICE_LABEL);
-        let matched = entry.content.to_lowercase().contains(needle)
-            || device_label.to_lowercase().contains(needle);
-        if !matched {
-            return false;
+        let matching_ids = device_names
+            .iter()
+            .filter(|(_, name)| name.to_lowercase().contains(needle))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let unknown_matches = UNKNOWN_DEVICE_LABEL.contains(needle);
+        // With no known devices every entry falls into the fallback group, so
+        // the keyword test passes for all of them.
+        if !(unknown_matches && device_names.is_empty()) {
+            let mut alternatives = vec!["LOWER(content) LIKE ? ESCAPE '\\'".to_string()];
+            values.push(Value::Text(format!("%{}%", escape_like(needle))));
+            if !matching_ids.is_empty() {
+                alternatives.push(format!(
+                    "source_device_id IN ({})",
+                    placeholders(matching_ids.len())
+                ));
+                values.extend(matching_ids.into_iter().map(Value::Text));
+            }
+            if unknown_matches {
+                alternatives.push(format!(
+                    "source_device_id NOT IN ({})",
+                    placeholders(device_names.len())
+                ));
+                values.extend(device_names.keys().map(|id| Value::Text(id.clone())));
+            }
+            clauses.push(format!("({})", alternatives.join(" OR ")));
         }
     }
-    if filter.start.is_some() || filter.end.is_some() {
-        let Ok(created_at) = DateTime::parse_from_rfc3339(&entry.created_at) else {
-            return false;
-        };
-        let created_at = created_at.timestamp_millis();
-        if filter.start.is_some_and(|start| created_at < start)
-            || filter.end.is_some_and(|end| created_at > end)
-        {
-            return false;
-        }
+    if let Some(start) = filter.start {
+        clauses.push("created_ms >= ?".to_string());
+        values.push(Value::Integer(start));
     }
-    true
-}
-
-fn manifest_page(
-    entries: &[ClipboardEntry],
-    filter: &EntriesManifestFilter,
-    device_names: &HashMap<String, String>,
-) -> EntriesManifestPage {
-    let needle = filter.query.trim().to_lowercase();
-    let matched = entries
-        .iter()
-        .filter(|entry| manifest_matches(entry, filter, device_names, &needle))
-        .collect::<Vec<_>>();
-    let total = matched.len();
-    let entries = match filter.page {
-        Some(page) => {
-            let skip = page.saturating_sub(1) * MANIFEST_PAGE_SIZE;
-            matched
-                .into_iter()
-                .skip(skip)
-                .take(MANIFEST_PAGE_SIZE)
-                .map(lightweight_entry)
-                .collect()
-        }
-        None => matched.into_iter().map(lightweight_entry).collect(),
+    if let Some(end) = filter.end {
+        clauses.push("created_ms <= ?".to_string());
+        values.push(Value::Integer(end));
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
     };
-    EntriesManifestPage { total, entries }
+    (where_sql, values)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -113,7 +128,32 @@ pub(crate) fn list_entries_manifest(
     device_names: HashMap<String, String>,
 ) -> Result<EntriesManifestPage, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    Ok(manifest_page(history.active_entries(), &filter, &device_names))
+    let cache_dir = active_cache_dir(&state, &history);
+    let needle = filter.query.trim().to_lowercase();
+    let (where_sql, values) = manifest_query(&filter, &device_names, &needle);
+    let (limit, offset) = match filter.page {
+        Some(page) => {
+            let offset = page.saturating_sub(1) * MANIFEST_PAGE_SIZE;
+            (Some(MANIFEST_PAGE_SIZE), offset)
+        }
+        None => (None, 0),
+    };
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    // Count and page come out of one pass over the same connection so a
+    // concurrent capture cannot slip between them.
+    let (total, entries) = state.with_database(&path, |connection| {
+        let total = count_entries(connection, &where_sql, &values)?;
+        let entries = select_entries(connection, &where_sql, &newest_first_sql(limit, offset), &values)?;
+        Ok((total, entries))
+    })?;
+    let mut entries = entries;
+    for entry in &mut entries {
+        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+    }
+    Ok(EntriesManifestPage {
+        total,
+        entries: entries.iter().map(lightweight_entry).collect(),
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -122,10 +162,91 @@ pub(crate) fn list_entries_query(
     entry_ids: Vec<String>,
 ) -> Result<Vec<ClipboardEntry>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let mut found = if entry_ids.is_empty() {
+        HashMap::new()
+    } else {
+        state.with_database(&path, |connection| {
+            let where_sql = format!("WHERE id IN ({})", placeholders(entry_ids.len()));
+            let values = entry_ids
+                .iter()
+                .map(|id| Value::Text(id.clone()))
+                .collect::<Vec<_>>();
+            select_entries(connection, &where_sql, "", &values)
+        })?
+        .into_iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect::<HashMap<_, _>>()
+    };
+    // The caller's id order is preserved; missing ids are simply absent.
     Ok(entry_ids
         .iter()
-        .filter_map(|entry_id| history.find(entry_id).map(lightweight_entry))
+        .filter_map(|entry_id| {
+            let mut entry = found.remove(entry_id)?;
+            refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+            Some(lightweight_entry(&entry))
+        })
         .collect())
+}
+
+/// Every stored entry id, newest first — the local side of the sync
+/// reconcile's manifest diff and the "clear history" total.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn list_entry_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| select_all_entry_ids(connection))
+}
+
+/// Entries that still carry a temporary pre-publish id — the durable pending
+/// list behind the sidebar badge and the pending-sync view.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn list_unpublished_entries(
+    state: State<'_, AppState>,
+) -> Result<Vec<ClipboardEntry>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let mut entries =
+        state.with_database(&path, |connection| select_entries(connection, "WHERE id LIKE 'p%'", "", &[]))?;
+    for entry in &mut entries {
+        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+    }
+    Ok(entries.iter().map(lightweight_entry).collect())
+}
+
+/// Files/image entries fully hashed whose uploadable payload fits the
+/// automatic-upload limit; drives the settings page's "upload now" run.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn list_upload_candidates(
+    state: State<'_, AppState>,
+    limit_bytes: u64,
+) -> Result<Vec<ClipboardEntry>, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let cache_dir = active_cache_dir(&state, &history);
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    // Files entries still hashing carry an unresolved `"fileId":null` source;
+    // images have no hashing step.
+    let mut entries = state.with_database(&path, |connection| {
+        select_entries(
+            connection,
+            "WHERE kind IN ('files', 'image') AND (kind = 'image' OR sources NOT LIKE '%\"fileId\":null%')",
+            "",
+            &[],
+        )
+    })?;
+    let mut candidates = Vec::new();
+    for entry in &mut entries {
+        refresh_summary(entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        if entry.summary.uploadable_size.is_some_and(|size| size < limit_bytes) {
+            candidates.push(lightweight_entry(entry));
+            if candidates.len() >= UPLOAD_CANDIDATE_LIMIT {
+                break;
+            }
+        }
+    }
+    Ok(candidates)
 }
 
 /// Every content an entry references, whichever kind carries it.
@@ -137,20 +258,21 @@ pub(crate) fn entry_contents_of(entry: &ClipboardEntry) -> Vec<(String, u64)> {
     }
 }
 
-pub(crate) fn entry_references(entry: &ClipboardEntry, file_id: &str) -> bool {
-    entry_contents_of(entry)
-        .into_iter()
-        .any(|(id, _)| id == file_id)
-}
-
 /// The full entry, tree included — used when publishing to the server.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    history
-        .find(&entry_id)
-        .cloned()
-        .ok_or_else(|| "剪贴板记录不存在".to_string())
+    let cache_dir = active_cache_dir(&state, &history);
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let mut entry = state
+        .with_database(&path, |connection| {
+            select_entries(connection, "WHERE id = ?", "", &[Value::Text(entry_id.clone())])
+        })?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "剪贴板记录不存在".to_string())?;
+    refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+    Ok(entry)
 }
 
 #[tauri::command]
@@ -159,66 +281,11 @@ pub(crate) fn get_device(state: State<'_, AppState>) -> Result<(String, String),
     Ok((history.device_id.clone(), history.device_name.clone()))
 }
 
-/// Recomputes one entry's aggregates. Downloads deliberately skip this so that
-/// finishing a file stays O(1); the caller refreshes once the batch is done.
+/// Summaries are recomputed from the availability sets every time an entry is
+/// read, so this is a pure re-read trigger for the frontend; it exists to
+/// keep the invoke shape stable across the read-model change.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn refresh_entry(state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
-    refresh_entry_summary(&mut history, &entry_id, &cache_dir);
+    let _ = (state, entry_id);
     Ok(())
-}
-
-/// Removes the given ids from the active history, tombstones every published
-/// id and frees the blobs they referenced.
-fn remove_entries_and_enqueue_deletions(
-    state: &AppState,
-    history: &mut HistoryData,
-    entry_ids: &[String],
-) -> Result<(), String> {
-    let removed = entry_ids.iter().cloned().collect::<HashSet<_>>();
-    let existing = history
-        .active_entries()
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<HashSet<_>>();
-    history
-        .active_entries_mut()
-        .retain(|entry| !removed.contains(&entry.id));
-    for entry_id in entry_ids {
-        // The server only knows published (numeric) ids; a temporary id was
-        // never uploaded, so removing it merely drops its queue row on the
-        // next save.
-        if existing.contains(entry_id) && temp_entry_seq(entry_id).is_none() {
-            history.pending_deletions.insert(entry_id.clone());
-        }
-    }
-    flush_active_history(state, history, &[])?;
-    // Dropping references is what frees disk space, so the sweep runs here.
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let _ = state.with_database(&path, |connection| {
-        collect_local_garbage(connection, &state.histories_dir, history)
-    });
-    Ok(())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn delete_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    remove_entries_and_enqueue_deletions(&state, &mut history, &[entry_id])?;
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub(crate) fn clear_history(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let entry_ids = history
-        .active_entries()
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
-    remove_entries_and_enqueue_deletions(&state, &mut history, &entry_ids)?;
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
 }

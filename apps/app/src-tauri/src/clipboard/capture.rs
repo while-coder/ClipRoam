@@ -16,11 +16,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature, fnv1a, hash_bytes,
-    upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
+    refresh_summary, upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo,
+    LocalSources,
 };
 use crate::store::{
-    enqueue_pending_entry, ensure_pending_entry, history_path_for_key, refresh_entry_summary,
-    temp_entry_seq,
+    delete_entries_by_ids, delete_queue_rows_for, enqueue_pending_entry, ensure_pending_entry,
+    history_path_for_key, save_metadata, select_entries, temp_entry_seq, upsert_entry_row,
 };
 use crate::AppState;
 
@@ -109,21 +110,42 @@ pub(crate) fn new_entry(seq: i64, kind: &str, content: String, device_id: String
     }
 }
 
-/// Writes the full capture payload to the durable upload queue. The returned
-/// seq doubles as the entry's temporary local id.
-fn queue_entry_payload(
+/// Finds the files entry to reuse for a re-copy of the same roots. A LIKE
+/// prefilter over the JSON `sources` column narrows the candidates (the
+/// exact signature stats the root paths, so it must not run per row), then
+/// the signature decides. Newest first, like the scan it replaces.
+fn find_reusable_files_entry(
     state: &AppState,
-    history: &crate::store::HistoryData,
-    kind: &str,
-    content: &str,
-    extra: &ClipboardEntryExtra,
-    created_at: &str,
-) -> Result<i64, String> {
-    let payload = extra.json()?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| {
-        enqueue_pending_entry(connection, kind, content, &payload, created_at)
-    })
+    history_path: &std::path::Path,
+    paths: &[PathBuf],
+    signature: &str,
+) -> Result<Option<ClipboardEntry>, String> {
+    // JSON escapes backslashes, so a Windows root appears doubled in the column.
+    let Some(first_root) = paths.first() else {
+        return Ok(None);
+    };
+    let json_escaped = first_root.to_string_lossy().replace('\\', "\\\\");
+    let mut pattern = String::new();
+    for character in json_escaped.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    let candidates = state.with_database(history_path, |connection| {
+        select_entries(
+            connection,
+            "WHERE kind = 'files' AND sources LIKE ? ESCAPE '\\'",
+            &crate::store::newest_first_sql(None, 0),
+            &[rusqlite::types::Value::Text(format!("%{pattern}%"))],
+        )
+    })?;
+    for candidate in candidates {
+        if file_entry_signature(&candidate) == signature {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 /// The frontend renders lists of hundreds of entries; shipping their trees
@@ -165,6 +187,17 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         if history.last_clipboard == signature {
             return Ok(());
         }
+        // The signatures are recorded before the transaction so the metadata
+        // write inside it persists them; on failure they roll back, keeping
+        // memory aligned with the database the transaction never touched.
+        let previous_signatures = (
+            history.last_clipboard.clone(),
+            history.last_file_signature.clone(),
+            history.last_image_signature.clone(),
+        );
+        history.last_clipboard = signature;
+        history.last_file_signature.clear();
+        history.last_image_signature.clear();
         let device_id = history.device_id.clone();
         let created_at = Utc::now().to_rfc3339();
         let extra = ClipboardEntryExtra {
@@ -173,34 +206,50 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
             file_info: None,
             image_info: None,
         };
-        // The payload lands in the durable queue first: the seq it gets back
-        // is the entry's local id until the server's id is adopted. Without a
-        // queue row there is nothing to sync later, so the capture is skipped.
-        let seq = match queue_entry_payload(&state, &history, "text", &text, &extra, &created_at) {
-            Ok(seq) => seq,
+        let payload = extra.json()?;
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        // One transaction: queue row, dedup, entry row and metadata land
+        // together, so a crash cannot leave a row without its queue entry. The
+        // seq the queue returns is the entry's local id until the server's is
+        // adopted; without a queue row there is nothing to sync later, so a
+        // failure here skips the capture entirely.
+        let entry = match state.with_database(&path, |connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let seq = enqueue_pending_entry(&transaction, "text", &text, &payload, &created_at)?;
+            let mut entry = new_entry(seq, "text", text.clone(), device_id.clone());
+            entry.html = extra.html.clone();
+            entry.rtf = extra.rtf.clone();
+            entry.created_at = created_at.clone();
+            // Text dedup ignores kind — same as the in-memory retain below.
+            // The duplicate rows go first, queue rows included, so the fresh
+            // insert cannot collide with itself.
+            let duplicates = select_entries(&transaction, "WHERE content = ?", "", &[
+                rusqlite::types::Value::Text(entry.content.clone()),
+            ])?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+            delete_queue_rows_for(&transaction, &duplicates)?;
+            delete_entries_by_ids(&transaction, &duplicates)?;
+            upsert_entry_row(&transaction, &entry)?;
+            save_metadata(&transaction, &history)?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(entry)
+        }) {
+            Ok(entry) => entry,
             Err(error) => {
-                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                history.last_clipboard = previous_signatures.0;
+                history.last_file_signature = previous_signatures.1;
+                history.last_image_signature = previous_signatures.2;
+                eprintln!("ClipRoam: 记录剪贴板条目失败：{error}");
                 return Ok(());
             }
         };
-        history.last_clipboard = signature;
-        history.last_file_signature.clear();
-        history.last_image_signature.clear();
-        let mut entry = new_entry(seq, "text", text, device_id);
-        entry.html = extra.html;
-        entry.rtf = extra.rtf;
-        entry.created_at = created_at;
-        let entries = history.active_entries_mut();
-        entries.retain(|item| item.content != entry.content);
-        entries.insert(0, entry.clone());
-        crate::flush_active_history(&state, &history, &[&entry])?;
         entry
     };
     // Text has no contents to hash, so it is publishable the moment it lands —
-    // the frontend drains the queue whenever an entry becomes ready.
+    // the frontend drains the queue whenever an entry is created.
     app.emit("cliproam://entry-created", lightweight_entry(&entry))
-        .map_err(|error| error.to_string())?;
-    app.emit("cliproam://entry-ready", entry.id)
         .map_err(|error| error.to_string())
 }
 
@@ -222,11 +271,18 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         return Ok(());
     }
     let collected = collect_tree(&paths)?;
-    let (entry, entry_id) = {
+    let entry = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.last_file_signature == signature {
             return Ok(());
         }
+        // Signatures roll back on a failed write, keeping memory aligned with
+        // the database the transaction never touched.
+        let previous_signatures = (
+            history.last_clipboard.clone(),
+            history.last_file_signature.clone(),
+            history.last_image_signature.clone(),
+        );
         history.last_file_signature = signature.clone();
         history.last_clipboard.clear();
         history.last_image_signature.clear();
@@ -235,39 +291,44 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         let device_id = history.device_id.clone();
         let created_at = Utc::now().to_rfc3339();
         let content = describe_roots(&collected.file_info);
-        let entries = history.active_entries_mut();
-        let entry_id = match entries
-            .iter()
-            .position(|item| item.kind == "files" && file_entry_signature(item) == signature)
-        {
-            Some(index) => {
-                let mut existing = entries.remove(index);
+        let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
+        let mut entry = match reusable {
+            Some(mut existing) => {
                 existing.created_at = created_at;
-                // A reused entry keeps its id — and its queue row when it is
-                // still unpublished. Recreate the row if it went missing, so
-                // the copy is not silently never synced.
-                if let Some(seq) = temp_entry_seq(&existing.id) {
-                    let payload = ClipboardEntryExtra::of(&existing).json()?;
-                    if let Err(error) = state.with_database(&history_path, |connection| {
+                // One transaction: the entry row (new timestamp, so it moves
+                // back to the top) and the metadata; a reused entry keeps its
+                // id — and its queue row when it is still unpublished, which
+                // is recreated if it went missing, so the copy is not
+                // silently never synced.
+                if let Err(error) = state.with_database(&history_path, |connection| {
+                    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+                    if let Some(seq) = temp_entry_seq(&existing.id) {
+                        let payload = ClipboardEntryExtra::of(&existing).json()?;
                         ensure_pending_entry(
-                            connection,
+                            &transaction,
                             seq,
                             &existing.kind,
                             &existing.content,
                             &payload,
                             &existing.created_at,
-                        )
-                    }) {
-                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                        )?;
                     }
+                    upsert_entry_row(&transaction, &existing)?;
+                    save_metadata(&transaction, &history)?;
+                    transaction.commit().map_err(|error| error.to_string())?;
+                    Ok(())
+                }) {
+                    history.last_clipboard = previous_signatures.0;
+                    history.last_file_signature = previous_signatures.1;
+                    history.last_image_signature = previous_signatures.2;
+                    eprintln!("ClipRoam: 记录剪贴板条目失败：{error}");
+                    return Ok(());
                 }
-                let entry_id = existing.id.clone();
-                entries.insert(0, existing);
-                entry_id
+                existing
             }
             None => {
                 // The tree goes into the queue with unresolved content ids
-                // (`f: ""`); the hash worker folds the real ones back in.
+                // (`f: ""`); the sync drain resolves them before publishing.
                 let extra = ClipboardEntryExtra {
                     html: None,
                     rtf: None,
@@ -275,34 +336,37 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                     image_info: None,
                 };
                 let payload = extra.json()?;
-                let seq = match state.with_database(&history_path, |connection| {
-                    enqueue_pending_entry(connection, "files", &content, &payload, &created_at)
-                }) {
-                    Ok(seq) => seq,
-                    Err(error) => {
-                        eprintln!("ClipRoam: 记录待上传条目失败：{error}");
-                        return Ok(());
-                    }
-                };
-                let mut entry = new_entry(seq, "files", content, device_id);
+                let mut entry = new_entry(0, "files", content, device_id);
                 entry.created_at = created_at;
                 entry.file_info = Some(collected.file_info);
                 entry.sources = collected.sources;
-                let entry_id = entry.id.clone();
-                entries.insert(0, entry);
-                entry_id
+                if let Err(error) = state.with_database(&history_path, |connection| {
+                    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+                    let seq = enqueue_pending_entry(
+                        &transaction,
+                        "files",
+                        &entry.content,
+                        &payload,
+                        &entry.created_at,
+                    )?;
+                    entry.id = crate::store::temp_entry_id(seq);
+                    upsert_entry_row(&transaction, &entry)?;
+                    save_metadata(&transaction, &history)?;
+                    transaction.commit().map_err(|error| error.to_string())?;
+                    Ok(())
+                }) {
+                    history.last_clipboard = previous_signatures.0;
+                    history.last_file_signature = previous_signatures.1;
+                    history.last_image_signature = previous_signatures.2;
+                    eprintln!("ClipRoam: 记录剪贴板条目失败：{error}");
+                    return Ok(());
+                }
+                entry
             }
         };
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        let row = history.find(&entry_id);
-        let upserts = row.into_iter().collect::<Vec<_>>();
-        crate::flush_active_history(&state, &history, &upserts)?;
-        let entry = row
-            .map(lightweight_entry)
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-        (entry, entry_id)
+        refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        lightweight_entry(&entry)
     };
-    crate::clipboard::hashing::queue_hashing(&state, &entry_id);
     app.emit("cliproam://entry-created", entry)
         .map_err(|error| error.to_string())
 }
@@ -336,6 +400,13 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         if !image_path.is_file() {
             fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
         }
+        // Signatures roll back on a failed write, keeping memory aligned with
+        // the database the transaction never touched.
+        let previous_signatures = (
+            history.last_clipboard.clone(),
+            history.last_file_signature.clone(),
+            history.last_image_signature.clone(),
+        );
         history.cached_files.insert(file_id.clone());
         history.last_image_signature = signature;
         history.last_clipboard.clear();
@@ -350,7 +421,8 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             thumbnail: thumbnail.unwrap_or_default(),
         };
         // Bytes are hashed already, so the queued payload is complete and the
-        // entry is publishable as soon as it lands.
+        // entry is publishable as soon as it lands. One transaction covers the
+        // queue row, the entry row and the metadata.
         let extra = ClipboardEntryExtra {
             html: None,
             rtf: None,
@@ -359,32 +431,31 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         };
         let payload = extra.json()?;
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        let seq = match state.with_database(&history_path, |connection| {
-            enqueue_pending_entry(connection, "image", &content, &payload, &created_at)
+        let entry = match state.with_database(&history_path, |connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            let seq = enqueue_pending_entry(&transaction, "image", &content, &payload, &created_at)?;
+            let mut entry = new_entry(seq, "image", content, device_id);
+            entry.created_at = created_at;
+            entry.image_info = Some(image_info);
+            upsert_entry_row(&transaction, &entry)?;
+            save_metadata(&transaction, &history)?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(entry)
         }) {
-            Ok(seq) => seq,
+            Ok(entry) => entry,
             Err(error) => {
-                eprintln!("ClipRoam: 记录待上传条目失败：{error}");
+                history.last_clipboard = previous_signatures.0;
+                history.last_file_signature = previous_signatures.1;
+                history.last_image_signature = previous_signatures.2;
+                eprintln!("ClipRoam: 记录剪贴板条目失败：{error}");
                 return Ok(());
             }
         };
-        let mut entry = new_entry(seq, "image", content, device_id);
-        entry.created_at = created_at;
-        entry.image_info = Some(image_info);
-        let entry_id = entry.id.clone();
-        let entries = history.active_entries_mut();
-        entries.insert(0, entry);
-        refresh_entry_summary(&mut history, &entry_id, &cache_dir);
-        let row = history.find(&entry_id);
-        let upserts = row.into_iter().collect::<Vec<_>>();
-        crate::flush_active_history(&state, &history, &upserts)?;
-        row.map(lightweight_entry)
-            .ok_or_else(|| "剪贴板记录不存在".to_string())?
+        let mut entry = entry;
+        refresh_summary(&mut entry, &history.cached_files, &history.uploaded_files, &cache_dir);
+        lightweight_entry(&entry)
     };
-    let entry_id = entry.id.clone();
     app.emit("cliproam://entry-created", entry)
-        .map_err(|error| error.to_string())?;
-    app.emit("cliproam://entry-ready", entry_id)
         .map_err(|error| error.to_string())
 }
 

@@ -121,18 +121,6 @@ pub struct ClipboardEntry {
     pub sources: LocalSources,
 }
 
-impl ClipboardEntry {
-    /// True while any source file's content id is still unresolved. The hash
-    /// worker's resume list and the sync queue's readiness check share this
-    /// rule: an entry whose payload is not final must not be published yet.
-    pub(crate) fn hashing_pending(&self) -> bool {
-        self.sources
-            .files
-            .iter()
-            .any(|source| source.file_id.is_none())
-    }
-}
-
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntryExtra {

@@ -1,20 +1,13 @@
-//! Background hashing pipeline: files entries enter the history unresolved
-//! (`f: ""`) and get their content ids folded in here.
+//! 同步时的内容解析：files 条目带着 `f: ""` 占位树进入历史，上传队列的
+//! drain 取到该行时才在这里把内容 id（sha256）解析出来。文本与图片在捕获
+//! 时就已完成，不会走到这里。
 
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::mpsc,
-    thread,
-};
+use std::{collections::HashMap, path::Path};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::content::{hash_file, tree_parent_at_path, ClipboardEntryExtra, TreeNode};
-use crate::store::{
-    cached_hash, history_path_for_key, refresh_entry_summary,
-    remember_hash, temp_entry_seq, update_pending_entry, HistoryData,
-};
-use crate::{active_cache_dir, flush_active_history, AppState};
+use crate::content::{describe_roots, hash_file, tree_parent_at_path, ClipboardEntryExtra, TreeNode};
+use crate::store::{cached_hash, history_path_for_key, remember_hash, select_entry};
+use crate::AppState;
 
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
@@ -27,38 +20,17 @@ struct PendingHash {
     modified_at: Option<u64>,
 }
 
-pub(crate) fn queue_hashing(state: &AppState, entry_id: &str) {
-    if let Ok(sender) = state.hash_queue.lock() {
-        let _ = sender.send(entry_id.to_string());
-    }
-}
-
-pub(crate) fn pending_entry_ids(history: &HistoryData) -> Vec<String> {
-    history
-        .active_entries()
-        .iter()
-        .filter(|entry| entry.hashing_pending())
-        .map(|entry| entry.id.clone())
-        .collect()
-}
-
-/// Hashing runs on one background thread: an entry becomes visible and pasteable
-/// straight away, and only reaches the server once every content is identified.
-pub(crate) fn start_hash_worker(app: AppHandle, receiver: mpsc::Receiver<String>) {
-    thread::spawn(move || {
-        for entry_id in receiver {
-            if let Err(error) = hash_entry_files(&app, &entry_id) {
-                eprintln!("ClipRoam: 计算 {entry_id} 的内容标识失败：{error}");
-            }
-        }
-    });
-}
-
-fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
+/// Resolves every still-unresolved content id of a `files` entry, folding the
+/// results into its SQLite row. Runs when the upload queue's drain reaches the
+/// entry, or when a manual upload picks it. A vanished entry — deleted while
+/// the queue waited — ends the run quietly; the caller cleans up the queue
+/// row. Idempotent: already-resolved sources are skipped.
+pub(crate) fn resolve_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let (history_key, pending) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let Some(entry) = history.find(entry_id) else {
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let Some(entry) = state.with_database(&path, |connection| select_entry(connection, entry_id))? else {
             return Ok(());
         };
         let pending = entry
@@ -76,9 +48,7 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
         (history.active_history.clone(), pending)
     };
     if pending.is_empty() {
-        return app
-            .emit("cliproam://entry-ready", entry_id)
-            .map_err(|error| error.to_string());
+        return Ok(());
     }
 
     // The hash cache shares the pooled database connection; each lookup only
@@ -104,94 +74,86 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
             });
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            if apply_hashes(app, entry_id, &batch, false)?.is_none() {
+            if apply_hashes(app, entry_id, &batch)?.is_none() {
                 return Ok(());
-            };
+            }
             batch.clear();
         }
     }
-    if apply_hashes(app, entry_id, &batch, true)?.is_none() {
+    if !batch.is_empty() && apply_hashes(app, entry_id, &batch)?.is_none() {
         return Ok(());
-    };
-    app.emit("cliproam://entry-ready", entry_id)
-        .map_err(|error| error.to_string())
+    }
+    Ok(())
 }
 
-/// Folds resolved content ids into the entry. Only the final call persists, so
-/// progress updates stay in memory.
+/// Folds resolved content ids into the entry row. Only the SQLite row is
+/// written — the queue row keeps the capture-time payload, and the publish
+/// flow reads the resolved entry back from here.
 fn apply_hashes(
     app: &AppHandle,
     entry_id: &str,
     resolved: &[(String, Option<String>)],
-    persist: bool,
 ) -> Result<Option<String>, String> {
     let state = app.state::<AppState>();
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(&state, &history);
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let Some(mut entry) = state
+        .with_database(&path, |connection| select_entry(connection, entry_id))?
+    else {
+        // The row is gone — the entry was deleted while hashing ran. Drop
+        // silently; the caller stops the run.
+        return Ok(None);
+    };
     let hashes = resolved
         .iter()
         .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
         .collect::<HashMap<_, _>>();
-    let final_entry_id = {
-        let Some(entry) = history.find_mut(entry_id) else {
-            return Ok(None);
-        };
-        if let Some(file_info) = entry.file_info.as_mut() {
-            for (path, file_id) in resolved {
-                let Some(parent) = tree_parent_at_path(file_info, path) else {
-                    continue;
-                };
-                let leaf = path.rsplit('/').next().unwrap_or_default();
-                match file_id {
-                    Some(file_id) => {
-                        if let Some(TreeNode::File { f, .. }) = parent.get_mut(leaf) {
-                            *f = file_id.clone();
-                        }
+    if let Some(file_info) = entry.file_info.as_mut() {
+        for (path, file_id) in resolved {
+            let Some(parent) = tree_parent_at_path(file_info, path) else {
+                continue;
+            };
+            let leaf = path.rsplit('/').next().unwrap_or_default();
+            match file_id {
+                Some(file_id) => {
+                    if let Some(TreeNode::File { f, .. }) = parent.get_mut(leaf) {
+                        *f = file_id.clone();
                     }
-                    // A file that vanished between copy and hash drops out of the tree.
-                    None => {
-                        parent.shift_remove(leaf);
-                    }
+                }
+                // A file that vanished between copy and hash drops out of the tree.
+                None => {
+                    parent.shift_remove(leaf);
                 }
             }
         }
-        entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
-            Some(Some(file_id)) => {
-                source.file_id = Some((*file_id).to_string());
-                true
-            }
-            Some(None) => false,
-            None => true,
-        });
-        entry.id.clone()
+    }
+    entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
+        Some(Some(file_id)) => {
+            source.file_id = Some((*file_id).to_string());
+            true
+        }
+        Some(None) => false,
+        None => true,
+    });
+    // The tree changed, so the stored content description is refreshed too and
+    // the keyword search stays true.
+    let content = match &entry.file_info {
+        Some(file_info) => describe_roots(file_info),
+        None => entry.content.clone(),
     };
-    refresh_entry_summary(&mut history, &final_entry_id, &cache_dir);
-    if persist {
-        // The resolved tree and sources ride the row write; the entry is the
-        // only row this flush touches.
-        let upserts = history.find(&final_entry_id).into_iter().collect::<Vec<_>>();
-        flush_active_history(&state, &history, &upserts)?;
-        // The queue row carries the published payload, so the resolved tree
-        // must land there too — an unpublished files entry is only synced
-        // once its content ids are known.
-        if let Some(seq) = temp_entry_seq(&final_entry_id) {
-            if let Some(entry) = history.find(&final_entry_id) {
-                let payload = ClipboardEntryExtra::of(entry).json()?;
-                let path = history_path_for_key(&state.histories_dir, &history.active_history);
-                if let Err(error) = state.with_database(&path, |connection| {
-                    update_pending_entry(
-                        connection,
-                        seq,
-                        &entry.kind,
-                        &entry.content,
-                        &payload,
-                        &entry.created_at,
-                    )
-                }) {
-                    eprintln!("ClipRoam: 回写待上传条目失败：{error}");
-                }
-            }
-        }
+    let extra = ClipboardEntryExtra::of(&entry).json()?;
+    let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
+    let final_entry_id = entry.id.clone();
+    let changed = state.with_database(&path, |connection| {
+        connection
+            .execute(
+                "UPDATE entries SET content = ?, extra = ?, sources = ? WHERE id = ?",
+                rusqlite::params![content, extra, sources, final_entry_id],
+            )
+            .map_err(|error| error.to_string())
+    })?;
+    if changed == 0 {
+        return Ok(None);
     }
     drop(history);
     app.emit("cliproam://history-changed", ())
