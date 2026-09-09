@@ -17,7 +17,7 @@ use crate::clipboard::output::{
 };
 use crate::content::{download_path, local_source_was_lost, readable_path, MissingFile};
 use crate::history::entry_contents_of;
-use crate::store::{cached_source_for, history_path_for_key, open_history_database};
+use crate::store::{cached_source_for, history_path_for_key};
 use crate::{active_cache_dir, AppState};
 
 #[derive(Default)]
@@ -380,8 +380,12 @@ pub(crate) fn read_file_chunk(
                 // before can stand in for content that never landed locally.
                 let database_path =
                     history_path_for_key(&state.histories_dir, &history.active_history);
-                let connection = open_history_database(&database_path).ok()?;
-                cached_source_for(&connection, &file_id)
+                state
+                    .with_database(&database_path, |connection| {
+                        Ok(cached_source_for(connection, &file_id))
+                    })
+                    .ok()
+                    .flatten()
             })
             .ok_or_else(|| {
                 if source_was_lost {

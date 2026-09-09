@@ -11,10 +11,10 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::content::{hash_file, tree_parent_at_path, ClipboardEntryExtra, TreeNode};
 use crate::store::{
-    cached_hash, history_path_for_key, open_history_database, refresh_entry_summary,
+    cached_hash, history_path_for_key, refresh_entry_summary,
     remember_hash, temp_entry_seq, update_pending_entry, HistoryData,
 };
-use crate::{active_cache_dir, save_active_history, AppState};
+use crate::{active_cache_dir, flush_active_history, AppState};
 
 /// How many freshly hashed paths are folded into the entry before the UI is
 /// told about the progress.
@@ -81,17 +81,27 @@ fn hash_entry_files(app: &AppHandle, entry_id: &str) -> Result<(), String> {
             .map_err(|error| error.to_string());
     }
 
-    // A second connection keeps the hash cache off the UI thread's connection.
-    let connection = open_history_database(&history_path_for_key(&state.histories_dir, &history_key))?;
+    // The hash cache shares the pooled database connection; each lookup only
+    // holds it briefly, so hashing a large file never blocks a history write.
+    let hash_database = history_path_for_key(&state.histories_dir, &history_key);
     let mut batch = Vec::new();
     for item in pending {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
-        let file_id = cached_hash(&connection, &item.source, item.size, modified_at).or_else(|| {
-            // A file that vanished between copy and hash drops out of the tree.
-            let hashed = hash_file(Path::new(&item.source)).ok()?;
-            remember_hash(&connection, &item.source, item.size, modified_at, &hashed);
-            Some(hashed)
-        });
+        let file_id = state
+            .with_database(&hash_database, |connection| {
+                Ok(cached_hash(connection, &item.source, item.size, modified_at))
+            })
+            .ok()
+            .flatten()
+            .or_else(|| {
+                // A file that vanished between copy and hash drops out of the tree.
+                let hashed = hash_file(Path::new(&item.source)).ok()?;
+                let _ = state.with_database(&hash_database, |connection| {
+                    remember_hash(connection, &item.source, item.size, modified_at, &hashed);
+                    Ok(())
+                });
+                Some(hashed)
+            });
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
             if apply_hashes(app, entry_id, &batch, false)?.is_none() {
@@ -157,21 +167,27 @@ fn apply_hashes(
     };
     refresh_entry_summary(&mut history, &final_entry_id, &cache_dir);
     if persist {
-        save_active_history(&state, &history)?;
+        // The resolved tree and sources ride the row write; the entry is the
+        // only row this flush touches.
+        let upserts = history.find(&final_entry_id).into_iter().collect::<Vec<_>>();
+        flush_active_history(&state, &history, &upserts)?;
         // The queue row carries the published payload, so the resolved tree
         // must land there too — an unpublished files entry is only synced
         // once its content ids are known.
         if let Some(seq) = temp_entry_seq(&final_entry_id) {
             if let Some(entry) = history.find(&final_entry_id) {
                 let payload = ClipboardEntryExtra::of(entry).json()?;
-                if let Err(error) = update_pending_entry(
-                    &history_path_for_key(&state.histories_dir, &history.active_history),
-                    seq,
-                    &entry.kind,
-                    &entry.content,
-                    &payload,
-                    &entry.created_at,
-                ) {
+                let path = history_path_for_key(&state.histories_dir, &history.active_history);
+                if let Err(error) = state.with_database(&path, |connection| {
+                    update_pending_entry(
+                        connection,
+                        seq,
+                        &entry.kind,
+                        &entry.content,
+                        &payload,
+                        &entry.created_at,
+                    )
+                }) {
                     eprintln!("ClipRoam: 回写待上传条目失败：{error}");
                 }
             }

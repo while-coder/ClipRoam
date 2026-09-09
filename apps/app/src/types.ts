@@ -57,6 +57,23 @@ export type EntrySummary = {
 };
 
 export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
+
+/**
+ * Mirrors `GET /entries/manifest` on the server: keyword, kind and time-range
+ * filters, then a page of the matches. An absent `page` returns every match.
+ */
+export type EntriesManifestFilter = {
+  query?: string;
+  kind?: EntryFilter;
+  start?: number;
+  end?: number;
+  page?: number;
+};
+
+export type EntriesManifestPage = {
+  total: number;
+  entries: LocalClipboardEntry[];
+};
 export type UploadProgress = { uploadedBytes: number; totalBytes: number };
 export type DownloadProgress = { finished: number; total: number };
 export type EntryFilter = "all" | ClipboardKind;

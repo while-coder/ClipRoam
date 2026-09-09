@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::store::{history_path_for_key, load_history, retain_single_history, LOCAL_HISTORY_KEY};
-use crate::{save_active_history, AppState};
+use crate::{flush_active_history, AppState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +81,7 @@ pub(crate) fn save_sync_config(
     let pending = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         if history.active_history != history_key {
-            save_active_history(&state, &history)?;
+            flush_active_history(&state, &history, &[])?;
             let next_path = history_path_for_key(&state.histories_dir, &history_key);
             let profile_exists = next_path.exists();
             let device_id = history.device_id.clone();
@@ -94,7 +94,7 @@ pub(crate) fn save_sync_config(
             }
             *history = next_history;
         }
-        save_active_history(&state, &history)?;
+        flush_active_history(&state, &history, &[])?;
         crate::clipboard::hashing::pending_entry_ids(&history)
     };
     for entry_id in pending {

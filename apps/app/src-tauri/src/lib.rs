@@ -9,15 +9,18 @@ mod transfer;
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{mpsc, Mutex},
     thread,
 };
+use rusqlite::Connection;
 use tauri::Manager;
 
+use crate::content::ClipboardEntry;
 use store::{
     cache_dir_for, collect_local_garbage, default_active_history, history_path_for_key,
-    load_history, retain_single_history, save_history, HistoryData,
+    load_history, open_history_database, retain_single_history, flush_history, DatabasePool,
+    HistoryData,
 };
 use sync::config::SyncConfig;
 use transfer::download::{DownloadState, VirtualDownloads};
@@ -26,6 +29,9 @@ use transfer::save::SaveSession;
 struct AppState {
     history: Mutex<HistoryData>,
     histories_dir: PathBuf,
+    /// One SQLite connection per history database; opening one re-runs the
+    /// schema migration, so writes share these instead of reopening.
+    database_pool: Mutex<DatabasePool>,
     sync_config: Mutex<Option<SyncConfig>>,
     sync_config_path: PathBuf,
     downloads: Mutex<HashMap<String, DownloadState>>,
@@ -36,14 +42,29 @@ struct AppState {
     share_import: Mutex<()>,
 }
 
-fn save_active_history(
+impl AppState {
+    /// Runs `write` with the pooled connection of a history database. Lock
+    /// order: take this only while already holding `history`, never before it.
+    fn with_database<T>(
+        &self,
+        path: &Path,
+        write: impl FnOnce(&mut Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut pool = self.database_pool.lock().map_err(|error| error.to_string())?;
+        write(pool.connection(path)?)
+    }
+}
+
+/// Flushes the active history into its SQLite projection, writing the entry
+/// rows the mutation touched in the same transaction; metadata-only changes
+/// pass `&[]`.
+fn flush_active_history(
     state: &AppState,
     history: &HistoryData,
+    upserts: &[&ClipboardEntry],
 ) -> Result<(), String> {
-    save_history(
-        &history_path_for_key(&state.histories_dir, &history.active_history),
-        history,
-    )
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| flush_history(connection, history, upserts))
 }
 
 fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
@@ -68,11 +89,13 @@ pub fn run() {
                 .unwrap_or_else(default_active_history);
             let mut history = load_history(&history_path_for_key(&histories_dir, &history_key), &history_key);
             retain_single_history(&mut history, &history_key);
-            save_history(&history_path_for_key(&histories_dir, &history_key), &history)?;
+            let mut connection = open_history_database(&history_path_for_key(&histories_dir, &history_key))?;
+            flush_history(&mut connection, &history, &[])?;
             let (sender, receiver) = mpsc::channel::<String>();
             app.manage(AppState {
                 history: Mutex::new(history),
                 histories_dir,
+                database_pool: Mutex::new(DatabasePool::default()),
                 sync_config: Mutex::new(sync_config),
                 sync_config_path,
                 downloads: Mutex::new(HashMap::new()),
@@ -99,7 +122,10 @@ pub fn run() {
                 let state = handle.state::<AppState>();
                 let pending = match state.history.lock() {
                     Ok(mut history) => {
-                        let _ = collect_local_garbage(&state.histories_dir, &mut history);
+                        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+                        let _ = state.with_database(&path, |connection| {
+                            collect_local_garbage(connection, &state.histories_dir, &mut history)
+                        });
                         clipboard::hashing::pending_entry_ids(&history)
                     }
                     Err(_) => Vec::new(),
@@ -117,7 +143,8 @@ pub fn run() {
             app_shell::get_platform_capabilities,
             clipboard::capture::capture_current_clipboard_text,
             clipboard::capture::consume_mobile_shares,
-            history::list_entries,
+            history::list_entries_manifest,
+            history::list_entries_query,
             history::get_entry,
             transfer::download::list_entry_files,
             sync::remote::filter_unknown_file_ids,

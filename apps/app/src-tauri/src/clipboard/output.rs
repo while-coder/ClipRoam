@@ -9,9 +9,9 @@ use std::{
 use tauri::{AppHandle, State};
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
-use crate::store::{cached_source_for, open_history_database, refresh_entry_summary, history_path_for_key};
+use crate::store::{cached_source_for, refresh_entry_summary, history_path_for_key};
 use crate::history::entry_contents_of;
-use crate::{active_cache_dir, save_active_history, AppState};
+use crate::{active_cache_dir, flush_active_history, AppState};
 
 use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};
 
@@ -66,19 +66,20 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
         .find(entry_id)
         .cloned()
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    let hash_sources = match open_history_database(&history_path_for_key(
-        &state.histories_dir,
-        &history.active_history,
-    )) {
-        Ok(connection) => entry_contents_of(&entry)
-            .into_iter()
-            .filter(|(file_id, _)| readable_path(&cache_dir, &history.cached_files, &entry, file_id).is_none())
-            .filter_map(|(file_id, _)| {
-                cached_source_for(&connection, &file_id).map(|path| (file_id, path))
-            })
-            .collect(),
-        Err(_) => HashMap::new(),
-    };
+    let hash_database = history_path_for_key(&state.histories_dir, &history.active_history);
+    let hash_sources = state
+        .with_database(&hash_database, |connection| {
+            Ok(entry_contents_of(&entry)
+                .into_iter()
+                .filter(|(file_id, _)| {
+                    readable_path(&cache_dir, &history.cached_files, &entry, file_id).is_none()
+                })
+                .filter_map(|(file_id, _)| {
+                    cached_source_for(connection, &file_id).map(|path| (file_id, path))
+                })
+                .collect::<HashMap<String, PathBuf>>())
+        })
+        .unwrap_or_default();
     Ok(EntrySnapshot {
         entry,
         cached: history.cached_files.clone(),
@@ -169,7 +170,7 @@ pub(crate) fn activate_remote_entry(
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         record_activation_signature(&mut history, &payload);
-        save_active_history(&state, &history)?;
+        flush_active_history(&state, &history, &[])?;
     }
 
     match payload {
@@ -230,7 +231,7 @@ pub(crate) fn apply_clipboard_entry(
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         record_activation_signature(&mut history, &payload);
-        save_active_history(&state, &history)?;
+        flush_active_history(&state, &history, &[])?;
     }
 
     match payload {

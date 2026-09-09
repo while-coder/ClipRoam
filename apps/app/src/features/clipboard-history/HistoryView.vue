@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
   Check,
@@ -19,7 +19,8 @@ import {
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
-import { useHistoryPagination } from "./useHistoryPagination";
+import { useHistoryManifest } from "./useHistoryManifest";
+import { PAGE_SIZE } from "../../utils/constants";
 import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
@@ -43,6 +44,8 @@ import type {
   ClipboardEntry,
   Device,
   DownloadProgress,
+  EntriesManifestFilter,
+  EntriesManifestPage,
   EntryFilter,
   LocalClipboardEntry,
   TimeFilter,
@@ -50,7 +53,15 @@ import type {
 } from "../../types";
 
 const props = defineProps<{
-  entries: LocalClipboardEntry[];
+  /** Server-style manifest fetch: filtering and paging run in Rust. */
+  fetchManifest: (
+    filter: EntriesManifestFilter,
+    deviceNames: Record<string, string>,
+  ) => Promise<EntriesManifestPage>;
+  /** Bumped whenever the history may have changed in the background. */
+  revision: number;
+  /** Total entries across all filters — the clear-history affordance. */
+  totalEntries: number;
   devicesById: Record<string, Device>;
   syncedEntryIds: Set<string>;
   connectionStatus: { label: string; title: string; tone: string };
@@ -123,55 +134,55 @@ const timeFilterSummary = computed(() => {
   return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
 });
 
-const filteredEntries = computed(() => {
-  if (timeRangeError.value) return [];
-  const needle = query.value.trim().toLocaleLowerCase();
-  const timeRange = activeTimeRange.value;
-  return props.entries.filter((entry) => {
-    const matchesType = filter.value === "all" || entry.kind === filter.value;
-    const matchesQuery = !needle
-      || entry.content.toLocaleLowerCase().includes(needle)
-      || deviceDisplayName(props.devicesById, entry).toLocaleLowerCase().includes(needle);
-    const createdAt = new Date(entry.createdAt).getTime();
-    const matchesTime = (timeRange.start === undefined || createdAt >= timeRange.start)
-      && (timeRange.end === undefined || createdAt <= timeRange.end);
-    return matchesType && matchesQuery && matchesTime;
-  });
+const debouncedQuery = ref("");
+let queryDebounceTimer: number | undefined;
+// Typing runs the keyword filter in Rust, so the round-trip is debounced.
+watch(query, () => {
+  window.clearTimeout(queryDebounceTimer);
+  queryDebounceTimer = window.setTimeout(() => { debouncedQuery.value = query.value; }, 200);
 });
+onBeforeUnmount(() => { window.clearTimeout(queryDebounceTimer); });
 
-const filterResultSummary = computed(() => {
-  if (timeRangeError.value) return "日期有误";
-  const count = `${filteredEntries.value.length} 条`;
-  return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
-});
-
-const clearableEntryCount = computed(() => props.entries.length);
-
-watch(filteredEntries, (nextEntries) => {
-  if (!nextEntries.some((entry) => entry.id === selectedEntryId.value)) {
-    selectedEntryId.value = nextEntries[0]?.id ?? "";
-  }
-});
-
-const selectedIndex = computed(() => {
-  const index = filteredEntries.value.findIndex((entry) => entry.id === selectedEntryId.value);
-  return index >= 0 ? index : 0;
-});
+const deviceNames = computed(() =>
+  Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
+);
 
 const {
   page: currentPage,
+  total: manifestTotal,
   pageCount,
-  pagedEntries,
-  goToPageOf,
+  entries: pageEntries,
+  fetch: fetchManifestPage,
+  clear: clearManifest,
   changePage,
-} = useHistoryPagination(
-  filteredEntries,
-  [query, filter, timeFilter, startDate, endDate],
-  {
-    listElement: historyListElement,
-    getSelectedEntryId: () => selectedEntryId.value,
-    setSelectedEntryId: (id) => { selectedEntryId.value = id; },
-  },
+} = useHistoryManifest({
+  fetchManifest: props.fetchManifest,
+  deviceNames: () => deviceNames.value,
+  buildFilter: (page) => ({
+    query: debouncedQuery.value,
+    kind: filter.value,
+    start: activeTimeRange.value.start,
+    end: activeTimeRange.value.end,
+    page,
+  }),
+  revision: computed(() => props.revision),
+  filterSources: [debouncedQuery, filter, timeFilter, startDate, endDate],
+  listElement: historyListElement,
+  getSelectedEntryId: () => selectedEntryId.value,
+  setSelectedEntryId: (id) => { selectedEntryId.value = id; },
+});
+
+// An invalid custom range matches nothing — the backend never sees it.
+watch(timeRangeError, (error) => { if (error) clearManifest(); });
+
+const filterResultSummary = computed(() => {
+  if (timeRangeError.value) return "日期有误";
+  const count = `${manifestTotal.value} 条`;
+  return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
+});
+
+const selectedLocalIndex = computed(() =>
+  pageEntries.value.findIndex((entry) => entry.id === selectedEntryId.value),
 );
 
 function formatAge(createdAt: string): string {
@@ -210,11 +221,13 @@ async function startWindowDrag(event: MouseEvent): Promise<void> {
 
 async function focusSearch(): Promise<void> {
   query.value = "";
+  debouncedQuery.value = "";
   if (isPasteWindow) {
     filter.value = "all";
     timeFilter.value = "all";
   }
-  selectedEntryId.value = filteredEntries.value[0]?.id ?? "";
+  await fetchManifestPage(1, true);
+  selectedEntryId.value = pageEntries.value[0]?.id ?? "";
   await nextTick();
   searchInput.value?.focus();
 }
@@ -265,17 +278,23 @@ function activateSelectedEntry(entry?: LocalClipboardEntry): void {
 }
 
 function moveSelection(offset: -1 | 1): void {
-  if (!filteredEntries.value.length) return;
-  const index = Math.min(
-    Math.max(selectedIndex.value + offset, 0),
-    filteredEntries.value.length - 1,
-  );
-  selectedEntryId.value = filteredEntries.value[index].id;
-  goToPageOf(index);
+  if (!manifestTotal.value) return;
+  // With no selection, ArrowDown takes the first entry and ArrowUp the last;
+  // the selection index is absolute, so crossing a page boundary fetches it.
+  const currentIndex = selectedLocalIndex.value >= 0
+    ? (currentPage.value - 1) * PAGE_SIZE + selectedLocalIndex.value
+    : offset === 1 ? -1 : manifestTotal.value;
+  const nextIndex = Math.min(Math.max(currentIndex + offset, 0), manifestTotal.value - 1);
+  const targetPage = Math.floor(nextIndex / PAGE_SIZE) + 1;
+  void (async () => {
+    if (targetPage !== currentPage.value) await fetchManifestPage(targetPage);
+    const localIndex = nextIndex - (currentPage.value - 1) * PAGE_SIZE;
+    selectedEntryId.value = pageEntries.value[localIndex]?.id ?? pageEntries.value[0]?.id ?? "";
+  })();
 }
 
 async function requestClearHistory(): Promise<void> {
-  if (!clearableEntryCount.value) return;
+  if (!props.totalEntries) return;
   clearHistoryConfirmVisible.value = true;
   await nextTick();
   clearHistoryCancelButton.value?.focus();
@@ -295,8 +314,8 @@ async function closeClearHistoryConfirm(): Promise<void> {
 }
 
 async function confirmClearHistory(): Promise<void> {
-  if (clearingHistory.value || !clearableEntryCount.value) return;
-  const clearedCount = clearableEntryCount.value;
+  if (clearingHistory.value || !props.totalEntries) return;
+  const clearedCount = props.totalEntries;
   clearingHistory.value = true;
   try {
     await props.clearHistory();
@@ -351,7 +370,7 @@ function handleKeydown(event: KeyboardEvent): boolean {
   }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    activateSelectedEntry(filteredEntries.value[selectedIndex.value]);
+    activateSelectedEntry(pageEntries.value[Math.max(selectedLocalIndex.value, 0)]);
     return true;
   }
   return false;
@@ -411,8 +430,8 @@ defineExpose({ handleKeydown, focusSearch });
             ref="clearHistoryButton"
             class="clear-button"
             type="button"
-            :disabled="!clearableEntryCount"
-            :title="clearableEntryCount ? `清除 ${clearableEntryCount} 条记录` : '没有可清除的记录'"
+            :disabled="!totalEntries"
+            :title="totalEntries ? `清除 ${totalEntries} 条记录` : '没有可清除的记录'"
             @click="requestClearHistory"
           >清除</button>
         </div>
@@ -421,7 +440,7 @@ defineExpose({ handleKeydown, focusSearch });
 
     <section ref="historyListElement" class="history-list" aria-label="剪贴板历史">
       <div
-        v-for="entry in pagedEntries"
+        v-for="entry in pageEntries"
         :key="entry.id"
         class="history-item"
         :class="{ selected: selectedEntryId === entry.id, 'image-entry': entry.kind === 'image' }"
@@ -508,7 +527,7 @@ defineExpose({ handleKeydown, focusSearch });
         </span>
       </div>
 
-      <div v-if="!filteredEntries.length" class="empty-state">
+      <div v-if="!manifestTotal" class="empty-state">
         <Search :size="28" />
         <strong>{{ timeRangeError ? "日期区间无效" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
         <span>{{ timeRangeError || (timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
@@ -526,7 +545,7 @@ defineExpose({ handleKeydown, focusSearch });
       <PaginationControl
         :page="currentPage"
         :page-count="pageCount"
-        :total="filteredEntries.length"
+        :total="manifestTotal"
         @update:page="changePage"
       />
       <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
@@ -537,11 +556,11 @@ defineExpose({ handleKeydown, focusSearch });
         <span class="confirm-icon danger" aria-hidden="true"><Trash2 :size="20" /></span>
         <div class="confirm-copy">
           <h2 id="clear-history-heading">清除未固定记录？</h2>
-          <p id="clear-history-description">将永久删除 {{ clearableEntryCount }} 条未固定的剪贴板记录。已固定记录会保留，此操作无法撤销。</p>
+          <p id="clear-history-description">将永久删除 {{ totalEntries }} 条未固定的剪贴板记录。已固定记录会保留，此操作无法撤销。</p>
         </div>
         <footer class="confirm-actions">
           <button ref="clearHistoryCancelButton" class="secondary-button" type="button" :disabled="clearingHistory" @click="closeClearHistoryConfirm">取消</button>
-          <button ref="clearHistoryConfirmButton" class="danger-button" type="button" :disabled="clearingHistory || !clearableEntryCount" @click="confirmClearHistory">
+          <button ref="clearHistoryConfirmButton" class="danger-button" type="button" :disabled="clearingHistory || !totalEntries" @click="confirmClearHistory">
             <LoaderCircle v-if="clearingHistory" :size="17" class="spin" aria-hidden="true" />
             <Trash2 v-else :size="17" aria-hidden="true" />
             {{ clearingHistory ? "正在清除…" : "确认清除" }}
