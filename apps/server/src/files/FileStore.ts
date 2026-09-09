@@ -82,9 +82,11 @@ export class FileStore {
   }
 
   // Locates the preallocated upload buffer beside its eventual resting place so
-  // promoting a finished upload is a same-directory rename.
+  // promoting a finished upload is a same-directory rename. The shard directory
+  // is created by `preparePath` (called by the upload's `begin`), not here — a
+  // chunk write must not re-mkdir an existing directory per request.
   partialPath(fileId: string): string {
-    return `${this.preparePath(fileId)}.part`;
+    return `${this.path(fileId)}.part`;
   }
 
   uploadLedger(fileId: string): { size: number; chunkCount: number; bitmap: Buffer } | undefined {

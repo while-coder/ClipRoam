@@ -15,12 +15,24 @@ const UPLOAD_CANDIDATE_LIMIT: usize = 500;
 /// Every content id the durable history references, derived from the entries'
 /// extras Rust-side so the whole history never crosses the IPC boundary. The
 /// frontend asks the pool (`/files/query`) which of these it holds to render
-/// upload status; nothing is persisted locally.
+/// upload status; nothing is persisted locally. The derived set is cached on
+/// the history and invalidated by any `entries` write, so repeated calls in a
+/// refresh burst re-parse nothing.
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn history_file_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| Ok(cache_history_file_ids(connection)))
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.file_ids.is_none() {
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let ids = state.with_database(&path, |connection| Ok(cache_history_file_ids(connection)))?;
+        history.file_ids = Some(ids);
+    }
+    Ok(history
+        .file_ids
+        .as_ref()
+        .expect("the set was derived above when absent")
+        .iter()
+        .cloned()
+        .collect())
 }
 
 /// Files/image entries fully hashed whose uploadable payload fits the

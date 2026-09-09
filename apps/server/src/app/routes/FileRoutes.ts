@@ -88,6 +88,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     // this connection may stay open for minutes.
     const stream = new PassThrough();
     const session = relays.create(user.id, entryId, fileId, size, stream);
+    if (!session) {
+      return reply.code(429).send({ message: "中转会话数已达上限" });
+    }
     reply.hijack();
     reply.raw.writeHead(200, { "Content-Type": "application/octet-stream" });
     // Without a Content-Length the headers would otherwise only flush with

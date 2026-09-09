@@ -43,6 +43,7 @@ export class UploadService {
     // is promoted inside this very request.
     if (chunkCount === 0) {
       this.#discard(fileId);
+      this.files.preparePath(fileId);
       closeSync(openSync(this.files.partialPath(fileId), "w"));
       this.#promote(fileId, size);
       return { status: "stored", fileId };
@@ -159,9 +160,12 @@ export class UploadService {
   }
 
   // Sparse preallocation: holes read as zeros and only chunks whose bit is set
-  // are trusted, so disk space is paid for as it is actually written.
+  // are trusted, so disk space is paid for as it is actually written. This is
+  // also where the shard directory gets created — once per upload, not once
+  // per chunk.
   #startLedger(fileId: string, size: number, chunkCount: number): void {
     this.#discard(fileId);
+    this.files.preparePath(fileId);
     const descriptor = openSync(this.files.partialPath(fileId), "w");
     try {
       ftruncateSync(descriptor, size);

@@ -234,13 +234,17 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         let outcome = match reusable {
             Some(mut existing) => {
                 existing.created_at = created_at;
-                state.with_database(&history_path, |connection| {
+                let outcome = state.with_database(&history_path, |connection| {
                     let transaction = connection.transaction().map_err(|error| error.to_string())?;
                     upsert_entry_row(&transaction, &existing)?;
                     save_metadata(&transaction, &history)?;
                     transaction.commit().map_err(|error| error.to_string())?;
                     Ok(())
-                })
+                });
+                // A row write lands, so the derived file-id cache is stale
+                // (conservatively — only `created_at` changed here).
+                history.file_ids = None;
+                outcome
             }
             None => {
                 // The tree goes into the queue with unresolved content ids

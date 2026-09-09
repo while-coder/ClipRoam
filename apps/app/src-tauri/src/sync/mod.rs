@@ -1,8 +1,11 @@
 //! 同步账号配置与它选定的历史档案。
+//!
+//! 保存配置只更新 Rust 侧状态，不向前端发事件：前端每个保存点都显式
+//! 决定连接/断开，避免「显式 startSync + 事件回调 startSync」的竞态双连。
 
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 
 use crate::store::{history_path_for_key, load_history, save_metadata, LOCAL_HISTORY_KEY};
 use crate::AppState;
@@ -76,7 +79,6 @@ pub(crate) fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncC
 /// 保存配置；键变化时切换到新档案的历史库（设备身份带过去）。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn save_sync_config(
-    app: AppHandle,
     state: State<'_, AppState>,
     config: SyncConfig,
 ) -> Result<(), String> {
@@ -106,6 +108,5 @@ pub(crate) fn save_sync_config(
     let config = Some(config);
     write_sync_config(&state.sync_config_path, &config)?;
     *state.sync_config.lock().map_err(|error| error.to_string())? = config;
-    app.emit("cliproam://sync-config-changed", ())
-        .map_err(|error| error.to_string())
+    Ok(())
 }

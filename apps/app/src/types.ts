@@ -71,6 +71,8 @@ export type EntriesManifestFilter = {
 
 export type EntriesManifestPage = {
   total: number;
+  /** Total entries across every filter — rides every manifest response. */
+  allTotal: number;
   entries: LocalClipboardEntry[];
 };
 export type UploadProgress = { uploadedBytes: number; totalBytes: number };

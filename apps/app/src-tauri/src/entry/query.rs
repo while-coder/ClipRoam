@@ -40,6 +40,9 @@ pub struct EntriesManifestFilter {
 #[serde(rename_all = "camelCase")]
 pub struct EntriesManifestPage {
     total: usize,
+    /// Total entries across every filter — the clear-history affordance, taken
+    /// in the same pass so a refresh burst needs no separate command.
+    all_total: usize,
     entries: Vec<ClipboardEntry>,
 }
 
@@ -136,10 +139,11 @@ pub(crate) fn list_entries_manifest(
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     // Count and page come out of one pass over the same connection so a
     // concurrent capture cannot slip between them.
-    let (total, entries) = state.with_database(&path, |connection| {
+    let (total, all_total, entries) = state.with_database(&path, |connection| {
         let total = count_entries(connection, &where_sql, &values)?;
+        let all_total = count_entries(connection, "", &[])?;
         let entries = select_entries(connection, &where_sql, &newest_first_sql(limit, offset), &values)?;
-        Ok((total, entries))
+        Ok((total, all_total, entries))
     })?;
     let mut entries = entries;
     for entry in &mut entries {
@@ -147,6 +151,7 @@ pub(crate) fn list_entries_manifest(
     }
     Ok(EntriesManifestPage {
         total,
+        all_total,
         entries: entries.iter().map(lightweight_entry).collect(),
     })
 }
@@ -158,14 +163,6 @@ pub(crate) fn list_entry_ids(state: State<'_, AppState>) -> Result<Vec<String>, 
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     state.with_database(&path, |connection| select_all_entry_ids(connection))
-}
-
-/// Total entries across every filter — the clear-history affordance.
-#[tauri::command]
-pub(crate) fn total_entry_count(state: State<'_, AppState>) -> Result<usize, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| count_entries(connection, "", &[]))
 }
 
 /// The full entry, tree included — used when publishing to the server.

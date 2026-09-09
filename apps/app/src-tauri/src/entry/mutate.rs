@@ -19,7 +19,7 @@ pub(crate) fn upsert_remote_entries(
         return Ok(());
     }
     {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         // The rows go in ascending created_at order, so within one millisecond
         // the newest insert gets the highest rowid and the created_ms DESC,
@@ -34,6 +34,8 @@ pub(crate) fn upsert_remote_entries(
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
         })?;
+        // The rows changed, so the derived file-id cache is stale.
+        history.file_ids = None;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -52,6 +54,8 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(())
         })?;
+        // The row is gone, so the derived file-id cache is stale.
+        history.file_ids = None;
         // Dropping references is what frees disk space, so the sweep runs here.
         let _ = state.with_database(&path, |connection| {
             collect_local_garbage(connection, &state.histories_dir, &mut history)
