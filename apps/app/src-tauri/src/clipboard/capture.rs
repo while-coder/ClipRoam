@@ -19,6 +19,7 @@ use crate::content::{
     refresh_summary, upload_image_path, ClipboardEntry, ClipboardEntryExtra, ImageInfo,
     LocalSources,
 };
+use crate::entry::lightweight_entry;
 use crate::pending::{delete_rows_for, enqueue};
 use crate::store::{
     delete_entries_by_ids, history_path_for_key, save_metadata, select_entries, upsert_entry_row,
@@ -146,33 +147,6 @@ fn find_reusable_files_entry(
         }
     }
     Ok(None)
-}
-
-/// The frontend renders lists of hundreds of entries; shipping their trees
-/// would mean tens of thousands of nodes per refresh.
-pub(crate) fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
-    // html/rtf can be hundreds of kilobytes per rich-text entry and the list
-    // never renders them, so they stay behind `get_entry`. Built field by
-    // field: a struct-update clone would copy those strings just to drop them.
-    let mut lightweight = ClipboardEntry {
-        id: entry.id.clone(),
-        kind: entry.kind.clone(),
-        content: entry.content.clone(),
-        html: None,
-        rtf: None,
-        file_info: None,
-        image_info: None,
-        source_device_id: entry.source_device_id.clone(),
-        created_at: entry.created_at.clone(),
-        summary: entry.summary.clone(),
-        sources: LocalSources::default(),
-    };
-    if lightweight.kind == "files" {
-        if let Some(file_info) = &entry.file_info {
-            lightweight.content = describe_roots(file_info);
-        }
-    }
-    lightweight
 }
 
 pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
