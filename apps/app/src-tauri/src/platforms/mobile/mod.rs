@@ -1,6 +1,11 @@
 //! Android/iOS 共享实现：没有桌面级的剪贴板轮询、自动粘贴、托盘和
 //! 系统对话框。剪贴板读写通过 tauri clipboard-manager 插件，文件通过
-//! 系统分享接收（Android 的真实导入在 platforms/android 覆盖）。
+//! 系统分享接收（Android 的真实导入在 platforms/mobile/android 覆盖）。
+
+#[cfg(target_os = "android")]
+pub(crate) mod android;
+#[cfg(target_os = "ios")]
+pub(crate) mod ios;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};

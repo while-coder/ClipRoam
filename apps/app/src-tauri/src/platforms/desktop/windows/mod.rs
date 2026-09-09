@@ -10,10 +10,10 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-use super::desktop::{open_data_directory_with, spawn_paste_focus_loss_check};
+use super::{open_data_directory_with, spawn_paste_focus_loss_check};
 use crate::clipboard::capture::{decode_image_as_bmp, RichText};
 
-pub(crate) use super::desktop::{
+pub(crate) use super::{
     consume_pending_shares, create_windows, deliver_paste, on_window_event,
     prompt_save_destination, register_plugins, requires_paste_window, setup_desktop_shell,
     show_detached_toast, supports_native_file_export,
