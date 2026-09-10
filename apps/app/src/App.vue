@@ -1296,7 +1296,6 @@ onBeforeUnmount(() => {
       :devices-by-id="devicesById"
       :current-time="currentTime"
       @remove="removeEntry"
-      @back="activeView = 'history'"
     />
 
     <SettingsDialog
