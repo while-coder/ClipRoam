@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
-  MAX_MESSAGE_BYTES,
+  MAX_PUBLISH_BYTES,
   EntryActivateRequestSchema,
   EntryManifestQuerySchema,
   EntryPublishRequestSchema,
@@ -57,9 +57,9 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return { entries: store.listByIds(user.id, parsed.data.entryIds) } satisfies EntryQueryResponse;
   });
 
-  // Entries carry an unbounded directory tree, so the body limit matches the
-  // WebSocket maxPayload the publish message used to travel within.
-  app.post("/entries", { bodyLimit: MAX_MESSAGE_BYTES }, async (request, reply) => {
+  // Entries carry an unbounded directory tree, so the publish body needs the
+  // protocol-wide cap (MAX_PUBLISH_BYTES).
+  app.post("/entries", { bodyLimit: MAX_PUBLISH_BYTES }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     const parsed = EntryPublishRequestSchema.safeParse(request.body);
