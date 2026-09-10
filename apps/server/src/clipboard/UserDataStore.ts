@@ -42,19 +42,26 @@ export class UserDataStore {
   #applySchema(): void {
     // Identity used to be client-generated hex strings; entries now carry a
     // server-assigned rowid plus a content hash, so a pre-hash table holds
-    // rows no client can address any more and is dropped outright.
+    // rows no client can address any more and is dropped outright. Tables
+    // were once singular-named; surviving ones are renamed in place.
     const existing = this.#database
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entry'")
       .get() as { sql: string } | undefined;
     if (existing && !existing.sql.includes("hash")) this.#database.exec("DROP TABLE entry");
+    else if (existing) this.#database.exec("ALTER TABLE entry RENAME TO entries");
+    if (this.#database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'device'").get()) {
+      this.#database.exec("ALTER TABLE device RENAME TO devices");
+    }
     // Pinning was removed: the column is dropped from databases written by
     // older builds instead of being recreated.
-    const columns = this.#database.prepare("PRAGMA table_info(entry)").all() as Array<{ name: string }>;
+    const columns = this.#database.prepare("PRAGMA table_info(entries)").all() as Array<{ name: string }>;
     if (columns.some(({ name }) => name === "pinned")) {
-      this.#database.exec("ALTER TABLE entry DROP COLUMN pinned");
+      this.#database.exec("ALTER TABLE entries DROP COLUMN pinned");
     }
     this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS entry (
+      DROP INDEX IF EXISTS entry_created_at;
+
+      CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
@@ -64,9 +71,9 @@ export class UserDataStore {
         created_at TEXT NOT NULL
       );
 
-      CREATE INDEX IF NOT EXISTS entry_created_at ON entry (created_at DESC);
+      CREATE INDEX IF NOT EXISTS entries_created_at ON entries (created_at DESC);
 
-      CREATE TABLE IF NOT EXISTS device (
+      CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
         device_info TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -97,14 +104,14 @@ export class UserDataStore {
     const rows = this.#database
       .prepare(`
         SELECT id
-        FROM entry
+        FROM entries
         ${where}
         ORDER BY created_at DESC
         LIMIT @limit OFFSET @offset
       `)
       .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number }>;
     const { count } = this.#database
-      .prepare(`SELECT COUNT(*) AS count FROM entry ${where}`)
+      .prepare(`SELECT COUNT(*) AS count FROM entries ${where}`)
       .get(filters) as { count: number };
     return {
       manifest: rows.map(({ id }) => ({ id: String(id) })),
@@ -120,7 +127,7 @@ export class UserDataStore {
       const rows = this.#database
         .prepare(`
           SELECT id, kind, content, extra, source_device_id, created_at
-          FROM entry
+          FROM entries
           WHERE id IN (${ids.map(() => "?").join(",")})
           ORDER BY created_at DESC
         `)
@@ -140,14 +147,14 @@ export class UserDataStore {
       osVersion: device.osVersion,
     };
     this.#database.prepare(`
-      INSERT INTO device (device_id, device_info, updated_at)
+      INSERT INTO devices (device_id, device_info, updated_at)
       VALUES (?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET device_info = excluded.device_info, updated_at = excluded.updated_at
     `).run(device.id, JSON.stringify(deviceInfo), new Date().toISOString());
   }
 
   listDevices(): Device[] {
-    const rows = this.#database.prepare("SELECT device_id, device_info FROM device ORDER BY updated_at DESC")
+    const rows = this.#database.prepare("SELECT device_id, device_info FROM devices ORDER BY updated_at DESC")
       .all() as Array<{ device_id: string; device_info: string }>;
     return rows.flatMap(({ device_id, device_info }) => {
       const result = DeviceSchema.safeParse({
@@ -173,7 +180,7 @@ export class UserDataStore {
     });
     const row = this.#transaction(() => {
       const row = this.#database.prepare(`
-        INSERT INTO entry (
+        INSERT INTO entries (
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at
@@ -199,14 +206,14 @@ export class UserDataStore {
   // Content is shared across entries, so deletion only drops the reference.
   // Unreferenced bytes are reclaimed by collectGarbage().
   delete(entryId: string): void {
-    this.#database.prepare("DELETE FROM entry WHERE id = ?").run(entryId);
+    this.#database.prepare("DELETE FROM entries WHERE id = ?").run(entryId);
   }
 
   // The server-wide pool owns collection. This returns this account's mark set
   // so ClipRoamStore can union it with every other account before reclaiming.
   referencedFileIds(): Set<string> {
     const referenced = new Set<string>();
-    const rows = this.#database.prepare("SELECT kind, extra FROM entry").all() as Array<{ kind: string; extra: string }>;
+    const rows = this.#database.prepare("SELECT kind, extra FROM entries").all() as Array<{ kind: string; extra: string }>;
     for (const row of rows) {
       for (const { fileId } of entryContents({ kind: row.kind, ...parseExtra(row.extra) })) referenced.add(fileId);
     }
@@ -214,7 +221,7 @@ export class UserDataStore {
   }
 
   hasFileReference(entryId: string, downloadId: string): boolean {
-    const row = this.#database.prepare("SELECT kind, extra FROM entry WHERE id = ?")
+    const row = this.#database.prepare("SELECT kind, extra FROM entries WHERE id = ?")
       .get(entryId) as { kind: string; extra: string } | undefined;
     return Boolean(row && entryContents({ kind: row.kind, ...parseExtra(row.extra) })
       .some(({ fileId }) => fileId === downloadId));
