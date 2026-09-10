@@ -310,7 +310,7 @@ kbd {
   scrollbar-width: none;
 }
 .filter-scroll::-webkit-scrollbar { display: none; }
-.filter-scroll > button, .clear-button {
+.filter-scroll > button {
   flex: 0 0 auto;
   height: 27px;
   padding: 0 9px;
@@ -334,9 +334,6 @@ kbd {
 }
 .result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .result-summary.error { color: #fca5a5; }
-.clear-button { color: #64748b; }
-.clear-button:hover:not(:disabled) { color: #fca5a5; background: rgba(220, 38, 38, 0.08); }
-
 .toast-window-shell { width: 100%; height: 100%; background: transparent; }
 .toast-layer {
   position: fixed;
@@ -1012,7 +1009,7 @@ button:focus-visible, [role="button"]:focus-visible {
   padding-bottom: 2px;
 }
 .mobile-app .filter-scroll { gap: 8px; }
-.mobile-app .filter-scroll > button, .mobile-app .clear-button { min-height: 44px; padding-inline: 14px; }
+.mobile-app .filter-scroll > button { min-height: 44px; padding-inline: 14px; }
 .mobile-app .filter-actions { gap: 8px; padding-left: 8px; }
 .mobile-app .result-summary { max-width: 92px; }
 .mobile-app .empty-filter-reset { min-height: 44px; padding-inline: 14px; font-size: 13px; }

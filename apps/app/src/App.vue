@@ -78,8 +78,6 @@ const { initUpdaterVersion } = useUpdater();
  */
 const pendingEntries = ref<LocalClipboardEntry[]>([]);
 const pendingCount = ref(0);
-/** Total entries across every filter; backs the clear-history affordance. */
-const totalEntryCount = ref(0);
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
@@ -212,7 +210,6 @@ function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<strin
   const page = filter.page;
   return {
     total: matched.length,
-    allTotal: previewEntries.value.length,
     entries: page ? matched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : matched,
   };
 }
@@ -222,13 +219,9 @@ async function fetchManifest(
   deviceNames: Record<string, string>,
 ): Promise<EntriesManifestPage> {
   if (!runningInTauri) {
-    const page = clientManifest(filter, deviceNames);
-    totalEntryCount.value = previewEntries.value.length;
-    return page;
+    return clientManifest(filter, deviceNames);
   }
-  const page = await invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
-  totalEntryCount.value = page.allTotal;
-  return page;
+  return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
 }
 
 /** The pending-sync list re-queries Rust; the browser preview derives it. */
@@ -706,33 +699,6 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
   }
 }
 
-// Invoked from the history view once its confirm dialog was accepted; the view
-// owns the dialog state, the toast and the post-clear focus.
-async function clearHistory(): Promise<void> {
-  const client = syncClient;
-  if (!client) throw new Error("网络异常，暂时无法清空，请检查同步连接");
-  const entryIds = runningInTauri
-    ? await invoke<string[]>("list_entry_ids")
-    : previewEntries.value.map((entry) => entry.id);
-  let failures = 0;
-  for (const entryId of entryIds) {
-    await client.delete(entryId).catch(() => { failures += 1; });
-  }
-  if (failures > 0) throw new Error(`${failures} 条记录删除失败，请重试`);
-  // Each entry's local cleanup rides its own `clipboard.deleted` echo. Pending
-  // rows never reached the server; they are dropped locally, or the drain
-  // would republish them right after the clear.
-  if (runningInTauri) {
-    const pending = await invoke<LocalClipboardEntry[]>("list_pending_entries").catch(() => []);
-    for (const entry of pending) {
-      const seq = pendingSeqOf(entry.id);
-      if (seq !== null) {
-        await invoke("dequeue_pending_entry", { seq }).catch(() => undefined);
-      }
-    }
-  }
-}
-
 async function getDevice(): Promise<Device> {
   const osVersion = detectOsVersion();
   if (!runningInTauri) {
@@ -959,16 +925,17 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
       knownSynced.add(entry.id);
     }
     syncedEntryIds.value = knownSynced;
-    // Read the durable history rather than the rendered list. The latter can
-    // be stale while another Tauri window is refreshing it; ids alone suffice
-    // for the diff, so no whole-history read is needed.
-    const localEntryIds = runningInTauri
-      ? await invoke<string[]>("list_entry_ids")
-      : previewEntries.value.map((entry) => entry.id);
-    const localClientIds = new Set(localEntryIds);
-    const remoteOnlyEntryIds = manifest
-      .filter((entry) => !localClientIds.has(entry.id))
-      .map((entry) => entry.id);
+    // The diff runs Rust-side: the manifest carries at most one page of ids,
+    // so membership is tested in SQL rather than hauling every local id across
+    // the IPC boundary. The preview diffs its in-memory list instead.
+    const localPreviewIds = new Set(previewEntries.value.map((entry) => entry.id));
+    const remoteOnlyEntryIds = runningInTauri
+      ? await invoke<string[]>("missing_entry_ids", {
+          entryIds: manifest.map((entry) => entry.id),
+        })
+      : manifest
+          .filter((entry) => !localPreviewIds.has(entry.id))
+          .map((entry) => entry.id);
     const remoteEntries = await client.fetchEntries(remoteOnlyEntryIds);
 
     // One batch write for the whole gap instead of a full history rewrite and
@@ -1317,7 +1284,6 @@ onBeforeUnmount(() => {
       ref="historyView"
       :fetch-manifest="fetchManifest"
       :revision="historyRevision"
-      :total-entries="totalEntryCount"
       :devices-by-id="devicesById"
       :synced-entry-ids="syncedEntryIds"
       :connection-status="connectionStatus"
@@ -1329,7 +1295,6 @@ onBeforeUnmount(() => {
       :download-progress-by-entry-id="downloadProgressByEntryId"
       :stored-file-ids="storedFileIds"
       :ensure-local-files="ensureLocalFiles"
-      :clear-history="clearHistory"
       @activate="activateFromView"
       @remove="removeEntry"
       @save="saveEntry"

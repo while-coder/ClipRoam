@@ -58,8 +58,6 @@ const props = defineProps<{
   ) => Promise<EntriesManifestPage>;
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
-  /** Total entries across all filters — the clear-history affordance. */
-  totalEntries: number;
   devicesById: Record<string, Device>;
   syncedEntryIds: Set<string>;
   connectionStatus: { label: string; title: string; tone: string };
@@ -72,7 +70,6 @@ const props = defineProps<{
   /** Contents the server pool holds, queried live; undefined when offline. */
   storedFileIds: Set<string> | undefined;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
-  clearHistory: () => Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -91,17 +88,12 @@ const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
 const endDate = ref("");
 const selectedEntryId = ref("");
-const clearHistoryConfirmVisible = ref(false);
-const clearingHistory = ref(false);
 const capturingClipboard = ref(false);
 const previewImage = ref<LocalClipboardEntry>();
 const previewLoading = ref(false);
 const previewDialog = ref<HTMLElement>();
 const searchInput = ref<HTMLInputElement>();
 const historyListElement = ref<HTMLElement>();
-const clearHistoryButton = ref<HTMLButtonElement>();
-const clearHistoryCancelButton = ref<HTMLButtonElement>();
-const clearHistoryConfirmButton = ref<HTMLButtonElement>();
 
 const timeRangeError = computed(() => (
   timeFilter.value === "custom" ? validateDateRange(startDate.value, endDate.value) : ""
@@ -291,41 +283,10 @@ function moveSelection(offset: -1 | 1): void {
   })();
 }
 
-async function requestClearHistory(): Promise<void> {
-  if (!props.totalEntries) return;
-  clearHistoryConfirmVisible.value = true;
-  await nextTick();
-  clearHistoryCancelButton.value?.focus();
-}
-
 function resetTimeFilter(): void {
   timeFilter.value = "all";
   startDate.value = "";
   endDate.value = "";
-}
-
-async function closeClearHistoryConfirm(): Promise<void> {
-  if (clearingHistory.value) return;
-  clearHistoryConfirmVisible.value = false;
-  await nextTick();
-  clearHistoryButton.value?.focus();
-}
-
-async function confirmClearHistory(): Promise<void> {
-  if (clearingHistory.value || !props.totalEntries) return;
-  const clearedCount = props.totalEntries;
-  clearingHistory.value = true;
-  try {
-    await props.clearHistory();
-    clearHistoryConfirmVisible.value = false;
-    showToast(`已清除 ${clearedCount} 条未固定记录`, "success");
-    await nextTick();
-    searchInput.value?.focus();
-  } catch (error) {
-    showToast(`清除历史失败：${errorMessage(error)}`, "error");
-  } finally {
-    clearingHistory.value = false;
-  }
 }
 
 /**
@@ -334,21 +295,6 @@ async function confirmClearHistory(): Promise<void> {
  * when the key was handled and should not fall through to window hiding.
  */
 function handleKeydown(event: KeyboardEvent): boolean {
-  if (clearHistoryConfirmVisible.value) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      void closeClearHistoryConfirm();
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      const cancelButton = clearHistoryCancelButton.value;
-      const confirmButton = clearHistoryConfirmButton.value;
-      const focusConfirm = event.shiftKey
-        ? document.activeElement === cancelButton
-        : document.activeElement !== confirmButton;
-      (focusConfirm ? confirmButton : cancelButton)?.focus();
-    }
-    return true;
-  }
   if (previewImage.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -423,15 +369,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         </div>
         <div class="filter-actions">
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
-          <button
-            v-if="!isPasteWindow"
-            ref="clearHistoryButton"
-            class="clear-button"
-            type="button"
-            :disabled="!totalEntries"
-            :title="totalEntries ? `清除 ${totalEntries} 条记录` : '没有可清除的记录'"
-            @click="requestClearHistory"
-          >清除</button>
         </div>
       </div>
     </section>
@@ -538,24 +475,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       />
       <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
     </footer>
-
-    <div v-if="clearHistoryConfirmVisible" class="confirm-backdrop" @mousedown.self="closeClearHistoryConfirm">
-      <section class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="clear-history-heading" aria-describedby="clear-history-description">
-        <span class="confirm-icon danger" aria-hidden="true"><Trash2 :size="20" /></span>
-        <div class="confirm-copy">
-          <h2 id="clear-history-heading">清除未固定记录？</h2>
-          <p id="clear-history-description">将永久删除 {{ totalEntries }} 条未固定的剪贴板记录。已固定记录会保留，此操作无法撤销。</p>
-        </div>
-        <footer class="confirm-actions">
-          <button ref="clearHistoryCancelButton" class="secondary-button" type="button" :disabled="clearingHistory" @click="closeClearHistoryConfirm">取消</button>
-          <button ref="clearHistoryConfirmButton" class="danger-button" type="button" :disabled="clearingHistory || !totalEntries" @click="confirmClearHistory">
-            <LoaderCircle v-if="clearingHistory" :size="17" class="spin" aria-hidden="true" />
-            <Trash2 v-else :size="17" aria-hidden="true" />
-            {{ clearingHistory ? "正在清除…" : "确认清除" }}
-          </button>
-        </footer>
-      </section>
-    </div>
 
     <div v-if="previewImage" class="image-preview-backdrop" @mousedown.self="closeImagePreview">
       <section ref="previewDialog" class="image-preview-dialog" role="dialog" aria-modal="true" :aria-label="previewImage.content" tabindex="-1">

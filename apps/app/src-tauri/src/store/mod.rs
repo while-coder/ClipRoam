@@ -261,17 +261,6 @@ pub fn newest_first_sql(limit: Option<usize>, offset: usize) -> String {
     sql
 }
 
-pub fn select_all_entry_ids(connection: &Connection) -> Result<Vec<String>, String> {
-    let sql = format!("SELECT id FROM entries{}", newest_first_sql(None, 0));
-    let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
-    let ids = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(ids)
-}
-
 pub fn load_history(path: &Path, key: &str) -> HistoryData {
     let mut history = HistoryData {
         active_history: key.to_string(),
