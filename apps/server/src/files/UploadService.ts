@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, fdatasyncSync, ftruncateSync, openSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { FILE_CHUNK_SIZE, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
 import { countWrittenChunks, isBitmapFull, zeroBitmap, type FileStore } from "./FileStore.js";
-import type { ServerConfig } from "../app/ServerConfig.js";
+import { HOUR, MEGABYTE, type ServerConfig } from "../app/ServerConfig.js";
 
 // An upload failure the HTTP routes translate into a status code verbatim.
 export class UploadHttpError extends Error {
@@ -37,7 +37,7 @@ export class UploadService {
     if (this.files.has(fileId)) {
       return { status: "stored", fileId };
     }
-    if (size >= this.config.maxStoredFileBytes) throw new UploadHttpError(413, "文件超过服务器存储上限");
+    if (size >= this.config.maxStoredFileMb * MEGABYTE) throw new UploadHttpError(413, "文件超过服务器存储上限");
     const chunkCount = Math.ceil(size / FILE_CHUNK_SIZE);
     // An empty content has no chunks: the buffer is complete on arrival, so it
     // is promoted inside this very request.
@@ -150,9 +150,9 @@ export class UploadService {
   #usableLedger(fileId: string, size: number, chunkCount: number): Ledger | undefined {
     const ledger = this.files.uploadLedger(fileId);
     if (!ledger || ledger.size !== size || ledger.chunkCount !== chunkCount) return undefined;
-    if (this.config.resumableUploadTtlMs === 0) return undefined;
+    if (this.config.resumableUploadTtlHours === 0) return undefined;
     try {
-      if (Date.now() - statSync(this.files.partialPath(fileId)).mtimeMs > this.config.resumableUploadTtlMs) return undefined;
+      if (Date.now() - statSync(this.files.partialPath(fileId)).mtimeMs > this.config.resumableUploadTtlHours * HOUR) return undefined;
     } catch {
       return undefined;
     }
