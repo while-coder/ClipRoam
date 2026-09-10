@@ -244,7 +244,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   border-radius: 7px;
 }
 .titlebar-actions { align-self: stretch; gap: 8px; }
-.paste-drag-strip { height: 6px; cursor: grab; }
+/* 快捷粘贴窗口首行是整个标题行高度，拖拽条要填满整行，别留不可拖的空白 */
+.paste-drag-strip { height: 100%; min-height: 6px; cursor: grab; }
 .paste-drag-strip:active { cursor: grabbing; }
 .icon-button {
   display: grid;
@@ -487,15 +488,17 @@ button.image-thumbnail { cursor: zoom-in; }
 .empty-filter-reset { min-height: 32px; margin-top: 4px; padding: 0 11px; color: #bfdbfe; background: rgba(37, 99, 235, 0.14); border: 1px solid rgba(96, 165, 250, 0.24); border-radius: 7px; font-size: 11px; cursor: pointer; }
 .empty-filter-reset:hover { background: rgba(37, 99, 235, 0.22); }
 .footer-hint {
-  gap: 16px;
+  gap: 10px;
   color: #64748b;
   border-top: 1px solid rgba(255, 255, 255, 0.07);
   font-size: 10px;
+  /* 单行排布：空间不足时整行裁剪，绝不断行 */
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
 }
-.footer-hint span { display: flex; align-items: center; gap: 4px; }
-.footer-hint .privacy { margin-left: auto; color: #4ade80; }
-.pagination-control { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.pagination-control + .privacy { margin-left: 0; }
+.footer-hint span { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.pagination-control { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
 .pagination-button {
   display: flex;
   align-items: center;
@@ -534,6 +537,10 @@ button.image-thumbnail { cursor: zoom-in; }
   background: #10192e;
 }
 .paste-app { display: block; }
+/* 快捷粘贴窗口没有标题栏：搜索/筛选工具栏整体兼作拖拽区（控件除外） */
+.paste-app .toolbar { cursor: grab; user-select: none; }
+.paste-app .toolbar:active { cursor: grabbing; }
+.paste-app .footer-hint { gap: 8px; }
 .paste-app .app-content {
   height: 100%;
   border: 0;
@@ -1048,7 +1055,6 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-app .item-action { width: 44px; height: 44px; border-radius: 10px; }
 .mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
-.mobile-app .footer-hint .privacy { margin-left: auto; }
 .mobile-app .settings-backdrop { padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0); }
 .mobile-app .settings-dialog { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; }
 .mobile-app .settings-dialog-header { min-height: 60px; padding-inline: 16px; }
