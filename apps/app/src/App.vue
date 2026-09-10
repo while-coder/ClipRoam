@@ -1273,7 +1273,6 @@ onBeforeUnmount(() => {
       :fetch-manifest="fetchManifest"
       :revision="historyRevision"
       :devices-by-id="devicesById"
-      :synced-entry-ids="syncedEntryIds"
       :connection-status="connectionStatus"
       :current-time="currentTime"
       :importing-share="importingShare"
@@ -1295,6 +1294,7 @@ onBeforeUnmount(() => {
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"
+      :upload-progress-by-entry-id="uploadProgressByEntryId"
       @remove="removeEntry"
     />
 

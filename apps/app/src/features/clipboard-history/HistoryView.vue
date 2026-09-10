@@ -35,7 +35,6 @@ import {
   deviceName as deviceDisplayName,
   fileEntrySummary,
   saveEntryLabel,
-  syncStatusLabel,
   uploadStatus as uploadStatusOf,
 } from "../../utils/entry";
 import type {
@@ -59,7 +58,6 @@ const props = defineProps<{
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
   devicesById: Record<string, Device>;
-  syncedEntryIds: Set<string>;
   connectionStatus: { label: string; title: string; tone: string };
   currentTime: number;
   importingShare: boolean;
@@ -177,10 +175,6 @@ const selectedLocalIndex = computed(() =>
 
 function formatAge(createdAt: string): string {
   return formatAgeRelative(createdAt, props.currentTime);
-}
-
-function isEntrySynced(entry: ClipboardEntry): boolean {
-  return props.syncedEntryIds.has(entry.id);
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
@@ -417,8 +411,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
             <Monitor :size="12" /> {{ deviceDisplayName(props.devicesById, entry) }}
             <span>·</span>
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
-            <span>·</span>
-            <span class="sync-status" role="img" :title="syncStatusLabel(isEntrySynced(entry))" :aria-label="syncStatusLabel(isEntrySynced(entry))">{{ isEntrySynced(entry) ? "☁️" : "⏳" }}</span>
             <template v-if="fileEntrySummary(entry)">
               <span>·</span>
               <span>{{ fileEntrySummary(entry) }}</span>

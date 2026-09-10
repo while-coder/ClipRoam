@@ -8,9 +8,9 @@ import {
   Monitor,
   Trash2,
 } from "lucide-vue-next";
-import { deviceName as deviceDisplayName } from "../../utils/entry";
+import { deviceName as deviceDisplayName, isHashing } from "../../utils/entry";
 import { formatAge as formatAgeRelative, formatExactDateTime } from "../../utils/format";
-import type { ClipboardEntry, Device, LocalClipboardEntry } from "../../types";
+import type { ClipboardEntry, Device, LocalClipboardEntry, UploadProgress } from "../../types";
 
 /**
  * Everything in this list shares one state — 未同步. Once an entry reaches the
@@ -21,6 +21,7 @@ const props = defineProps<{
   entries: LocalClipboardEntry[];
   devicesById: Record<string, Device>;
   currentTime: number;
+  uploadProgressByEntryId: Record<string, UploadProgress>;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +30,20 @@ const emit = defineEmits<{
 
 function formatAge(createdAt: string): string {
   return formatAgeRelative(createdAt, props.currentTime);
+}
+
+/**
+ * 队列行的两个进行中阶段：哈希进度来自 Rust 分批写回的 summary（hashCount
+ * 落后于 fileCount 即在算），上传进度由同步客户端按 `p{seq}` 实时上报。
+ */
+function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
+  if (isHashing(entry)) return `计算中 ${entry.summary.hashedCount}/${entry.summary.fileCount}`;
+  const progress = props.uploadProgressByEntryId[entry.id];
+  if (!progress) return undefined;
+  const percent = progress.totalBytes
+    ? Math.min(99, Math.floor((progress.uploadedBytes / progress.totalBytes) * 100))
+    : 0;
+  return `上传中 ${percent}%`;
 }
 </script>
 
@@ -59,6 +74,10 @@ function formatAge(createdAt: string): string {
             <Monitor :size="12" /> {{ deviceDisplayName(props.devicesById, entry) }}
             <span>·</span>
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
+            <template v-if="entryUploadStatus(entry)">
+              <span>·</span>
+              <span class="upload-status uploading">{{ entryUploadStatus(entry) }}</span>
+            </template>
           </span>
         </span>
         <span class="entry-actions">

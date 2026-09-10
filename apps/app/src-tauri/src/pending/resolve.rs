@@ -3,14 +3,16 @@
 //! 图片在捕获时就已完成，不会走到这里。
 
 use std::collections::HashMap;
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::{list_rows, row_entry};
 use crate::content::{
     describe_roots, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
 };
-use crate::file::source_file_hash;
+use crate::file::{cached_file_hash, remember_file_hash};
 use crate::store::history_path_for_key;
+use crate::utils::hash_file;
 use crate::AppState;
 
 /// How many freshly hashed paths are folded into the row before the UI is
@@ -64,14 +66,29 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
     let mut batch = Vec::new();
     for item in pending {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
-        let file_id = state
+        // The pool lock only covers the two quick cache reads/writes; the hash
+        // itself runs unlocked — hashing a large file takes a while and every
+        // database command queues behind the pool.
+        let cached = state
             .with_database(&hash_database, |connection| {
-                // A file that vanished between copy and hash hashes to None
-                // and drops out of the tree.
-                Ok(source_file_hash(connection, &item.source, item.size, modified_at))
+                Ok(cached_file_hash(connection, &item.source, item.size, modified_at))
             })
             .ok()
             .flatten();
+        let file_id = match cached {
+            Some(hash) => Some(hash),
+            None => {
+                // A file that vanished between copy and hash hashes to None
+                // and drops out of the tree.
+                hash_file(Path::new(&item.source)).ok().map(|hashed| {
+                    let _ = state.with_database(&hash_database, |connection| {
+                        remember_file_hash(connection, &item.source, item.size, modified_at, &hashed);
+                        Ok(())
+                    });
+                    hashed
+                })
+            }
+        };
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
             apply_hashes(app, seq, &mut entry, &batch)?;

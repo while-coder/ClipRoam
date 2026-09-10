@@ -78,7 +78,3 @@ export function saveEntryLabel(entry: LocalClipboardEntry, savingEntryId: string
   if (savingEntryId === entry.id) return isMobile ? "正在下载…" : "正在另存为…";
   return isMobile ? "下载到本机缓存" : "另存为…";
 }
-
-export function syncStatusLabel(synced: boolean): string {
-  return synced ? "已同步到服务器" : "未同步到服务器";
-}
