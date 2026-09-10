@@ -271,7 +271,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
 // server already holds the whole content, nothing left to send. `ready`:
 // `begin` is handing out the chunk ledger, start sending. `accepted`: the
 // chunk landed but the file is not complete yet, keep going.
-export const UploadStatus = {
+export const UPLOAD_STATUS = {
   stored: "stored",
   ready: "ready",
   accepted: "accepted",
@@ -289,18 +289,18 @@ export const UploadBeginRequestSchema = z.object({
 });
 
 export const UploadBeginResponseSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
+  z.object({ status: z.literal(UPLOAD_STATUS.stored), fileId: FileIdSchema }),
   z.object({
-    status: z.literal(UploadStatus.ready),
+    status: z.literal(UPLOAD_STATUS.ready),
     missingChunks: z.string(),
     receivedBytes: z.number().int().nonnegative(),
   }),
 ]);
 
 export const UploadChunkResponseSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal(UploadStatus.stored), fileId: FileIdSchema }),
+  z.object({ status: z.literal(UPLOAD_STATUS.stored), fileId: FileIdSchema }),
   z.object({
-    status: z.literal(UploadStatus.accepted),
+    status: z.literal(UPLOAD_STATUS.accepted),
     missingChunks: z.string(),
     receivedBytes: z.number().int().nonnegative(),
   }),

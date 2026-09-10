@@ -2,23 +2,23 @@ import { createSecureContext } from "node:tls";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tlsDirectory } from "../DataPaths.js";
+import { TLS_MAX_PEM_BYTES } from "../app/ServerConfig.js";
 
 export type TlsOptions = { cert: Buffer; key: Buffer };
 export type TlsStatus = { enabled: boolean; source: "managed" | "none" };
 
-const certFile = join(tlsDirectory, "cert.pem");
-const keyFile = join(tlsDirectory, "key.pem");
-const maxPemBytes = 1_024 * 1_024;
+const CERT_FILE = join(tlsDirectory, "cert.pem");
+const KEY_FILE = join(tlsDirectory, "key.pem");
 
 export class TlsCertificateService {
   #options: TlsOptions | undefined;
   #source: TlsStatus["source"] = "none";
 
   constructor() {
-    if (existsSync(certFile) !== existsSync(keyFile)) {
+    if (existsSync(CERT_FILE) !== existsSync(KEY_FILE)) {
       throw new Error("Managed TLS certificate and key files must both exist.");
     }
-    if (existsSync(certFile)) this.#setOptions(readCertificateFiles(certFile, keyFile), "managed");
+    if (existsSync(CERT_FILE)) this.#setOptions(readCertificateFiles(CERT_FILE, KEY_FILE), "managed");
   }
 
   get options(): TlsOptions | undefined { return this.#options; }
@@ -28,15 +28,15 @@ export class TlsCertificateService {
     if (typeof cert !== "string" || typeof key !== "string" || !cert.trim() || !key.trim()) {
       throw new Error("Certificate and private key are required.");
     }
-    if (Buffer.byteLength(cert) > maxPemBytes || Buffer.byteLength(key) > maxPemBytes) {
+    if (Buffer.byteLength(cert) > TLS_MAX_PEM_BYTES || Buffer.byteLength(key) > TLS_MAX_PEM_BYTES) {
       throw new Error("Certificate or private key is too large.");
     }
 
     const options = { cert: Buffer.from(cert), key: Buffer.from(key) };
     validateOptions(options);
     mkdirSync(tlsDirectory, { recursive: true });
-    writeAtomically(certFile, options.cert, 0o644);
-    writeAtomically(keyFile, options.key, 0o600);
+    writeAtomically(CERT_FILE, options.cert, 0o644);
+    writeAtomically(KEY_FILE, options.key, 0o600);
     this.#setOptions(options, "managed");
     return options;
   }
@@ -46,8 +46,8 @@ export class TlsCertificateService {
       throw new Error("No managed TLS certificate is configured.");
     }
 
-    rmSync(certFile, { force: true });
-    rmSync(keyFile, { force: true });
+    rmSync(CERT_FILE, { force: true });
+    rmSync(KEY_FILE, { force: true });
     this.#options = undefined;
     this.#source = "none";
   }

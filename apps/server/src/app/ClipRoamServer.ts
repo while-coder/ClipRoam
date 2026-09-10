@@ -13,7 +13,7 @@ import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
-import { loadServerConfig, SERVER_DEFAULTS, type ServerConfig } from "./ServerConfig.js";
+import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, SERVER_PORT, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
@@ -57,7 +57,7 @@ export class ClipRoamServer {
     this.#registerRoutes();
     this.#collectionTimer = setInterval(() => {
       this.#collectGarbage();
-    }, SERVER_DEFAULTS.garbageCollectionIntervalMs);
+    }, GARBAGE_COLLECTION_INTERVAL_MS);
     this.#collectionTimer.unref();
     await this.#app.listen({ port: this.config.port, host: "0.0.0.0" });
   }

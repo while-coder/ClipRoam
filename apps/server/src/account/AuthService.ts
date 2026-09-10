@@ -1,12 +1,13 @@
 import { AuthCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol";
+import { LOGIN_ATTEMPT_WINDOW_MS, LOGIN_BLOCKED_FOR_MS, LOGIN_MAX_ATTEMPTS } from "../app/ServerConfig.js";
 import { AttemptThrottle } from "../common/AttemptThrottle.js";
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 
 export type HttpResult = { statusCode: number; payload: unknown };
 
 export class AuthService {
-  // 5 bad credentials in 5 minutes block the key (ip + username) for a minute.
-  #throttle = new AttemptThrottle({ maxAttempts: 5, windowMs: 5 * 60_000, blockedForMs: 60_000 });
+  // WINDOW_MS 内失败 MAX_ATTEMPTS 次即封锁 BLOCKED_FOR_MS（键为 ip:username）。
+  #throttle = new AttemptThrottle({ maxAttempts: LOGIN_MAX_ATTEMPTS, windowMs: LOGIN_ATTEMPT_WINDOW_MS, blockedForMs: LOGIN_BLOCKED_FOR_MS });
 
   constructor(private readonly store: ClipRoamStore) {}
 
