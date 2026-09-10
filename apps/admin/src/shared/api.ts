@@ -3,11 +3,15 @@ export type TransferSettings = { maxStoredFileMb: number; resumableUploadTtlHour
 export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
 export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; lastSeenAt: string };
+export type AdminFile = { fileId: string; size: number; stored: boolean; createdAt: string };
+export type FileStats = { count: number; storedCount: number; storedBytes: number };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/admin-api/${path}`, {
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    // Only body-carrying requests declare JSON: Fastify rejects a body-less
+    // DELETE that claims an application/json payload.
+    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
     ...init,
   });
   const body = await response.json().catch(() => ({})) as { message?: string } & T;
@@ -49,6 +53,16 @@ export async function fetchUserDevices(userId: string): Promise<AdminDevice[]> {
 
 export async function deleteUserDevice(userId: string, deviceId: string): Promise<void> {
   await request(`users/${userId}/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+}
+
+export async function fetchFiles(search = ""): Promise<{ files: AdminFile[]; total: number; stats: FileStats }> {
+  const keyword = search.trim();
+  const query = keyword ? `?search=${encodeURIComponent(keyword)}` : "";
+  return request<{ files: AdminFile[]; total: number; stats: FileStats }>(`files${query}`);
+}
+
+export async function deleteFile(fileId: string): Promise<void> {
+  await request(`files/${encodeURIComponent(fileId)}`, { method: "DELETE" });
 }
 
 export async function updateTransferSettings(settings: TransferSettings): Promise<TransferSettings> {

@@ -13,6 +13,9 @@ type FileRow = { file_id: string; size: number; stored: number };
 // reported, and whether the bytes are actually on disk.
 type FileStatus = { fileId: string; size: number; stored: boolean };
 
+// The admin listing shape: a pool row with its registration timestamp.
+export type FileRecord = { fileId: string; size: number; stored: boolean; createdAt: string };
+
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
 // bytes are stored once no matter how many entries or paths point at them.
@@ -160,6 +163,51 @@ export class FileStore {
     });
   }
 
+  // Admin view: newest registrations first, id-prefix search, bounded page so
+  // a huge pool cannot flood the response.
+  listFiles(search: string | undefined, limit: number): { files: FileRecord[]; total: number } {
+    const pattern = search?.trim() ? `${escapeLike(search.trim().toLowerCase())}%` : null;
+    const where = pattern ? "WHERE file_id LIKE ? ESCAPE '\\'" : "";
+    const { total } = this.database
+      .prepare(`SELECT COUNT(*) AS total FROM files ${where}`)
+      .get(...(pattern ? [pattern] : [])) as { total: number };
+    const rows = this.database
+      .prepare(`SELECT file_id, size, stored, created_at FROM files ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...(pattern ? [pattern] : []), limit) as Array<FileRow & { created_at: string }>;
+    return {
+      files: rows.map(({ file_id, size, stored, created_at }) => ({
+        fileId: file_id,
+        size,
+        stored: Boolean(stored),
+        createdAt: created_at,
+      })),
+      total,
+    };
+  }
+
+  stats(): { count: number; storedCount: number; storedBytes: number } {
+    return this.database.prepare(`
+      SELECT COUNT(*) AS count,
+        COALESCE(SUM(stored), 0) AS storedCount,
+        COALESCE(SUM(CASE WHEN stored = 1 THEN size ELSE 0 END), 0) AS storedBytes
+      FROM files
+    `).get() as { count: number; storedCount: number; storedBytes: number };
+  }
+
+  // Admin removal: the bytes, the registration row and any idle upload ledger
+  // go together. Entries still referencing the content lose it on read —
+  // the caller owns that warning in the UI.
+  deleteFile(fileId: string): boolean {
+    if (!FILE_ID_PATTERN.test(fileId)) return false;
+    const removed = this.database.prepare("DELETE FROM files WHERE file_id = ?").run(fileId).changes > 0;
+    if (removed) {
+      rmSync(this.path(fileId), { force: true });
+      rmSync(this.partialPath(fileId), { force: true });
+      this.removeUploadLedger(fileId);
+    }
+    return removed;
+  }
+
   // Deletes every content the caller does not claim as still reachable from a
   // clipboard entry, plus .part uploads idle past `partialTtlMs`. The caller
   // supplies the reachable set because only the entries know it.
@@ -247,6 +295,10 @@ function statsOf(path: string): Stats | undefined {
   } catch {
     return undefined;
   }
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 function isExpired(mtimeMs: number, ttlMs: number): boolean {

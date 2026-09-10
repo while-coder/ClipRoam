@@ -3,6 +3,7 @@ import { authenticated, ensureAuthenticated } from "../shared/auth.js";
 import LoginSection from "../sections/login/LoginSection.vue";
 import OverviewSection from "../sections/overview/OverviewSection.vue";
 import UsersSection from "../sections/users/UsersSection.vue";
+import FilesSection from "../sections/files/FilesSection.vue";
 import TransferSection from "../sections/transfer/TransferSection.vue";
 import SecuritySection from "../sections/security/SecuritySection.vue";
 
@@ -14,6 +15,7 @@ export const router = createRouter({
     { path: "/login", name: "login", component: LoginSection, meta: { public: true } },
     { path: "/", name: "overview", component: OverviewSection },
     { path: "/users", name: "users", component: UsersSection },
+    { path: "/files", name: "files", component: FilesSection },
     { path: "/transfer", name: "transfer", component: TransferSection },
     { path: "/security", name: "security", component: SecuritySection },
     { path: "/:pathMatch(.*)*", redirect: "/" },

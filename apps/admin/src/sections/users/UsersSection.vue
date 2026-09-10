@@ -250,30 +250,20 @@ onUnmounted(() => clearTimeout(searchTimer));
         <p>删除设备后，该设备的登录会话同时失效，需要重新登录才能继续同步。</p>
         <p v-if="devicesLoading" class="muted">正在加载设备列表…</p>
         <p v-else-if="devices.length === 0" class="muted">该用户还没有登录过任何设备。</p>
-        <table v-else class="user-table">
-          <thead>
-            <tr>
-              <th scope="col">设备</th>
-              <th scope="col">平台</th>
-              <th scope="col">系统版本</th>
-              <th scope="col">最后登录</th>
-              <th scope="col"><span class="visually-hidden">操作</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="device in devices" :key="device.id">
-              <td>{{ device.name }}</td>
-              <td>{{ device.platform }}</td>
-              <td>{{ device.osVersion }}</td>
-              <td>{{ formatDateTime(device.lastSeenAt) }}</td>
-              <td class="row-actions">
-                <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(device)">
-                  {{ removingDeviceId === device.id ? "正在删除…" : "删除" }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <ul v-else class="device-list">
+          <li v-for="device in devices" :key="device.id" class="device-item">
+            <div class="device-info">
+              <strong>{{ device.name }}</strong>
+              <span class="muted">{{ device.platform }} · {{ device.osVersion }}</span>
+            </div>
+            <div class="device-side">
+              <time class="muted" :title="'最后登录时间'">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
+              <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(device)">
+                {{ removingDeviceId === device.id ? "正在删除…" : "删除" }}
+              </button>
+            </div>
+          </li>
+        </ul>
         <p v-if="deviceError" class="message error" role="alert">{{ deviceError }}</p>
         <div class="form-actions">
           <button class="secondary" type="button" @click="managingDevicesUser = undefined">关闭</button>
