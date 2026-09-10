@@ -1,4 +1,5 @@
-//! 条目更新与删除：远端来源的写入（服务器回显 upsert）与服务器确认的删除。
+//! 条目更新与删除：服务器来源的写入（`clipboard.created` 回显 upsert，含本机
+//! 发布的回声）与服务器确认的删除。
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -7,10 +8,10 @@ use crate::file::collect_local_garbage;
 use crate::store::{delete_entries_by_ids, history_path_for_key, upsert_entry_row};
 use crate::AppState;
 
-/// Reconciling a fresh install can deliver hundreds of remote entries at once;
+/// Reconciling a fresh install can deliver hundreds of server entries at once;
 /// a single lock, save and event keeps that from locking up the windows.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn upsert_remote_entries(
+pub(crate) fn upsert_server_entries(
     app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<ClipboardEntry>,
@@ -44,7 +45,7 @@ pub(crate) fn upsert_remote_entries(
 /// Applies a server-confirmed deletion: drops the entry, then frees the blobs
 /// it referenced.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let path = history_path_for_key(&state.histories_dir, &history.active_history);

@@ -2,7 +2,7 @@
 //!
 //! - `query.rs`：manifest / query / ids 等读取命令，行离开后端前重算
 //!   派生 summary；
-//! - `mutate.rs`：远端来源的条目写入（upsert、发布换 id）与删除；
+//! - `mutate.rs`：服务器来源的条目写入（upsert、发布换 id）与删除；
 //! - 本文件放两种条目视图共用的整形与内容枚举辅助。
 
 pub(crate) mod mutate;

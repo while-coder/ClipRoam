@@ -42,7 +42,7 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
 
 /// Every content id the durable history references (image contents plus file
 /// tree leaves), streamed row by row so the entries themselves never load.
-/// This is the reference side of `unknown_file_ids`: rows the `files` table
+/// This is the reference side of `find_unknown_file_ids`: rows the `files` table
 /// is missing get queried from the pool and persisted.
 pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
     let mut statement = match connection.prepare("SELECT extra FROM entries") {
