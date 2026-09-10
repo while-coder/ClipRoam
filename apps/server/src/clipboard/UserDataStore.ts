@@ -197,6 +197,20 @@ export class UserDataStore {
     };
   }
 
+  // Enforces the account-wide history cap: entries beyond the newest
+  // `maxEntries` are dropped and their ids returned so the route layer can
+  // broadcast clipboard.deleted. Like delete(), only references go away —
+  // collectGarbage() reclaims the bytes later.
+  prune(maxEntries: number): string[] {
+    if (maxEntries <= 0) return [];
+    const rows = this.#database.prepare(`
+      DELETE FROM entries
+      WHERE id NOT IN (SELECT id FROM entries ORDER BY created_at DESC LIMIT ?)
+      RETURNING id
+    `).all(maxEntries) as Array<{ id: number }>;
+    return rows.map(({ id }) => String(id));
+  }
+
   // Content is shared across entries, so deletion only drops the reference.
   // Unreferenced bytes are reclaimed by collectGarbage().
   delete(entryId: string): void {

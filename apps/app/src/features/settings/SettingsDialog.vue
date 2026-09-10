@@ -22,6 +22,7 @@ import { useUpdater } from "./useUpdater";
 import {
   autoReceiveClipboard,
   autoUploadLimitMb,
+  manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
   changePassword,
@@ -128,6 +129,20 @@ const {
                   </option>
                 </select>
                 <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
+              </section>
+              <section class="settings-section" aria-labelledby="page-size-settings-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><Clipboard :size="18" /></span>
+                  <div>
+                    <h4 id="page-size-settings-heading">同步历史</h4>
+                    <p>连接后一次拉取的同步历史条数。</p>
+                  </div>
+                </div>
+                <label for="manifest-page-size">每页数量</label>
+                <select id="manifest-page-size" v-model.number="manifestPageSize" :disabled="savingSettings">
+                  <option v-for="size in [10, 20, 50, 100]" :key="size" :value="size">{{ size }} 条</option>
+                </select>
+                <span class="field-hint">修改后下次连接同步服务时生效。</span>
               </section>
               <section class="settings-section" aria-labelledby="exclude-settings-heading">
                 <div class="settings-section-heading">

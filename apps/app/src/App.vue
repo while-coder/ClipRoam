@@ -8,7 +8,8 @@ import type {
   ClipboardEntry,
   ClipboardManifestEntry,
 } from "@cliproam/protocol";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
+import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_MAX_CAPTURE_FILE_COUNT, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_SERVER_PROTOCOL } from "./features/sync/syncDefaults";
 import {
   Clipboard,
   Cloud,
@@ -743,6 +744,17 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
     serverMaxFileMb: typeof value.serverMaxFileMb === "number" && value.serverMaxFileMb > 0
       ? Math.floor(value.serverMaxFileMb)
       : DEFAULT_SERVER_MAX_FILE_MB,
+    manifestPageSize: typeof value.manifestPageSize === "number"
+      && Number.isInteger(value.manifestPageSize)
+      && value.manifestPageSize >= 10
+      && value.manifestPageSize <= 100
+      ? value.manifestPageSize
+      : ENTRY_PAGE_DEFAULT_LIMIT,
+    maxCaptureFileCount: typeof value.maxCaptureFileCount === "number"
+      && Number.isInteger(value.maxCaptureFileCount)
+      && value.maxCaptureFileCount > 0
+      ? value.maxCaptureFileCount
+      : DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
 }
 
@@ -770,6 +782,8 @@ async function useLocalMode(draft: SetupDraft): Promise<void> {
     autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? DEFAULT_AUTO_RECEIVE_CLIPBOARD,
     excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
     serverMaxFileMb: activeSyncConfig?.serverMaxFileMb ?? DEFAULT_SERVER_MAX_FILE_MB,
+    manifestPageSize: activeSyncConfig?.manifestPageSize ?? ENTRY_PAGE_DEFAULT_LIMIT,
+    maxCaptureFileCount: activeSyncConfig?.maxCaptureFileCount ?? DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
   setupError.value = "";
   try {
@@ -815,11 +829,14 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随配置持久化。
       autoUploadLimitMb: Math.min(
         DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-        Math.max(0, session.maxStoredFileMb),
+        Math.max(0, session.settings.maxStoredFileMb),
       ),
       autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
       excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
-      serverMaxFileMb: Math.max(1, Math.floor(session.maxStoredFileMb)),
+      serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
+      manifestPageSize: activeSyncConfig?.manifestPageSize ?? ENTRY_PAGE_DEFAULT_LIMIT,
+      // 单次复制文件数上限跟随服务器配置，随配置持久化供 Rust 捕获时读取。
+      maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
     await persistSyncConfig(config);
     activeSyncConfig = config;
@@ -1036,6 +1053,7 @@ async function startSync(config: SyncConfig): Promise<void> {
       },
     },
     config.autoUploadLimitMb * 1024 * 1024,
+    config.manifestPageSize,
   );
   syncClient = client;
   client.connect();

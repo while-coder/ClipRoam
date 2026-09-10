@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
-import { MAX_MESSAGE_BYTES } from "@cliproam/protocol";
+import { MAX_MESSAGE_BYTES, type ServerSettings } from "@cliproam/protocol";
 import { AuthService } from "../account/AuthService.js";
 import { AdminService } from "../admin/AdminService.js";
 import { getLogger } from "./Logger.js";
@@ -13,11 +13,10 @@ import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
-import { loadServerConfig, type ServerConfig } from "./ServerConfig.js";
+import { loadServerConfig, SERVER_DEFAULTS, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
-const garbageCollectionIntervalMs = 6 * 60 * 60 * 1_000;
 const logger = getLogger("ClipRoamServer");
 
 export class ClipRoamServer {
@@ -58,7 +57,7 @@ export class ClipRoamServer {
     this.#registerRoutes();
     this.#collectionTimer = setInterval(() => {
       this.#collectGarbage();
-    }, garbageCollectionIntervalMs);
+    }, SERVER_DEFAULTS.garbageCollectionIntervalMs);
     this.#collectionTimer.unref();
     await this.#app.listen({ port: this.config.port, host: "0.0.0.0" });
   }
@@ -99,6 +98,7 @@ export class ClipRoamServer {
     registerEntryRoutes(this.#app, {
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
+      maxHistoryEntries: () => this.config.maxHistoryEntries,
     });
     registerDeviceRoutes(this.#app, {
       store: this.#store,
@@ -106,7 +106,7 @@ export class ClipRoamServer {
     registerAuthRoutes(this.#app, {
       auth: this.#auth,
       onPasswordChanged: (userId) => this.#sockets.disconnectUser(userId, "Password changed"),
-      maxStoredFileMb: Math.round(this.config.maxStoredFileBytes / (1024 * 1024)),
+      serverSettings: () => serverSettings(this.config),
     });
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));
@@ -146,4 +146,14 @@ function createApp(tls: TlsOptions | undefined): FastifyInstance {
   return (tls
     ? Fastify({ logger: false, https: tls })
     : Fastify({ logger: false })) as FastifyInstance;
+}
+
+// The client-facing caps, derived from the live config on every call so admin
+// settings changes apply without a restart.
+function serverSettings(config: ServerConfig): ServerSettings {
+  return {
+    maxStoredFileMb: Math.round(config.maxStoredFileBytes / (1024 * 1024)),
+    maxHistoryEntries: config.maxHistoryEntries,
+    maxCaptureFileCount: config.maxCaptureFileCount,
+  };
 }

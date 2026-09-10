@@ -1,15 +1,16 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
-// `AuthResponse` 去掉服务器附带字段：`maxStoredFileMb` 由路由层注入。
-type AuthSession = Omit<AuthResponse, "maxStoredFileMb">;
+// `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
+type AuthSession = Omit<AuthResponse, "settings">;
 import type Database from "better-sqlite3";
 import { openDatabase } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
+import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
 
 const scryptAsync = promisify(scrypt);
 const passwordKeyLength = 64;
-const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+const sessionLifetimeMs = SERVER_DEFAULTS.accountSessionLifetimeMs;
 
 export type AccountUser = { id: string; username: string };
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { ServerSettings } from "@cliproam/protocol";
 import type { AuthService } from "../../account/AuthService.js";
 
 export type AuthRouteDeps = {
@@ -7,23 +8,25 @@ export type AuthRouteDeps = {
   // each of the user's devices is closed and the clients re-login.
   onPasswordChanged: (userId: string) => void;
   // Sent with every successful login/register so clients can keep their
-  // auto-upload tier at or below the server's storage cap.
-  maxStoredFileMb: number;
+  // auto-upload tier and local history mirror at or below the server's caps.
+  // A getter on purpose: admin settings changes apply to new logins without
+  // a restart.
+  serverSettings: () => ServerSettings;
 };
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
-  const { auth, onPasswordChanged, maxStoredFileMb } = deps;
-  const withServerCap = (payload: unknown) =>
-    typeof payload === "object" && payload !== null ? { ...(payload as object), maxStoredFileMb } : payload;
+  const { auth, onPasswordChanged, serverSettings } = deps;
+  const withServerSettings = (payload: unknown) =>
+    typeof payload === "object" && payload !== null ? { ...(payload as object), settings: serverSettings() } : payload;
 
   app.post("/auth/register", async (request, reply) => {
     const result = await auth.register(request.body);
-    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerCap(result.payload) : result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
   });
 
   app.post("/auth/login", async (request, reply) => {
     const result = await auth.login(request.ip, request.body);
-    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerCap(result.payload) : result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
   });
 
   app.post("/auth/password", async (request, reply) => {

@@ -8,21 +8,16 @@ import type {
   EntryPublishInput,
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
+import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
 import { FileStore } from "../files/FileStore.js";
 import { userDirectory } from "../DataPaths.js";
 import { AccountStore, type AdminUserSummary } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
-// `AuthResponse` 去掉服务器附带字段：`maxStoredFileMb` 由路由层注入。
-type AuthSession = Omit<AuthResponse, "maxStoredFileMb">;
+// `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
+type AuthSession = Omit<AuthResponse, "settings">;
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
-
-// Each UserDataStore holds an open SQLite connection, so stores left behind by
-// users who have gone quiet are swept after this much inactivity. Reopening on
-// the next request only costs an openDatabase plus a schema check.
-const USER_STORE_IDLE_MS = 10 * 60 * 1_000;
-const USER_STORE_SWEEP_INTERVAL_MS = 60 * 1_000;
 
 const logger = getLogger("ClipRoamStore");
 
@@ -37,7 +32,7 @@ export class ClipRoamStore {
   constructor() {
     this.#accounts = new AccountStore();
     this.#files = new FileStore();
-    this.#sweepTimer = setInterval(() => this.#sweepIdleStores(), USER_STORE_SWEEP_INTERVAL_MS);
+    this.#sweepTimer = setInterval(() => this.#sweepIdleStores(), SERVER_DEFAULTS.userStoreSweepIntervalMs);
     this.#sweepTimer.unref();
   }
 
@@ -71,6 +66,7 @@ export class ClipRoamStore {
     return this.#userStore(userId).upsert(entry);
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
+  pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
   files(): FileStore { return this.#files; }
   listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }
   hasUser(userId: string): boolean { return this.#accounts.hasUser(userId); }
@@ -126,7 +122,7 @@ export class ClipRoamStore {
     const now = Date.now();
     let swept = 0;
     for (const [userId, tracked] of this.#userStores) {
-      if (now - tracked.lastUsedAt < USER_STORE_IDLE_MS) continue;
+      if (now - tracked.lastUsedAt < SERVER_DEFAULTS.userStoreIdleMs) continue;
       tracked.store.close();
       this.#userStores.delete(userId);
       swept += 1;
