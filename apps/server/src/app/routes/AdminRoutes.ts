@@ -173,6 +173,22 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     return { ok: true };
   });
 
+  app.get("/admin-api/files", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { search } = request.query as { search?: string };
+    const { files, total } = store.files().listFiles(search, 500);
+    return { files, total, stats: store.files().stats() };
+  });
+
+  app.delete("/admin-api/files/:fileId", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { fileId } = request.params as { fileId: string };
+    if (!store.files().deleteFile(fileId)) {
+      return reply.code(404).send({ code: "FILE_NOT_FOUND", message: "文件不存在或已被删除。" });
+    }
+    return { ok: true };
+  });
+
   app.get("/admin", async (_request, reply) => serveAdminAsset("", reply));
   app.get("/admin/*", async (request, reply) => {
     const path = (request.params as { "*"?: string })["*"] ?? "";
