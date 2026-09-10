@@ -6,6 +6,7 @@
   "platforms": ["windows", "macOS", "linux"],
   "permissions": [
     "core:default",
+    "log:default",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",

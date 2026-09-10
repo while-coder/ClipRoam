@@ -25,6 +25,8 @@ pub(crate) fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     // html/rtf can be hundreds of kilobytes per rich-text entry and the list
     // never renders them, so they stay behind `get_entry`. Built field by
     // field: a struct-update clone would copy those strings just to drop them.
+    // image_info (thumbnail included) stays: the list renders it as the
+    // entry's thumbnail, and it is a few kilobytes per image entry at most.
     let mut lightweight = ClipboardEntry {
         id: entry.id.clone(),
         kind: entry.kind.clone(),
@@ -32,7 +34,7 @@ pub(crate) fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
         html: None,
         rtf: None,
         file_info: None,
-        image_info: None,
+        image_info: entry.image_info.clone(),
         source_device_id: entry.source_device_id.clone(),
         created_at: entry.created_at.clone(),
         summary: entry.summary.clone(),

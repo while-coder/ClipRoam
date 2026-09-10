@@ -3,6 +3,7 @@ mod clipboard;
 mod content;
 mod entry;
 mod file;
+mod logging;
 mod pending;
 mod platforms;
 mod store;
@@ -61,7 +62,10 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
+    // 日志插件最先注册，尽量覆盖后续插件与 setup 阶段的日志
+    let builder = tauri::Builder::default()
+        .plugin(logging::logging_plugin())
+        .plugin(tauri_plugin_clipboard_manager::init());
     let builder = platforms::register_plugins(builder);
     let builder = tauri_updater_kit::attach_updater(builder);
 
