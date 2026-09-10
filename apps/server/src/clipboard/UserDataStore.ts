@@ -40,27 +40,7 @@ export class UserDataStore {
   }
 
   #applySchema(): void {
-    // Identity used to be client-generated hex strings; entries now carry a
-    // server-assigned rowid plus a content hash, so a pre-hash table holds
-    // rows no client can address any more and is dropped outright. Tables
-    // were once singular-named; surviving ones are renamed in place.
-    const existing = this.#database
-      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entry'")
-      .get() as { sql: string } | undefined;
-    if (existing && !existing.sql.includes("hash")) this.#database.exec("DROP TABLE entry");
-    else if (existing) this.#database.exec("ALTER TABLE entry RENAME TO entries");
-    if (this.#database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'device'").get()) {
-      this.#database.exec("ALTER TABLE device RENAME TO devices");
-    }
-    // Pinning was removed: the column is dropped from databases written by
-    // older builds instead of being recreated.
-    const columns = this.#database.prepare("PRAGMA table_info(entries)").all() as Array<{ name: string }>;
-    if (columns.some(({ name }) => name === "pinned")) {
-      this.#database.exec("ALTER TABLE entries DROP COLUMN pinned");
-    }
     this.#database.exec(`
-      DROP INDEX IF EXISTS entry_created_at;
-
       CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY,
         hash TEXT NOT NULL UNIQUE,
