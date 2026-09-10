@@ -595,6 +595,7 @@ dependencies = [
  "clipboard-win",
  "image",
  "indexmap 2.14.0",
+ "log",
  "rfd",
  "rusqlite",
  "serde",

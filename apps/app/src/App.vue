@@ -8,7 +8,7 @@ import type {
   ClipboardEntry,
   ClipboardManifestEntry,
 } from "@cliproam/protocol";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_SERVER_PROTOCOL } from "@cliproam/protocol";
 import {
   Clipboard,
   Cloud,
@@ -735,6 +735,12 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
       ? Math.max(0, value.autoUploadLimitMb)
       : DEFAULT_AUTO_UPLOAD_LIMIT_MB,
     autoReceiveClipboard: value.autoReceiveClipboard !== false,
+    excludePatterns: Array.isArray(value.excludePatterns)
+      ? value.excludePatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern.trim() !== "")
+      : DEFAULT_EXCLUDE_PATTERNS,
+    serverMaxFileMb: typeof value.serverMaxFileMb === "number" && value.serverMaxFileMb > 0
+      ? Math.floor(value.serverMaxFileMb)
+      : DEFAULT_SERVER_MAX_FILE_MB,
   };
 }
 
@@ -760,6 +766,8 @@ async function useLocalMode(draft: SetupDraft): Promise<void> {
     sessionToken: activeSyncConfig?.sessionToken ?? "",
     autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? DEFAULT_AUTO_UPLOAD_LIMIT_MB,
     autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+    excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
+    serverMaxFileMb: activeSyncConfig?.serverMaxFileMb ?? DEFAULT_SERVER_MAX_FILE_MB,
   };
   setupError.value = "";
   try {
@@ -802,8 +810,14 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       serverProtocol,
       username: session.user.username,
       sessionToken: session.sessionToken,
-      autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
+      // 自动上传档位不能超过服务器单文件上限：登录响应带回，随配置持久化。
+      autoUploadLimitMb: Math.min(
+        DEFAULT_AUTO_UPLOAD_LIMIT_MB,
+        Math.max(0, session.maxStoredFileMb),
+      ),
       autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+      excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
+      serverMaxFileMb: Math.max(1, Math.floor(session.maxStoredFileMb)),
     };
     await persistSyncConfig(config);
     activeSyncConfig = config;

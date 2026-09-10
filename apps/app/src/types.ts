@@ -14,6 +14,9 @@ export type SyncConfig = {
   sessionToken: string;
   autoUploadLimitMb: number;
   autoReceiveClipboard: boolean;
+  excludePatterns: string[];
+  /** 登录时服务器下发的单文件存储上限（MB），自动上传档位不超过它。 */
+  serverMaxFileMb: number;
 };
 
 export type MissingFile = { fileId: string; size: number; sourceDeviceId: string };

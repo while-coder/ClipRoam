@@ -6,19 +6,24 @@ export type AuthRouteDeps = {
   // Changing the password invalidates every live session, so the socket for
   // each of the user's devices is closed and the clients re-login.
   onPasswordChanged: (userId: string) => void;
+  // Sent with every successful login/register so clients can keep their
+  // auto-upload tier at or below the server's storage cap.
+  maxStoredFileMb: number;
 };
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
-  const { auth, onPasswordChanged } = deps;
+  const { auth, onPasswordChanged, maxStoredFileMb } = deps;
+  const withServerCap = (payload: unknown) =>
+    typeof payload === "object" && payload !== null ? { ...(payload as object), maxStoredFileMb } : payload;
 
   app.post("/auth/register", async (request, reply) => {
     const result = await auth.register(request.body);
-    return reply.code(result.statusCode).send(result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerCap(result.payload) : result.payload);
   });
 
   app.post("/auth/login", async (request, reply) => {
     const result = await auth.login(request.ip, request.body);
-    return reply.code(result.statusCode).send(result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerCap(result.payload) : result.payload);
   });
 
   app.post("/auth/password", async (request, reply) => {

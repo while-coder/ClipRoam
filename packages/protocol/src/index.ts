@@ -3,8 +3,12 @@ import { z } from "zod";
 // Sync-config defaults shared by the app's settings UI and (as a comment) the
 // Rust serde fallbacks in apps/app/src-tauri/src/sync/config.rs.
 export const DEFAULT_SERVER_PROTOCOL = "http";
-export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 10;
+export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 50;
 export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
+// 捕获文件/文件夹时按名称跳过的默认过滤模式（与 Rust 侧 default_exclude_patterns 一致）。
+export const DEFAULT_EXCLUDE_PATTERNS = ["node_modules"];
+// 服务器单文件存储上限的默认值（与 apps/server ServerConfig 的默认一致）。
+export const DEFAULT_SERVER_MAX_FILE_MB = 200;
 export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
 export const FILE_CHUNK_SIZE = 128 * 1024;
 // A single entry carries its whole directory tree, so a publish body can get
@@ -122,6 +126,8 @@ export const AuthResponseSchema = z.object({
     id: z.string(),
     username: z.string(),
   }),
+  // 登录/注册时随会话下发，客户端自动上传档位不能超过它。
+  maxStoredFileMb: z.number().int().positive(),
 });
 
 // Entries run over HTTP. The publish response is the sender's confirmation —

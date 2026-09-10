@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-vue-next";
+import { computed } from "vue";
 import { runningInTauri, usePlatform } from "../../composables/usePlatform";
 import {
   displayShortcut,
@@ -21,6 +22,8 @@ import { useUpdater } from "./useUpdater";
 import {
   autoReceiveClipboard,
   autoUploadLimitMb,
+  excludePatternsInput,
+  serverMaxFileMb,
   changePassword,
   changingPassword,
   closeSettings,
@@ -48,6 +51,11 @@ defineProps<{
 }>();
 
 const { platformCapabilities, isMobile } = usePlatform();
+
+/** 自动上传档位：0 = 关闭，其余不超过服务器单文件存储上限。 */
+const autoUploadLimitOptions = computed(() =>
+  [0, 50, 100, 150, 200].filter((limit) => limit === 0 || limit <= serverMaxFileMb.value),
+);
 
 const {
   appVersion,
@@ -115,16 +123,30 @@ const {
                 </div>
                 <label for="auto-upload-limit">自动上传文件</label>
                 <select id="auto-upload-limit" v-model.number="autoUploadLimitMb" :disabled="savingSettings">
-                  <option :value="0">关闭自动上传</option>
-                  <option :value="1">小于 1 MB</option>
-                  <option :value="2">小于 2 MB</option>
-                  <option :value="5">小于 5 MB</option>
-                  <option :value="10">小于 10 MB</option>
-                  <option :value="20">小于 20 MB</option>
-                  <option :value="50">小于 50 MB</option>
-                  <option :value="100">小于 100 MB</option>
+                  <option v-for="limit in autoUploadLimitOptions" :key="limit" :value="limit">
+                    {{ limit === 0 ? "关闭自动上传" : `小于 ${limit} MB` }}
+                  </option>
                 </select>
                 <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
+              </section>
+              <section class="settings-section" aria-labelledby="exclude-settings-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><FolderOpen :size="18" /></span>
+                  <div>
+                    <h4 id="exclude-settings-heading">复制过滤</h4>
+                    <p>复制文件/文件夹时按名称跳过匹配的内容，不进入历史与同步。</p>
+                  </div>
+                </div>
+                <label for="exclude-patterns">过滤名称</label>
+                <textarea
+                  id="exclude-patterns"
+                  v-model="excludePatternsInput"
+                  rows="4"
+                  placeholder="node_modules&#10;.git&#10;*.log"
+                  spellcheck="false"
+                  :disabled="savingSettings"
+                ></textarea>
+                <span class="field-hint">每行一个名称，支持 * 和 ? 通配；只匹配名称本身，不区分大小写。</span>
               </section>
             </section>
 

@@ -18,7 +18,7 @@ export type TransferSettings = {
 
 export function loadServerConfig(): ServerConfig {
   const defaults: TransferSettings = {
-    maxStoredFileMb: 100,
+    maxStoredFileMb: 200,
     resumableUploadTtlHours: 24,
   };
   const settings = { ...defaults, ...readTransferSettings() };

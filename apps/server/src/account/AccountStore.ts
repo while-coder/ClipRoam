@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
+// `AuthResponse` 去掉服务器附带字段：`maxStoredFileMb` 由路由层注入。
+type AuthSession = Omit<AuthResponse, "maxStoredFileMb">;
 import type Database from "better-sqlite3";
 import { openDatabase } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
@@ -51,7 +53,7 @@ export class AccountStore {
     this.#removeExpiredSessions(new Date());
   }
 
-  async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
+  async register(username: string, password: string, deviceId: string): Promise<AuthSession> {
     const normalizedUsername = username.trim();
     if (this.#database.prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE").get(normalizedUsername)) {
       throw new UsernameTakenError();
@@ -71,7 +73,7 @@ export class AccountStore {
     return this.#issueSession({ id, username: normalizedUsername }, deviceId);
   }
 
-  async login(username: string, password: string, deviceId: string): Promise<AuthResponse> {
+  async login(username: string, password: string, deviceId: string): Promise<AuthSession> {
     const row = this.#database.prepare(`
       SELECT id, username, password_hash, password_salt
       FROM users WHERE username = ? COLLATE NOCASE
@@ -164,7 +166,7 @@ export class AccountStore {
 
   close(): void { this.#database.close(); }
 
-  #issueSession(user: AccountUser, deviceId: string): AuthResponse {
+  #issueSession(user: AccountUser, deviceId: string): AuthSession {
     const token = randomBytes(32).toString("base64url");
     const createdAt = new Date();
     const expiresAt = new Date(createdAt.getTime() + sessionLifetimeMs);

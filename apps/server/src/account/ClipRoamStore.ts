@@ -13,6 +13,9 @@ import { userDirectory } from "../DataPaths.js";
 import { AccountStore, type AdminUserSummary } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
+// `AuthResponse` 去掉服务器附带字段：`maxStoredFileMb` 由路由层注入。
+type AuthSession = Omit<AuthResponse, "maxStoredFileMb">;
+
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
 // Each UserDataStore holds an open SQLite connection, so stores left behind by
@@ -38,13 +41,13 @@ export class ClipRoamStore {
     this.#sweepTimer.unref();
   }
 
-  async register(username: string, password: string, deviceId: string): Promise<AuthResponse> {
+  async register(username: string, password: string, deviceId: string): Promise<AuthSession> {
     const response = await this.#accounts.register(username, password, deviceId);
     this.#userStore(response.user.id);
     return response;
   }
 
-  login(username: string, password: string, deviceId: string): Promise<AuthResponse> {
+  login(username: string, password: string, deviceId: string): Promise<AuthSession> {
     return this.#accounts.login(username, password, deviceId);
   }
 
