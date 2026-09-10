@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import {
-  Check,
   Clipboard,
-  CloudUpload,
   File,
   FileText,
   FolderOpen,
@@ -12,7 +10,6 @@ import {
 } from "lucide-vue-next";
 import { deviceName as deviceDisplayName } from "../../utils/entry";
 import { formatAge as formatAgeRelative, formatExactDateTime } from "../../utils/format";
-import { usePlatform } from "../../composables/usePlatform";
 import type { ClipboardEntry, Device, LocalClipboardEntry } from "../../types";
 
 /**
@@ -28,10 +25,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   remove: [entry: ClipboardEntry];
-  back: [];
 }>();
-
-const { isMobile } = usePlatform();
 
 function formatAge(createdAt: string): string {
   return formatAgeRelative(createdAt, props.currentTime);
@@ -81,17 +75,8 @@ function formatAge(createdAt: string): string {
       </div>
 
       <div v-if="!entries.length" class="empty-state">
-        <CloudUpload :size="28" />
-        <strong>没有待同步的内容</strong>
-        <span>所有内容都已同步到服务器</span>
-        <button class="empty-filter-reset" type="button" @click="emit('back')">返回剪贴板历史</button>
+        <span>没有待同步的内容，所有内容都已同步到服务器</span>
       </div>
     </section>
-
-    <footer class="footer-hint">
-      <span>共 {{ entries.length }} 条待同步</span>
-      <span v-if="isMobile">连接服务器后自动同步</span>
-      <span class="privacy"><Check :size="13" /> 本地优先</span>
-    </footer>
   </section>
 </template>
