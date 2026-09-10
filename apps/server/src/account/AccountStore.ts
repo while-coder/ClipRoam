@@ -11,6 +11,8 @@ const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
 export type AccountUser = { id: string; username: string };
 
+export type AdminUserSummary = { id: string; username: string; createdAt: string; activeSessions: number };
+
 export class UsernameTakenError extends Error {
   constructor() { super("该账号已存在"); }
 }
@@ -119,6 +121,47 @@ export class AccountStore {
     return (this.#database.prepare("SELECT id FROM users").all() as Array<{ id: string }>).map(({ id }) => id);
   }
 
+  listUsers(search?: string): AdminUserSummary[] {
+    // Active sessions double as the device count: one session row per user +
+    // device pair, so opening each per-user database for a real count is not
+    // worth the cost on the admin list.
+    const keyword = search?.trim().slice(0, 100) ?? "";
+    return this.#database.prepare(`
+      SELECT users.id, users.username, users.created_at AS createdAt,
+        (SELECT COUNT(*) FROM sessions WHERE sessions.user_id = users.id AND sessions.expires_at > @now) AS activeSessions
+      FROM users
+      WHERE (@search IS NULL OR username LIKE @search ESCAPE '\\')
+      ORDER BY users.created_at DESC
+    `).all({
+      now: new Date().toISOString(),
+      search: keyword ? `%${escapeLike(keyword)}%` : null,
+    }) as AdminUserSummary[];
+  }
+
+  deleteUser(userId: string): boolean {
+    return this.#database.prepare("DELETE FROM users WHERE id = ?").run(userId).changes > 0;
+  }
+
+  hasUser(userId: string): boolean {
+    return !!this.#database.prepare("SELECT 1 FROM users WHERE id = ?").get(userId);
+  }
+
+  // Administrator-initiated reset: no current-password check, and every
+  // session is dropped so signed-in devices must sign in again.
+  async resetPassword(userId: string, newPassword: string): Promise<boolean> {
+    if (!this.hasUser(userId)) return false;
+    const salt = randomBytes(16);
+    const passwordHash = await derivePassword(newPassword, salt);
+    this.#database.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+      .run(passwordHash, salt, userId);
+    this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+    return true;
+  }
+
+  deleteSession(userId: string, deviceId: string): void {
+    this.#database.prepare("DELETE FROM sessions WHERE user_id = ? AND device_id = ?").run(userId, deviceId);
+  }
+
   close(): void { this.#database.close(); }
 
   #issueSession(user: AccountUser, deviceId: string): AuthResponse {
@@ -144,6 +187,10 @@ export class AccountStore {
 
 async function derivePassword(password: string, salt: Uint8Array): Promise<Buffer> {
   return await scryptAsync(password, salt, passwordKeyLength) as Buffer;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 function hashSessionToken(token: string): string {

@@ -4,6 +4,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { AdminService } from "../../admin/AdminService.js";
+import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
 import { getTransferSettings, updateTransferSettings, type ServerConfig } from "../ServerConfig.js";
 
@@ -20,13 +21,14 @@ export type AdminRouteDeps = {
   admin: AdminService;
   tls: TlsCertificateService;
   config: ServerConfig;
+  store: ClipRoamStore;
   // The running HTTP(S) server, so a new TLS certificate can be applied
   // without a restart when the runtime supports it.
   liveServer: { setSecureContext?: (context: TlsOptions) => void };
 };
 
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
-  const { admin, tls, config, liveServer } = deps;
+  const { admin, tls, config, store, liveServer } = deps;
 
   const requireAdmin = (
     request: { headers: { cookie?: string } },
@@ -119,6 +121,56 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
         message: error instanceof Error ? error.message : "证书删除失败。",
       });
     }
+  });
+
+  app.get("/admin-api/users", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { search } = request.query as { search?: string };
+    return { users: store.listUsers(search) };
+  });
+
+  app.delete("/admin-api/users/:userId", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    if (!store.deleteUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    return { ok: true };
+  });
+
+  app.put("/admin-api/users/:userId/password", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    const body = request.body as { password?: unknown } | undefined;
+    const password = typeof body?.password === "string" ? body.password : "";
+    if (password.length < 6 || password.length > 128) {
+      return reply.code(400).send({ code: "INVALID_PASSWORD", message: "新密码长度需在 6 到 128 位之间。" });
+    }
+    if (!(await store.resetPassword(userId, password))) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/admin-api/users/:userId/devices", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    return { devices: store.listUserDevices(userId) };
+  });
+
+  app.delete("/admin-api/users/:userId/devices/:deviceId", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId, deviceId } = request.params as { userId: string; deviceId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    if (!store.deleteUserDevice(userId, deviceId)) {
+      return reply.code(404).send({ code: "DEVICE_NOT_FOUND", message: "设备不存在或已被删除。" });
+    }
+    return { ok: true };
   });
 
   app.get("/admin", async (_request, reply) => serveAdminAsset("", reply));
