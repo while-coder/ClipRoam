@@ -32,6 +32,13 @@ pub fn download_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
     is_file_id(file_id).then(|| cache_dir.join("download").join(file_id))
 }
 
+/// Cache downloads land at `<final>.part` and are renamed into place only
+/// after digest verification, so a crash can never leave a truncated file
+/// that the startup blob scan would accept as valid content.
+pub fn partial_download_path(final_path: &Path) -> PathBuf {
+    final_path.with_extension("part")
+}
+
 pub fn cached_file_path(cache_dir: &Path, file_id: &str) -> Option<PathBuf> {
     [upload_image_path(cache_dir, file_id), download_path(cache_dir, file_id)]
         .into_iter()

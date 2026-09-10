@@ -97,6 +97,11 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     // the first piped byte; flush now so the client sees the parked GET.
     reply.raw.flushHeaders();
     stream.pipe(reply.raw);
+    // A session torn down server-side (idle prune, abandoned pipe) destroys the
+    // PassThrough, and destroying a source does not end a piped destination —
+    // without this the hijacked response would hang forever and the client
+    // would never reach its "retry from another device" path.
+    stream.on("close", () => reply.raw.end());
     // The response's close (not the request's — an empty-body GET "closes" as
     // soon as it is fully received) means the requester hung up.
     reply.raw.on("close", () => relays.abandon(session.id));

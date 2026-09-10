@@ -341,14 +341,15 @@ pub(crate) fn supports_native_file_export() -> bool {
     true
 }
 
-pub(crate) fn prompt_save_destination(single_file: bool, file_name: &str) -> Option<PathBuf> {
-    if single_file {
-        rfd::FileDialog::new()
-            .set_file_name(file_name)
-            .save_file()
+/// 命令在 tokio 工作线程上执行，而阻塞版 `FileDialog` 的 macOS 面板要求
+/// 主线程——异步版由 rfd 负责派发，两端都能安全等待。
+pub(crate) async fn prompt_save_destination(single_file: bool, file_name: &str) -> Option<PathBuf> {
+    let handle = if single_file {
+        rfd::AsyncFileDialog::new().set_file_name(file_name).save_file().await
     } else {
-        rfd::FileDialog::new().pick_folder()
-    }
+        rfd::AsyncFileDialog::new().pick_folder().await
+    }?;
+    Some(handle.path().to_path_buf())
 }
 
 pub(crate) fn consume_pending_shares(_app: &AppHandle) -> Result<ShareImportSummary, String> {

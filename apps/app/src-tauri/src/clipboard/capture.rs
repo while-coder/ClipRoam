@@ -161,14 +161,16 @@ impl CapturedSignature {
 /// 三个捕获路径共用的去重与事务骨架：命中签名直接跳过；否则快照三元组、
 /// 记录新签名（让事务内的 metadata 写把它们落库）、执行 `write`；失败时
 /// 回滚签名，让内存与事务从未触及的数据库保持一致，并把错误记进日志后
-/// 吞掉——监控线程没有别的上报途径，且没有队列行就无事可同步。
+/// 吞掉——监控线程没有别的上报途径，且没有队列行就无事可同步。返回本次
+/// 是否真正落了新条目：轮询每 350ms 带着同一内容进来，命中与失败都必须
+/// 返回 false，调用方才不会把 `entry-created` 发成前端刷新永动机。
 fn capture_transaction(
     history: &mut HistoryData,
     signature: CapturedSignature,
     write: impl FnOnce(&mut HistoryData) -> Result<(), String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if signature.matches(history) {
-        return Ok(());
+        return Ok(false);
     }
     let previous = (
         history.last_clipboard.clone(),
@@ -179,8 +181,9 @@ fn capture_transaction(
     if let Err(error) = write(history) {
         signature.restore(previous, history);
         eprintln!("ClipRoam: 记录剪贴板条目失败：{error}");
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), String> {
@@ -190,7 +193,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
     let signature = rich_text_signature(&rich_text);
     let RichText { text, html, rtf } = rich_text;
     let state = app.state::<AppState>();
-    {
+    let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let created_at = Utc::now().to_rfc3339();
         let extra = ClipboardEntryExtra {
@@ -220,12 +223,15 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
                 transaction.commit().map_err(|error| error.to_string())?;
                 Ok(())
             })
-        })?;
-    }
+        })?
+    };
     // Text has no contents to hash, so it is publishable the moment it lands —
     // the frontend drains the queue whenever an entry is created.
-    app.emit("cliproam://entry-created", ())
-        .map_err(|error| error.to_string())
+    if captured {
+        app.emit("cliproam://entry-created", ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), String> {
@@ -248,17 +254,26 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     let collected = collect_tree(&paths)?;
     // A short lock takes only the active key, so the reuse lookup and the
     // transaction below never hold the history lock against a query burst.
-    let history_path = {
+    let (history_path, history_key) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        history_path_for_key(&state.histories_dir, &history.active_history)
+        (
+            history_path_for_key(&state.histories_dir, &history.active_history),
+            history.active_history.clone(),
+        )
     };
     // A re-copy of the same roots refreshes the published entry's timestamp
     // instead of queueing the tree a second time.
     let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
-    {
+    let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let created_at = Utc::now().to_rfc3339();
         capture_transaction(&mut history, CapturedSignature::File(signature), |history| {
+            // The reuse lookup ran without the lock; if the active profile
+            // changed meanwhile, abandoning beats writing the old archive while
+            // recording the signature for the new one.
+            if history.active_history != history_key {
+                return Err("活动档案已切换，放弃本次捕获".to_string());
+            }
             match reusable {
                 Some(mut existing) => {
                     existing.created_at = created_at;
@@ -297,12 +312,15 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                     })
                 }
             }
-        })?;
-    }
+        })?
+    };
     // The queue row lands either resolved (reuse) or placeholder (new); the
     // frontend refreshes the pending view and starts the drain from the event.
-    app.emit("cliproam://entry-created", ())
-        .map_err(|error| error.to_string())
+    if captured {
+        app.emit("cliproam://entry-created", ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
@@ -340,9 +358,12 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
     // The blob lands outside the history lock: the write is content-addressed
     // and idempotent, and an orphan (write succeeded, queue row failed) is
     // dropped by the startup garbage sweep.
-    let cache_dir = {
+    let (cache_dir, history_key) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        crate::active_cache_dir(&state, &history)
+        (
+            crate::active_cache_dir(&state, &history),
+            history.active_history.clone(),
+        )
     };
     let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
     if let Some(parent) = image_path.parent() {
@@ -351,9 +372,15 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
     if !image_path.is_file() {
         fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
     }
-    {
+    let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         capture_transaction(&mut history, CapturedSignature::Image(signature), |history| {
+            // The blob write ran without the lock; if the active profile changed
+            // meanwhile, abandon the capture — a now-orphan blob is dropped by
+            // the startup garbage sweep.
+            if history.active_history != history_key {
+                return Err("活动档案已切换，放弃本次捕获".to_string());
+            }
             history.cached_files.insert(file_id.clone());
             let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
             // One transaction covers the queue row and the metadata.
@@ -364,10 +391,13 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
                 transaction.commit().map_err(|error| error.to_string())?;
                 Ok(())
             })
-        })?;
+        })?
+    };
+    if captured {
+        app.emit("cliproam://entry-created", ())
+            .map_err(|error| error.to_string())?;
     }
-    app.emit("cliproam://entry-created", ())
-        .map_err(|error| error.to_string())
+    Ok(())
 }
 
 #[tauri::command(async)]

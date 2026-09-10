@@ -132,7 +132,7 @@ pub(crate) fn supports_native_file_export() -> bool {
     false
 }
 
-pub(crate) fn prompt_save_destination(_single_file: bool, _file_name: &str) -> Option<PathBuf> {
+pub(crate) async fn prompt_save_destination(_single_file: bool, _file_name: &str) -> Option<PathBuf> {
     None
 }
 

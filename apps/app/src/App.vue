@@ -129,6 +129,7 @@ initSettings({
   disconnect: (syncEnabledAfter) => {
     stopSyncClient(syncEnabledAfter);
   },
+  refreshAfterArchiveSwitch: refreshHistory,
   uploadNowEligibleEntries,
   openSetup: ({ config, message, focus }) => {
     if (message !== undefined) setupError.value = message;

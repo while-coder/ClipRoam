@@ -32,7 +32,7 @@ pub(crate) struct SavePreparation {
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn prepare_save_entry(
+pub(crate) async fn prepare_save_entry(
     state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<Option<SavePreparation>, String> {
@@ -52,7 +52,7 @@ pub(crate) fn prepare_save_entry(
     let single_file = file_info.len() == 1
         && matches!(file_info.values().next(), Some(TreeNode::File { .. }));
     let name = file_info.keys().next().expect("count is one").clone();
-    let Some(destination) = crate::platforms::prompt_save_destination(single_file, &name) else {
+    let Some(destination) = crate::platforms::prompt_save_destination(single_file, &name).await else {
         return Ok(None);
     };
 

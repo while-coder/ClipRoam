@@ -15,7 +15,7 @@ use tauri::State;
 use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
 use crate::content::MissingFile;
 use crate::entry::entry_contents_of;
-use crate::file::{cached_file_path, cached_source_for, download_path};
+use crate::file::{cached_file_path, cached_source_for, download_path, partial_download_path};
 use crate::store::{history_path_for_key, select_entry};
 use crate::{active_cache_dir, AppState};
 
@@ -94,7 +94,10 @@ pub(crate) struct DownloadState {
 }
 
 pub(crate) enum DownloadTarget {
-    Cache,
+    Cache {
+        /// The content-addressed name the verified `.part` is renamed to.
+        final_path: std::path::PathBuf,
+    },
     Save {
         save_id: String,
         completed_path: std::path::PathBuf,
@@ -134,12 +137,15 @@ pub(crate) fn begin_file_download(
         )
     } else {
         state.virtual_downloads.begin(&file_id);
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        (
+        let final_path = {
+            let history = state.history.lock().map_err(|error| error.to_string())?;
             download_path(&crate::active_cache_dir(&state, &history), &file_id)
-                .ok_or_else(|| "内容标识不合法".to_string())?,
-            DownloadTarget::Cache,
-        )
+                .ok_or_else(|| "内容标识不合法".to_string())?
+        };
+        // Cache downloads stage at `.part` exactly like direct saves; the
+        // digest-verified rename in `finish_file_download` is the promotion.
+        let path = partial_download_path(&final_path);
+        (path, DownloadTarget::Cache { final_path })
     };
     let prepared = (|| {
         if let Some(parent) = path.parent() {
@@ -193,7 +199,7 @@ pub(crate) fn append_file_download(
         .open(&download.path)
         .and_then(|mut file| file.write_all(&bytes))
         .map_err(|error| error.to_string())?;
-    if matches!(download.target, DownloadTarget::Cache) {
+    if matches!(download.target, DownloadTarget::Cache { .. }) {
         state.virtual_downloads.progress();
     }
     Ok(())
@@ -222,7 +228,11 @@ pub(crate) fn finish_file_download(state: State<'_, AppState>, transfer_id: Stri
     }
 
     match &download.target {
-        DownloadTarget::Cache => {
+        DownloadTarget::Cache { final_path } => {
+            // Promote only now, after the size and digest checks above: a
+            // truncated download must never enter the cache, where the startup
+            // blob scan accepts any file whose name is a content id.
+            fs::rename(&download.path, final_path).map_err(|error| error.to_string())?;
             state
                 .history
                 .lock()
@@ -256,7 +266,11 @@ pub(crate) fn fail_download_target(state: &AppState, download: &DownloadState, m
 
 pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, message: &str) {
     match target {
-        DownloadTarget::Cache => state.virtual_downloads.fail(file_id, message.to_string()),
+        DownloadTarget::Cache { final_path } => {
+            // Drop the staging file a cancelled or failed transfer leaves behind.
+            let _ = fs::remove_file(partial_download_path(final_path));
+            state.virtual_downloads.fail(file_id, message.to_string());
+        }
         DownloadTarget::Save { save_id, .. } => {
             if let Ok(mut sessions) = state.save_sessions.lock() {
                 if let Some(session) = sessions.get_mut(save_id) {

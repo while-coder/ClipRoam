@@ -26,6 +26,8 @@ export type SettingsBridge = {
   startSync(config: SyncConfig): Promise<void>;
   /** 断开当前同步客户端；参数为断开后的 syncEnabled 值（改密后为 true，退出账号为 false）。 */
   disconnect(syncEnabledAfter: boolean): void;
+  /** persistSyncConfig 切换档案后重拉历史与待同步数据（新档案的数据与旧档案无关）。 */
+  refreshAfterArchiveSwitch(): void;
   uploadNowEligibleEntries(bytes: number): void;
   openSetup(o: { config?: SyncConfig; message?: string; focus?: "server" | "password" }): void;
   focusSearch(): void;
@@ -192,6 +194,8 @@ async function saveSettings(): Promise<void> {
       await requireBridge().startSync(config);
     } else {
       requireBridge().disconnect(false);
+      // 关闭同步会把活动档案切回本地，重拉一次历史与待同步数据。
+      requireBridge().refreshAfterArchiveSwitch();
     }
     if (config.autoUploadLimitMb > previousAutoUploadLimitMb) {
       requireBridge().uploadNowEligibleEntries(config.autoUploadLimitMb * 1024 * 1024);
@@ -270,6 +274,9 @@ async function signOut(openLogin: boolean): Promise<void> {
     requireBridge().setActiveConfig(config);
     requireBridge().setUsername("");
     requireBridge().disconnect(false);
+    // 退出账号把活动档案切回本地：立刻重拉历史与待同步数据，否则界面继续
+    // 显示上一账号档案的队列行，此时点删除会误删本地档案里同 seq 的行。
+    requireBridge().refreshAfterArchiveSwitch();
     settingsVisible.value = false;
     if (openLogin) {
       requireBridge().openSetup({ config, focus: "server" });
