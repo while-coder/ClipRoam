@@ -550,7 +550,7 @@ export class SyncClient {
   // `missing` list the protocol dropped: the client asks once per upsert batch
   // which contents the server already holds, so locally stored availability
   // marks stay truthful without the server restamping every entry read.
-  async fetchFileStatuses(fileIds: readonly string[]): Promise<FileStatus[]> {
+  async fetchFiles(fileIds: readonly string[]): Promise<FileStatus[]> {
     return this.#queryBatched(fileIds, (batch) => this.#fetchFileStatusBatch(batch));
   }
 

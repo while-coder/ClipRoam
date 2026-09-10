@@ -274,41 +274,26 @@ function refreshHistory(): void {
 
 /**
  * Server-pool availability is persisted in the local `files` table; this only
- * fills its gaps. Rust reports the content ids no row exists for, one batched
- * `/files/query` answers them, and the result lands in the table where the
- * summaries read it. Steady state returns an empty list, so it costs nothing;
- * a failure just leaves the gap for the next pass.
+ * fills its gaps. Rust reports the content ids without a confirmed pool
+ * answer, one batched `/files/query` answers them, and the result lands in
+ * the table where the summaries read it. Steady state returns an empty list,
+ * so it costs nothing; a failure just leaves the gap for the next pass.
+ * `recheckUnstored` (reconnect only) also re-asks ids last answered "not
+ * stored", healing a `file.available` push missed while offline.
  */
-async function syncFileStatuses(): Promise<void> {
+async function syncFileStatuses(recheckUnstored = false): Promise<void> {
   const client = syncClient;
   if (!runningInTauri || !client) return;
   try {
-    const fileIds = await invoke<string[]>("unknown_file_ids");
+    const fileIds = await invoke<string[]>("find_unknown_file_ids", { recheckUnstored });
     if (!fileIds.length) return;
-    const statuses = await client.fetchFileStatuses(fileIds);
-    await invoke("save_file_statuses", { statuses });
+    const statuses = await client.fetchFiles(fileIds);
+    await invoke("upsert_server_files", { statuses });
     // The summaries changed, so the history view refetches its current page.
     historyRevision.value += 1;
   } catch {
     // Auxiliary display state; the next refresh retries.
   }
-}
-
-/** Buffers `file.available` pushes so a multi-file upload is one IPC write. */
-const storedMarkBuffer = new Set<string>();
-let storedMarkTimer: number | undefined;
-
-function markFilesStored(fileId: string): void {
-  storedMarkBuffer.add(fileId);
-  if (storedMarkTimer !== undefined) return;
-  storedMarkTimer = window.setTimeout(() => {
-    storedMarkTimer = undefined;
-    const fileIds = [...storedMarkBuffer];
-    storedMarkBuffer.clear();
-    invoke("mark_files_stored", { fileIds })
-      .then(() => refreshHistory())
-      .catch(() => { /* The push replays or the next query backfills. */ });
-  }, 300);
 }
 
 const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
@@ -358,7 +343,7 @@ async function applyRemoteUpserts(batch: ClipboardEntry[], refresh = true): Prom
     return;
   }
   try {
-    await invoke("upsert_remote_entries", { entries: batch });
+    await invoke("upsert_server_entries", { entries: batch });
   } catch (error) {
     showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
     return;
@@ -698,7 +683,7 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
     setTimeout(() => {
       // The command emits `cliproam://history-changed`, which refreshes the
       // views; no explicit invalidation needed here.
-      void invoke("remove_remote_entry", { entryId: entry.id });
+      void invoke("remove_server_entry", { entryId: entry.id });
     }, 5000);
   }
 }
@@ -950,8 +935,10 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
 
     refreshHistory();
     // A reconcile is also the moment the persisted availability view catches
-    // up against the pool before the drain republishes the capture queue.
-    if (syncClient === client) await syncFileStatuses();
+    // up against the pool — including re-asking unstored ids, since a
+    // `file.available` push may have been missed while offline — before the
+    // drain republishes the capture queue.
+    if (syncClient === client) await syncFileStatuses(true);
     // Deletions and remote upserts have been replayed; now publish whatever
     // the durable capture queue still holds (single-flight, no-op if running).
     if (syncClient === client) client.drainQueue();
@@ -998,14 +985,14 @@ async function startSync(config: SyncConfig): Promise<void> {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
         syncedEntryIds.value = remaining;
-        if (runningInTauri) void invoke("remove_remote_entry", { entryId });
+        if (runningInTauri) void invoke("remove_server_entry", { entryId });
         else previewEntries.value = previewEntries.value.filter((entry) => entry.id !== entryId);
       },
-      onFileAvailable: (fileId) => {
-        // Content-addressed push: the server now holds this content. Buffered
-        // into one `mark_files_stored` write, which persists it in the local
-        // files table.
-        markFilesStored(fileId);
+      onFileAvailable: () => {
+        // Content-addressed push: the server now holds this content. The
+        // persisted row is written by the next `/files/query` backfill —
+        // this only nudges the refresh burst that triggers it.
+        refreshHistory();
       },
       onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
         uploadProgressByEntryId.value = {
