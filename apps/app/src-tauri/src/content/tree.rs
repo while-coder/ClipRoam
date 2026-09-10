@@ -10,7 +10,7 @@ use super::{
     ClipboardEntry, CollectedTree, EntrySummary, FileInfo, LocalSource, LocalSources, TreeNode,
 };
 use crate::file::cached_file_path;
-use crate::utils::modified_millis;
+use crate::utils::{modified_millis, name_matches_any};
 
 /// Every content the map references, de-duplicated in encounter order, with
 /// the size each leaf reports.
@@ -55,7 +55,9 @@ pub fn tree_parent_at_path<'a>(
 
 /// Walks the copied paths collecting structure only — hashing happens later on
 /// a background thread so a large folder shows up in the UI immediately.
-pub fn collect_tree(paths: &[PathBuf]) -> Result<CollectedTree, String> {
+/// `exclude` 按名称过滤文件与文件夹（`node_modules`、`*.log`），命中的整棵
+/// 子树不进历史、不同步。
+pub fn collect_tree(paths: &[PathBuf], exclude: &[String]) -> Result<CollectedTree, String> {
     let mut file_info = FileInfo::default();
     let mut sources = LocalSources::default();
     let mut used = HashSet::new();
@@ -70,9 +72,12 @@ pub fn collect_tree(paths: &[PathBuf]) -> Result<CollectedTree, String> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
+        if name_matches_any(&base, exclude) {
+            continue;
+        }
         let name = unique_root_name(&sanitize_root_name(&base), &mut used);
         sources.roots.push(path.display().to_string());
-        collect_node(path, &metadata, &mut file_info, &mut sources, &name)?;
+        collect_node(path, &metadata, &mut file_info, &mut sources, &name, exclude)?;
     }
     if file_info.is_empty() {
         return Err("剪贴板中没有可用的文件".to_string());
@@ -86,7 +91,11 @@ fn collect_node(
     file_info: &mut FileInfo,
     sources: &mut LocalSources,
     name: &str,
+    exclude: &[String],
 ) -> Result<(), String> {
+    if name_matches_any(name, exclude) {
+        return Ok(());
+    }
     if !metadata.is_dir() {
         file_info.insert(name.to_string(), TreeNode::File { f: String::new(), s: metadata.len() });
         sources.files.push(LocalSource {
@@ -98,14 +107,19 @@ fn collect_node(
         });
         return Ok(());
     }
-    let children = collect_dir(path, sources, name)?;
+    let children = collect_dir(path, sources, name, exclude)?;
     file_info.insert(name.to_string(), TreeNode::Dir(children));
     Ok(())
 }
 
 /// Reads a directory into its nested representation; an empty directory comes
 /// back as an empty map, so it survives a round trip.
-fn collect_dir(path: &Path, sources: &mut LocalSources, prefix: &str) -> Result<FileInfo, String> {
+fn collect_dir(
+    path: &Path,
+    sources: &mut LocalSources,
+    prefix: &str,
+    exclude: &[String],
+) -> Result<FileInfo, String> {
     let mut children = fs::read_dir(path)
         .map_err(|error| error.to_string())?
         .filter_map(Result::ok)
@@ -122,9 +136,12 @@ fn collect_dir(path: &Path, sources: &mut LocalSources, prefix: &str) -> Result<
             continue;
         }
         let child_name = child.file_name().to_string_lossy().into_owned();
+        if name_matches_any(&child_name, exclude) {
+            continue;
+        }
         let child_relative_path = format!("{prefix}/{child_name}");
         if child_metadata.is_dir() {
-            let nested = collect_dir(&child_path, sources, &child_relative_path)?;
+            let nested = collect_dir(&child_path, sources, &child_relative_path, exclude)?;
             dir.insert(child_name, TreeNode::Dir(nested));
             continue;
         }

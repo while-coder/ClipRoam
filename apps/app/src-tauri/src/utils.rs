@@ -71,3 +71,55 @@ pub fn escape_like(needle: &str) -> String {
     }
     escaped
 }
+
+// ---------------------------------------------------------------------------
+// 名称过滤
+// ---------------------------------------------------------------------------
+
+/// 名称是否命中任一过滤模式：大小写不敏感，`*` 匹配任意长度、`?` 匹配单个
+/// 字符（`node_modules`、`*.log`、`build*`）。只匹配名称本身，不涉及路径。
+pub fn name_matches_any(name: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    let name = name.to_lowercase();
+    patterns
+        .iter()
+        .any(|pattern| glob_match(&name, &pattern.trim().to_lowercase()))
+}
+
+fn glob_match(text: &str, pattern: &str) -> bool {
+    match (text.chars().next(), pattern.chars().next()) {
+        // 文本耗尽后仍可能被剩余的 `*` 吸收（如 "build*" 匹配 "build"）。
+        (None, Some('*')) => glob_match(text, &pattern[1..]),
+        (None, None) => true,
+        (None, Some(_)) => false,
+        (Some(_), None) => false,
+        (Some(text_char), Some('*')) => {
+            glob_match(text, &pattern[1..]) || glob_match(&text[text_char.len_utf8()..], pattern)
+        }
+        (Some(text_char), Some('?')) => glob_match(&text[text_char.len_utf8()..], &pattern[1..]),
+        (Some(text_char), Some(pattern_char)) => {
+            text_char == pattern_char
+                && glob_match(&text[text_char.len_utf8()..], &pattern[pattern_char.len_utf8()..])
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::name_matches_any;
+
+    #[test]
+    fn matches_plain_names_and_wildcards() {
+        let patterns = vec!["node_modules".to_string(), "*.log".to_string(), "build*".to_string()];
+        assert!(name_matches_any("node_modules", &patterns));
+        assert!(name_matches_any("NODE_MODULES", &patterns));
+        assert!(name_matches_any("error.log", &patterns));
+        assert!(name_matches_any("build-output", &patterns));
+        assert!(name_matches_any("build", &patterns));
+        assert!(!name_matches_any("my_node_modules_backup", &patterns));
+        assert!(!name_matches_any("logs", &patterns));
+        assert!(!name_matches_any("readme.md", &[]));
+    }
+}

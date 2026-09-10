@@ -26,6 +26,13 @@ pub(crate) struct SyncConfig {
     pub auto_upload_limit_mb: u64,
     #[serde(default = "default_auto_receive_clipboard")]
     pub auto_receive_clipboard: bool,
+    /// 捕获文件/文件夹时按名称跳过的过滤模式（`*`/`?` 通配，如 `node_modules`）。
+    #[serde(default = "default_exclude_patterns")]
+    pub exclude_patterns: Vec<String>,
+    /// 登录时服务器下发的单文件存储上限（MB）；Rust 侧只透传持久化，前端用它
+    /// 约束自动上传档位。
+    #[serde(default = "default_server_max_file_mb")]
+    pub server_max_file_mb: u64,
 }
 
 // The serde defaults below must stay in step with the DEFAULT_* constants in
@@ -35,11 +42,19 @@ fn default_server_protocol() -> String {
 }
 
 fn default_auto_upload_limit_mb() -> u64 {
-    10
+    50
 }
 
 fn default_auto_receive_clipboard() -> bool {
     true
+}
+
+fn default_exclude_patterns() -> Vec<String> {
+    vec!["node_modules".to_string()]
+}
+
+fn default_server_max_file_mb() -> u64 {
+    200
 }
 
 /// 配置对应的本地历史档案键：登录账号用 `account:{服务器}:{用户名}`，

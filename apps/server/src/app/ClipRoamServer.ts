@@ -106,6 +106,7 @@ export class ClipRoamServer {
     registerAuthRoutes(this.#app, {
       auth: this.#auth,
       onPasswordChanged: (userId) => this.#sockets.disconnectUser(userId, "Password changed"),
+      maxStoredFileMb: Math.round(this.config.maxStoredFileBytes / (1024 * 1024)),
     });
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));

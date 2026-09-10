@@ -28,6 +28,8 @@ use crate::AppState;
 
 const THUMBNAIL_MAX_EDGE: u32 = 64;
 const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
+/// 单次复制的文件数上限：超过就不捕获、不同步。
+const MAX_SYNC_FILE_COUNT: u64 = 1000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RichText {
@@ -251,7 +253,36 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     {
         return Ok(());
     }
-    let collected = collect_tree(&paths)?;
+    // 过滤模式跟随同步配置；未保存过配置时用 serde 默认值兜底。
+    let exclude = state
+        .sync_config
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(|config| config.exclude_patterns.clone())
+        .unwrap_or_default();
+    let collected = collect_tree(&paths, &exclude)?;
+    // 过滤后的文件数仍在同步上限之外就不入队：入队会让同步端面对上千个
+    // 内容，历史里也放不下。签名落库让后续轮询静默跳过，不再重走目录。
+    let file_count = collected.sources.files.len() as u64;
+    if file_count > MAX_SYNC_FILE_COUNT {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        CapturedSignature::File(signature).record(&mut history);
+        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&history_path, |connection| {
+            let transaction = connection.transaction().map_err(|error| error.to_string())?;
+            save_metadata(&transaction, &history)?;
+            transaction.commit().map_err(|error| error.to_string())
+        })?;
+        drop(history);
+        log::warn!("复制内容包含 {file_count} 个文件，超过 {MAX_SYNC_FILE_COUNT} 上限，未捕获");
+        let _ = crate::app_shell::show_toast(
+            app.clone(),
+            format!("内容包含 {file_count} 个文件，超过同步上限 {MAX_SYNC_FILE_COUNT}，未同步"),
+            "error".to_string(),
+        );
+        return Ok(());
+    }
     // A short lock takes only the active key, so the reuse lookup and the
     // transaction below never hold the history lock against a query burst.
     let (history_path, history_key) = {

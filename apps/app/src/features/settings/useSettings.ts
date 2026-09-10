@@ -9,7 +9,7 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword } from "../sync/syncClient";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB } from "@cliproam/protocol";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "@cliproam/protocol";
 import type { SettingsPage, SyncConfig } from "../../types";
 
 /**
@@ -48,6 +48,10 @@ const settingsVisible = ref(false);
 const settingsPage = ref<SettingsPage>("general");
 const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
 const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
+/** 文本域里的过滤模式，一行一条；保存时拆成数组。 */
+const excludePatternsInput = ref("");
+/** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
+const serverMaxFileMb = ref(DEFAULT_SERVER_MAX_FILE_MB);
 const savingSettings = ref(false);
 const recordingQuickPasteShortcut = ref(false);
 const changingPassword = ref(false);
@@ -62,6 +66,12 @@ function openSettings(): void {
   if (!activeConfig) return;
   autoUploadLimitMb.value = activeConfig.autoUploadLimitMb;
   autoReceiveClipboard.value = activeConfig.autoReceiveClipboard;
+  excludePatternsInput.value = activeConfig.excludePatterns.join("\n");
+  serverMaxFileMb.value = activeConfig.serverMaxFileMb;
+  // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
+  if (autoUploadLimitMb.value > serverMaxFileMb.value) {
+    autoUploadLimitMb.value = serverMaxFileMb.value;
+  }
   resetQuickPasteShortcutDraft();
   recordingQuickPasteShortcut.value = false;
   settingsPage.value = "general";
@@ -175,6 +185,10 @@ async function saveSettings(): Promise<void> {
     ...activeConfig,
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
+    excludePatterns: excludePatternsInput.value
+      .split("\n")
+      .map((pattern) => pattern.trim())
+      .filter((pattern, index, all) => pattern !== "" && all.indexOf(pattern) === index),
   };
   try {
     if (
@@ -296,6 +310,8 @@ export {
   settingsPage,
   autoUploadLimitMb,
   autoReceiveClipboard,
+  excludePatternsInput,
+  serverMaxFileMb,
   savingSettings,
   recordingQuickPasteShortcut,
   changingPassword,
