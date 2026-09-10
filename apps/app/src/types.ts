@@ -51,6 +51,8 @@ export type EntrySummary = {
   readyCount: number;
   pendingCount: number;
   pendingSize: number;
+  /** Contents the server pool holds (the local `files` table, `stored = 1`). */
+  storedCount: number;
   uploadableSize?: number;
   previewPath?: string;
 };

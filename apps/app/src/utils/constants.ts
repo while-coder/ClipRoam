@@ -19,6 +19,7 @@ export const EMPTY_SUMMARY: EntrySummary = {
   readyCount: 0,
   pendingCount: 0,
   pendingSize: 0,
+  storedCount: 0,
 };
 
 export const DESKTOP_CAPABILITIES: PlatformCapabilities = {

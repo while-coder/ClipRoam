@@ -98,13 +98,6 @@ const importingShare = ref(false);
 const activatingEntryId = ref("");
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
-/**
- * Contents the server pool holds, refreshed live from `/files/query` on every
- * history read and `file.available` push. Deliberately never persisted — it is
- * server state that would go stale — so `undefined` (no sync client) means the
- * upload status is unknown and stays hidden instead of misreporting.
- */
-const storedFileIds = ref<Set<string> | undefined>(undefined);
 const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
@@ -275,36 +268,47 @@ function refreshHistory(): void {
     historyRevision.value += 1;
     void refreshPendingCount();
     if (activeView.value === "pending-sync") void refreshPendingEntries();
-    void refreshStoredFileIds();
+    void syncFileStatuses();
   }, 200);
 }
 
 /**
- * Upload status is derived, never stored: the content ids come from the
- * durable history's extras (computed Rust-side) and the pool is asked live
- * which ones it holds. Contents already known stored skip the query, so a
- * steady state costs nothing; a failure clears the set so the status text
- * hides instead of misreporting.
+ * Server-pool availability is persisted in the local `files` table; this only
+ * fills its gaps. Rust reports the content ids no row exists for, one batched
+ * `/files/query` answers them, and the result lands in the table where the
+ * summaries read it. Steady state returns an empty list, so it costs nothing;
+ * a failure just leaves the gap for the next pass.
  */
-async function refreshStoredFileIds(): Promise<void> {
+async function syncFileStatuses(): Promise<void> {
   const client = syncClient;
-  if (!client) {
-    storedFileIds.value = undefined;
-    return;
-  }
+  if (!runningInTauri || !client) return;
   try {
-    const fileIds = await invoke<string[]>("history_file_ids");
-    const unchecked = fileIds.filter((fileId) => !storedFileIds.value?.has(fileId));
-    if (!unchecked.length) return;
-    const statuses = await client.fetchFileStatuses(unchecked);
-    const next = new Set(storedFileIds.value);
-    for (const file of statuses) {
-      if (file.stored) next.add(file.fileId);
-    }
-    storedFileIds.value = next;
+    const fileIds = await invoke<string[]>("unknown_file_ids");
+    if (!fileIds.length) return;
+    const statuses = await client.fetchFileStatuses(fileIds);
+    await invoke("save_file_statuses", { statuses });
+    // The summaries changed, so the history view refetches its current page.
+    historyRevision.value += 1;
   } catch {
-    storedFileIds.value = undefined;
+    // Auxiliary display state; the next refresh retries.
   }
+}
+
+/** Buffers `file.available` pushes so a multi-file upload is one IPC write. */
+const storedMarkBuffer = new Set<string>();
+let storedMarkTimer: number | undefined;
+
+function markFilesStored(fileId: string): void {
+  storedMarkBuffer.add(fileId);
+  if (storedMarkTimer !== undefined) return;
+  storedMarkTimer = window.setTimeout(() => {
+    storedMarkTimer = undefined;
+    const fileIds = [...storedMarkBuffer];
+    storedMarkBuffer.clear();
+    invoke("mark_files_stored", { fileIds })
+      .then(() => refreshHistory())
+      .catch(() => { /* The push replays or the next query backfills. */ });
+  }, 300);
 }
 
 const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
@@ -945,9 +949,9 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     }
 
     refreshHistory();
-    // A reconcile is also the moment the live availability view is re-derived
-    // against the pool before the drain republishes the capture queue.
-    if (syncClient === client) await refreshStoredFileIds();
+    // A reconcile is also the moment the persisted availability view catches
+    // up against the pool before the drain republishes the capture queue.
+    if (syncClient === client) await syncFileStatuses();
     // Deletions and remote upserts have been replayed; now publish whatever
     // the durable capture queue still holds (single-flight, no-op if running).
     if (syncClient === client) client.drainQueue();
@@ -998,13 +1002,10 @@ async function startSync(config: SyncConfig): Promise<void> {
         else previewEntries.value = previewEntries.value.filter((entry) => entry.id !== entryId);
       },
       onFileAvailable: (fileId) => {
-        // Content-addressed push: the server now holds this content. Kept
-        // in-memory only — nothing survives a restart; the next pool query
-        // re-derives it.
-        const next = new Set(storedFileIds.value);
-        next.add(fileId);
-        storedFileIds.value = next;
-        refreshHistory();
+        // Content-addressed push: the server now holds this content. Buffered
+        // into one `mark_files_stored` write, which persists it in the local
+        // files table.
+        markFilesStored(fileId);
       },
       onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
         uploadProgressByEntryId.value = {
@@ -1293,7 +1294,7 @@ onBeforeUnmount(() => {
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
-      :stored-file-ids="storedFileIds"
+      :sync-enabled="syncEnabled"
       :ensure-local-files="ensureLocalFiles"
       @activate="activateFromView"
       @remove="removeEntry"

@@ -230,15 +230,9 @@ pub(crate) fn finish_file_download(state: State<'_, AppState>, transfer_id: Stri
     match &download.target {
         DownloadTarget::Cache { final_path } => {
             // Promote only now, after the size and digest checks above: a
-            // truncated download must never enter the cache, where the startup
-            // blob scan accepts any file whose name is a content id.
+            // truncated download must never enter the cache, where the blob
+            // scan accepts any file whose name is a content id.
             fs::rename(&download.path, final_path).map_err(|error| error.to_string())?;
-            state
-                .history
-                .lock()
-                .map_err(|error| error.to_string())?
-                .cached_files
-                .insert(download.file_id.clone());
             state.virtual_downloads.complete(&download.file_id);
         }
         DownloadTarget::Save {
@@ -382,19 +376,18 @@ pub(crate) fn read_upload_chunk(
     let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         let cache_dir = active_cache_dir(&state, &history);
-        (history.cached_files.contains(&file_id))
-            .then(|| cached_file_path(&cache_dir, &file_id))
-            .flatten()
-            .or_else(|| {
-                let history_path =
-                    history_path_for_key(&state.histories_dir, &history.active_history);
-                state
-                    .with_database(&history_path, |connection| {
-                        Ok(cached_source_for(connection, &file_id))
-                    })
-                    .ok()
-                    .flatten()
-            })
+        // `cached_file_path` stats the candidates itself, so a hit is always
+        // a file that exists right now.
+        cached_file_path(&cache_dir, &file_id).or_else(|| {
+            let history_path =
+                history_path_for_key(&state.histories_dir, &history.active_history);
+            state
+                .with_database(&history_path, |connection| {
+                    Ok(cached_source_for(connection, &file_id))
+                })
+                .ok()
+                .flatten()
+        })
     }
     .ok_or_else(|| "本机文件内容不可用".to_string())?;
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;

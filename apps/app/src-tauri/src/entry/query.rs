@@ -7,7 +7,8 @@ use rusqlite::{params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::content::{refresh_summary, ClipboardEntry};
+use crate::content::{refresh_summary, ClipboardEntry, SummaryContext};
+use crate::file::{blob_ids_on_disk, history_stored_ids};
 use crate::store::{
     count_entries, history_path_for_key, newest_first_sql, select_entries,
 };
@@ -110,8 +111,11 @@ pub(crate) fn list_entries_manifest(
     filter: EntriesManifestFilter,
     device_names: HashMap<String, String>,
 ) -> Result<EntriesManifestPage, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let stored = history_stored_ids(&state, &mut history)?;
     let cache_dir = active_cache_dir(&state, &history);
+    let blobs = blob_ids_on_disk(&cache_dir);
+    let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
     let needle = filter.query.trim().to_lowercase();
     let (where_sql, values) = manifest_query(&filter, &device_names, &needle);
     let (limit, offset) = match filter.page {
@@ -131,7 +135,7 @@ pub(crate) fn list_entries_manifest(
     })?;
     let mut entries = entries;
     for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &cache_dir);
+        refresh_summary(entry, &context);
     }
     Ok(EntriesManifestPage {
         total,
@@ -173,8 +177,11 @@ pub(crate) fn find_unknown_entry_ids(
 /// The full entry, tree included — used when publishing to the server.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let stored = history_stored_ids(&state, &mut history)?;
     let cache_dir = active_cache_dir(&state, &history);
+    let blobs = blob_ids_on_disk(&cache_dir);
+    let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     let mut entry = state
         .with_database(&path, |connection| {
@@ -183,6 +190,6 @@ pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<
         .into_iter()
         .next()
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    refresh_summary(&mut entry, &history.cached_files, &cache_dir);
+    refresh_summary(&mut entry, &context);
     Ok(entry)
 }

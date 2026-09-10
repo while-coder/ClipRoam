@@ -10,7 +10,7 @@ mod tree;
 
 pub use tree::{
     collect_tree, describe_roots, file_entry_signature, file_signature, readable_path,
-    rebuild_tree, refresh_summary, tree_contents, tree_parent_at_path,
+    rebuild_tree, refresh_summary, tree_contents, tree_parent_at_path, SummaryContext,
 };
 
 use indexmap::IndexMap;
@@ -87,6 +87,9 @@ pub struct EntrySummary {
     pub ready_count: u64,
     pub pending_count: u64,
     pub pending_size: u64,
+    /// Contents the server pool holds (`files` table, `stored = 1`).
+    #[serde(default)]
+    pub stored_count: u64,
     /// Size of the smallest locally readable content, so the UI can tell
     /// "nothing left to upload" from "everything is too large".
     #[serde(default, skip_serializing_if = "Option::is_none")]

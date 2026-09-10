@@ -6,7 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::store::{cache_dir_for, HistoryData};
 use crate::content::{tree_contents, ClipboardEntryExtra, LocalSources};
 use crate::utils::modified_millis;
 
@@ -43,7 +42,8 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
 
 /// Every content id the durable history references (image contents plus file
 /// tree leaves), streamed row by row so the entries themselves never load.
-/// This is the input of the frontend's live pool-availability query.
+/// This is the reference side of `unknown_file_ids`: rows the `files` table
+/// is missing get queried from the pool and persisted.
 pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
     let mut statement = match connection.prepare("SELECT extra FROM entries") {
         Ok(statement) => statement,
@@ -67,11 +67,12 @@ pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
     ids
 }
 
-/// Content ids this machine holds a blob for. The blob directories are the
-/// source of truth, so the set is read straight off the disk; it can never
-/// disagree with what is actually pasteable. Blob file names are the content
-/// hashes themselves, so a directory listing is all it takes.
-pub fn scan_cached_blobs(cache_dir: &Path) -> HashSet<String> {
+/// Content ids this machine holds a blob for, scanned fresh per command. The
+/// blob directories are the source of truth, so there is no long-lived mirror
+/// to invalidate — two `read_dir` calls per refresh are all it costs. Blob
+/// file names are the content hashes themselves, so a directory listing is
+/// all it takes.
+pub fn blob_ids_on_disk(cache_dir: &Path) -> HashSet<String> {
     [cache_dir.join("upload").join("images"), cache_dir.join("download")]
         .into_iter()
         .filter_map(|directory| fs::read_dir(directory).ok())
@@ -117,13 +118,12 @@ pub fn cached_source_for(connection: &Connection, file_id: &str) -> Option<PathB
 }
 
 /// Mark-sweep over local uploads, downloaded content, and views for entries
-/// that are gone. Incomplete downloads expire after one day.
+/// that are gone. Incomplete downloads expire after one day; anything an
+/// entry still references is kept regardless of age.
 pub fn collect_local_garbage(
     connection: &mut Connection,
-    histories_dir: &Path,
-    history: &mut HistoryData,
+    cache_dir: &Path,
 ) -> Result<usize, String> {
-    let cache_dir = cache_dir_for(histories_dir, &history.active_history);
     let share_dir = cache_dir.join("share");
     let mut referenced = HashSet::new();
     let mut entry_ids = HashSet::new();
@@ -171,7 +171,7 @@ pub fn collect_local_garbage(
         };
         for file in files.filter_map(Result::ok) {
             let file_id = file.file_name().to_string_lossy().into_owned();
-            if referenced.contains(&file_id) && history.cached_files.contains(&file_id) {
+            if referenced.contains(&file_id) {
                 continue;
             }
             let expired = file
@@ -181,9 +181,7 @@ pub fn collect_local_garbage(
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|time| now_millis().saturating_sub(time.as_millis() as u64) > DOWNLOAD_TTL_MS)
                 .unwrap_or(true);
-            if (!referenced.contains(&file_id) || expired)
-                && fs::remove_file(file.path()).is_ok()
-            {
+            if expired && fs::remove_file(file.path()).is_ok() {
                 removed.push(file_id);
             }
         }
@@ -204,9 +202,6 @@ pub fn collect_local_garbage(
                 removed_share_requests += 1;
             }
         }
-    }
-    for file_id in &removed {
-        history.cached_files.remove(file_id);
     }
     Ok(removed.len() + removed_share_requests)
 }
