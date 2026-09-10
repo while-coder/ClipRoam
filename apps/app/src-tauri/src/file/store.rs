@@ -9,12 +9,12 @@
 
 use std::collections::HashSet;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Deserialize;
 use tauri::State;
 
 use crate::store::{history_path_for_key, HistoryData};
-use crate::{AppState};
+use crate::{utils::placeholders, AppState};
 
 /// One `/files/query` answer, straight off the wire (`FileStatus` in the
 /// protocol).
@@ -40,16 +40,33 @@ pub(crate) fn stored_file_ids(connection: &Connection) -> Result<HashSet<String>
     Ok(ids)
 }
 
-fn all_file_ids(connection: &Connection) -> Result<HashSet<String>, String> {
-    let mut statement = connection
-        .prepare("SELECT file_id FROM files")
-        .map_err(|error| error.to_string())?;
-    let ids = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<HashSet<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    Ok(ids)
+/// SQLite's host-parameter ceiling is far above this chunk size, so the
+/// membership probe never trips it even for a whole-history reference list.
+const QUERY_CHUNK: usize = 500;
+
+/// Which of the given ids have a row, and whether it is stored. Same shape as
+/// `find_unknown_entry_ids`: the candidate list goes into SQLite via IN, so
+/// only referenced rows are read back — the table is never dumped whole.
+fn file_rows(connection: &Connection, file_ids: &[String]) -> Result<Vec<(String, bool)>, String> {
+    let mut rows = Vec::new();
+    for chunk in file_ids.chunks(QUERY_CHUNK) {
+        let sql = format!(
+            "SELECT file_id, stored FROM files WHERE file_id IN ({})",
+            placeholders(chunk.len())
+        );
+        let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+        let values = chunk.iter().map(|id| Value::Text(id.clone())).collect::<Vec<_>>();
+        rows.extend(
+            statement
+                .query_map(params_from_iter(values), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(rows)
 }
 
 /// The update is monotonic on purpose: a late query racing a finished upload
@@ -94,12 +111,14 @@ pub(crate) fn history_stored_ids(
         .clone())
 }
 
-/// Of the ids the durable history references, those with no confirmed pool
-/// answer yet — the frontend's batch for the next `/files/query`. By default
-/// that means "no row at all"; `recheck_unstored` also re-asks ids whose last
-/// answer was `stored = 0`, so a reconnect heals a `file.available` push that
-/// was missed while offline. Also refreshes the stored-id cache while the
-/// connection is open; the reads are one pass.
+/// Of the ids the durable history references — the file-side counterpart of
+/// the server's entry manifest — those with no confirmed pool answer yet, i.e.
+/// the frontend's batch for the next `/files/query`. By default that means "no
+/// row at all"; `recheck_unstored` also re-asks ids whose last answer was
+/// `stored = 0`, so a reconnect heals a `file.available` push that was missed
+/// while offline. Also refreshes the stored-id cache while the connection is
+/// open; summary reads only ever test referenced ids, so scoping the cache to
+/// them stays truthful.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn find_unknown_file_ids(
     state: State<'_, AppState>,
@@ -107,13 +126,20 @@ pub(crate) fn find_unknown_file_ids(
 ) -> Result<Vec<String>, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let referenced = super::query::derived_history_file_ids(&state, &mut history)?;
+    let referenced: Vec<String> = referenced.into_iter().collect();
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    let (known, stored) = state.with_database(&path, |connection| {
-        Ok((all_file_ids(connection)?, stored_file_ids(connection)?))
-    })?;
+    let rows = state.with_database(&path, |connection| file_rows(connection, &referenced))?;
+    let mut known = HashSet::new();
+    let mut stored = HashSet::new();
+    for (file_id, is_stored) in rows {
+        known.insert(file_id.clone());
+        if is_stored {
+            stored.insert(file_id);
+        }
+    }
     history.stored_file_ids = Some(stored.clone());
     let answered = if recheck_unstored.unwrap_or(false) { stored } else { known };
-    Ok(referenced.difference(&answered).cloned().collect())
+    Ok(referenced.into_iter().filter(|id| !answered.contains(id)).collect())
 }
 
 /// Persists a `/files/query` batch. Ids the server reports as not stored are
