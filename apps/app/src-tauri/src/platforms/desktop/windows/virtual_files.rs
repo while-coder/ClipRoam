@@ -8,7 +8,7 @@
 use crate::{
     clipboard::output::snapshot_entry,
     content::{ClipboardEntry, FileInfo, TreeNode},
-    file::{download_path, is_file_id},
+    file::{download_path, is_file_id, partial_download_path},
     AppState,
 };
 use serde::Serialize;
@@ -331,6 +331,7 @@ impl VirtualFileStream {
             crate::active_cache_dir(&state, &history)
         };
         let partial = download_path(&cache_dir, &self.file_id)
+            .map(|path| partial_download_path(&path))
             .ok_or_else(|| "内容标识不合法".to_string())?;
         loop {
             if let Some(path) = self.resolved_path() {
