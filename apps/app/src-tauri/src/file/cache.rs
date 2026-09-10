@@ -7,12 +7,12 @@ use std::{
 };
 
 use crate::content::{tree_contents, ClipboardEntryExtra, LocalSources};
-use crate::utils::modified_millis;
+use crate::utils::{hash_file, modified_millis};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 
-pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
+fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
     connection
         .query_row(
             "SELECT hash FROM hash_cache WHERE source = ? AND size = ? AND modified_at = ?",
@@ -24,7 +24,7 @@ pub fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at
         .flatten()
 }
 
-pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, hash: &str) {
+fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, hash: &str) {
     let _ = connection.execute(
         "INSERT INTO hash_cache (source, size, modified_at, hash) VALUES (?, ?, ?, ?) ON CONFLICT(source, size, modified_at) DO UPDATE SET hash = excluded.hash",
         params![source, size, modified_at, hash],
@@ -38,6 +38,23 @@ pub fn remember_hash(connection: &Connection, source: &str, size: u64, modified_
             params![count / 2],
         );
     }
+}
+
+/// Content id of a source file: the hash cache answers from the recorded
+/// (source, size, modified_at) signature, a miss hashes the file and remembers
+/// it for next time. `None` means the file could not be read — the caller
+/// decides whether that drops the content.
+pub fn source_file_hash(
+    connection: &Connection,
+    source: &str,
+    size: u64,
+    modified_at: i64,
+) -> Option<String> {
+    cached_hash(connection, source, size, modified_at).or_else(|| {
+        let hashed = hash_file(Path::new(source)).ok()?;
+        remember_hash(connection, source, size, modified_at, &hashed);
+        Some(hashed)
+    })
 }
 
 /// Every content id the durable history references (image contents plus file

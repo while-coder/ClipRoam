@@ -2,15 +2,14 @@
 //! drain 取到该行时才在这里把内容 id（sha256）解析出来并写回该行。文本与
 //! 图片在捕获时就已完成，不会走到这里。
 
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::{list_rows, row_entry};
 use crate::content::{
     describe_roots, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
 };
-use crate::file::{cached_hash, remember_hash};
-use crate::utils::hash_file;
+use crate::file::source_file_hash;
 use crate::store::history_path_for_key;
 use crate::AppState;
 
@@ -67,19 +66,12 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
         let file_id = state
             .with_database(&hash_database, |connection| {
-                Ok(cached_hash(connection, &item.source, item.size, modified_at))
+                // A file that vanished between copy and hash hashes to None
+                // and drops out of the tree.
+                Ok(source_file_hash(connection, &item.source, item.size, modified_at))
             })
             .ok()
-            .flatten()
-            .or_else(|| {
-                // A file that vanished between copy and hash drops out of the tree.
-                let hashed = hash_file(Path::new(&item.source)).ok()?;
-                let _ = state.with_database(&hash_database, |connection| {
-                    remember_hash(connection, &item.source, item.size, modified_at, &hashed);
-                    Ok(())
-                });
-                Some(hashed)
-            });
+            .flatten();
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
             apply_hashes(app, seq, &mut entry, &batch)?;
