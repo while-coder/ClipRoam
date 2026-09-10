@@ -374,7 +374,7 @@ function handleKeydown(event: KeyboardEvent): boolean {
   return false;
 }
 
-defineExpose({ handleKeydown, focusSearch });
+defineExpose({ handleKeydown, focusSearch, currentPage });
 </script>
 
 <template>

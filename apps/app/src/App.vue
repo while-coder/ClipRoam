@@ -318,6 +318,17 @@ const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
 let remoteUpsertFlush: Promise<void> | undefined;
 
 /**
+ * Whether the history view needs a visible refresh for a newly arrived entry.
+ * The entry lands on page 1, so only a view sitting there must refetch; deeper
+ * pages keep their scroll (their slice shifts by one and the next page change
+ * or revision bump catches up), and an unmounted view refetches page 1 on
+ * remount anyway.
+ */
+function historyOnFirstPage(): boolean {
+  return historyView.value?.currentPage === 1;
+}
+
+/**
  * Remote entry echoes arrive one per published entry, but each write rewrites
  * the durable history. Queue them so a burst becomes a single batch command.
  */
@@ -329,7 +340,7 @@ function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
       const batch = [...pendingRemoteUpserts.values()];
       pendingRemoteUpserts.clear();
       remoteUpsertFlush = undefined;
-      void applyRemoteUpserts(batch).finally(resolve);
+      void applyRemoteUpserts(batch, historyOnFirstPage()).finally(resolve);
     }, 200);
   });
   return remoteUpsertFlush;
@@ -343,7 +354,7 @@ function upsertLocalEntry(entry: ClipboardEntry): void {
   ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
+async function applyRemoteUpserts(batch: ClipboardEntry[], refresh = true): Promise<void> {
   for (const entry of batch) markEntrySynced(entry);
   if (!runningInTauri) {
     for (const entry of batch) upsertLocalEntry(entry);
@@ -355,7 +366,7 @@ async function applyRemoteUpserts(batch: ClipboardEntry[]): Promise<void> {
     showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
     return;
   }
-  refreshHistory();
+  if (refresh) refreshHistory();
 }
 
 function rememberDevices(devices: Device[]): void {
