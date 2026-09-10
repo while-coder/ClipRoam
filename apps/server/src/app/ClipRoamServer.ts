@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
-import { MAX_MESSAGE_BYTES, type ServerSettings } from "@cliproam/protocol";
+import { type ServerSettings } from "@cliproam/protocol";
 import { AuthService } from "../account/AuthService.js";
 import { AdminService } from "../admin/AdminService.js";
 import { getLogger } from "./Logger.js";
@@ -53,7 +53,9 @@ export class ClipRoamServer {
   }
 
   async start(): Promise<void> {
-    await this.#app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
+    // Inbound socket messages are only `auth`/`ping` — a small explicit cap,
+    // not the publish-body limit that used to double as this value.
+    await this.#app.register(websocket, { options: { maxPayload: 64 * 1024 } });
     this.#registerRoutes();
     this.#collectionTimer = setInterval(() => {
       this.#collectGarbage();

@@ -2,13 +2,13 @@ import { z } from "zod";
 
 // App 侧同步配置的默认值不放在这里：它们只有 app 使用，已移到
 // apps/app/src/features/sync/syncDefaults.ts。本文件只保留三端契约相关的
-// 常量（分片大小、消息上限、分页等）与 schema。
+// 常量（分片大小、发布上限、分页等）与 schema。
 
 export const FILE_CHUNK_SIZE = 128 * 1024;
-// A single entry carries its whole directory tree, so a publish body can get
-// large. The tree is compact (~40 bytes per node) but unbounded by design.
-// The same cap bounds the WebSocket maxPayload.
-export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+// A single entry carries its whole directory tree, so the publish body needs a
+// cap: the tree is compact (~40 bytes per node) but unbounded by design. This
+// bounds POST /entries (and its thumbnails/text), nothing else.
+export const MAX_PUBLISH_BYTES = 16 * 1024 * 1024;
 // One HTTP query round-trip covers far more ids than the per-message batches
 // the WebSocket era needed; the response size (thumbnails included) is the
 // real bound, not the request.
