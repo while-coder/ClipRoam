@@ -144,7 +144,7 @@ pub(crate) fn list_entries_manifest(
 /// ids, so the membership test runs inside SQLite instead of hauling every
 /// local id across the IPC boundary. Input order is preserved.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn missing_entry_ids(
+pub(crate) fn find_unknown_entry_ids(
     state: State<'_, AppState>,
     entry_ids: Vec<String>,
 ) -> Result<Vec<String>, String> {
