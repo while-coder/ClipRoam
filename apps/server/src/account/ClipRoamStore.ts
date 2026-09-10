@@ -8,7 +8,7 @@ import type {
   EntryPublishInput,
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
-import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
+import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS } from "../app/ServerConfig.js";
 import { FileStore } from "../files/FileStore.js";
 import { userDirectory } from "../DataPaths.js";
 import { AccountStore, type AdminUserSummary } from "./AccountStore.js";
@@ -32,7 +32,7 @@ export class ClipRoamStore {
   constructor() {
     this.#accounts = new AccountStore();
     this.#files = new FileStore();
-    this.#sweepTimer = setInterval(() => this.#sweepIdleStores(), SERVER_DEFAULTS.userStoreSweepIntervalMs);
+    this.#sweepTimer = setInterval(() => this.#sweepIdleStores(), USER_STORE_SWEEP_INTERVAL_MS);
     this.#sweepTimer.unref();
   }
 
@@ -122,7 +122,7 @@ export class ClipRoamStore {
     const now = Date.now();
     let swept = 0;
     for (const [userId, tracked] of this.#userStores) {
-      if (now - tracked.lastUsedAt < SERVER_DEFAULTS.userStoreIdleMs) continue;
+      if (now - tracked.lastUsedAt < USER_STORE_IDLE_MS) continue;
       tracked.store.close();
       this.#userStores.delete(userId);
       swept += 1;

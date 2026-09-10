@@ -6,11 +6,9 @@ type AuthSession = Omit<AuthResponse, "settings">;
 import type Database from "better-sqlite3";
 import { openDatabase } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
-import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
+import { ACCOUNT_SESSION_LIFETIME_MS, PASSWORD_KEY_LENGTH } from "../app/ServerConfig.js";
 
 const scryptAsync = promisify(scrypt);
-const passwordKeyLength = 64;
-const sessionLifetimeMs = SERVER_DEFAULTS.accountSessionLifetimeMs;
 
 export type AccountUser = { id: string; username: string };
 
@@ -170,7 +168,7 @@ export class AccountStore {
   #issueSession(user: AccountUser, deviceId: string): AuthSession {
     const token = randomBytes(32).toString("base64url");
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + sessionLifetimeMs);
+    const expiresAt = new Date(createdAt.getTime() + ACCOUNT_SESSION_LIFETIME_MS);
     this.#removeExpiredSessions(createdAt);
     this.#database.prepare(`
       INSERT INTO sessions (token_hash, user_id, device_id, expires_at, created_at)
@@ -189,7 +187,7 @@ export class AccountStore {
 }
 
 async function derivePassword(password: string, salt: Uint8Array): Promise<Buffer> {
-  return await scryptAsync(password, salt, passwordKeyLength) as Buffer;
+  return await scryptAsync(password, salt, PASSWORD_KEY_LENGTH) as Buffer;
 }
 
 function escapeLike(value: string): string {

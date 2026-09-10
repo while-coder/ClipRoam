@@ -1,15 +1,10 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { AttemptThrottle } from "../common/AttemptThrottle.js";
-import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
-
-const sessionLifetimeMs = SERVER_DEFAULTS.adminSessionLifetimeMs;
-const maxAttempts = 5;
-const attemptWindowMs = 5 * 60 * 1_000;
-const blockedForMs = 60 * 1_000;
+import { ADMIN_SESSION_LIFETIME_MS, LOGIN_ATTEMPT_WINDOW_MS, LOGIN_BLOCKED_FOR_MS, LOGIN_MAX_ATTEMPTS } from "../app/ServerConfig.js";
 
 export class AdminService {
   #sessions = new Map<string, number>();
-  #throttle = new AttemptThrottle({ maxAttempts, windowMs: attemptWindowMs, blockedForMs });
+  #throttle = new AttemptThrottle({ maxAttempts: LOGIN_MAX_ATTEMPTS, windowMs: LOGIN_ATTEMPT_WINDOW_MS, blockedForMs: LOGIN_BLOCKED_FOR_MS });
   readonly #password: string;
 
   constructor(password = process.env.CLIPROAM_ADMIN_PASSWORD ?? "") {
@@ -37,7 +32,7 @@ export class AdminService {
     this.#throttle.reset(ip);
     this.#removeExpiredSessions(now);
     const token = randomBytes(32).toString("base64url");
-    this.#sessions.set(token, now + sessionLifetimeMs);
+    this.#sessions.set(token, now + ADMIN_SESSION_LIFETIME_MS);
     return { token };
   }
 

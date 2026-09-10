@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { ENTRY_PAGE_DEFAULT_LIMIT, ENTRY_PAGE_SIZE_RANGE } from "@cliproam/protocol";
 import { serverSettingsPath } from "../DataPaths.js";
 
-const megabyte = 1024 * 1024;
-const hour = 60 * 60 * 1_000;
+const MEGABYTE = 1024 * 1024;
+const HOUR = 60 * 60 * 1_000;
 
 // 每项设置的默认值与合法范围声明在一起，方便对照；管理后台的下拉档位
 // 必须落在这些范围内。0 关闭对应功能（文件保存 / 断点续传）。
@@ -23,19 +23,26 @@ export const MANIFEST_PAGE_SIZE = {
   max: ENTRY_PAGE_SIZE_RANGE.max,
 } as const;
 
-// 服务器各处默认配置的统一声明，方便集中查看与调整。
-export const SERVER_DEFAULTS = {
-  // HTTP/WebSocket 监听端口。
-  port: 4810,
-  // 全局内容池的垃圾回收周期：回收不再被任何账号条目引用的文件。
-  garbageCollectionIntervalMs: 6 * 60 * 60 * 1_000,
-  // 账号登录会话的有效期；管理后台会话独立计时。
-  accountSessionLifetimeMs: 30 * 24 * 60 * 60 * 1_000,
-  adminSessionLifetimeMs: 8 * 60 * 60 * 1_000,
-  // 闲置用户库连接的回收阈值与巡检周期（每开一个 SQLite 连接都有成本）。
-  userStoreIdleMs: 10 * 60 * 1_000,
-  userStoreSweepIntervalMs: 60 * 1_000,
-} as const;
+// 以下均为固定配置（管理后台不可修改），直接以 const 声明。
+
+// HTTP/WebSocket 监听端口。
+export const SERVER_PORT = 4810;
+// 全局内容池的垃圾回收周期：回收不再被任何账号条目引用的文件。
+export const GARBAGE_COLLECTION_INTERVAL_MS = 6 * 60 * 60 * 1_000;
+// 账号登录会话的有效期；管理后台会话独立计时。
+export const ACCOUNT_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
+export const ADMIN_SESSION_LIFETIME_MS = 8 * 60 * 60 * 1_000;
+// 闲置用户库连接的回收阈值与巡检周期（每开一个 SQLite 连接都有成本）。
+export const USER_STORE_IDLE_MS = 10 * 60 * 1_000;
+export const USER_STORE_SWEEP_INTERVAL_MS = 60 * 1_000;
+// 账号密码的 scrypt 派生密钥长度（字节）。
+export const PASSWORD_KEY_LENGTH = 64;
+// 登录失败限流：账号登录与管理后台共用同一策略（键分别为 ip:username 与 ip）。
+export const LOGIN_MAX_ATTEMPTS = 5;
+export const LOGIN_ATTEMPT_WINDOW_MS = 5 * 60 * 1_000;
+export const LOGIN_BLOCKED_FOR_MS = 60 * 1_000;
+// 管理后台上传 TLS 证书/私钥的单文件大小上限。
+export const TLS_MAX_PEM_BYTES = 1_024 * 1_024;
 
 export type ServerConfig = {
   port: number;
@@ -61,9 +68,9 @@ export function loadServerConfig(): ServerConfig {
     ...readTransferSettings(),
   };
   return {
-    port: SERVER_DEFAULTS.port,
-    maxStoredFileBytes: settings.maxStoredFileMb * megabyte,
-    resumableUploadTtlMs: settings.resumableUploadTtlHours * hour,
+    port: SERVER_PORT,
+    maxStoredFileBytes: settings.maxStoredFileMb * MEGABYTE,
+    resumableUploadTtlMs: settings.resumableUploadTtlHours * HOUR,
     maxHistoryEntries: settings.maxHistoryEntries,
     maxCaptureFileCount: settings.maxCaptureFileCount,
   };
@@ -71,8 +78,8 @@ export function loadServerConfig(): ServerConfig {
 
 export function getTransferSettings(config: ServerConfig): TransferSettings {
   return {
-    maxStoredFileMb: config.maxStoredFileBytes / megabyte,
-    resumableUploadTtlHours: config.resumableUploadTtlMs / hour,
+    maxStoredFileMb: config.maxStoredFileBytes / MEGABYTE,
+    resumableUploadTtlHours: config.resumableUploadTtlMs / HOUR,
     maxHistoryEntries: config.maxHistoryEntries,
     maxCaptureFileCount: config.maxCaptureFileCount,
   };
@@ -87,8 +94,8 @@ export function updateTransferSettings(config: ServerConfig, values: unknown): T
     maxHistoryEntries: validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries),
     maxCaptureFileCount: validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount),
   };
-  config.maxStoredFileBytes = settings.maxStoredFileMb * megabyte;
-  config.resumableUploadTtlMs = settings.resumableUploadTtlHours * hour;
+  config.maxStoredFileBytes = settings.maxStoredFileMb * MEGABYTE;
+  config.resumableUploadTtlMs = settings.resumableUploadTtlHours * HOUR;
   config.maxHistoryEntries = settings.maxHistoryEntries;
   config.maxCaptureFileCount = settings.maxCaptureFileCount;
   writeSettings(settings);

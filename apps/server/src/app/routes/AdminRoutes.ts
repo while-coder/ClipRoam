@@ -6,16 +6,17 @@ import type { FastifyInstance } from "fastify";
 import type { AdminService } from "../../admin/AdminService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
-import { getTransferSettings, updateTransferSettings, type ServerConfig } from "../ServerConfig.js";
+import { getTransferSettings, updateTransferSettings, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
 
-const adminSessionCookie = "cliproam_admin";
-const adminSessionMaxAgeSeconds = 8 * 60 * 60;
+const ADMIN_SESSION_COOKIE = "cliproam_admin";
+// 与管理后台会话有效期保持同一来源（ServerConfig 的 const），单位换算为秒。
+const ADMIN_SESSION_MAX_AGE_SECONDS = ADMIN_SESSION_LIFETIME_MS / 1000;
 // The admin UI ships inside the server package once built, under ./admin-ui —
 // a different name from the backend ./admin (AdminService), because tsc mirrors
 // the src tree and both would otherwise land in the same output directory. The
 // workspace fallback serves the Vite output straight from the monorepo in dev.
-const bundledAdminDirectory = fileURLToPath(new URL("../../admin-ui", import.meta.url));
-const workspaceAdminDirectory = fileURLToPath(new URL("../../../admin", import.meta.url));
+const BUNDLED_ADMIN_DIRECTORY = fileURLToPath(new URL("../../admin-ui", import.meta.url));
+const WORKSPACE_ADMIN_DIRECTORY = fileURLToPath(new URL("../../../admin", import.meta.url));
 
 export type AdminRouteDeps = {
   admin: AdminService;
@@ -34,14 +35,14 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     request: { headers: { cookie?: string } },
     reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown } },
   ): boolean => {
-    if (admin.authenticate(readCookie(request.headers.cookie, adminSessionCookie))) return true;
+    if (admin.authenticate(readCookie(request.headers.cookie, ADMIN_SESSION_COOKIE))) return true;
     reply.code(401).send({ code: "ADMIN_AUTH_REQUIRED", message: "请先登录管理后台。" });
     return false;
   };
 
   const adminCookie = (value: string, maxAge: number): string => {
     const parts = [
-      `${adminSessionCookie}=${value}`,
+      `${ADMIN_SESSION_COOKIE}=${value}`,
       "HttpOnly",
       "Path=/admin-api",
       "SameSite=Strict",
@@ -65,12 +66,12 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       const [statusCode, message] = responses[result.error];
       return reply.code(statusCode).send({ code: result.error, message });
     }
-    reply.header("Set-Cookie", adminCookie(result.token, adminSessionMaxAgeSeconds));
+    reply.header("Set-Cookie", adminCookie(result.token, ADMIN_SESSION_MAX_AGE_SECONDS));
     return { ok: true };
   });
 
   app.post("/admin-api/logout", async (request, reply) => {
-    admin.logout(readCookie(request.headers.cookie, adminSessionCookie));
+    admin.logout(readCookie(request.headers.cookie, ADMIN_SESSION_COOKIE));
     reply.header("Set-Cookie", adminCookie("", 0));
     return { ok: true };
   });
@@ -205,8 +206,8 @@ function readCookie(header: string | undefined, name: string): string | undefine
 async function serveAdminAsset(requestPath: string, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown }; type: (contentType: string) => { send: (payload: unknown) => unknown } }): Promise<unknown> {
   // The backend also compiles into a sibling "admin" directory, so a bare
   // directory check is not enough — only index.html proves the UI is here.
-  const hasBundledUi = existsSync(join(bundledAdminDirectory, "index.html"));
-  const directory = hasBundledUi ? bundledAdminDirectory : workspaceAdminDirectory;
+  const hasBundledUi = existsSync(join(BUNDLED_ADMIN_DIRECTORY, "index.html"));
+  const directory = hasBundledUi ? BUNDLED_ADMIN_DIRECTORY : WORKSPACE_ADMIN_DIRECTORY;
   if (!existsSync(join(directory, "index.html"))) {
     return reply.code(503).send({ message: "管理后台资源未构建。请先执行 pnpm --filter @cliproam/admin build。" });
   }
