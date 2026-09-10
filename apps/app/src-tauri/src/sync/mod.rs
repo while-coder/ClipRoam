@@ -33,10 +33,17 @@ pub(crate) struct SyncConfig {
     /// 约束自动上传档位。
     #[serde(default = "default_server_max_file_mb")]
     pub server_max_file_mb: u64,
+    /// 连接后拉取同步历史的每页数量（10-100）；Rust 侧只透传持久化。
+    #[serde(default = "default_manifest_page_size")]
+    pub manifest_page_size: u32,
+    /// 单次复制文件数上限（登录时服务器下发的 settings.maxCaptureFileCount）；
+    /// 捕获时超过则不捕获、不同步。
+    #[serde(default = "default_max_capture_file_count")]
+    pub max_capture_file_count: u64,
 }
 
-// The serde defaults below must stay in step with the DEFAULT_* constants in
-// packages/protocol/src/index.ts, which are what the frontend actually shows.
+// The serde defaults below must stay in step with the app-side defaults in
+// apps/app/src/features/sync/syncDefaults.ts, which is what the frontend shows.
 fn default_server_protocol() -> String {
     "http".to_string()
 }
@@ -55,6 +62,14 @@ fn default_exclude_patterns() -> Vec<String> {
 
 fn default_server_max_file_mb() -> u64 {
     200
+}
+
+fn default_manifest_page_size() -> u32 {
+    100
+}
+
+pub(crate) fn default_max_capture_file_count() -> u64 {
+    1000
 }
 
 /// 配置对应的本地历史档案键：登录账号用 `account:{服务器}:{用户名}`，

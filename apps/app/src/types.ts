@@ -17,6 +17,10 @@ export type SyncConfig = {
   excludePatterns: string[];
   /** 登录时服务器下发的单文件存储上限（MB），自动上传档位不超过它。 */
   serverMaxFileMb: number;
+  /** 连接后拉取同步历史的每页数量（10-100），下次连接生效。 */
+  manifestPageSize: number;
+  /** 登录时服务器下发的单次复制文件数上限，捕获时超过则不捕获、不同步。 */
+  maxCaptureFileCount: number;
 };
 
 export type MissingFile = { fileId: string; size: number; sourceDeviceId: string };

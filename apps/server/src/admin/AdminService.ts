@@ -1,7 +1,8 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { AttemptThrottle } from "../common/AttemptThrottle.js";
+import { SERVER_DEFAULTS } from "../app/ServerConfig.js";
 
-const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
+const sessionLifetimeMs = SERVER_DEFAULTS.adminSessionLifetimeMs;
 const maxAttempts = 5;
 const attemptWindowMs = 5 * 60 * 1_000;
 const blockedForMs = 60 * 1_000;

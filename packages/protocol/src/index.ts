@@ -1,15 +1,9 @@
 import { z } from "zod";
 
-// Sync-config defaults shared by the app's settings UI and (as a comment) the
-// Rust serde fallbacks in apps/app/src-tauri/src/sync/config.rs.
-export const DEFAULT_SERVER_PROTOCOL = "http";
-export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 50;
-export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
-// 捕获文件/文件夹时按名称跳过的默认过滤模式（与 Rust 侧 default_exclude_patterns 一致）。
-export const DEFAULT_EXCLUDE_PATTERNS = ["node_modules"];
-// 服务器单文件存储上限的默认值（与 apps/server ServerConfig 的默认一致）。
-export const DEFAULT_SERVER_MAX_FILE_MB = 200;
-export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
+// App 侧同步配置的默认值不放在这里：它们只有 app 使用，已移到
+// apps/app/src/features/sync/syncDefaults.ts。本文件只保留三端契约相关的
+// 常量（分片大小、消息上限、分页等）与 schema。
+
 export const FILE_CHUNK_SIZE = 128 * 1024;
 // A single entry carries its whole directory tree, so a publish body can get
 // large. The tree is compact (~40 bytes per node) but unbounded by design.
@@ -20,6 +14,9 @@ export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 // real bound, not the request.
 export const ENTRY_QUERY_BATCH = 100;
 export const ENTRY_PAGE_DEFAULT_LIMIT = 100;
+// `/entries/manifest` 每页数量（pageSize 参数）的合法范围；zod schema 与
+// 服务器端配置共用这一份。
+export const ENTRY_PAGE_SIZE_RANGE = { min: 10, max: 100 } as const;
 
 export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
 
@@ -119,6 +116,17 @@ export const ChangePasswordSchema = z.object({
   message: "新密码不能与当前密码相同",
 });
 
+// 服务器能力上限，随登录/注册响应下发（客户端在下次登录时拿到最新值）。
+// 客户端自动上传档位不能超过 `maxStoredFileMb`（0 表示服务器禁止保存文件），
+// `maxHistoryEntries` 是服务器为账号保留的历史条数上限，
+// `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
+export const ServerSettingsSchema = z.object({
+  maxStoredFileMb: z.number().int().nonnegative(),
+  maxHistoryEntries: z.number().int().positive(),
+  maxCaptureFileCount: z.number().int().positive(),
+});
+export type ServerSettings = z.infer<typeof ServerSettingsSchema>;
+
 export const AuthResponseSchema = z.object({
   sessionToken: z.string().min(1),
   expiresAt: z.string(),
@@ -126,8 +134,7 @@ export const AuthResponseSchema = z.object({
     id: z.string(),
     username: z.string(),
   }),
-  // 登录/注册时随会话下发，客户端自动上传档位不能超过它。
-  maxStoredFileMb: z.number().int().positive(),
+  settings: ServerSettingsSchema,
 });
 
 // Entries run over HTTP. The publish response is the sender's confirmation —
@@ -170,9 +177,11 @@ export const FileQueryRequestSchema = z.object({
 export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchema) });
 
 // Offset pagination over entry identities: keyword filter on entry content, an
-// inclusive UTC time range, a kind filter, and a 1-based page. Page
-// size is the server's choice. Filters apply before paging, so a filtered page
-// always holds up to a full page of matching rows.
+// inclusive UTC time range, a kind filter, and a 1-based page. The client may
+// pick a page size within a bounded range (smaller responses on weak links,
+// fewer round-trips on fast ones); absent, the server default applies. Filters
+// apply before paging, so a filtered page always holds up to a full page of
+// matching rows.
 export const EntryManifestQuerySchema = z.object({
   search: z.string().trim().min(1).max(100).optional(),
   // Either a UTC date (`YYYY-MM-DD`, expanded to the whole day) or a concrete
@@ -181,6 +190,7 @@ export const EntryManifestQuerySchema = z.object({
   dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)?$/, "dateEnd 必须是 UTC 日期或时间戳").optional(),
   kind: ClipboardKindSchema.optional(),
   page: z.coerce.number().int().min(1).max(100000).optional(),
+  pageSize: z.coerce.number().int().min(ENTRY_PAGE_SIZE_RANGE.min).max(ENTRY_PAGE_SIZE_RANGE.max).optional(),
 });
 
 // One page of the identity listing. It doubles as the connection-time

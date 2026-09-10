@@ -1,5 +1,10 @@
 export type TlsStatus = { enabled: boolean; source: "managed" | "none" };
-export type TransferSettings = { maxStoredFileMb: number; resumableUploadTtlHours: number };
+export type TransferSettings = {
+  maxStoredFileMb: number;
+  resumableUploadTtlHours: number;
+  maxHistoryEntries: number;
+  maxCaptureFileCount: number;
+};
 export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
 export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; lastSeenAt: string };

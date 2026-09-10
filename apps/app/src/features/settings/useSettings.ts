@@ -9,7 +9,8 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword } from "../sync/syncClient";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "@cliproam/protocol";
+import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "../sync/syncDefaults";
 import type { SettingsPage, SyncConfig } from "../../types";
 
 /**
@@ -48,6 +49,8 @@ const settingsVisible = ref(false);
 const settingsPage = ref<SettingsPage>("general");
 const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
 const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
+/** 连接后拉取同步历史的每页数量（10-100）。 */
+const manifestPageSize = ref(ENTRY_PAGE_DEFAULT_LIMIT);
 /** 文本域里的过滤模式，一行一条；保存时拆成数组。 */
 const excludePatternsInput = ref("");
 /** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
@@ -66,6 +69,7 @@ function openSettings(): void {
   if (!activeConfig) return;
   autoUploadLimitMb.value = activeConfig.autoUploadLimitMb;
   autoReceiveClipboard.value = activeConfig.autoReceiveClipboard;
+  manifestPageSize.value = activeConfig.manifestPageSize;
   excludePatternsInput.value = activeConfig.excludePatterns.join("\n");
   serverMaxFileMb.value = activeConfig.serverMaxFileMb;
   // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
@@ -185,6 +189,7 @@ async function saveSettings(): Promise<void> {
     ...activeConfig,
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
+    manifestPageSize: manifestPageSize.value,
     excludePatterns: excludePatternsInput.value
       .split("\n")
       .map((pattern) => pattern.trim())
@@ -310,6 +315,7 @@ export {
   settingsPage,
   autoUploadLimitMb,
   autoReceiveClipboard,
+  manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
   savingSettings,

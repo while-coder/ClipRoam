@@ -1,6 +1,6 @@
 import {
   AuthResponseSchema,
-  DEFAULT_AUTO_UPLOAD_LIMIT,
+  ENTRY_PAGE_DEFAULT_LIMIT,
   ENTRY_QUERY_BATCH,
   FILE_CHUNK_SIZE,
   EntryActivateResponseSchema,
@@ -32,6 +32,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
+import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { errorMessage } from "../../utils/error";
 
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
@@ -239,6 +240,8 @@ export class SyncClient {
     private readonly device: Device,
     private readonly handlers: SyncHandlers,
     private readonly autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
+    // 连接后拉取对账快照的每页数量；设置页修改随下次 startSync 生效。
+    private readonly manifestPageSize = ENTRY_PAGE_DEFAULT_LIMIT,
   ) {}
 
   connect(): void {
@@ -515,7 +518,7 @@ export class SyncClient {
   async #fetchConnectionState(): Promise<void> {
     const state = await this.#request(
       "GET",
-      "/entries/manifest",
+      `/entries/manifest?pageSize=${this.manifestPageSize}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
       EntryManifestResponseSchema,
       "服务器返回了不兼容的连接状态响应",
