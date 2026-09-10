@@ -120,7 +120,7 @@ pub fn run() {
             clipboard::capture::capture_current_clipboard_text,
             clipboard::capture::consume_mobile_shares,
             entry::query::list_entries_manifest,
-            entry::query::missing_entry_ids,
+            entry::query::find_unknown_entry_ids,
             entry::query::get_entry,
             file::query::history_file_ids,
             file::query::list_upload_candidates,

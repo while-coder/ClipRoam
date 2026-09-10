@@ -930,7 +930,7 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     // the IPC boundary. The preview diffs its in-memory list instead.
     const localPreviewIds = new Set(previewEntries.value.map((entry) => entry.id));
     const remoteOnlyEntryIds = runningInTauri
-      ? await invoke<string[]>("missing_entry_ids", {
+      ? await invoke<string[]>("find_unknown_entry_ids", {
           entryIds: manifest.map((entry) => entry.id),
         })
       : manifest
