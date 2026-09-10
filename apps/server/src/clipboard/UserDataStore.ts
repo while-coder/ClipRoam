@@ -134,15 +134,29 @@ export class UserDataStore {
   }
 
   listDevices(): Device[] {
-    const rows = this.#database.prepare("SELECT device_id, device_info FROM devices ORDER BY updated_at DESC")
-      .all() as Array<{ device_id: string; device_info: string }>;
-    return rows.flatMap(({ device_id, device_info }) => {
+    return this.#listDeviceRows().map(({ device }) => device);
+  }
+
+  // Admin view: the row's updated_at doubles as the last time the device
+  // signed in or re-registered.
+  listDevicesWithLastSeen(): Array<Device & { lastSeenAt: string }> {
+    return this.#listDeviceRows().map(({ device, updatedAt }) => ({ ...device, lastSeenAt: updatedAt }));
+  }
+
+  #listDeviceRows(): Array<{ device: Device; updatedAt: string }> {
+    const rows = this.#database.prepare("SELECT device_id, device_info, updated_at FROM devices ORDER BY updated_at DESC")
+      .all() as Array<{ device_id: string; device_info: string; updated_at: string }>;
+    return rows.flatMap(({ device_id, device_info, updated_at }) => {
       const result = DeviceSchema.safeParse({
         ...JSON.parse(device_info),
         id: device_id,
       });
-      return result.success ? [result.data] : [];
+      return result.success ? [{ device: result.data, updatedAt: updated_at }] : [];
     });
+  }
+
+  deleteDevice(deviceId: string): boolean {
+    return this.#database.prepare("DELETE FROM devices WHERE device_id = ?").run(deviceId).changes > 0;
   }
 
   // The server owns identity: it dedupes by content hash, assigns the rowid

@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import type {
   AuthResponse,
   ClipboardEntry,
@@ -8,7 +9,8 @@ import type {
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
 import { FileStore } from "../files/FileStore.js";
-import { AccountStore } from "./AccountStore.js";
+import { userDirectory } from "../DataPaths.js";
+import { AccountStore, type AdminUserSummary } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
@@ -67,6 +69,36 @@ export class ClipRoamStore {
   }
   delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
   files(): FileStore { return this.#files; }
+  listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }
+  hasUser(userId: string): boolean { return this.#accounts.hasUser(userId); }
+  resetPassword(userId: string, newPassword: string): Promise<boolean> {
+    return this.#accounts.resetPassword(userId, newPassword);
+  }
+
+  listUserDevices(userId: string): Array<Device & { lastSeenAt: string }> {
+    return this.#userStore(userId).listDevicesWithLastSeen();
+  }
+
+  // The accounts-side session for this device dies with the device row, so a
+  // removed device cannot keep syncing until its stored token expires.
+  deleteUserDevice(userId: string, deviceId: string): boolean {
+    this.#accounts.deleteSession(userId, deviceId);
+    return this.#userStore(userId).deleteDevice(deviceId);
+  }
+
+  // The account row cascades its sessions; the per-user database and directory
+  // are removed with it, while pool files it referenced are reclaimed by the
+  // next garbage-collection sweep.
+  deleteUser(userId: string): boolean {
+    this.#userStores.get(userId)?.store.close();
+    this.#userStores.delete(userId);
+    const removed = this.#accounts.deleteUser(userId);
+    if (removed) {
+      void rm(userDirectory(userId), { recursive: true, force: true })
+        .catch((error) => logger.error(`Failed to remove data directory for user ${userId}:`, error));
+    }
+    return removed;
+  }
   canReadFile(userId: string, entryId: string, fileId: string): boolean {
     return this.#userStore(userId).hasFileReference(entryId, fileId);
   }
