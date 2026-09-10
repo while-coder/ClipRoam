@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { ENTRY_PAGE_DEFAULT_LIMIT, ENTRY_PAGE_SIZE_RANGE } from "@cliproam/protocol";
 import { serverSettingsPath } from "../DataPaths.js";
 
-const MEGABYTE = 1024 * 1024;
-const HOUR = 60 * 60 * 1_000;
+export const MEGABYTE = 1024 * 1024;
+export const HOUR = 60 * 60 * 1_000;
 
 // 每项设置的默认值与合法范围声明在一起，方便对照；管理后台的下拉档位
 // 必须落在这些范围内。0 关闭对应功能（文件保存 / 断点续传）。
@@ -44,15 +44,9 @@ export const LOGIN_BLOCKED_FOR_MS = 60 * 1_000;
 // 管理后台上传 TLS 证书/私钥的单文件大小上限。
 export const TLS_MAX_PEM_BYTES = 1_024 * 1_024;
 
+// 运行时可变的传输配置（管理后台可修改）；固定配置见上方各 const。
+// 单位与管理后台编辑、落盘、下发 app 的源头值保持一致，不做换算存储。
 export type ServerConfig = {
-  port: number;
-  maxStoredFileBytes: number;
-  resumableUploadTtlMs: number;
-  maxHistoryEntries: number;
-  maxCaptureFileCount: number;
-};
-
-export type TransferSettings = {
   maxStoredFileMb: number;
   resumableUploadTtlHours: number;
   maxHistoryEntries: number;
@@ -60,49 +54,27 @@ export type TransferSettings = {
 };
 
 export function loadServerConfig(): ServerConfig {
-  const settings = {
+  return {
     maxStoredFileMb: SETTING_CONSTRAINTS.maxStoredFileMb.default,
     resumableUploadTtlHours: SETTING_CONSTRAINTS.resumableUploadTtlHours.default,
     maxHistoryEntries: SETTING_CONSTRAINTS.maxHistoryEntries.default,
     maxCaptureFileCount: SETTING_CONSTRAINTS.maxCaptureFileCount.default,
     ...readTransferSettings(),
   };
-  return {
-    port: SERVER_PORT,
-    maxStoredFileBytes: settings.maxStoredFileMb * MEGABYTE,
-    resumableUploadTtlMs: settings.resumableUploadTtlHours * HOUR,
-    maxHistoryEntries: settings.maxHistoryEntries,
-    maxCaptureFileCount: settings.maxCaptureFileCount,
-  };
 }
 
-export function getTransferSettings(config: ServerConfig): TransferSettings {
-  return {
-    maxStoredFileMb: config.maxStoredFileBytes / MEGABYTE,
-    resumableUploadTtlHours: config.resumableUploadTtlMs / HOUR,
-    maxHistoryEntries: config.maxHistoryEntries,
-    maxCaptureFileCount: config.maxCaptureFileCount,
-  };
-}
-
-export function updateTransferSettings(config: ServerConfig, values: unknown): TransferSettings {
+export function updateTransferSettings(config: ServerConfig, values: unknown): ServerConfig {
   if (!values || typeof values !== "object") throw new Error("配置必须是对象。");
   const input = values as Record<string, unknown>;
-  const settings: TransferSettings = {
-    maxStoredFileMb: validateSetting(input.maxStoredFileMb, "服务器文件上限（MB）", SETTING_CONSTRAINTS.maxStoredFileMb),
-    resumableUploadTtlHours: validateSetting(input.resumableUploadTtlHours, "断点续传有效期（小时）", SETTING_CONSTRAINTS.resumableUploadTtlHours),
-    maxHistoryEntries: validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries),
-    maxCaptureFileCount: validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount),
-  };
-  config.maxStoredFileBytes = settings.maxStoredFileMb * MEGABYTE;
-  config.resumableUploadTtlMs = settings.resumableUploadTtlHours * HOUR;
-  config.maxHistoryEntries = settings.maxHistoryEntries;
-  config.maxCaptureFileCount = settings.maxCaptureFileCount;
-  writeSettings(settings);
-  return settings;
+  config.maxStoredFileMb = validateSetting(input.maxStoredFileMb, "服务器文件上限（MB）", SETTING_CONSTRAINTS.maxStoredFileMb);
+  config.resumableUploadTtlHours = validateSetting(input.resumableUploadTtlHours, "断点续传有效期（小时）", SETTING_CONSTRAINTS.resumableUploadTtlHours);
+  config.maxHistoryEntries = validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries);
+  config.maxCaptureFileCount = validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount);
+  writeSettings(config);
+  return config;
 }
 
-function readTransferSettings(): Partial<TransferSettings> {
+function readTransferSettings(): Partial<ServerConfig> {
   if (!existsSync(serverSettingsPath)) return {};
   const parsed = JSON.parse(readFileSync(serverSettingsPath, "utf8")) as Record<string, unknown>;
   // A saved value outside the sane range falls back to the default instead of
@@ -115,7 +87,7 @@ function readTransferSettings(): Partial<TransferSettings> {
   };
 }
 
-function writeSettings(settings: TransferSettings): void {
+function writeSettings(settings: ServerConfig): void {
   mkdirSync(dirname(serverSettingsPath), { recursive: true });
   const temporaryPath = `${serverSettingsPath}.${process.pid}.new`;
   writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });

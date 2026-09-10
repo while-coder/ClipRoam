@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type { AdminService } from "../../admin/AdminService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
-import { getTransferSettings, updateTransferSettings, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
+import { updateTransferSettings, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
 
 const ADMIN_SESSION_COOKIE = "cliproam_admin";
 // 与管理后台会话有效期保持同一来源（ServerConfig 的 const），单位换算为秒。
@@ -78,7 +78,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
 
   app.get("/admin-api/status", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
-    return { tls: tls.status, transfer: getTransferSettings(config) };
+    return { tls: tls.status, transfer: config };
   });
 
   app.put("/admin-api/transfer-settings", async (request, reply) => {

@@ -13,7 +13,7 @@ import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
-import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, SERVER_PORT, type ServerConfig } from "./ServerConfig.js";
+import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, HOUR, SERVER_PORT, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
@@ -43,13 +43,13 @@ export class ClipRoamServer {
     );
   }
 
-  get port(): number { return this.config.port; }
+  get port(): number { return SERVER_PORT; }
 
   get adminPassword(): string { return this.#admin.password; }
 
   get adminUrl(): string {
     const protocol = this.#tls.status.enabled ? "https" : "http";
-    return `${protocol}://localhost:${this.config.port}/admin`;
+    return `${protocol}://localhost:${SERVER_PORT}/admin`;
   }
 
   async start(): Promise<void> {
@@ -59,7 +59,7 @@ export class ClipRoamServer {
       this.#collectGarbage();
     }, GARBAGE_COLLECTION_INTERVAL_MS);
     this.#collectionTimer.unref();
-    await this.#app.listen({ port: this.config.port, host: "0.0.0.0" });
+    await this.#app.listen({ port: SERVER_PORT, host: "0.0.0.0" });
   }
 
   async stop(): Promise<void> {
@@ -131,7 +131,7 @@ export class ClipRoamServer {
   #collectGarbage(): void {
     setTimeout(() => {
       try {
-        const { removedFiles, removedBytes } = this.#store.collectGarbage(this.config.resumableUploadTtlMs);
+        const { removedFiles, removedBytes } = this.#store.collectGarbage(this.config.resumableUploadTtlHours * HOUR);
         if (removedFiles > 0) {
           logger.info(`Reclaimed ${removedFiles} globally unreferenced files (${removedBytes} bytes)`);
         }
@@ -152,7 +152,7 @@ function createApp(tls: TlsOptions | undefined): FastifyInstance {
 // settings changes apply without a restart.
 function serverSettings(config: ServerConfig): ServerSettings {
   return {
-    maxStoredFileMb: Math.round(config.maxStoredFileBytes / (1024 * 1024)),
+    maxStoredFileMb: config.maxStoredFileMb,
     maxHistoryEntries: config.maxHistoryEntries,
     maxCaptureFileCount: config.maxCaptureFileCount,
   };
