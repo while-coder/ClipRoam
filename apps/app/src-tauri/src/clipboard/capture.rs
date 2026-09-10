@@ -381,7 +381,6 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             if history.active_history != history_key {
                 return Err("活动档案已切换，放弃本次捕获".to_string());
             }
-            history.cached_files.insert(file_id.clone());
             let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
             // One transaction covers the queue row and the metadata.
             state.with_database(&history_path, |connection| {

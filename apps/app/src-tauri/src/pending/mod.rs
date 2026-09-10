@@ -16,7 +16,7 @@ pub(crate) use resolve::resolve_entry_files;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra};
+use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, SummaryContext};
 use crate::entry::lightweight_entry;
 use crate::store::history_path_for_key;
 use crate::{active_cache_dir, AppState};
@@ -208,13 +208,16 @@ pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize,
 /// 全部队列行，条目形态——待同步视图的数据。
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let stored = crate::file::history_stored_ids(&state, &mut history)?;
     let cache_dir = active_cache_dir(&state, &history);
+    let blobs = crate::file::blob_ids_on_disk(&cache_dir);
+    let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     let rows = state.with_database(&path, |connection| list_rows(connection))?;
     let mut entries: Vec<ClipboardEntry> = rows.iter().map(row_entry).collect();
     for entry in &mut entries {
-        refresh_summary(entry, &history.cached_files, &cache_dir);
+        refresh_summary(entry, &context);
     }
     Ok(entries.iter().map(lightweight_entry).collect())
 }

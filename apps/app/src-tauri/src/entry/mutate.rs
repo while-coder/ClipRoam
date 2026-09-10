@@ -57,8 +57,9 @@ pub(crate) fn remove_remote_entry(app: AppHandle, state: State<'_, AppState>, en
         // The row is gone, so the derived file-id cache is stale.
         history.file_ids = None;
         // Dropping references is what frees disk space, so the sweep runs here.
+        let cache_dir = crate::active_cache_dir(&state, &history);
         let _ = state.with_database(&path, |connection| {
-            collect_local_garbage(connection, &state.histories_dir, &mut history)
+            collect_local_garbage(connection, &cache_dir)
         });
     }
     app.emit("cliproam://history-changed", ())

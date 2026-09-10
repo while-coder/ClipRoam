@@ -102,12 +102,13 @@ pub fn run() {
             let handle = app.handle().clone();
             thread::spawn(move || {
                 let state = handle.state::<AppState>();
-                let Ok(mut history) = state.history.lock() else {
+                let Ok(history) = state.history.lock() else {
                     return;
                 };
                 let path = history_path_for_key(&state.histories_dir, &history.active_history);
+                let cache_dir = active_cache_dir(&state, &history);
                 let _ = state.with_database(&path, |connection| {
-                    collect_local_garbage(connection, &state.histories_dir, &mut history)
+                    collect_local_garbage(connection, &cache_dir)
                 });
             });
             Ok(())
@@ -122,8 +123,10 @@ pub fn run() {
             entry::query::list_entries_manifest,
             entry::query::find_unknown_entry_ids,
             entry::query::get_entry,
-            file::query::history_file_ids,
             file::query::list_upload_candidates,
+            file::store::unknown_file_ids,
+            file::store::save_file_statuses,
+            file::store::mark_files_stored,
             transfer::download::list_entry_files,
             app_shell::get_device,
             sync::get_sync_config,

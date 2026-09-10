@@ -3,8 +3,9 @@
 //! SQLite is the only store: every entry lives in the `entries` table, reads
 //! go through SQL, and every mutation writes exactly the rows it touched —
 //! there is no in-memory window and no full-table sweep. Server-pool
-//! availability is queried live by the frontend; local-cache state is derived
-//! from the blob directories on disk, which are the source of truth for it.
+//! availability lives in the `files` table (`stored = 1`); local-cache state
+//! is derived from the blob directories on disk, which are the source of
+//! truth for it.
 
 use rusqlite::{params, params_from_iter, Connection};
 use std::{
@@ -31,13 +32,15 @@ pub struct HistoryData {
     pub last_image_signature: String,
     pub device_id: String,
     pub device_name: String,
-    /// Content ids this machine has a blob for. Kept in memory so refreshing a
-    /// summary never touches the disk.
-    pub cached_files: HashSet<String>,
     /// Every content id the durable history references, derived from the
     /// entries' extras. `None` means stale: any write to the `entries` table
-    /// resets it, and the next `history_file_ids` re-derives it in one pass.
+    /// resets it, and the next derivation re-derives it in one pass.
     pub file_ids: Option<HashSet<String>>,
+    /// Content ids the server pool holds (`files` table, `stored = 1`), kept in
+    /// memory so refreshing a summary never queries SQLite. `None` means not
+    /// loaded yet; placeholder rows (`stored = 0`) never change the set, so
+    /// only `mark`/`save` extend it and a profile switch rebuilds it.
+    pub stored_file_ids: Option<HashSet<String>>,
 }
 
 impl Default for HistoryData {
@@ -51,8 +54,8 @@ impl Default for HistoryData {
             device_name: std::env::var("COMPUTERNAME")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "This device".to_string()),
-            cached_files: HashSet::new(),
             file_ids: None,
+            stored_file_ids: None,
         }
     }
 }
@@ -164,6 +167,12 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
                 kind TEXT NOT NULL,
                 content TEXT NOT NULL,
                 extra TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS files (
+                file_id TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                stored INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             ",
@@ -285,8 +294,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
         }
     }
 
-    let cache_dir = cache_dir_for_path(path);
-    history.cached_files = crate::file::scan_cached_blobs(&cache_dir);
     history
 }
 

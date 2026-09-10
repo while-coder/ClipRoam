@@ -67,8 +67,8 @@ const props = defineProps<{
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
-  /** Contents the server pool holds, queried live; undefined when offline. */
-  storedFileIds: Set<string> | undefined;
+  /** Upload badges stay hidden entirely while sync is not configured. */
+  syncEnabled: boolean;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
 }>();
 
@@ -184,7 +184,7 @@ function isEntrySynced(entry: ClipboardEntry): boolean {
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
-  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId, props.storedFileIds);
+  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId, props.syncEnabled);
 }
 
 function entrySaveLabel(entry: LocalClipboardEntry): string {

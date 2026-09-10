@@ -1,4 +1,3 @@
-import { entryContents } from "@cliproam/protocol";
 import { MANUAL_UPLOAD_LIMIT } from "../features/sync/syncClient";
 import { runningInTauri } from "../composables/usePlatform";
 import { formatFileSize } from "./format";
@@ -25,15 +24,16 @@ export function isHashing(entry: LocalClipboardEntry): boolean {
 }
 
 /**
- * Server-pool availability lives in `storedFileIds`, refreshed live from
- * `/files/query` — never persisted, so `undefined` (no sync client) means the
- * upload state is simply unknown and stays hidden rather than misreported.
+ * Upload state is derived from the entry's summary: `storedCount` comes from
+ * the local `files` table (persisted, backfilled from `/files/query`), so no
+ * live server state rides in here. Sync being disabled keeps the whole badge
+ * hidden rather than showing a wall of "未上传".
  */
 export function uploadStatus(
   entry: LocalClipboardEntry,
   uploadProgress: Record<string, UploadProgress>,
   downloadProgress: Record<string, DownloadProgress>,
-  storedFileIds: Set<string> | undefined,
+  syncEnabled: boolean,
 ): string | undefined {
   const summary = entry.summary;
   if (!summary.fileCount) return undefined;
@@ -49,12 +49,11 @@ export function uploadStatus(
       : 0;
     return `上传中 ${percent}%`;
   }
-  if (!summary.contentCount || !storedFileIds) return undefined;
-  const uploadedCount = entryContents(entry)
-    .filter(({ fileId }) => storedFileIds.has(fileId)).length;
-  if (uploadedCount === summary.contentCount) return "已上传";
-  if (uploadedCount) {
-    return `部分上传（${uploadedCount}/${summary.contentCount}）`;
+  if (!summary.contentCount || !syncEnabled) return undefined;
+  const storedCount = summary.storedCount;
+  if (storedCount >= summary.contentCount) return "已上传";
+  if (storedCount) {
+    return `部分上传（${storedCount}/${summary.contentCount}）`;
   }
   if (summary.uploadableSize !== undefined && summary.uploadableSize >= MANUAL_UPLOAD_LIMIT) {
     return "未上传（超过 100 MB）";

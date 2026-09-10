@@ -169,9 +169,28 @@ pub fn file_entry_signature(entry: &ClipboardEntry) -> String {
     file_signature(&roots)
 }
 
+/// Everything `refresh_summary` reads beyond the entry itself, gathered once
+/// per command instead of once per entry: the server-pool set comes from the
+/// `files` table's in-memory cache, and the blob set is one directory scan —
+/// the disk is the source of truth for local content, so there is no
+/// long-lived mirror to invalidate.
+pub struct SummaryContext<'a> {
+    /// Content ids the server pool holds (`files` table, `stored = 1`).
+    pub stored: &'a HashSet<String>,
+    /// Content ids this machine has a blob file for on disk.
+    pub blobs: &'a HashSet<String>,
+    pub cache_dir: &'a Path,
+}
+
+impl SummaryContext<'_> {
+    pub fn readable_path(&self, entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf> {
+        readable_path(self.cache_dir, entry, file_id)
+    }
+}
+
 /// Never stats tree nodes: with hundreds of entries holding thousands of paths
 /// each, a single `stat` per node would stall startup.
-pub fn refresh_summary(entry: &mut ClipboardEntry, cached: &HashSet<String>, cache_dir: &Path) {
+pub fn refresh_summary(entry: &mut ClipboardEntry, context: &SummaryContext) {
     let mut summary = EntrySummary::default();
     let contents = match (&entry.file_info, &entry.image_info) {
         (Some(file_info), _) => {
@@ -205,10 +224,12 @@ pub fn refresh_summary(entry: &mut ClipboardEntry, cached: &HashSet<String>, cac
     for (file_id, size) in &contents {
         summary.total_size += size;
         summary.max_file_size = summary.max_file_size.max(*size);
-        // Server-pool availability is not visible here — the frontend queries
-        // it live. A locally readable content is uploadable from this device;
-        // everything else still pends a download or a source re-hash.
-        if cached.contains(file_id) || local.contains(file_id.as_str()) {
+        if context.stored.contains(file_id) {
+            summary.stored_count += 1;
+        }
+        // A locally readable content is uploadable from this device; everything
+        // else still pends a download or a source re-hash.
+        if context.blobs.contains(file_id) || local.contains(file_id.as_str()) {
             summary.ready_count += 1;
             summary.uploadable_size = Some(summary.uploadable_size.unwrap_or(u64::MAX).min(*size));
         } else {
@@ -219,7 +240,7 @@ pub fn refresh_summary(entry: &mut ClipboardEntry, cached: &HashSet<String>, cac
     if entry.kind == "image" {
         let file_id = entry.image_info.as_ref().map(|image| image.file_id.clone());
         summary.preview_path = file_id
-            .and_then(|file_id| readable_path(cache_dir, cached, entry, &file_id))
+            .and_then(|file_id| context.readable_path(entry, &file_id))
             .map(|path| path.display().to_string());
     }
     entry.summary = summary;
@@ -257,16 +278,11 @@ pub fn local_source_of(entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf>
         })
 }
 
-pub fn readable_path(
-    cache_dir: &Path,
-    cached: &HashSet<String>,
-    entry: &ClipboardEntry,
-    file_id: &str,
-) -> Option<PathBuf> {
-    if cached.contains(file_id) {
-        if let Some(path) = cached_file_path(cache_dir, file_id) {
-            return Some(path);
-        }
+pub fn readable_path(cache_dir: &Path, entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf> {
+    // `cached_file_path` stats the blob candidates itself, so the disk is
+    // checked live and a stale in-memory set can never disagree with it.
+    if let Some(path) = cached_file_path(cache_dir, file_id) {
+        return Some(path);
     }
     local_source_of(entry, file_id)
 }

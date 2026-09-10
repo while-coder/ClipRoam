@@ -2,7 +2,7 @@
 //! that decides when remote contents must be materialized first.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -49,7 +49,6 @@ pub(crate) enum ClipboardPayload {
 /// block the clipboard monitor.
 pub(crate) struct EntrySnapshot {
     pub entry: ClipboardEntry,
-    cached: HashSet<String>,
     /// Contents neither a cache blob nor a surviving local source covers,
     /// resolved against the hash cache once at snapshot time: a file this
     /// machine hashed before can stand in for the content and spare a
@@ -71,9 +70,7 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
         .with_database(&hash_database, |connection| {
             Ok(entry_contents_of(&entry)
                 .into_iter()
-                .filter(|(file_id, _)| {
-                    readable_path(&cache_dir, &history.cached_files, &entry, file_id).is_none()
-                })
+                .filter(|(file_id, _)| readable_path(&cache_dir, &entry, file_id).is_none())
                 .filter_map(|(file_id, _)| {
                     cached_source_for(connection, &file_id).map(|path| (file_id, path))
                 })
@@ -82,7 +79,6 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
         .unwrap_or_default();
     Ok(EntrySnapshot {
         entry,
-        cached: history.cached_files.clone(),
         hash_sources,
         cache_dir,
     })
@@ -90,7 +86,7 @@ pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySn
 
 impl EntrySnapshot {
     pub(crate) fn resolve(&self, file_id: &str) -> Option<PathBuf> {
-        readable_path(&self.cache_dir, &self.cached, &self.entry, file_id)
+        readable_path(&self.cache_dir, &self.entry, file_id)
             .or_else(|| self.hash_sources.get(file_id).cloned())
     }
 }
