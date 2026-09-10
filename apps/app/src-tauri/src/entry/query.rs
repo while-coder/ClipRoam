@@ -2,15 +2,16 @@
 //! Entries live in SQLite; every read goes through SQL, and each row's derived
 //! `summary` is recomputed just before it leaves the backend.
 
-use std::collections::HashMap;
-use rusqlite::types::Value;
+use std::collections::{HashMap, HashSet};
+use rusqlite::{params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::content::{refresh_summary, ClipboardEntry};
 use crate::store::{
-    count_entries, history_path_for_key, newest_first_sql, select_all_entry_ids, select_entries,
+    count_entries, history_path_for_key, newest_first_sql, select_entries,
 };
+use crate::utils::placeholders;
 use crate::{active_cache_dir, AppState};
 
 use super::lightweight_entry;
@@ -40,9 +41,6 @@ pub struct EntriesManifestFilter {
 #[serde(rename_all = "camelCase")]
 pub struct EntriesManifestPage {
     total: usize,
-    /// Total entries across every filter — the clear-history affordance, taken
-    /// in the same pass so a refresh burst needs no separate command.
-    all_total: usize,
     entries: Vec<ClipboardEntry>,
 }
 
@@ -126,11 +124,10 @@ pub(crate) fn list_entries_manifest(
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
     // Count and page come out of one pass over the same connection so a
     // concurrent capture cannot slip between them.
-    let (total, all_total, entries) = state.with_database(&path, |connection| {
+    let (total, entries) = state.with_database(&path, |connection| {
         let total = count_entries(connection, &where_sql, &values)?;
-        let all_total = count_entries(connection, "", &[])?;
         let entries = select_entries(connection, &where_sql, &newest_first_sql(limit, offset), &values)?;
-        Ok((total, all_total, entries))
+        Ok((total, entries))
     })?;
     let mut entries = entries;
     for entry in &mut entries {
@@ -138,18 +135,39 @@ pub(crate) fn list_entries_manifest(
     }
     Ok(EntriesManifestPage {
         total,
-        all_total,
         entries: entries.iter().map(lightweight_entry).collect(),
     })
 }
 
-/// Every stored entry id, newest first — the local side of the sync
-/// reconcile's manifest diff and the "clear history" total.
+/// Of the given ids, those the local history does not store — the remote side
+/// of the sync reconcile's manifest diff. The manifest page is a few dozen
+/// ids, so the membership test runs inside SQLite instead of hauling every
+/// local id across the IPC boundary. Input order is preserved.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn list_entry_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+pub(crate) fn missing_entry_ids(
+    state: State<'_, AppState>,
+    entry_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if entry_ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&path, |connection| select_all_entry_ids(connection))
+    state.with_database(&path, |connection| {
+        let marks = placeholders(entry_ids.len());
+        let sql = format!("SELECT id FROM entries WHERE id IN ({marks})");
+        let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+        let values = entry_ids
+            .iter()
+            .map(|id| Value::Text(id.clone()))
+            .collect::<Vec<_>>();
+        let present = statement
+            .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(entry_ids.into_iter().filter(|id| !present.contains(id)).collect())
+    })
 }
 
 /// The full entry, tree included — used when publishing to the server.
