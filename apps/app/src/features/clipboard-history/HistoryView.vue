@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
-  Check,
   Clipboard,
   Download,
   File,
@@ -199,7 +198,7 @@ function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
 async function startWindowDrag(event: MouseEvent): Promise<void> {
   if (!runningInTauri || isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
-  if (target.closest("button, input, [role='button']")) return;
+  if (target.closest("button, input, select, textarea, kbd, [role='button']")) return;
   await invoke("start_window_drag");
 }
 
@@ -307,6 +306,10 @@ function handleKeydown(event: KeyboardEvent): boolean {
     return true;
   }
   if (event.key === "Enter" && !event.shiftKey) {
+    // 焦点在搜索框等输入控件里时，回车属于输入框，不再触发列表条目的
+    // 复制/粘贴，避免一次按键同时执行两个操作。
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable]")) return false;
     event.preventDefault();
     activateSelectedEntry(pageEntries.value[Math.max(selectedLocalIndex.value, 0)]);
     return true;
@@ -333,7 +336,7 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       </div>
     </header>
 
-    <section class="toolbar">
+    <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
       <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
         <LoaderCircle :size="18" class="spin" aria-hidden="true" />
         <span>正在接收系统分享…</span>
@@ -465,7 +468,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         :total="manifestTotal"
         @update:page="changePage"
       />
-      <span v-if="!isPasteWindow" class="privacy"><Check :size="13" /> 本地优先</span>
     </footer>
 
     <div v-if="previewImage" class="image-preview-backdrop" @mousedown.self="closeImagePreview">

@@ -156,7 +156,7 @@ pub(crate) fn setup_desktop_shell(app: &AppHandle) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-fn show_main_window(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;

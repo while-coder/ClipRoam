@@ -23,7 +23,6 @@ const emit = defineEmits<{
       @click="emit('update:page', page - 1)"
     >
       <ChevronLeft :size="15" aria-hidden="true" />
-      <span>上一页</span>
     </button>
     <span class="pagination-status" aria-live="polite">共 {{ total }} 条 · 第 {{ page }} / {{ pageCount }} 页</span>
     <button
@@ -34,7 +33,6 @@ const emit = defineEmits<{
       :disabled="page >= pageCount"
       @click="emit('update:page', page + 1)"
     >
-      <span>下一页</span>
       <ChevronRight :size="15" aria-hidden="true" />
     </button>
   </nav>

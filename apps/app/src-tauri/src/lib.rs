@@ -62,8 +62,17 @@ fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 日志插件最先注册，尽量覆盖后续插件与 setup 阶段的日志
-    let builder = tauri::Builder::default()
+    // 单实例最先注册：第二次启动会自行退出，并唤醒已运行实例的主窗口。
+    // 移动端由系统保证单实例，插件也仅支持桌面端。
+    #[cfg(desktop)]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        platforms::show_main_window(app);
+    }));
+    #[cfg(not(desktop))]
+    let builder = tauri::Builder::default();
+
+    // 日志插件随后注册，尽量覆盖后续插件与 setup 阶段的日志
+    let builder = builder
         .plugin(logging::logging_plugin())
         .plugin(tauri_plugin_clipboard_manager::init());
     let builder = platforms::register_plugins(builder);

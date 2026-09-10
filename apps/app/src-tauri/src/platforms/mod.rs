@@ -23,6 +23,13 @@ pub(crate) use mobile::android::*;
 #[cfg(target_os = "ios")]
 pub(crate) use mobile::ios::*;
 
+/// 单实例插件回调：第二次启动时唤醒已运行实例的主窗口。移动端由系统保证
+/// 单实例，没有这个场景。
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+    let _ = desktop::show_main_window(app);
+}
+
 /// 桌面平台在后台线程轮询系统剪贴板；移动端不轮询（Android 通过分享
 /// 接收导入），这里把差异收敛成统一入口。
 pub(crate) fn start_clipboard_monitor(app: tauri::AppHandle) {

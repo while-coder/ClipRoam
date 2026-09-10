@@ -543,7 +543,9 @@ async function activateEntry(
     // platform must materialize before it can copy or paste the entry.
     await ensurePasteReady(entry);
     await invoke(command, { entryId: entry.id });
-    showToast(command === "copy_entry" ? "已复制到系统剪贴板" : "已粘贴到当前应用", "success");
+    // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
+    // 看不见，保留确认提示。
+    if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
   } catch (error) {
     if (String(error).includes("clipboard entry was not found")) {
       refreshHistory();
