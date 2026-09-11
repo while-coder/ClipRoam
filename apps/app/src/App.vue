@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, monitorFromPoint, PhysicalPosition, type Monitor } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 import type {
@@ -24,6 +24,13 @@ import {
   getServerUrls,
   testSyncConnection,
 } from "./features/sync/syncClient";
+import {
+  requestProxyDevices,
+  startPasteBridge,
+  startSyncBridgeService,
+  SYNC_BRIDGE_DEVICES_EVENT,
+} from "./features/sync/bridge";
+import { downloadStoredFile, type FileDownloadCredentials } from "./features/sync/fileDownload";
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./features/sync/concurrency";
 import {
   disposeQuickPasteShortcut,
@@ -357,6 +364,10 @@ function rememberDevices(devices: Device[]): void {
     ...devicesById.value,
     ...Object.fromEntries(devices.map((device) => [device.id, device])),
   };
+  // paste 窗口不持有 sync 客户端，设备名靠主窗口广播补充。
+  if (runningInTauri && !isPasteWindow) {
+    void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, { devices }).catch(() => undefined);
+  }
 }
 
 function markEntrySynced(entry: ClipboardEntry): void {
@@ -399,6 +410,8 @@ function calculatePasteWindowPosition(
 
 async function showPasteWindow(): Promise<void> {
   if (!isPasteWindow || !runningInTauri) return;
+  // 每次弹出时向主窗口要一次设备名，兜住错过广播的启动竞态；失败静默。
+  requestProxyDevices();
   // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
   await invoke("capture_paste_target").catch(() => undefined);
   const pasteWindow = getCurrentWindow();
@@ -494,6 +507,19 @@ function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T>
 }
 
 /**
+ * paste 窗口直连下载的凭据：现读持久化配置，保证拿到最新 token；
+ * 未配置同步时给出明确错误。
+ */
+async function pasteDownloadCredentials(): Promise<FileDownloadCredentials> {
+  const config = await loadSyncConfig();
+  if (!config || !config.enabled || !config.sessionToken) {
+    throw new Error("同步未配置或未开启，无法获取其他设备的文件");
+  }
+  const { httpUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
+  return { httpUrl, token: config.sessionToken };
+}
+
+/**
  * Fetches every content this device is missing.
  */
 async function downloadRequiredFiles(
@@ -503,6 +529,19 @@ async function downloadRequiredFiles(
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
   const missing = await invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
   if (!missing.length) return entry;
+  if (isPasteWindow) {
+    // paste 窗口不持有 sync 客户端：凭持久化配置直接走公共 HTTP 下载管线，
+    // Rust 写入共享的内容寻址缓存，完成后重读条目即可。
+    try {
+      const credentials = await pasteDownloadCredentials();
+      await downloadMissingFiles(entry.id, missing, (file) =>
+        downloadStoredFile(credentials, entry.id, { fileId: file.fileId, size: file.size }));
+    } finally {
+      downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
+      refreshHistory();
+    }
+    return (await fullEntry(entry)) as LocalClipboardEntry;
+  }
   const client = syncClient;
   if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
 
@@ -616,10 +655,20 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       saveId = preparation.saveId;
 
       if (preparation.missing.length) {
-        const client = syncClient;
-        if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
-        await downloadMissingFiles(entry.id, preparation.missing, (file) =>
-          client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId));
+        if (isPasteWindow) {
+          // 与粘贴同理：paste 窗口凭持久化配置直接走公共 HTTP 下载管线。
+          const credentials = await pasteDownloadCredentials();
+          await downloadMissingFiles(entry.id, preparation.missing, (file) =>
+            downloadStoredFile(credentials, entry.id, {
+              fileId: file.fileId,
+              size: file.size,
+            }, { saveId: preparation.saveId }));
+        } else {
+          const client = syncClient;
+          if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
+          await downloadMissingFiles(entry.id, preparation.missing, (file) =>
+            client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId));
+        }
       }
 
       const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
@@ -1097,7 +1146,28 @@ async function initializeTauriServices(): Promise<void> {
     }),
     listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
+    isPasteWindow
+      ? startPasteBridge({ onDevices: rememberDevices })
+      : startSyncBridgeService({ getDevices: () => Object.values(devicesById.value) }),
     listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
+      if (isPasteWindow) {
+        // paste 窗口凭持久化配置直接走公共 HTTP 下载管线；失败回执给 Rust，
+        // Explorer 重试时 VirtualDownloads 的复位语义会重新发起请求。
+        try {
+          const credentials = await pasteDownloadCredentials();
+          await downloadStoredFile(credentials, payload.entryId, {
+            fileId: payload.fileId,
+            size: payload.size,
+          });
+          refreshHistory();
+        } catch (error) {
+          await invoke("fail_virtual_file_request", {
+            fileId: payload.fileId,
+            message: errorMessage(error),
+          }).catch(() => undefined);
+        }
+        return;
+      }
       const client = syncClient;
       if (!client) {
         await invoke("fail_virtual_file_request", {

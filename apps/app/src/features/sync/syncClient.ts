@@ -33,6 +33,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
+import { downloadStoredFile } from "./fileDownload";
 import { errorMessage } from "../../utils/error";
 
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
@@ -64,8 +65,6 @@ type PendingQueueRow = {
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
-const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
-const DOWNLOAD_RETRY_MS = 3_000;
 const SERVE_RETRY_BACKOFF_MS = 60_000;
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
@@ -281,9 +280,11 @@ export class SyncClient {
 
   // Re-uploads an already-published entry's contents — the settings page's
   // "upload now" run. Nothing is published: the entry row already lives on
-  // the server, and the upload itself is purely content-addressed.
+  // the server, and the upload itself is purely content-addressed. Manual
+  // runs surface connection errors immediately instead of waiting on a
+  // reconnect that may never come.
   async uploadEntryContents(entry: ClipboardEntry): Promise<void> {
-    return this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT);
+    return this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, false);
   }
 
   // The durable capture queue is the single replay mechanism: captures land
@@ -402,11 +403,15 @@ export class SyncClient {
     return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
   }
 
-  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
+  async #uploadEntry(
+    entry: ClipboardEntry,
+    sizeLimit: number,
+    retryOnRecoverable = true,
+  ): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
     if (existingUpload) return existingUpload;
 
-    const upload = this.#uploadFiles(entry, sizeLimit);
+    const upload = this.#uploadFiles(entry, sizeLimit, retryOnRecoverable);
     this.#entryUploads.set(entry.id, upload);
     try {
       await upload;
@@ -423,7 +428,11 @@ export class SyncClient {
    * The candidates derive from the entry payload itself, so this works for a
    * published row and for a queue row that has no local entry yet alike.
    */
-  async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
+  async #uploadFiles(
+    entry: ClipboardEntry,
+    sizeLimit: number,
+    retryOnRecoverable: boolean,
+  ): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
@@ -436,7 +445,7 @@ export class SyncClient {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadFile(file, (fileUploadedBytes) => {
+          await this.#uploadFile(file, retryOnRecoverable, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -640,7 +649,13 @@ export class SyncClient {
     const abort = new AbortController();
     this.#downloadAborts.add(abort);
     try {
-      await this.#fetchStoredFile(entryId, file, saveId, abort);
+      // 下载走纯 HTTP + Rust 落盘（公共管线），不依赖 socket；stop() 时才中止。
+      await downloadStoredFile(
+        { httpUrl: this.httpUrl, token: this.token },
+        entryId,
+        file,
+        { saveId, signal: abort.signal },
+      );
     } finally {
       this.#downloadAborts.delete(abort);
     }
@@ -650,98 +665,9 @@ export class SyncClient {
   // bytes straight off the pool, and content it does not hold parks the
   // request on a live relay pipe that a device holding the bytes fills through
   // `PUT /files/relay/:sessionId`. A pipe that breaks (or its session expires)
-  // simply falls back to the next retry — until the deadline.
-  async #fetchStoredFile(
-    entryId: string,
-    file: FileReference,
-    saveId: string | undefined,
-    abort: AbortController,
-  ): Promise<void> {
-    const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
-    let transferId = crypto.randomUUID();
-    await invoke("begin_file_download", {
-      transferId,
-      fileId: file.fileId,
-      expectedSize: file.size,
-      saveId,
-    });
-    let offset = 0;
-    try {
-      for (;;) {
-        if (offset >= file.size) {
-          await invoke("finish_file_download", { transferId });
-          return;
-        }
-        if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
-        try {
-          offset = await this.#pullOnce(transferId, entryId, file, offset, abort);
-        } catch (error) {
-          if (abort.signal.aborted) throw error;
-          // Broken pipe, expired session, network hiccup: back off and retry.
-          await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
-          // The retry GET streams from byte 0 again (no offset parameter), so
-          // the transfer must restart too — appending the fresh stream onto
-          // the already-received prefix would overflow the declared size and
-          // fail on every subsequent attempt.
-          await invoke("cancel_file_download", {
-            transferId,
-            reason: errorMessage(error),
-          }).catch(() => undefined);
-          transferId = crypto.randomUUID();
-          await invoke("begin_file_download", {
-            transferId,
-            fileId: file.fileId,
-            expectedSize: file.size,
-            saveId,
-          });
-          offset = 0;
-        }
-      }
-    } catch (error) {
-      await invoke("cancel_file_download", {
-        transferId,
-        reason: errorMessage(error),
-      }).catch(() => undefined);
-      throw error;
-    }
-  }
-
-  // One pull attempt: the single download GET either streams stored bytes or
-  // parks on the relay pipe until a holder fills it. Returns the offset the
-  // transfer has advanced to; completion is the caller's check.
-  async #pullOnce(
-    transferId: string,
-    entryId: string,
-    file: FileReference,
-    offset: number,
-    abort: AbortController,
-  ): Promise<number> {
-    const response = await this.#httpFetch(
-      "GET",
-      `/files/${entryId}/${file.fileId}`,
-      { signal: abort.signal },
-    );
-    if (response.status === 401) throw new Error("登录已失效，请重新登录");
-    // Error bodies are JSON; the success body is the file itself, so it must
-    // stay unread until the streaming loop below.
-    if (!response.ok) {
-      const body = await response.json().catch(() => undefined) as unknown;
-      throw new Error(errorMessageFromBody(body, response.status));
-    }
-    return this.#drainIntoTransfer(transferId, response, offset);
-  }
-
-  async #drainIntoTransfer(transferId: string, response: Response, offset: number): Promise<number> {
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("服务器未返回文件内容");
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await invoke("append_file_download", { transferId, data: bytesToBase64(value) });
-      offset += value.byteLength;
-    }
-    return offset;
-  }
+  // simply falls back to the next retry — until the deadline. The pipeline
+  // itself lives in the shared `fileDownload.ts`, so any window can download
+  // with just credentials.
 
   // A 404 is not a failure: another device may have deleted the entry first,
   // and the outcome every device converges on is the same.
@@ -790,8 +716,7 @@ export class SyncClient {
   }
 
   #isRecoverableUploadError(error: unknown): boolean {
-    const message = errorMessage(error);
-    return message === "同步连接已断开" || message === "同步服务未连接";
+    return errorMessage(error) === "同步连接已断开";
   }
 
   #waitForConnection(): Promise<void> {
@@ -821,6 +746,7 @@ export class SyncClient {
 
   async #uploadFile(
     file: FileReference,
+    retryOnRecoverable: boolean,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
     while (!this.#stopped) {
@@ -829,6 +755,9 @@ export class SyncClient {
         return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
+        // Manual runs ("upload now") surface connection errors immediately
+        // instead of waiting on a reconnect that may never come.
+        if (!retryOnRecoverable) throw error;
         await this.#waitForConnection();
         // The socket can stay open while HTTP is briefly unreachable, so back
         // off instead of spinning on an immediately-failing fetch.
@@ -1118,17 +1047,6 @@ function base64ToBytes(base64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;
-}
-
-// `String.fromCharCode` blows the call stack past ~64K arguments, so the bytes
-// go in bounded slices.
-function bytesToBase64(bytes: Uint8Array): string {
-  const sliceSize = 0x8000;
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += sliceSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + sliceSize));
-  }
-  return btoa(binary);
 }
 
 // Mirrors the server's ledger layout: bit `i` of byte `i >> 3`, least
