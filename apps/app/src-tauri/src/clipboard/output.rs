@@ -124,10 +124,11 @@ fn text_payload(entry: &ClipboardEntry) -> ClipboardPayload {
     })
 }
 
-/// Records which signature suppresses re-capturing what was just written,
-/// clearing the other two so a different payload kind is still captured.
-fn record_activation_signature(history: &mut crate::store::HistoryData, payload: &ClipboardPayload) {
-    let (file, clipboard, image) = match payload {
+/// The signature triple that suppresses re-capturing what is about to be
+/// written, with the other two cleared so a different payload kind is still
+/// captured.
+fn activation_signature(payload: &ClipboardPayload) -> (String, String, String) {
+    match payload {
         ClipboardPayload::Files(paths) => {
             let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
             (file_signature(&paths), String::new(), String::new())
@@ -135,7 +136,13 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, payload:
         ClipboardPayload::VirtualFiles(_) => (String::new(), String::new(), String::new()),
         ClipboardPayload::Image(image) => (String::new(), String::new(), image_signature(image)),
         ClipboardPayload::Text(rich_text) => (String::new(), rich_text_signature(rich_text), String::new()),
-    };
+    }
+}
+
+/// Records which signature suppresses re-capturing what was just written,
+/// clearing the other two so a different payload kind is still captured.
+fn record_activation_signature(history: &mut crate::store::HistoryData, signature: (String, String, String)) {
+    let (file, clipboard, image) = signature;
     history.last_file_signature = file;
     history.last_clipboard = clipboard;
     history.last_image_signature = image;
@@ -156,20 +163,25 @@ pub(crate) fn activate_remote_entry(
         "image" => image_payload(&snapshot)?,
         _ => text_payload(&snapshot.entry),
     };
+    let signature = activation_signature(&payload);
 
+    match payload {
+        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text)?,
+        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image)?,
+        _ => unreachable!("file activations are rejected above"),
+    }
+
+    // Signatures are recorded only after the write succeeded: recording first
+    // would make the monitor re-capture the old clipboard content as a
+    // duplicate when the write failed, and suppress the real copy afterwards.
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        record_activation_signature(&mut history, &payload);
+        record_activation_signature(&mut history, signature);
         // Only the activation signatures changed — persist the metadata rows.
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
         state.with_database(&path, |connection| save_metadata(connection, &history))?;
     }
-
-    match payload {
-        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
-        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
-        _ => unreachable!("file activations are rejected above"),
-    }
+    Ok(())
 }
 
 pub(crate) fn apply_clipboard_entry(
@@ -206,7 +218,12 @@ pub(crate) fn apply_clipboard_entry(
                             .join("views")
                             .join(safe_file_name(&snapshot.entry.id));
                         let _ = fs::remove_dir_all(&view);
-                        rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), true)?;
+                        // Real copies, not hard links: the view is handed to
+                        // other applications, and an in-place edit there must
+                        // not reach back into the content-addressed cache blob
+                        // (the filename is the sha256 — corrupted bytes would
+                        // then be trusted for every entry sharing the content).
+                        rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), false)?;
                         let paths = file_info
                             .keys()
                             .map(|root| view.join(root).display().to_string())
@@ -220,13 +237,7 @@ pub(crate) fn apply_clipboard_entry(
         _ => text_payload(&snapshot.entry),
     };
 
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        record_activation_signature(&mut history, &payload);
-        // Only the activation signatures changed — persist the metadata rows.
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
-        state.with_database(&path, |connection| save_metadata(connection, &history))?;
-    }
+    let signature = activation_signature(&payload);
 
     match payload {
         ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text)?,
@@ -235,6 +246,17 @@ pub(crate) fn apply_clipboard_entry(
             crate::platforms::set_virtual_file_clipboard(&app, window.label(), *entry)?
         }
         ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image)?,
+    }
+
+    // Signatures are recorded only after the write succeeded: recording first
+    // would make the monitor re-capture the old clipboard content as a
+    // duplicate when the write failed, and suppress the real copy afterwards.
+    {
+        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        record_activation_signature(&mut history, signature);
+        // Only the activation signatures changed — persist the metadata rows.
+        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&path, |connection| save_metadata(connection, &history))?;
     }
 
     crate::platforms::deliver_paste(&window, synthesize)

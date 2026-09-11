@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileAtomic } from "../common/atomicWrite.js";
 import { dirname } from "node:path";
 import { ENTRY_PAGE_DEFAULT_LIMIT, ENTRY_PAGE_SIZE_RANGE } from "@cliproam/protocol";
 import { serverSettingsPath } from "../DataPaths.js";
@@ -89,9 +90,7 @@ function readTransferSettings(): Partial<ServerConfig> {
 
 function writeSettings(settings: ServerConfig): void {
   mkdirSync(dirname(serverSettingsPath), { recursive: true });
-  const temporaryPath = `${serverSettingsPath}.${process.pid}.new`;
-  writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporaryPath, serverSettingsPath);
+  writeFileAtomic(serverSettingsPath, `${JSON.stringify(settings, null, 2)}\n`, 0o600);
 }
 
 function pickSetting(value: unknown, range: { min: number; max: number }): number | undefined {

@@ -8,6 +8,7 @@ use std::{fs, path::Path};
 use tauri::State;
 
 use crate::store::{history_path_for_key, load_history, save_metadata, LOCAL_HISTORY_KEY};
+use crate::utils::write_file_atomic;
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +95,9 @@ pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
 
 pub(crate) fn write_sync_config(path: &Path, config: &Option<SyncConfig>) -> Result<(), String> {
     let json = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
-    fs::write(path, json).map_err(|error| error.to_string())
+    // 原子写：直接覆盖的话，写一半崩溃/断电会留下无法解析的配置，下次启动
+    // 回落到本地档案——用户视角等于账号历史全部「消失」。
+    write_file_atomic(path, json.as_bytes())
 }
 
 #[tauri::command]
@@ -107,36 +110,38 @@ pub(crate) fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncC
 }
 
 /// 保存配置；键变化时切换到新档案的历史库（设备身份带过去）。
+/// 顺序很讲究：先持久化旧档案元数据，再原子写配置文件，最后才切换内存
+/// 档案。配置写失败时直接返回，内存档案原封不动——不会出现「内存已切到
+/// 账号档案、磁盘配置还是本地」的分裂状态。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn save_sync_config(
     state: State<'_, AppState>,
     config: SyncConfig,
 ) -> Result<(), String> {
     let history_key = history_key_for_config(&config);
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        if history.active_history != history_key {
-            // Persist the outgoing profile's metadata before switching to it.
-            let current_path = history_path_for_key(&state.histories_dir, &history.active_history);
-            state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
-            let next_path = history_path_for_key(&state.histories_dir, &history_key);
-            let profile_exists = next_path.exists();
-            let device_id = history.device_id.clone();
-            let device_name = history.device_name.clone();
-            let mut next_history = load_history(&next_path, &history_key);
-            if !profile_exists {
-                next_history.device_id = device_id;
-                next_history.device_name = device_name;
-            }
-            *history = next_history;
-        }
-        // A fresh profile has no device identity row yet; the metadata write
-        // lands it.
-        let active_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.active_history != history_key {
+        // Persist the outgoing profile's metadata before leaving it.
+        let current_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
     }
-    let config = Some(config);
-    write_sync_config(&state.sync_config_path, &config)?;
-    *state.sync_config.lock().map_err(|error| error.to_string())? = config;
+    write_sync_config(&state.sync_config_path, &Some(config.clone()))?;
+    if history.active_history != history_key {
+        let next_path = history_path_for_key(&state.histories_dir, &history_key);
+        let profile_exists = next_path.exists();
+        let device_id = history.device_id.clone();
+        let device_name = history.device_name.clone();
+        let mut next_history = load_history(&next_path, &history_key);
+        if !profile_exists {
+            next_history.device_id = device_id;
+            next_history.device_name = device_name;
+        }
+        *history = next_history;
+    }
+    // A fresh profile has no device identity row yet; the metadata write
+    // lands it.
+    let active_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
+    *state.sync_config.lock().map_err(|error| error.to_string())? = Some(config);
     Ok(())
 }

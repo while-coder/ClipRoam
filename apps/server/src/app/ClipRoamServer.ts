@@ -131,23 +131,26 @@ export class ClipRoamServer {
   // Sweeping walks the whole content pool, so it is deferred off the caller
   // rather than run inline with the upload that triggered it.
   #collectGarbage(): void {
-    setTimeout(() => {
+    void (async () => {
       try {
-        const { removedFiles, removedBytes } = this.#store.collectGarbage(this.config.resumableUploadTtlHours * HOUR);
+        const { removedFiles, removedBytes } = await this.#store.collectGarbage(this.config.resumableUploadTtlHours * HOUR);
         if (removedFiles > 0) {
           logger.info(`Reclaimed ${removedFiles} globally unreferenced files (${removedBytes} bytes)`);
         }
       } catch (error) {
         logger.error("Failed to collect globally unreferenced files:", error);
       }
-    }, 0);
+    })();
   }
 }
 
 function createApp(tls: TlsOptions | undefined): FastifyInstance {
+  // forceCloseConnections: hijacked relay GETs park on a live pipe and are
+  // never "idle" — without this, `stop()` would wait on them for the full
+  // GracefulShutdownTimeout (or forever) and SIGINT would not shut down.
   return (tls
-    ? Fastify({ logger: false, https: tls })
-    : Fastify({ logger: false })) as FastifyInstance;
+    ? Fastify({ logger: false, forceCloseConnections: true, https: tls })
+    : Fastify({ logger: false, forceCloseConnections: true })) as FastifyInstance;
 }
 
 // The client-facing caps, derived from the live config on every call so admin

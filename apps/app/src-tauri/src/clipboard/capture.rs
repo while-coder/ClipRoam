@@ -19,7 +19,7 @@ use crate::content::{
     ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
 use crate::sync::default_max_capture_file_count;
-use crate::utils::{fnv1a, hash_bytes};
+use crate::utils::{fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{
@@ -401,17 +401,12 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if !image_path.is_file() {
-        // The write is atomic (`.part` + rename) because the target is
-        // content-addressed: a plain interrupted write would leave a truncated
-        // file that every later capture of the same content would then trust.
-        let mut part_name = image_path.clone().into_os_string();
-        part_name.push(".part");
-        let part_path = PathBuf::from(part_name);
-        fs::write(&part_path, &webp).map_err(|error| error.to_string())?;
-        // Two captures of the same content can race here; a rename failure
-        // with the target now present means the winner's identical bytes won.
-        if fs::rename(&part_path, &image_path).is_err() && !image_path.is_file() {
-            let _ = fs::remove_file(&part_path);
+        // The write is atomic because the target is content-addressed: a plain
+        // interrupted write would leave a truncated file that every later
+        // capture of the same content would then trust. Two captures of the
+        // same content can race here; a failure with the target now present
+        // means the winner's identical bytes won.
+        if write_file_atomic(&image_path, &webp).is_err() && !image_path.is_file() {
             return Err("图片内容写入失败".to_string());
         }
     }

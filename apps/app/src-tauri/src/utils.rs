@@ -1,7 +1,7 @@
 //! 跨模块复用的小工具：哈希、时间与 SQL 辅助。
 
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::Path, time::UNIX_EPOCH};
+use std::{fs, io::Read, path::{Path, PathBuf}, time::UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // 哈希
@@ -70,6 +70,24 @@ pub fn escape_like(needle: &str) -> String {
         escaped.push(character);
     }
     escaped
+}
+
+// ---------------------------------------------------------------------------
+// 文件写入
+// ---------------------------------------------------------------------------
+
+/// 原子写入：先写临时文件再改名，写一半崩溃/断电不会留下截断的文件（目标
+/// 多为内容寻址路径，截断文件会被后续同样内容的写入直接信任）。改名失败时
+/// 清理临时文件并返回错误。
+pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut tmp_name = path.as_os_str().to_owned();
+    tmp_name.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_name);
+    fs::write(&tmp_path, bytes).map_err(|error| error.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp_path);
+        error.to_string()
+    })
 }
 
 // ---------------------------------------------------------------------------

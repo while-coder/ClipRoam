@@ -1,5 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref, type WatchSource } from "vue";
 import { PAGE_SIZE } from "../../utils/constants";
+import { errorMessage } from "../../utils/error";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 
 type ManifestOptions = {
@@ -13,6 +14,10 @@ type ManifestOptions = {
   revision: Ref<number>;
   /** Filter inputs: watching them re-runs the query from page 1. */
   filterSources: WatchSource[];
+  /** When false (e.g. an invalid filter), fetches are skipped so the cleared list stays cleared. */
+  canFetch?: () => boolean;
+  /** Fetch failures land here instead of surfacing as unhandled rejections. */
+  onError?: (message: string) => void;
   listElement?: Ref<HTMLElement | undefined>;
   getSelectedEntryId: () => string;
   setSelectedEntryId: (id: string) => void;
@@ -33,6 +38,7 @@ export function useHistoryManifest(options: ManifestOptions) {
   const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
   async function fetch(requestedPage: number, scrollToTop = false): Promise<void> {
+    if (options.canFetch && !options.canFetch()) return;
     const token = ++fetchToken;
     loading.value = true;
     try {
@@ -58,6 +64,10 @@ export function useHistoryManifest(options: ManifestOptions) {
         await nextTick();
         if (options.listElement?.value) options.listElement.value.scrollTop = 0;
       }
+    } catch (error) {
+      // Keep the stale page on screen rather than silently appearing empty;
+      // the caller decides how the failure is surfaced.
+      if (token === fetchToken) options.onError?.(errorMessage(error));
     } finally {
       if (token === fetchToken) loading.value = false;
     }
