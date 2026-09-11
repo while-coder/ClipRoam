@@ -34,12 +34,16 @@ export function useHistoryManifest(options: ManifestOptions) {
   const entries = ref<LocalClipboardEntry[]>([]);
   const loading = ref(false);
   let fetchToken = 0;
+  // 请求的目标页：revision 自增落在一次拉取中途时（例如重开快捷粘贴窗口的
+  // 第 1 页重置还没返回），按目标页重拉，而不是被过期的旧 page.value 抢占。
+  let targetPage = 1;
 
   const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
   async function fetch(requestedPage: number, scrollToTop = false): Promise<void> {
     if (options.canFetch && !options.canFetch()) return;
     const token = ++fetchToken;
+    targetPage = requestedPage;
     loading.value = true;
     try {
       const result = await options.fetchManifest(
@@ -84,7 +88,7 @@ export function useHistoryManifest(options: ManifestOptions) {
   watch(options.filterSources, () => { void fetch(1, true); });
   // `immediate` covers the first mount and re-mounts of the view; later bumps
   // refresh the current page in the background.
-  watch(options.revision, () => { void fetch(page.value); }, { immediate: true });
+  watch(options.revision, () => { void fetch(targetPage); }, { immediate: true });
 
   async function changePage(next: number): Promise<void> {
     if (next === page.value) return;
