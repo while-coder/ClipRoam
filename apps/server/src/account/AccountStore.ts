@@ -12,6 +12,10 @@ const scryptAsync = promisify(scrypt);
 
 export type AccountUser = { id: string; username: string };
 
+// A resolved session also knows which device it was issued to: relay sessions
+// use that to bind a transfer to a single sender device.
+export type AuthenticatedUser = AccountUser & { deviceId: string };
+
 export type AdminUserSummary = { id: string; username: string; createdAt: string; activeSessions: number };
 
 export class UsernameTakenError extends Error {
@@ -109,13 +113,13 @@ export class AccountStore {
     this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id);
   }
 
-  authenticateSession(token: string): AccountUser | undefined {
+  authenticateSession(token: string): AuthenticatedUser | undefined {
     if (!token) return undefined;
     return this.#database.prepare(`
-      SELECT users.id, users.username
+      SELECT users.id, users.username, sessions.device_id AS deviceId
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
-    `).get(hashSessionToken(token), new Date().toISOString()) as AccountUser | undefined;
+    `).get(hashSessionToken(token), new Date().toISOString()) as AuthenticatedUser | undefined;
   }
 
   listUserIds(): string[] {

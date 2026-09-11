@@ -21,7 +21,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
 
   app.post("/auth/register", async (request, reply) => {
     const result = await auth.register(request.body);
-    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
+    // Register answers 201, login 200 — both carry the server settings.
+    return reply.code(result.statusCode).send(result.statusCode === 200 || result.statusCode === 201 ? withServerSettings(result.payload) : result.payload);
   });
 
   app.post("/auth/login", async (request, reply) => {

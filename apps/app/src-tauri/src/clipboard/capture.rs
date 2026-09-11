@@ -401,7 +401,19 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if !image_path.is_file() {
-        fs::write(&image_path, &webp).map_err(|error| error.to_string())?;
+        // The write is atomic (`.part` + rename) because the target is
+        // content-addressed: a plain interrupted write would leave a truncated
+        // file that every later capture of the same content would then trust.
+        let mut part_name = image_path.clone().into_os_string();
+        part_name.push(".part");
+        let part_path = PathBuf::from(part_name);
+        fs::write(&part_path, &webp).map_err(|error| error.to_string())?;
+        // Two captures of the same content can race here; a rename failure
+        // with the target now present means the winner's identical bytes won.
+        if fs::rename(&part_path, &image_path).is_err() && !image_path.is_file() {
+            let _ = fs::remove_file(&part_path);
+            return Err("图片内容写入失败".to_string());
+        }
     }
     let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;

@@ -435,13 +435,25 @@ export class SyncClient {
       for (const fileId of uploaded) {
         this.handlers.onFileAvailable(fileId);
       }
-      const sourceFailure = results.find((result) => (
-        result.status === "rejected"
-        && String(result.reason).includes("复制的源文件已删除或移动")
+      const failures = results.flatMap((result) => (
+        result.status === "rejected" ? [result.reason] : []
       ));
-      if (sourceFailure?.status === "rejected") {
-        this.handlers.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
-        return;
+      if (failures.length) {
+        // A source the local machine can no longer read never becomes
+        // uploadable, so that failure keeps the published record (its bytes
+        // stay downloadable from the device that still holds them) instead of
+        // failing the entry.
+        const allMissingSource = failures.every((reason) => (
+          String(reason).includes("本机文件内容不可用")
+        ));
+        if (allMissingSource) {
+          this.handlers.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
+          return;
+        }
+        // Anything else (auth, network, server) is a real failure: surface it
+        // so the caller's retry/skip handling engages instead of leaving the
+        // content silently unuploaded.
+        throw failures[0];
       }
     } finally {
       this.handlers.onUploadFinished(entry.id);
@@ -598,23 +610,10 @@ export class SyncClient {
     file: FileReference,
     saveId?: string,
   ): Promise<void> {
-    const transferId = crypto.randomUUID();
-    await invoke("begin_file_download", {
-      transferId,
-      fileId: file.fileId,
-      expectedSize: file.size,
-      saveId,
-    });
     const abort = new AbortController();
     this.#downloadAborts.add(abort);
     try {
-      await this.#fetchStoredFile(transferId, entryId, file, abort);
-    } catch (error) {
-      await invoke("cancel_file_download", {
-        transferId,
-        reason: errorMessage(error),
-      }).catch(() => undefined);
-      throw error;
+      await this.#fetchStoredFile(entryId, file, saveId, abort);
     } finally {
       this.#downloadAborts.delete(abort);
     }
@@ -626,26 +625,57 @@ export class SyncClient {
   // `PUT /files/relay/:sessionId`. A pipe that breaks (or its session expires)
   // simply falls back to the next retry — until the deadline.
   async #fetchStoredFile(
-    transferId: string,
     entryId: string,
     file: FileReference,
+    saveId: string | undefined,
     abort: AbortController,
   ): Promise<void> {
     const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
+    let transferId = crypto.randomUUID();
+    await invoke("begin_file_download", {
+      transferId,
+      fileId: file.fileId,
+      expectedSize: file.size,
+      saveId,
+    });
     let offset = 0;
-    for (;;) {
-      if (offset >= file.size) {
-        await invoke("finish_file_download", { transferId });
-        return;
+    try {
+      for (;;) {
+        if (offset >= file.size) {
+          await invoke("finish_file_download", { transferId });
+          return;
+        }
+        if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
+        try {
+          offset = await this.#pullOnce(transferId, entryId, file, offset, abort);
+        } catch (error) {
+          if (abort.signal.aborted) throw error;
+          // Broken pipe, expired session, network hiccup: back off and retry.
+          await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
+          // The retry GET streams from byte 0 again (no offset parameter), so
+          // the transfer must restart too — appending the fresh stream onto
+          // the already-received prefix would overflow the declared size and
+          // fail on every subsequent attempt.
+          await invoke("cancel_file_download", {
+            transferId,
+            reason: errorMessage(error),
+          }).catch(() => undefined);
+          transferId = crypto.randomUUID();
+          await invoke("begin_file_download", {
+            transferId,
+            fileId: file.fileId,
+            expectedSize: file.size,
+            saveId,
+          });
+          offset = 0;
+        }
       }
-      if (Date.now() >= deadline) throw new Error("文件下载超时，没有设备能够提供该文件");
-      try {
-        offset = await this.#pullOnce(transferId, entryId, file, offset, abort);
-      } catch (error) {
-        if (abort.signal.aborted) throw error;
-        // Broken pipe, expired session, network hiccup: back off and retry.
-        await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
-      }
+    } catch (error) {
+      await invoke("cancel_file_download", {
+        transferId,
+        reason: errorMessage(error),
+      }).catch(() => undefined);
+      throw error;
     }
   }
 

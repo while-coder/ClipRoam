@@ -11,7 +11,7 @@ import { getLogger } from "../app/Logger.js";
 import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS } from "../app/ServerConfig.js";
 import { FileStore } from "../files/FileStore.js";
 import { userDirectory } from "../DataPaths.js";
-import { AccountStore, type AdminUserSummary } from "./AccountStore.js";
+import { AccountStore, type AdminUserSummary, type AuthenticatedUser } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
 // `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
@@ -50,7 +50,7 @@ export class ClipRoamStore {
     return this.#accounts.changePassword(userId, currentPassword, newPassword);
   }
 
-  authenticateSession(token: string): { id: string; username: string } | undefined {
+  authenticateSession(token: string): AuthenticatedUser | undefined {
     return this.#accounts.authenticateSession(token);
   }
 

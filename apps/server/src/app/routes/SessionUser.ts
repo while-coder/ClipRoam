@@ -1,8 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { AuthenticatedUser } from "../../account/AccountStore.js";
 
 // The authenticated caller of an HTTP route. The server's central `onRequest`
 // hook resolves the Bearer token once and parks the result here.
-export type SessionUser = { id: string };
+export type SessionUser = AuthenticatedUser;
 
 declare module "fastify" {
   interface FastifyRequest {

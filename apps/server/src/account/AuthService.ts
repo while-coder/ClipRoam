@@ -2,6 +2,7 @@ import { AuthCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol"
 import { LOGIN_ATTEMPT_WINDOW_MS, LOGIN_BLOCKED_FOR_MS, LOGIN_MAX_ATTEMPTS } from "../app/ServerConfig.js";
 import { AttemptThrottle } from "../common/AttemptThrottle.js";
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
+import type { AuthenticatedUser } from "./AccountStore.js";
 
 export type HttpResult = { statusCode: number; payload: unknown };
 
@@ -87,7 +88,7 @@ export class AuthService {
     }
   }
 
-  authenticateSession(token: string): { id: string; username: string } | undefined {
+  authenticateSession(token: string): AuthenticatedUser | undefined {
     return this.store.authenticateSession(token);
   }
 }
