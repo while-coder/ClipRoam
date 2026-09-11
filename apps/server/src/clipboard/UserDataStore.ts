@@ -4,6 +4,7 @@ import {
   FileInfoSchema,
   ImageInfoSchema,
   DeviceSchema,
+  UNKNOWN_DEVICE_ID,
   entryContents,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -62,24 +63,40 @@ export class UserDataStore {
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
-  // date-range and kind filters. The total covers the same filters, so
-  // a client can render "page x of y" and detect the last page from a filtered
-  // result set. Full details ride POST /entries/query. Recency order follows
-  // `created_at`: the rowid no longer reflects it, since a re-copy refreshes
-  // the timestamp while keeping its original rowid.
+  // date-range, kind and source-device filters. The total covers the same
+  // filters, so a client can render "page x of y" and detect the last page
+  // from a filtered result set. Full details ride POST /entries/query.
+  // Recency order follows `created_at`: the rowid no longer reflects it, since
+  // a re-copy refreshes the timestamp while keeping its original rowid.
   listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
+    // The device filter matches entries whose source is one of the selected
+    // devices, or the UNKNOWN_DEVICE_ID marker is selected and its device is
+    // no longer registered. An absent filter drops the clause entirely.
+    const selectedDeviceIds = [...new Set(query.deviceIds ?? [])];
+    const unknownSelected = selectedDeviceIds.includes(UNKNOWN_DEVICE_ID);
+    const knownDeviceIds = selectedDeviceIds.filter((id) => id !== UNKNOWN_DEVICE_ID);
+    const deviceParams = Object.fromEntries(knownDeviceIds.map((id, index) => [`device${index}`, id]));
+    const deviceInSql = knownDeviceIds.length
+      ? `source_device_id IN (${Object.keys(deviceParams).map((name) => `@${name}`).join(", ")})`
+      : "";
+    const unknownSql = unknownSelected
+      ? "source_device_id NOT IN (SELECT device_id FROM devices)"
+      : "";
+    const deviceClause = [deviceInSql, unknownSql].filter(Boolean).join(" OR ");
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
       WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
         AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
         AND (@kind IS NULL OR kind = @kind)
+        ${deviceClause ? `AND (${deviceClause})` : ""}
     `;
     const filters = {
       search: query.search ? `%${escapeLike(query.search)}%` : null,
       dateStart: query.dateStart ? normalizeDateBound(query.dateStart, "start") : null,
       dateEnd: query.dateEnd ? normalizeDateBound(query.dateEnd, "end") : null,
       kind: query.kind ?? null,
+      ...deviceParams,
     };
     const rows = this.#database
       .prepare(`
