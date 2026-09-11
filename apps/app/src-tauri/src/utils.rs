@@ -1,7 +1,7 @@
 //! 跨模块复用的小工具：哈希、时间与 SQL 辅助。
 
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::{Path, PathBuf}, time::UNIX_EPOCH};
+use std::{fs, io::Read, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 // ---------------------------------------------------------------------------
 // 哈希
@@ -52,6 +52,14 @@ pub fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
         .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_millis() as u64)
+}
+
+/// 当前时间的毫秒时间戳；时钟早于 Unix 纪元时返回 0。
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 /// Comma-separated `?` marks for an IN clause.

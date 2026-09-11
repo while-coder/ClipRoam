@@ -9,6 +9,7 @@ import {
   type AdminDevice,
   type AdminUser,
 } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 
 const users = ref<AdminUser[]>([]);
 const loading = ref(true);
@@ -38,7 +39,7 @@ async function load(): Promise<void> {
   try {
     users.value = await fetchUsers(search.value);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "加载用户列表失败。";
+    error.value = errorMessage(reason, "加载用户列表失败。");
   } finally {
     loading.value = false;
   }
@@ -62,7 +63,7 @@ async function removeUser(): Promise<void> {
     notice.value = `用户 ${user.username} 已删除。`;
     await load();
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "删除用户失败。";
+    error.value = errorMessage(reason, "删除用户失败。");
   } finally {
     submitting.value = false;
   }
@@ -102,7 +103,7 @@ async function confirmPasswordReset(): Promise<void> {
     resettingUser.value = undefined;
     notice.value = `用户 ${user.username} 的密码已重置，该用户的所有会话已失效。`;
   } catch (reason) {
-    passwordError.value = reason instanceof Error ? reason.message : "重置密码失败。";
+    passwordError.value = errorMessage(reason, "重置密码失败。");
   } finally {
     submitting.value = false;
   }
@@ -131,7 +132,7 @@ async function loadDevices(): Promise<void> {
   try {
     devices.value = await fetchUserDevices(user.id);
   } catch (reason) {
-    deviceError.value = reason instanceof Error ? reason.message : "加载设备列表失败。";
+    deviceError.value = errorMessage(reason, "加载设备列表失败。");
   } finally {
     devicesLoading.value = false;
   }
@@ -146,7 +147,7 @@ async function removeDevice(device: AdminDevice): Promise<void> {
     await deleteUserDevice(user.id, device.id);
     await loadDevices();
   } catch (reason) {
-    deviceError.value = reason instanceof Error ? reason.message : "删除设备失败。";
+    deviceError.value = errorMessage(reason, "删除设备失败。");
   } finally {
     removingDeviceId.value = "";
   }

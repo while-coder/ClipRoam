@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::content::ClipboardEntry;
 use crate::file::collect_local_garbage;
-use crate::store::{delete_entries_by_ids, history_path_for_key, upsert_entry_row};
+use crate::store::{delete_entries_by_ids, history_path_for_key, upsert_entry_row, with_transaction};
 use crate::AppState;
 
 /// Reconciling a fresh install can deliver hundreds of server entries at once;
@@ -28,12 +28,12 @@ pub(crate) fn upsert_server_entries(
         let mut upserts = entries;
         upserts.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         state.with_database(&history_path, |connection| {
-            let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            for entry in &upserts {
-                upsert_entry_row(&transaction, entry)?;
-            }
-            transaction.commit().map_err(|error| error.to_string())?;
-            Ok(())
+            with_transaction(connection, |transaction| {
+                for entry in &upserts {
+                    upsert_entry_row(transaction, entry)?;
+                }
+                Ok(())
+            })
         })?;
         // The rows changed, so the derived file-id cache is stale.
         history.file_ids = None;
@@ -50,10 +50,10 @@ pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, en
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
         state.with_database(&path, |connection| {
-            let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            delete_entries_by_ids(&transaction, std::slice::from_ref(&entry_id))?;
-            transaction.commit().map_err(|error| error.to_string())?;
-            Ok(())
+            with_transaction(connection, |transaction| {
+                delete_entries_by_ids(transaction, std::slice::from_ref(&entry_id))?;
+                Ok(())
+            })
         })?;
         // The row is gone, so the derived file-id cache is stale.
         history.file_ids = None;

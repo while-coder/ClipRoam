@@ -1,10 +1,11 @@
-import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt } from "node:crypto";
+import { secretsEqual } from "../common/secretsEqual.js";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
 // `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
 type AuthSession = Omit<AuthResponse, "settings">;
 import type Database from "better-sqlite3";
-import { openDatabase } from "../sqlite.js";
+import { escapeLike, openDatabase } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
 import { ACCOUNT_SESSION_LIFETIME_MS, PASSWORD_KEY_LENGTH } from "../app/ServerConfig.js";
 
@@ -87,7 +88,7 @@ export class AccountStore {
     }
     const actualHash = await derivePassword(password, Buffer.from(row.password_salt));
     const expectedHash = Buffer.from(row.password_hash);
-    if (actualHash.length !== expectedHash.length || !timingSafeEqual(actualHash, expectedHash)) {
+    if (!secretsEqual(actualHash, expectedHash)) {
       throw new InvalidCredentialsError();
     }
     return this.#issueSession({ id: row.id, username: row.username }, deviceId);
@@ -102,7 +103,7 @@ export class AccountStore {
 
     const actualHash = await derivePassword(currentPassword, Buffer.from(row.password_salt));
     const expectedHash = Buffer.from(row.password_hash);
-    if (actualHash.length !== expectedHash.length || !timingSafeEqual(actualHash, expectedHash)) {
+    if (!secretsEqual(actualHash, expectedHash)) {
       throw new InvalidCredentialsError();
     }
 
@@ -192,10 +193,6 @@ export class AccountStore {
 
 async function derivePassword(password: string, salt: Uint8Array): Promise<Buffer> {
   return await scryptAsync(password, salt, PASSWORD_KEY_LENGTH) as Buffer;
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 function hashSessionToken(token: string): string {

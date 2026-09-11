@@ -7,7 +7,7 @@
 //! is derived from the blob directories on disk, which are the source of
 //! truth for it.
 
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, Transaction};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -18,6 +18,19 @@ use chrono::DateTime;
 
 use crate::content::{entry_row_extra_json, ClipboardEntry, ClipboardEntryExtra};
 use crate::utils::placeholders;
+
+/// Runs `work` inside one transaction: begin, run, commit. An uncommitted
+/// transaction rolls back when dropped, so a failing `work` needs no explicit
+/// rollback — just return the error.
+pub fn with_transaction<T>(
+    connection: &mut Connection,
+    work: impl FnOnce(&Transaction) -> Result<T, String>,
+) -> Result<T, String> {
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let result = work(&transaction)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(result)
+}
 
 pub const LOCAL_HISTORY_KEY: &str = "local";
 

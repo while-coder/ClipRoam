@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchStatus, updateTransferSettings } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 
 // The dropdown presets live here; the server only sanity-checks that a saved
 // value stays inside its range (ServerConfig.ts).
@@ -37,7 +38,7 @@ async function load(): Promise<void> {
     maxHistoryEntries.value = result.transfer.maxHistoryEntries;
     maxCaptureFileCount.value = result.transfer.maxCaptureFileCount;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "加载传输设置失败。";
+    error.value = errorMessage(reason, "加载传输设置失败。");
   }
 }
 
@@ -59,7 +60,7 @@ async function save(): Promise<void> {
     maxCaptureFileCount.value = transfer.maxCaptureFileCount;
     notice.value = "传输设置已保存，并已应用到后续上传与续传。";
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "保存传输设置失败。";
+    error.value = errorMessage(reason, "保存传输设置失败。");
   } finally {
     submitting.value = false;
   }

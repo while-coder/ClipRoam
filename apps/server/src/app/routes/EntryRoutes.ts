@@ -12,9 +12,10 @@ import {
   type ServerMessage,
 } from "@cliproam/protocol";
 import { getLogger } from "../Logger.js";
-import { MANIFEST_PAGE_SIZE } from "../ServerConfig.js";
+import { MANIFEST_PAGE_SIZE, SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
+import { parseOr400 } from "./parseRequest.js";
 
 const logger = getLogger("EntryRoutes");
 
@@ -41,20 +42,20 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
   app.get("/entries/manifest", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    const parsed = EntryManifestQuerySchema.safeParse(request.query);
-    if (!parsed.success) return reply.code(400).send({ message: "查询参数无效" });
+    const query = parseOr400(reply, EntryManifestQuerySchema, request.query, "查询参数无效");
+    if (!query) return reply;
     // The page size is the client's choice within the schema's bounds;
     // absent, the server default applies.
-    const pageSize = parsed.data.pageSize ?? MANIFEST_PAGE_SIZE.default;
-    return store.listManifestPage(user.id, parsed.data, pageSize) satisfies EntryManifestResponse;
+    const pageSize = query.pageSize ?? MANIFEST_PAGE_SIZE.default;
+    return store.listManifestPage(user.id, query, pageSize) satisfies EntryManifestResponse;
   });
 
-  app.post("/entries/query", { bodyLimit: 64 * 1024 }, async (request, reply) => {
+  app.post("/entries/query", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    const parsed = EntryQueryRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ message: "查询参数无效" });
-    return { entries: store.listByIds(user.id, parsed.data.entryIds) } satisfies EntryQueryResponse;
+    const body = parseOr400(reply, EntryQueryRequestSchema, request.body, "查询参数无效");
+    if (!body) return reply;
+    return { entries: store.listByIds(user.id, body.entryIds) } satisfies EntryQueryResponse;
   });
 
   // Entries carry an unbounded directory tree, so the publish body needs the
@@ -62,13 +63,13 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
   app.post("/entries", { bodyLimit: MAX_PUBLISH_BYTES }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    const parsed = EntryPublishRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ message: "剪贴板参数无效" });
+    const body = parseOr400(reply, EntryPublishRequestSchema, request.body, "剪贴板参数无效");
+    if (!body) return reply;
     const storedEntry = store.upsert(user.id, {
-      ...parsed.data.entry,
-      sourceDeviceId: parsed.data.deviceId,
+      ...body.entry,
+      sourceDeviceId: body.deviceId,
     });
-    logger.info(`Clipboard entry stored: user=${user.id} entry=${storedEntry.id} device=${parsed.data.deviceId}`);
+    logger.info(`Clipboard entry stored: user=${user.id} entry=${storedEntry.id} device=${body.deviceId}`);
     // The response is the publisher's confirmation; the push below still
     // reaches the publisher, whose local write is an idempotent upsert.
     broadcast(user.id, { type: "clipboard.created", entry: storedEntry });
@@ -86,8 +87,8 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const { id } = request.params as { id: string };
     const [entry] = store.listByIds(user.id, [id]);
     if (!entry) return reply.code(404).send({ message: "剪贴板记录不存在" });
-    const parsed = EntryActivateRequestSchema.safeParse(request.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ message: "激活参数无效" });
+    const body = parseOr400(reply, EntryActivateRequestSchema, request.body ?? {}, "激活参数无效");
+    if (!body) return reply;
     // File-list clipboards are intentionally history-only. Broadcasting them
     // would make receivers materialize unused directory views and temporary
     // files before the user has chosen to paste anything. The 200 response
@@ -96,8 +97,8 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (entry.kind !== "files") {
       // Self-excluded on purpose: a delayed self-echo would overwrite a
       // newer local clipboard captured moments after this one.
-      broadcast(user.id, { type: "clipboard.activated", entry }, parsed.data.deviceId);
-      logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${parsed.data.deviceId}`);
+      broadcast(user.id, { type: "clipboard.activated", entry }, body.deviceId);
+      logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${body.deviceId}`);
     }
     return { entry } satisfies EntryActivateResponse;
   });

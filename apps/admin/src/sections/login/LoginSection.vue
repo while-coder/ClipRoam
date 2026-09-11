@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { login as submitLogin } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 import { markAuthenticated } from "../../shared/auth.js";
 
 const route = useRoute();
@@ -22,7 +23,7 @@ async function login(): Promise<void> {
     const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "/";
     await router.push(redirect);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "登录失败。";
+    error.value = errorMessage(reason, "登录失败。");
   } finally {
     submitting.value = false;
   }

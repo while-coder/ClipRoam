@@ -148,6 +148,17 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, signatur
     history.last_image_signature = image;
 }
 
+/// Locks history, records the activation signature and persists the metadata
+/// rows. Call only after the clipboard write succeeded — see the comment at
+/// the call sites.
+fn persist_activation_signature(state: &AppState, signature: (String, String, String)) -> Result<(), String> {
+    let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    record_activation_signature(&mut history, signature);
+    // Only the activation signatures changed — persist the metadata rows.
+    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    state.with_database(&path, |connection| save_metadata(connection, &history))
+}
+
 /// Writes a live clipboard activation received from another device without
 /// synthesizing Paste. File-list entries are deliberately excluded: they stay
 /// in history until the user explicitly chooses where to paste or save them.
@@ -174,13 +185,7 @@ pub(crate) fn activate_remote_entry(
     // Signatures are recorded only after the write succeeded: recording first
     // would make the monitor re-capture the old clipboard content as a
     // duplicate when the write failed, and suppress the real copy afterwards.
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        record_activation_signature(&mut history, signature);
-        // Only the activation signatures changed — persist the metadata rows.
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
-        state.with_database(&path, |connection| save_metadata(connection, &history))?;
-    }
+    persist_activation_signature(&state, signature)?;
     Ok(())
 }
 
@@ -251,13 +256,7 @@ pub(crate) fn apply_clipboard_entry(
     // Signatures are recorded only after the write succeeded: recording first
     // would make the monitor re-capture the old clipboard content as a
     // duplicate when the write failed, and suppress the real copy afterwards.
-    {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        record_activation_signature(&mut history, signature);
-        // Only the activation signatures changed — persist the metadata rows.
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
-        state.with_database(&path, |connection| save_metadata(connection, &history))?;
-    }
+    persist_activation_signature(&state, signature)?;
 
     crate::platforms::deliver_paste(&window, synthesize)
 }

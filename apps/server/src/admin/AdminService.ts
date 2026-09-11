@@ -1,5 +1,6 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { AttemptThrottle } from "../common/AttemptThrottle.js";
+import { secretsEqual } from "../common/secretsEqual.js";
 import { ADMIN_SESSION_LIFETIME_MS, LOGIN_ATTEMPT_WINDOW_MS, LOGIN_BLOCKED_FOR_MS, LOGIN_MAX_ATTEMPTS } from "../app/ServerConfig.js";
 
 export class AdminService {
@@ -24,7 +25,7 @@ export class AdminService {
     const now = Date.now();
     if (this.#throttle.isBlocked(ip, now)) return { error: "TOO_MANY_ATTEMPTS" };
 
-    if (typeof password !== "string" || !sameSecret(this.password, password)) {
+    if (typeof password !== "string" || !secretsEqual(this.password, password)) {
       this.#throttle.recordFailure(ip, now);
       return { error: "INVALID_CREDENTIALS" };
     }
@@ -55,10 +56,4 @@ export class AdminService {
       if (expiresAt <= now) this.#sessions.delete(token);
     }
   }
-}
-
-function sameSecret(expected: string, actual: string): boolean {
-  const expectedBuffer = Buffer.from(expected);
-  const actualBuffer = Buffer.from(actual);
-  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
 }

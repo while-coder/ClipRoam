@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchStatus, fetchUsers, type TlsStatus } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 
 const tls = ref<TlsStatus>();
 const userCount = ref(0);
@@ -15,7 +16,7 @@ onMounted(async () => {
     userCount.value = users.length;
     tlsSummary.value = status.tls.enabled ? "HTTPS 已启用（后台管理）" : "尚未启用 HTTPS";
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "加载状态失败。";
+    error.value = errorMessage(reason, "加载状态失败。");
   }
 });
 </script>

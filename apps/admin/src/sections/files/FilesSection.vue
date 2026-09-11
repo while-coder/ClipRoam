@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { deleteFile, fetchFiles, type AdminFile, type FileStats } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 
 const pageLimit = 500;
 
@@ -39,7 +40,7 @@ async function load(): Promise<void> {
     total.value = result.total;
     stats.value = result.stats;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "加载文件列表失败。";
+    error.value = errorMessage(reason, "加载文件列表失败。");
   } finally {
     loading.value = false;
   }
@@ -63,22 +64,22 @@ async function removeFile(): Promise<void> {
     notice.value = "文件已删除。";
     await load();
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "删除文件失败。";
+    error.value = errorMessage(reason, "删除文件失败。");
   } finally {
     submitting.value = false;
   }
 }
 
+// 与 apps/app/src/utils/format.ts 的 formatFileSize 是同一实现，改动请同步。
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
-  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit]}`;
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function formatDateTime(iso: string): string {
