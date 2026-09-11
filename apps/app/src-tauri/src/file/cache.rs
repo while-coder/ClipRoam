@@ -81,15 +81,22 @@ pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
         .flatten();
     let mut ids = HashSet::new();
     for extra in rows {
-        let extra: ClipboardEntryExtra = serde_json::from_str(&extra).unwrap_or_default();
-        if let Some(image_info) = &extra.image_info {
-            ids.insert(image_info.file_id.clone());
-        }
-        for (file_id, _) in extra.file_info.as_ref().map(tree_contents).unwrap_or_default() {
-            ids.insert(file_id);
-        }
+        extend_referenced_ids(&extra, &mut ids);
     }
     ids
+}
+
+/// Content ids one `extra` JSON blob references (image contents plus file tree
+/// leaves). Shared by the history scan and the pending-queue scan, which use
+/// the same `ClipboardEntryExtra` shape.
+fn extend_referenced_ids(extra_json: &str, ids: &mut HashSet<String>) {
+    let extra: ClipboardEntryExtra = serde_json::from_str(extra_json).unwrap_or_default();
+    if let Some(image_info) = &extra.image_info {
+        ids.insert(image_info.file_id.clone());
+    }
+    for (file_id, _) in extra.file_info.as_ref().map(tree_contents).unwrap_or_default() {
+        ids.insert(file_id);
+    }
 }
 
 /// Content ids this machine holds a blob for, scanned fresh per command. The
@@ -179,13 +186,23 @@ pub fn collect_local_garbage(
                     }
                 }
             }
-            let extra: ClipboardEntryExtra = serde_json::from_str(&extra).unwrap_or_default();
-            if let Some(image_info) = &extra.image_info {
-                referenced.insert(image_info.file_id.clone());
-            }
-            for (file_id, _) in extra.file_info.as_ref().map(tree_contents).unwrap_or_default() {
-                referenced.insert(file_id);
-            }
+            extend_referenced_ids(&extra, &mut referenced);
+        }
+    }
+
+    // Pending queue rows reference their blobs the same way published entries
+    // do — an offline capture's image lands on disk before its entry row ever
+    // exists — so the sweep must count these too, or it deletes data whose
+    // only reference is a queue row that can never upload again.
+    {
+        let mut statement = connection
+            .prepare("SELECT extra FROM pending_entries")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>("extra"))
+            .map_err(|error| error.to_string())?;
+        for extra in rows.flatten() {
+            extend_referenced_ids(&extra, &mut referenced);
         }
     }
 

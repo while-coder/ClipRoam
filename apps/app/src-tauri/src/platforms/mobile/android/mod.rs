@@ -46,17 +46,32 @@ fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<Pat
             .filter(|name| !name.is_empty())
             .map(|name| name.to_owned())
             .unwrap_or_else(|| format!("shared-{}", index + 1).into());
-        let target = directory.join(name);
-        let source_size = fs::metadata(&source).map_err(|error| error.to_string())?.len();
-        let target_matches = fs::metadata(&target)
-            .map(|metadata| metadata.is_file() && metadata.len() == source_size)
-            .unwrap_or(false);
-        if !target_matches {
-            fs::copy(&source, &target).map_err(|error| format!("无法保存分享文件 {}：{error}", item.name))?;
-        }
+        // 同名分享项各占一个目标：先到先得，后来者递增命名。目标路径即
+        // 内容来源，互相覆盖会让第一个文件的内容永久丢失。
+        let target = unique_target(&directory, &name);
+        fs::copy(&source, &target)
+            .map_err(|error| format!("无法保存分享文件 {}：{error}", item.name))?;
         paths.push(target);
     }
     Ok(paths)
+}
+
+/// 在 directory 下为 name 找一个未被占用的目标路径，重名时按
+/// `name (2).ext` 递增。
+fn unique_target(directory: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let candidate = directory.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let name = name.to_string_lossy();
+    let (stem, extension) = match name.rfind('.') {
+        Some(index) if index > 0 => (&name[..index], &name[index..]),
+        _ => (name.as_ref(), ""),
+    };
+    (2u32..)
+        .map(|counter| directory.join(format!("{stem} ({counter}){extension}")))
+        .find(|candidate| !candidate.exists())
+        .expect("the counter range is unbounded")
 }
 
 fn import_android_share(app: &AppHandle, share: &PendingShare) -> Result<ShareImportSummary, String> {
@@ -92,7 +107,19 @@ fn import_android_share(app: &AppHandle, share: &PendingShare) -> Result<ShareIm
 pub(crate) fn consume_pending_shares(app: &AppHandle) -> Result<ShareImportSummary, String> {
     let mut imported = ShareImportSummary::default();
     for share in app.share_receiver().pending().map_err(|error| error.to_string())? {
-        let summary = import_android_share(app, &share)?;
+        // 单条分享失败（分享源被系统回收是常态）不能卡住整个队列：提示
+        // 后丢弃该条并继续导入后面的。不确认的话它会永久阻塞后续分享。
+        let summary = match import_android_share(app, &share) {
+            Ok(summary) => summary,
+            Err(error) => {
+                let _ = crate::app_shell::show_toast(
+                    app.clone(),
+                    format!("分享导入失败，已跳过：{error}"),
+                    "error".to_string(),
+                );
+                ShareImportSummary::default()
+            }
+        };
         app.share_receiver()
             .acknowledge(&share.id)
             .map_err(|error| error.to_string())?;

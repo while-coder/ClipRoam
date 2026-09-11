@@ -147,9 +147,12 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     if (session.userId !== user.id) {
       return reply.code(404).send({ message: "中转会话不存在" });
     }
-    // Only the first PUT claims; later chunks of the same transfer pass
-    // through. A claim that fails here means another sender won the race.
-    if (!session.claimed && !relays.claim(sessionId)) {
+    // Only the first PUT claims, and the claim binds the session to that
+    // sender's device: every device holding the content sees `file.requested`,
+    // so without the binding a second sender's chunks would interleave with
+    // the winner's and corrupt the byte stream. A claim that fails here means
+    // another device won the race.
+    if (!relays.admit(sessionId, user.deviceId)) {
       return reply.code(409).send({ message: "中转会话已被其他设备认领" });
     }
     if (!(await relays.push(sessionId, chunk))) {

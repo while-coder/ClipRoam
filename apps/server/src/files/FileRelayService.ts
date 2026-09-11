@@ -19,6 +19,10 @@ export type RelaySession = {
   size: number;
   stream: PassThrough;
   claimed: boolean;
+  // Device id of the sender that won the claim: `file.requested` reaches every
+  // online device holding the content, so without this binding a second sender
+  // would interleave its chunks into the same pipe and corrupt the stream.
+  claimedBy?: string;
   createdAt: number;
   // Last byte the sender fed in; a claimed session with no activity for
   // SESSION_IDLE_MS is a half-open transfer and gets swept like an idle one.
@@ -75,12 +79,16 @@ export class FileRelayService {
     return this.#sessions.get(sessionId);
   }
 
-  // Only one sender may feed a session; a second claim (e.g. two devices hold
-  // the same content) gets a false and keeps its bytes.
-  claim(sessionId: string): boolean {
+  // Only one sender may feed a session: the first PUT claims it for that
+  // sender's device, later chunks from the same device pass, and a different
+  // device (two devices hold the same content) is rejected so the two byte
+  // streams cannot interleave.
+  admit(sessionId: string, senderDeviceId: string): boolean {
     const session = this.#sessions.get(sessionId);
-    if (!session || session.claimed || session.stream.destroyed) return false;
+    if (!session || session.stream.destroyed) return false;
+    if (session.claimed) return session.claimedBy === senderDeviceId;
     session.claimed = true;
+    session.claimedBy = senderDeviceId;
     return true;
   }
 
