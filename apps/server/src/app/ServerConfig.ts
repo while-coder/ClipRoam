@@ -44,6 +44,9 @@ export const LOGIN_ATTEMPT_WINDOW_MS = 5 * 60 * 1_000;
 export const LOGIN_BLOCKED_FOR_MS = 60 * 1_000;
 // 管理后台上传 TLS 证书/私钥的单文件大小上限。
 export const TLS_MAX_PEM_BYTES = 1_024 * 1_024;
+// 小型 JSON 请求体（id 列表查询）与入站 WebSocket 消息的上限；与条目负载的
+// MAX_PUBLISH_BYTES 区分开。
+export const SMALL_JSON_BODY_LIMIT = 64 * 1024;
 
 // 运行时可变的传输配置（管理后台可修改）；固定配置见上方各 const。
 // 单位与管理后台编辑、落盘、下发 app 的源头值保持一致，不做换算存储。

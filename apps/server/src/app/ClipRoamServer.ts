@@ -13,7 +13,7 @@ import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
-import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, HOUR, SERVER_PORT, type ServerConfig } from "./ServerConfig.js";
+import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, HOUR, SERVER_PORT, SMALL_JSON_BODY_LIMIT, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
@@ -55,7 +55,7 @@ export class ClipRoamServer {
   async start(): Promise<void> {
     // Inbound socket messages are only `auth`/`ping` — a small explicit cap,
     // not the publish-body limit that used to double as this value.
-    await this.#app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+    await this.#app.register(websocket, { options: { maxPayload: SMALL_JSON_BODY_LIMIT } });
     this.#registerRoutes();
     this.#collectionTimer = setInterval(() => {
       this.#collectGarbage();

@@ -15,7 +15,7 @@ import {
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
-import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
+import { chunk, escapeLike, openDatabase, placeholders, QUERY_BATCH, withTransaction } from "../sqlite.js";
 import { userDatabasePath } from "../DataPaths.js";
 
 type EntryRow = {
@@ -108,7 +108,7 @@ export class UserDataStore {
         .prepare(`
           SELECT id, kind, content, extra, source_device_id, created_at
           FROM entries
-          WHERE id IN (${ids.map(() => "?").join(",")})
+          WHERE id IN (${placeholders(ids.length)})
           ORDER BY created_at DESC
         `)
         .all(...ids) as Array<EntryRow>;
@@ -256,12 +256,6 @@ export class UserDataStore {
   #transaction<T>(work: () => T): T {
     return withTransaction(this.#database, work);
   }
-}
-
-// LIKE wildcards in user input must match literally, so they are escaped and
-// the statement declares '\\' as the escape character.
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
 // Range bounds compare against `created_at` (stored via `toISOString()`, i.e.

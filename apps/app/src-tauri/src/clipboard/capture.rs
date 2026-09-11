@@ -23,7 +23,8 @@ use crate::utils::{fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{
-    history_path_for_key, save_metadata, select_entries, upsert_entry_row, HistoryData,
+    history_path_for_key, save_metadata, select_entries, upsert_entry_row, with_transaction,
+    HistoryData,
 };
 use crate::AppState;
 
@@ -211,18 +212,18 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
             // a crash cannot leave a half-written capture. A failure here skips
             // the capture entirely — without a queue row there is nothing to sync.
             state.with_database(&path, |connection| {
-                let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                // Queue dedup ignores kind: the same content waiting to be synced
-                // collapses into this new row. Published duplicates stay alone —
-                // the server dedups by content, so the publish refreshes that
-                // row's timestamp and the echo moves it back to the top.
-                transaction
-                    .execute("DELETE FROM pending_entries WHERE content = ?", [&text])
-                    .map_err(|error| error.to_string())?;
-                enqueue_pending_entry(&transaction, "text", &text, &payload, &created_at)?;
-                save_metadata(&transaction, &history)?;
-                transaction.commit().map_err(|error| error.to_string())?;
-                Ok(())
+                with_transaction(connection, |transaction| {
+                    // Queue dedup ignores kind: the same content waiting to be synced
+                    // collapses into this new row. Published duplicates stay alone —
+                    // the server dedups by content, so the publish refreshes that
+                    // row's timestamp and the echo moves it back to the top.
+                    transaction
+                        .execute("DELETE FROM pending_entries WHERE content = ?", [&text])
+                        .map_err(|error| error.to_string())?;
+                    enqueue_pending_entry(transaction, "text", &text, &payload, &created_at)?;
+                    save_metadata(transaction, &history)?;
+                    Ok(())
+                })
             })
         })?
     };
@@ -270,9 +271,10 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
         CapturedSignature::File(signature).record(&mut history);
         let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
         state.with_database(&history_path, |connection| {
-            let transaction = connection.transaction().map_err(|error| error.to_string())?;
-            save_metadata(&transaction, &history)?;
-            transaction.commit().map_err(|error| error.to_string())
+            with_transaction(connection, |transaction| {
+                save_metadata(transaction, &history)?;
+                Ok(())
+            })
         })?;
         drop(history);
         log::warn!("复制内容包含 {file_count} 个文件，超过 {max_capture_file_count} 上限，未捕获");
@@ -309,11 +311,11 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 Some(mut existing) => {
                     existing.created_at = created_at;
                     let outcome = state.with_database(&history_path, |connection| {
-                        let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                        upsert_entry_row(&transaction, &existing)?;
-                        save_metadata(&transaction, &history)?;
-                        transaction.commit().map_err(|error| error.to_string())?;
-                        Ok(())
+                        with_transaction(connection, |transaction| {
+                            upsert_entry_row(transaction, &existing)?;
+                            save_metadata(transaction, &history)?;
+                            Ok(())
+                        })
                     });
                     // A row write lands, so the derived file-id cache is stale
                     // (conservatively — only `created_at` changed here).
@@ -335,11 +337,11 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                     };
                     let payload = extra.json()?;
                     state.with_database(&history_path, |connection| {
-                        let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                        enqueue_pending_entry(&transaction, "files", &content, &payload, &created_at)?;
-                        save_metadata(&transaction, &history)?;
-                        transaction.commit().map_err(|error| error.to_string())?;
-                        Ok(())
+                        with_transaction(connection, |transaction| {
+                            enqueue_pending_entry(transaction, "files", &content, &payload, &created_at)?;
+                            save_metadata(transaction, &history)?;
+                            Ok(())
+                        })
                     })
                 }
             }
@@ -422,11 +424,11 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
             // One transaction covers the queue row and the metadata.
             state.with_database(&history_path, |connection| {
-                let transaction = connection.transaction().map_err(|error| error.to_string())?;
-                enqueue_pending_entry(&transaction, "image", &content, &payload, &created_at)?;
-                save_metadata(&transaction, &history)?;
-                transaction.commit().map_err(|error| error.to_string())?;
-                Ok(())
+                with_transaction(connection, |transaction| {
+                    enqueue_pending_entry(transaction, "image", &content, &payload, &created_at)?;
+                    save_metadata(transaction, &history)?;
+                    Ok(())
+                })
             })
         })?
     };

@@ -11,7 +11,9 @@ import type { FileQueryResponse, ServerMessage } from "@cliproam/protocol";
 import type { FileRelayService } from "../../files/FileRelayService.js";
 import { UploadHttpError, type UploadService } from "../../files/UploadService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
+import { SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
 import { requireSessionUser } from "./SessionUser.js";
+import { parseOr400 } from "./parseRequest.js";
 
 export type FileRouteDeps = {
   uploads: Pick<UploadService, "begin" | "uploadPart">;
@@ -30,10 +32,10 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   app.post("/upload/begin", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    const parsed = UploadBeginRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ message: "上传参数无效" });
+    const body = parseOr400(reply, UploadBeginRequestSchema, request.body, "上传参数无效");
+    if (!body) return reply;
     try {
-      return uploads.begin(parsed.data.fileId, parsed.data.size);
+      return uploads.begin(body.fileId, body.size);
     } catch (error) {
       return uploadError(reply, error);
     }
@@ -122,12 +124,12 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   // download route already answers "do you hold sha256(x)?" for any published
   // entry, so a bare availability read leaks nothing new; ids still validate
   // against the content-hash shape.
-  app.post("/files/query", { bodyLimit: 64 * 1024 }, async (request, reply) => {
+  app.post("/files/query", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    const parsed = FileQueryRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ message: "查询参数无效" });
-    return { files: store.files().describe(parsed.data.fileIds) } satisfies FileQueryResponse;
+    const body = parseOr400(reply, FileQueryRequestSchema, request.body, "查询参数无效");
+    if (!body) return reply;
+    return { files: store.files().describe(body.fileIds) } satisfies FileQueryResponse;
   });
 
   // One chunk of an online relay. The first PUT claims the session (a second

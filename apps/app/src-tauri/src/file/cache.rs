@@ -3,11 +3,10 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::content::{tree_contents, ClipboardEntryExtra, LocalSources};
-use crate::utils::modified_millis;
+use crate::utils::{modified_millis, now_millis};
 
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -219,9 +218,8 @@ pub fn collect_local_garbage(
             let expired = file
                 .metadata()
                 .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|time| now_millis().saturating_sub(time.as_millis() as u64) > DOWNLOAD_TTL_MS)
+                .and_then(|metadata| modified_millis(&metadata))
+                .map(|modified_at| now_millis().saturating_sub(modified_at) > DOWNLOAD_TTL_MS)
                 .unwrap_or(true);
             if expired && fs::remove_file(file.path()).is_ok() {
                 removed.push(file_id);
@@ -246,11 +244,4 @@ pub fn collect_local_garbage(
         }
     }
     Ok(removed.len() + removed_share_requests)
-}
-
-pub fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis() as u64)
-        .unwrap_or_default()
 }

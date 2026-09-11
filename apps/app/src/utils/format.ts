@@ -43,6 +43,7 @@ export function validateDateRange(start: string, end: string): string {
   return "";
 }
 
+// 与 apps/admin/src/sections/files/FilesSection.vue 的 formatBytes 是同一实现，改动请同步。
 export function formatFileSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;

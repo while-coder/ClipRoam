@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, rmSync, statSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { filesDatabasePath, filesDirectory } from "../DataPaths.js";
-import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js";
+import { chunk, escapeLike, openDatabase, placeholders, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
@@ -152,7 +152,7 @@ export class FileStore {
     for (const batch of chunk(fileIds, QUERY_BATCH)) {
       const rows = this.database.prepare(`
         SELECT file_id, size, stored FROM files
-        WHERE file_id IN (${batch.map(() => "?").join(",")})
+        WHERE file_id IN (${placeholders(batch.length)})
       `).all(...batch) as Array<FileRow>;
       for (const file of rows) known.set(file.file_id, file);
     }
@@ -313,10 +313,6 @@ function statsOf(path: string): Stats | undefined {
   } catch {
     return undefined;
   }
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 function isExpired(mtimeMs: number, ttlMs: number): boolean {

@@ -24,6 +24,17 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return batches;
 }
 
+// Comma-separated `?` marks for an IN clause.
+export function placeholders(count: number): string {
+  return new Array(count).fill("?").join(",");
+}
+
+// LIKE wildcards in user input must match literally, so they are escaped and
+// statements using it declare `ESCAPE '\'`.
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 export function withTransaction<T>(database: Database.Database, work: () => T): T {
   database.exec("BEGIN");
   try {

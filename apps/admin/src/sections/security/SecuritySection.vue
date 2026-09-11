@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchStatus, removeTls, replaceTls, type TlsStatus } from "../../shared/api.js";
+import { errorMessage } from "../../shared/errorMessage.js";
 
 const submitting = ref(false);
 const error = ref("");
@@ -14,7 +15,7 @@ async function load(): Promise<void> {
   try {
     status.value = (await fetchStatus()).tls;
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "加载证书状态失败。";
+    error.value = errorMessage(reason, "加载证书状态失败。");
   }
 }
 
@@ -32,7 +33,7 @@ async function save(): Promise<void> {
       ? "证书已保存。当前服务仍是 HTTP，请重启服务后启用 HTTPS/WSS。"
       : "证书已更新，HTTPS/WSS 已使用新证书。";
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "保存证书失败。";
+    error.value = errorMessage(reason, "保存证书失败。");
   } finally {
     submitting.value = false;
   }
@@ -55,7 +56,7 @@ async function remove(): Promise<void> {
     confirmingTlsRemoval.value = false;
     notice.value = "证书已删除。服务仍会维持当前 HTTPS 直到重启；重启后同一端口将回到 HTTP/WS。";
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "删除证书失败。";
+    error.value = errorMessage(reason, "删除证书失败。");
   } finally {
     submitting.value = false;
   }
