@@ -54,6 +54,19 @@ pub(crate) fn hide_paste(app: AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// 记录当前前台应用，供 macOS 合成粘贴后恢复焦点；其余平台无需处理。
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub(crate) fn capture_paste_target(app: AppHandle) -> Result<(), String> {
+    platforms::capture_paste_target(&app)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub(crate) fn capture_paste_target(_app: AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) fn hide_main(app: AppHandle) -> Result<(), String> {
     app.get_webview_window("main")
