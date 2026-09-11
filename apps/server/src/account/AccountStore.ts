@@ -87,8 +87,7 @@ export class AccountStore {
       throw new InvalidCredentialsError();
     }
     const actualHash = await derivePassword(password, Buffer.from(row.password_salt));
-    const expectedHash = Buffer.from(row.password_hash);
-    if (!secretsEqual(actualHash, expectedHash)) {
+    if (!secretsEqual(actualHash.toString("hex"), Buffer.from(row.password_hash).toString("hex"))) {
       throw new InvalidCredentialsError();
     }
     return this.#issueSession({ id: row.id, username: row.username }, deviceId);
@@ -102,8 +101,7 @@ export class AccountStore {
     if (!row) throw new InvalidCredentialsError();
 
     const actualHash = await derivePassword(currentPassword, Buffer.from(row.password_salt));
-    const expectedHash = Buffer.from(row.password_hash);
-    if (!secretsEqual(actualHash, expectedHash)) {
+    if (!secretsEqual(actualHash.toString("hex"), Buffer.from(row.password_hash).toString("hex"))) {
       throw new InvalidCredentialsError();
     }
 
