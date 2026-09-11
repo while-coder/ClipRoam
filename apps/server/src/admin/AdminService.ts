@@ -25,7 +25,7 @@ export class AdminService {
     const now = Date.now();
     if (this.#throttle.isBlocked(ip, now)) return { error: "TOO_MANY_ATTEMPTS" };
 
-    if (typeof password !== "string" || !secretsEqual(this.password, password)) {
+    if (!secretsEqual(this.password, password)) {
       this.#throttle.recordFailure(ip, now);
       return { error: "INVALID_CREDENTIALS" };
     }
