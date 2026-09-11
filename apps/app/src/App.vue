@@ -399,6 +399,8 @@ function calculatePasteWindowPosition(
 
 async function showPasteWindow(): Promise<void> {
   if (!isPasteWindow || !runningInTauri) return;
+  // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
+  await invoke("capture_paste_target").catch(() => undefined);
   const pasteWindow = getCurrentWindow();
   try {
     const cursor = await cursorPosition();

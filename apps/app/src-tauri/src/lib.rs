@@ -152,6 +152,7 @@ pub fn run() {
             pending::list_pending_entries,
             app_shell::start_window_drag,
             app_shell::hide_paste,
+            app_shell::capture_paste_target,
             app_shell::hide_main,
             app_shell::show_toast,
             app_shell::hide_toast,
