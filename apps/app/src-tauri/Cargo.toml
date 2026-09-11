@@ -37,6 +37,10 @@ arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+
+# macOS 上 WKWebView 透明背景走私有 API（toast 窗口 transparent: true 依赖它）
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-process = "2"
