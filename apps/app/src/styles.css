@@ -224,10 +224,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  cursor: grab;
   user-select: none;
 }
-.titlebar:active { cursor: grabbing; }
 .titlebar button { cursor: pointer; }
 .titlebar-actions, .entry-meta, .footer-hint, .filter-row {
   display: flex;
