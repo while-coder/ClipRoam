@@ -101,12 +101,12 @@ export class ClipRoamStore {
   canReadFile(userId: string, entryId: string, fileId: string): boolean {
     return this.#userStore(userId).hasFileReference(entryId, fileId);
   }
-  collectGarbage(partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+  async collectGarbage(partialTtlMs: number): Promise<{ removedFiles: number; removedBytes: number }> {
     const referenced = new Set<string>();
     for (const userId of this.#accounts.listUserIds()) {
       for (const fileId of this.#userStore(userId).referencedFileIds()) referenced.add(fileId);
     }
-    return this.#files.reclaimUnreferenced(referenced, partialTtlMs);
+    return await this.#files.reclaimUnreferenced(referenced, partialTtlMs);
   }
   close(): void {
     clearInterval(this.#sweepTimer);

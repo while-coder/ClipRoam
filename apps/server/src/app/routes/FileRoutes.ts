@@ -43,11 +43,13 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     const { fileId } = request.params as { fileId: string };
-    const index = Number((request.query as { index?: string }).index);
+    const rawIndex = (request.query as { index?: string }).index;
+    const index = Number(rawIndex);
     const chunk = request.body;
     // A session id from a pre-ledger client can never be a content id, so it
-    // is rejected here instead of reaching the store.
-    if (!FileIdSchema.safeParse(fileId).success || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(chunk)) {
+    // is rejected here instead of reaching the store. `!rawIndex` keeps an
+    // absent/empty index (`Number("") === 0`) from overwriting chunk 0.
+    if (!FileIdSchema.safeParse(fileId).success || !rawIndex || !Number.isInteger(index) || index < 0 || !Buffer.isBuffer(chunk)) {
       return reply.code(400).send({ message: "上传参数无效" });
     }
     try {

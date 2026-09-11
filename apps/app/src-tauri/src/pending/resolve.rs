@@ -91,12 +91,12 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
         };
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            apply_hashes(app, seq, &mut entry, &batch)?;
+            apply_hashes(app, seq, &history_key, &mut entry, &batch)?;
             batch.clear();
         }
     }
     if !batch.is_empty() {
-        apply_hashes(app, seq, &mut entry, &batch)?;
+        apply_hashes(app, seq, &history_key, &mut entry, &batch)?;
     }
     Ok(())
 }
@@ -107,6 +107,7 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
 fn apply_hashes(
     app: &AppHandle,
     seq: i64,
+    history_key: &str,
     entry: &mut ClipboardEntry,
     resolved: &[(String, Option<String>)],
 ) -> Result<(), String> {
@@ -150,6 +151,12 @@ fn apply_hashes(
     let extra = ClipboardEntryExtra::of(entry).json()?;
     {
         let history = state.history.lock().map_err(|error| error.to_string())?;
+        // Hashing a large tree takes seconds, and the profile can switch in
+        // that window: the UPDATE must not land on the new profile's queue
+        // (same seq, unrelated row). Same guard capture paths use.
+        if history.active_history != history_key {
+            return Err("活动档案已切换，放弃写回解析结果".to_string());
+        }
         let path = history_path_for_key(&state.histories_dir, &history.active_history);
         state.with_database(&path, |connection| {
             connection

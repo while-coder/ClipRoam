@@ -76,6 +76,14 @@ export class SocketHub {
     socket.on("close", () => {
       if (client) this.#handleClientClose(client);
     });
+    // A socket-level error (TLS failure, connection reset, fatal frame error)
+    // with no listener would surface as an uncaughtException — which the
+    // entrypoint treats as fatal and shuts the whole server down for. Log it,
+    // drop the connection, keep serving everyone else.
+    socket.on("error", (error: Error) => {
+      logger.warn(`WebSocket error${client ? ` from device ${client.device.id}` : ""}:`, error);
+      socket.terminate();
+    });
   }
 
   // Publishes, activates and deletes are HTTP routes now. Broadcasts go to

@@ -1,8 +1,12 @@
 import { createSecureContext } from "node:tls";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tlsDirectory } from "../DataPaths.js";
 import { TLS_MAX_PEM_BYTES } from "../app/ServerConfig.js";
+import { getLogger } from "../app/Logger.js";
+import { writeFileAtomic } from "../common/atomicWrite.js";
+
+const logger = getLogger("TlsCertificateService");
 
 export type TlsOptions = { cert: Buffer; key: Buffer };
 export type TlsStatus = { enabled: boolean; source: "managed" | "none" };
@@ -15,10 +19,23 @@ export class TlsCertificateService {
   #source: TlsStatus["source"] = "none";
 
   constructor() {
-    if (existsSync(CERT_FILE) !== existsSync(KEY_FILE)) {
-      throw new Error("Managed TLS certificate and key files must both exist.");
+    // `replace` swaps two files, so a crash or power loss between the two
+    // renames can leave a mismatched (or half-present) pair on disk. Throwing
+    // here would turn that into a permanent outage — the server would fail
+    // every startup until someone deletes the files by hand — so instead the
+    // broken pair is quarantined and the server comes up on HTTP, where the
+    // admin UI can install a fresh certificate.
+    if (existsSync(CERT_FILE) && existsSync(KEY_FILE)) {
+      try {
+        this.#setOptions(readCertificateFiles(CERT_FILE, KEY_FILE), "managed");
+      } catch (error) {
+        logger.warn("Managed TLS certificate and key do not match; starting without HTTPS.", error);
+        this.#quarantineBrokenPair();
+      }
+    } else if (existsSync(CERT_FILE) || existsSync(KEY_FILE)) {
+      logger.warn("Managed TLS certificate or key is missing; starting without HTTPS.");
+      this.#quarantineBrokenPair();
     }
-    if (existsSync(CERT_FILE)) this.#setOptions(readCertificateFiles(CERT_FILE, KEY_FILE), "managed");
   }
 
   get options(): TlsOptions | undefined { return this.#options; }
@@ -35,8 +52,8 @@ export class TlsCertificateService {
     const options = { cert: Buffer.from(cert), key: Buffer.from(key) };
     validateOptions(options);
     mkdirSync(tlsDirectory, { recursive: true });
-    writeAtomically(CERT_FILE, options.cert, 0o644);
-    writeAtomically(KEY_FILE, options.key, 0o600);
+    writeFileAtomic(CERT_FILE, options.cert, 0o644);
+    writeFileAtomic(KEY_FILE, options.key, 0o600);
     this.#setOptions(options, "managed");
     return options;
   }
@@ -57,6 +74,21 @@ export class TlsCertificateService {
     this.#options = options;
     this.#source = source;
   }
+
+  // Moves the unusable files aside (kept for inspection, out of the way of a
+  // later `replace`) so the service starts clean.
+  #quarantineBrokenPair(): void {
+    const suffix = `.broken-${Date.now()}`;
+    for (const file of [CERT_FILE, KEY_FILE]) {
+      if (!existsSync(file)) continue;
+      try {
+        renameSync(file, `${file}${suffix}`);
+      } catch (error) {
+        logger.warn(`Could not quarantine ${file}:`, error);
+        rmSync(file, { force: true });
+      }
+    }
+  }
 }
 
 function readCertificateFiles(certPath: string, keyPath: string): TlsOptions {
@@ -65,10 +97,4 @@ function readCertificateFiles(certPath: string, keyPath: string): TlsOptions {
 
 function validateOptions(options: TlsOptions): void {
   createSecureContext(options);
-}
-
-function writeAtomically(path: string, contents: Buffer, mode: number): void {
-  const temporaryPath = `${path}.${process.pid}.new`;
-  writeFileSync(temporaryPath, contents, { mode });
-  renameSync(temporaryPath, path);
 }

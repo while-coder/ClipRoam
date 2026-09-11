@@ -154,6 +154,10 @@ const {
   }),
   revision: computed(() => props.revision),
   filterSources: [debouncedQuery, filter, timeFilter, startDate, endDate],
+  // An invalid custom range matches nothing — the backend never sees it, and
+  // background revision bumps must not refill the cleared list either.
+  canFetch: () => !timeRangeError.value,
+  onError: (message) => showToast(`读取历史失败：${message}`, "error"),
   listElement: historyListElement,
   getSelectedEntryId: () => selectedEntryId.value,
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },

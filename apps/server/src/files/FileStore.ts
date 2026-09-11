@@ -6,6 +6,9 @@ import { chunk, openDatabase, QUERY_BATCH, withTransaction } from "../sqlite.js"
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
 const PARTIAL_SUFFIX = ".part";
+// Disk removals between event-loop yields during reclaim: keeps one GC sweep
+// from monopolising the loop while still finishing a large pool quickly.
+const GC_YIELD_BATCH = 200;
 
 type FileRow = { file_id: string; size: number; stored: number };
 
@@ -210,8 +213,10 @@ export class FileStore {
 
   // Deletes every content the caller does not claim as still reachable from a
   // clipboard entry, plus .part uploads idle past `partialTtlMs`. The caller
-  // supplies the reachable set because only the entries know it.
-  reclaimUnreferenced(referenced: ReadonlySet<string>, partialTtlMs: number): { removedFiles: number; removedBytes: number } {
+  // supplies the reachable set because only the entries know it. Async and
+  // yielding: a pool of a few thousand files would otherwise block the event
+  // loop — every request, WebSocket push and heartbeat — for the whole walk.
+  async reclaimUnreferenced(referenced: ReadonlySet<string>, partialTtlMs: number): Promise<{ removedFiles: number; removedBytes: number }> {
     withTransaction(this.database, () => {
       const known = this.database.prepare("SELECT file_id FROM files").all() as Array<{ file_id: string }>;
       const remove = this.database.prepare("DELETE FROM files WHERE file_id = ?");
@@ -225,6 +230,11 @@ export class FileStore {
     let removedFiles = 0;
     let removedBytes = 0;
     const removeLedger = this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?");
+    // The `referenced` snapshot was taken before this walk started: content
+    // promoted in between has a registration row but no snapshot entry, so
+    // final files are kept on a live table check, not the stale snapshot.
+    const isRegistered = this.database.prepare("SELECT 1 FROM files WHERE file_id = ?");
+    let processed = 0;
     for (const bucket of readDirectorySafely(this.directory)) {
       const bucketPath = join(this.directory, bucket);
       const names = readDirectorySafely(bucketPath);
@@ -237,7 +247,11 @@ export class FileStore {
         // how many bytes retiring it reclaims. A stat failure keeps the file
         // for the next run to look at.
         const stats = statsOf(path);
-        if (!stats || (partial ? !isExpired(stats.mtimeMs, partialTtlMs) : referenced.has(fileId))) continue;
+        if (!stats) continue;
+        const keep = partial
+          ? !isExpired(stats.mtimeMs, partialTtlMs)
+          : referenced.has(fileId) || isRegistered.get(fileId) !== undefined;
+        if (keep) continue;
         removedBytes += stats.size;
         rmSync(path, { force: true });
         // The ledger must not outlive the bytes it describes, or a later `begin`
@@ -245,6 +259,10 @@ export class FileStore {
         if (partial) removeLedger.run(fileId);
         removedFiles += 1;
         remaining -= 1;
+        processed += 1;
+        if (processed % GC_YIELD_BATCH === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
       }
       if (remaining === 0) rmSync(bucketPath, { recursive: true, force: true });
     }
