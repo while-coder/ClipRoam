@@ -97,17 +97,13 @@ fn default_max_capture_file_count() -> u64 {
     1000
 }
 
-/// 配置对应的历史档案键：`account:{服务器}:{用户名}`。用户名为空（旧版
-/// 退出账号的残留配置）时返回 None——没有档案可用。
-pub(crate) fn history_key_for_config(config: &SyncConfig) -> Option<String> {
-    let username = config.username.trim().to_ascii_lowercase();
-    (!username.is_empty()).then(|| {
-        format!(
-            "account:{}:{}",
-            config.server_address.trim().to_ascii_lowercase(),
-            username
-        )
-    })
+/// 配置对应的历史档案键：`account:{服务器}:{用户名}`。
+pub(crate) fn history_key_for_config(config: &SyncConfig) -> String {
+    format!(
+        "account:{}:{}",
+        config.server_address.trim().to_ascii_lowercase(),
+        config.username.trim().to_ascii_lowercase()
+    )
 }
 
 pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
@@ -117,10 +113,6 @@ pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
     if config.session_token.is_empty() {
         // 文件已剥离 token：从系统凭据库补回；拿不到则视为未登录。
         config.session_token = token_store::load_session_token().unwrap_or_default();
-    } else if token_store::store_session_token(&config.session_token) {
-        // 一次性迁移：文件里的旧 token 能进凭据库就搬进去并重写剥离；
-        // 进不去则保持文件存储，行为与旧版一致。
-        let _ = write_sync_config(path, &Some(config.clone()));
     }
     Some(config)
 }
@@ -209,7 +201,7 @@ pub(crate) fn save_sync_config(
     state: State<'_, AppState>,
     config: Option<SyncConfig>,
 ) -> Result<(), String> {
-    let history_key = config.as_ref().and_then(history_key_for_config);
+    let history_key = config.as_ref().map(history_key_for_config);
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.active_history != history_key {
         // Persist the outgoing profile's metadata before leaving it.

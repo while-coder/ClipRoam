@@ -105,7 +105,7 @@ pub fn run() {
             let sync_config_path = app_data_dir.join("sync-config.json");
             let device_config_path = app_data_dir.join("device.json");
             let sync_config = sync::load_sync_config(&sync_config_path);
-            let history_key = sync_config.as_ref().and_then(sync::history_key_for_config);
+            let history_key = sync_config.as_ref().map(sync::history_key_for_config);
             // 登录态决定活动档案：未登录时没有档案，捕获与查询都不可用。
             let (history, account_preferences) = match &history_key {
                 Some(key) => {
