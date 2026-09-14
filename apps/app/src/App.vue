@@ -1036,6 +1036,8 @@ async function startSync(config: SyncConfig): Promise<void> {
   );
   syncClient = client;
   client.connect();
+  // 登录即拉取设备表与对账快照：纯 HTTP，不依赖 socket；auth.ack 只确认连接。
+  void client.fetchConnectionState();
 }
 
 function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
