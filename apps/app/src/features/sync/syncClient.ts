@@ -70,6 +70,8 @@ const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
 const QUEUE_FAILURE_LIMIT = 3;
 const HEARTBEAT_INTERVAL_MS = 25_000;
+// 可恢复上传失败的固定退避：不依赖 socket，退避后直接重新探测 HTTP。
+const UPLOAD_RETRY_BACKOFF_MS = 2_000;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -218,12 +220,6 @@ export class SyncClient {
   #awaitingPong = false;
   #drainRetryTimer?: number;
   #stopped = false;
-  #connected = false;
-  #connectionWaiters = new Set<{
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timer: number;
-  }>();
   #downloadAborts = new Set<AbortController>();
   #servingFiles = new Set<string>();
   #failedServes = new Map<string, number>();
@@ -243,7 +239,7 @@ export class SyncClient {
     private readonly device: Device,
     private readonly handlers: SyncHandlers,
     private readonly autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
-    // 连接后拉取对账快照的每页数量；设置页修改随下次 startSync 生效。
+    // 登录后拉取对账快照的每页数量；设置页修改随下次 startSync 生效。
     private readonly manifestPageSize = ENTRY_PAGE_DEFAULT_LIMIT,
   ) {}
 
@@ -254,7 +250,6 @@ export class SyncClient {
 
   stop(): void {
     this.#stopped = true;
-    this.#connected = false;
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
     if (this.#drainRetryTimer) window.clearTimeout(this.#drainRetryTimer);
@@ -264,16 +259,11 @@ export class SyncClient {
     // stop ends them.
     for (const abort of this.#downloadAborts) abort.abort();
     this.#downloadAborts.clear();
-    for (const waiter of this.#connectionWaiters) {
-      window.clearTimeout(waiter.timer);
-      waiter.reject(new Error("同步连接已断开"));
-    }
-    this.#connectionWaiters.clear();
   }
 
-  // Nothing waits on socket echoes anymore: entry writes confirm through
-  // their HTTP responses and downloads ride HTTP fetches that carry their own
-  // abort controllers.
+  // Nothing waits on the socket anymore: entry writes confirm through their
+  // HTTP responses, downloads ride HTTP fetches, and recoverable failures
+  // back off and re-probe HTTP directly. The socket is a push-only channel.
 
   // Every write returns the server's stored entry: its id and timestamp are
   // server-assigned, and the caller must adopt it into local state.
@@ -333,10 +323,9 @@ export class SyncClient {
         this.#queueFailures.delete(row.seq);
       } catch (error) {
         if (this.#isRecoverableUploadError(error)) {
-          // Bounded wait for the socket, then end the pass — the row keeps
-          // its place in line. Without a retry trigger of its own (no
-          // reconnect, no new capture), schedule one.
-          await this.#waitForConnection().catch(() => undefined);
+          // End the pass and retry on the queue's own pulse — nothing waits
+          // on the socket here: HTTP comes back on its own schedule and the
+          // row keeps its place in line either way.
           this.#scheduleDrainRetry();
           return;
         }
@@ -534,27 +523,35 @@ export class SyncClient {
     return stored!.entry;
   }
 
-  // Pulls the reconciliation snapshot after the socket's bare `auth.ack`: the
-  // full unfiltered manifest (ids only, refetched on every connection — never
-  // cached) plus the account's devices. The protocol's paging contract is
-  // "keep walking while the fetched count is below total" — stopping after one
-  // page would strand everything past it on a fresh install or rebuilt
+  // The login-time reconciliation snapshot, pulled over HTTP with no socket
+  // involved: the full unfiltered manifest (ids only, never cached) plus the
+  // account's devices. Reconnects do not re-pull — pushes missed during a
+  // disconnect window wait for the next login. The protocol's paging contract
+  // is "keep walking while the fetched count is below total" — stopping after
+  // one page would strand everything past it on a fresh install or rebuilt
   // profile. Details of missing entries follow through fetchEntries().
-  async #fetchConnectionState(): Promise<void> {
-    const manifest: ClipboardManifestEntry[] = [];
-    for (let page = 1; ; page += 1) {
-      const state = await this.#request(
-        "GET",
-        `/entries/manifest?page=${page}&pageSize=${this.manifestPageSize}`,
-        { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
-        EntryManifestResponseSchema,
-        "服务器返回了不兼容的连接状态响应",
-      );
-      manifest.push(...state!.manifest);
-      // The empty-page check ends the walk if `total` drifts upward mid-paging.
-      if (manifest.length >= state!.total || state!.manifest.length === 0) break;
+  async fetchConnectionState(): Promise<void> {
+    try {
+      const manifest: ClipboardManifestEntry[] = [];
+      for (let page = 1; ; page += 1) {
+        const state = await this.#request(
+          "GET",
+          `/entries/manifest?page=${page}&pageSize=${this.manifestPageSize}`,
+          { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+          EntryManifestResponseSchema,
+          "服务器返回了不兼容的连接状态响应",
+        );
+        manifest.push(...state!.manifest);
+        // The empty-page check ends the walk if `total` drifts upward mid-paging.
+        if (manifest.length >= state!.total || state!.manifest.length === 0) break;
+      }
+      this.handlers.onManifest(manifest, await this.#fetchDevices());
+    } catch (error) {
+      // An expired session must reach the re-login flow, not a toast.
+      const message = errorMessage(error);
+      if (message === "登录已失效，请重新登录") this.handlers.onAuthenticationFailed(message);
+      else this.handlers.onError(`获取同步历史失败：${message}`);
     }
-    this.handlers.onManifest(manifest, await this.#fetchDevices());
   }
 
   async #fetchDevices(): Promise<Device[]> {
@@ -702,31 +699,6 @@ export class SyncClient {
     return errorMessage(error) === "同步连接已断开";
   }
 
-  #waitForConnection(): Promise<void> {
-    if (this.#stopped) return Promise.reject(new Error("同步连接已断开"));
-    if (this.#connected) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      const waiter = {
-        resolve,
-        reject,
-        timer: window.setTimeout(() => {
-          this.#connectionWaiters.delete(waiter);
-          reject(new Error("同步服务重连超时"));
-        }, 30_000),
-      };
-      this.#connectionWaiters.add(waiter);
-    });
-  }
-
-  #markConnected(): void {
-    this.#connected = true;
-    for (const waiter of this.#connectionWaiters) {
-      window.clearTimeout(waiter.timer);
-      waiter.resolve();
-    }
-    this.#connectionWaiters.clear();
-  }
-
   async #uploadFile(
     file: FileReference,
     onProgress: (uploadedBytes: number) => void,
@@ -737,10 +709,8 @@ export class SyncClient {
         return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
-        await this.#waitForConnection();
-        // The socket can stay open while HTTP is briefly unreachable, so back
-        // off instead of spinning on an immediately-failing fetch.
-        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        // No socket to wait on: back off and re-probe HTTP directly.
+        await new Promise((resolve) => window.setTimeout(resolve, UPLOAD_RETRY_BACKOFF_MS));
       }
     }
     throw new Error("同步连接已断开");
@@ -950,16 +920,13 @@ export class SyncClient {
         void this.#serveRelayRequest(message).catch(() => undefined);
         return;
       case "auth.ack":
-        this.#markConnected();
         this.handlers.onConnected(true);
         this.#startHeartbeat();
         // A fresh session gives previously skipped rows another chance.
         this.#skippedRows.clear();
-        // The socket only confirms the session; the manifest and device list
-        // ride HTTP. A reconnect re-acks and re-runs this fetch.
-        void this.#fetchConnectionState().catch((error: unknown) => {
-          this.handlers.onError(`获取同步历史失败：${errorMessage(error)}`);
-        });
+        // The socket only confirms the session: devices and the manifest were
+        // pulled over HTTP at login, and a reconnect does not re-pull — pushes
+        // missed during a disconnect window wait for the next login.
         return;
       case "pong":
         this.#awaitingPong = false;
@@ -1006,7 +973,6 @@ export class SyncClient {
 
     socket.addEventListener("close", () => {
       if (this.#socket !== socket) return;
-      this.#connected = false;
       this.#stopHeartbeat();
       this.handlers.onConnected(false);
       if (!this.#stopped) {
