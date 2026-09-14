@@ -26,6 +26,21 @@ function displayToast(payload: ToastPayload): void {
   }, payload.tone === "error" ? 5_000 : 3_200);
 }
 
+/** 立即关闭 toast（托盘通知的关闭按钮）。 */
+function hideToastNow(): void {
+  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
+  toastPayload.value = undefined;
+  toastTimer = undefined;
+  toastWindowHideTimer = undefined;
+  if (isToastWindow) {
+    toastWindowHideTimer = window.setTimeout(() => {
+      void invoke("hide_toast").catch(() => {});
+      toastWindowHideTimer = undefined;
+    }, 180);
+  }
+}
+
 function showToast(message: string, tone: ToastTone = "info"): void {
   const normalized = message.trim();
   if (!normalized) return;
@@ -50,4 +65,4 @@ function startToastWindowListener(): Promise<UnlistenFn> {
   });
 }
 
-export { toastPayload, showToast, disposeToast, startToastWindowListener };
+export { toastPayload, showToast, hideToastNow, disposeToast, startToastWindowListener };

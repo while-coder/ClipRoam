@@ -8,7 +8,6 @@ export type { ClipboardEntry, ClipboardKind, Device };
 
 /** 会话凭证：全局唯一，决定激活哪个账号档案。 */
 export type SyncConfig = {
-  enabled: boolean;
   serverAddress: string;
   serverProtocol: "http" | "https";
   username: string;

@@ -9,11 +9,9 @@ use tauri::State;
 
 use crate::content::{refresh_summary, ClipboardEntry, SummaryContext};
 use crate::file::{blob_ids_on_disk, history_stored_ids};
-use crate::store::{
-    count_entries, history_path_for_key, newest_first_sql, select_entries,
-};
+use crate::store::{count_entries, newest_first_sql, select_entries};
 use crate::utils::placeholders;
-use crate::{active_cache_dir, AppState};
+use crate::AppState;
 
 use super::lightweight_entry;
 
@@ -119,7 +117,7 @@ pub(crate) fn list_entries_manifest(
 ) -> Result<EntriesManifestPage, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let stored = history_stored_ids(&state, &mut history)?;
-    let cache_dir = active_cache_dir(&state, &history);
+    let cache_dir = state.active_cache_dir(&history)?;
     let blobs = blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
     let needle = filter.query.trim().to_lowercase();
@@ -131,7 +129,7 @@ pub(crate) fn list_entries_manifest(
         }
         None => (None, 0),
     };
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     // Count and page come out of one pass over the same connection so a
     // concurrent capture cannot slip between them.
     let (total, entries) = state.with_database(&path, |connection| {
@@ -162,7 +160,7 @@ pub(crate) fn find_unknown_entry_ids(
         return Ok(Vec::new());
     }
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     state.with_database(&path, |connection| {
         let marks = placeholders(entry_ids.len());
         let sql = format!("SELECT id FROM entries WHERE id IN ({marks})");
@@ -185,10 +183,10 @@ pub(crate) fn find_unknown_entry_ids(
 pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let stored = history_stored_ids(&state, &mut history)?;
-    let cache_dir = active_cache_dir(&state, &history);
+    let cache_dir = state.active_cache_dir(&history)?;
     let blobs = blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     let mut entry = state
         .with_database(&path, |connection| {
             select_entries(connection, "WHERE id = ?", "", &[Value::Text(entry_id.clone())])

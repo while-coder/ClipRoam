@@ -10,9 +10,9 @@ use tauri::{AppHandle, State};
 
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
 use crate::file::cached_source_for;
-use crate::store::{history_path_for_key, save_metadata, select_entry};
+use crate::store::{save_metadata, select_entry};
 use crate::entry::entry_contents_of;
-use crate::{active_cache_dir, AppState};
+use crate::AppState;
 
 use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};
 
@@ -61,8 +61,8 @@ pub(crate) struct EntrySnapshot {
 
 pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = active_cache_dir(state, &history);
-    let hash_database = history_path_for_key(&state.histories_dir, &history.active_history);
+    let cache_dir = state.active_cache_dir(&history)?;
+    let hash_database = state.active_history_path(&history)?;
     let entry = state
         .with_database(&hash_database, |connection| select_entry(connection, entry_id))?
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
@@ -155,7 +155,7 @@ fn persist_activation_signature(state: &AppState, signature: (String, String, St
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     record_activation_signature(&mut history, signature);
     // Only the activation signatures changed — persist the metadata rows.
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     state.with_database(&path, |connection| save_metadata(connection, &history))
 }
 

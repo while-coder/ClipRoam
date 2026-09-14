@@ -27,7 +27,6 @@ defineProps<{
 
 const emit = defineEmits<{
   submit: [draft: SetupDraft];
-  local: [draft: SetupDraft];
   close: [];
   "reset-error": [];
 }>();
@@ -95,16 +94,6 @@ function submit(): void {
   if (!serverAddress || !usernameValid || !passwordValid) return;
   emit("submit", {
     serverAddress,
-    serverProtocol: setupServerProtocol.value,
-    username: setupUsername.value.trim(),
-    password: setupPassword.value,
-    authMode: authMode.value,
-  });
-}
-
-function useLocal(): void {
-  emit("local", {
-    serverAddress: setupServerAddress.value.trim() || DEFAULT_SERVER_ADDRESS,
     serverProtocol: setupServerProtocol.value,
     username: setupUsername.value.trim(),
     password: setupPassword.value,
@@ -226,9 +215,6 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
         {{ busy
           ? (authMode === "login" ? "正在登录…" : "正在创建账号…")
           : (authMode === "login" ? "登录并连接" : "创建账号并连接") }}
-      </button>
-      <button class="secondary-button" type="button" :disabled="busy" @click="useLocal">
-        暂时仅使用本地剪贴板
       </button>
     </form>
   </section>

@@ -31,14 +31,14 @@ pub fn with_transaction<T>(
     Ok(result)
 }
 
-pub const LOCAL_HISTORY_KEY: &str = "local";
-
 /// History-level state that is not per-entry: the active profile key, the
 /// activation signatures and the local-cache set. Entry rows live in SQLite
 /// alone; the device identity lives in machine-level `device.json`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct HistoryData {
-    pub active_history: String,
+    /// 当前活动档案键（`account:{服务器}:{用户名}`）。`None` 表示未登录：
+    /// 没有活动档案，捕获与查询都不可用。
+    pub active_history: Option<String>,
     pub last_clipboard: String,
     pub last_file_signature: String,
     pub last_image_signature: String,
@@ -51,23 +51,6 @@ pub struct HistoryData {
     /// loaded yet; placeholder rows (`stored = 0`) never change the set, so
     /// only `mark`/`save` extend it and a profile switch rebuilds it.
     pub stored_file_ids: Option<HashSet<String>>,
-}
-
-impl Default for HistoryData {
-    fn default() -> Self {
-        Self {
-            active_history: default_active_history(),
-            last_clipboard: String::new(),
-            last_file_signature: String::new(),
-            last_image_signature: String::new(),
-            file_ids: None,
-            stored_file_ids: None,
-        }
-    }
-}
-
-pub fn default_active_history() -> String {
-    LOCAL_HISTORY_KEY.to_string()
 }
 
 pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
@@ -288,7 +271,7 @@ pub fn newest_first_sql(limit: Option<usize>, offset: usize) -> String {
 
 pub fn load_history(path: &Path, key: &str) -> HistoryData {
     let mut history = HistoryData {
-        active_history: key.to_string(),
+        active_history: Some(key.to_string()),
         ..HistoryData::default()
     };
     let Ok(connection) = open_history_database(path) else {

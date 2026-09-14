@@ -328,7 +328,7 @@ impl VirtualFileStream {
         // active profile's cache dir without re-deriving the whole snapshot.
         let cache_dir = {
             let history = state.history.lock().map_err(|error| error.to_string())?;
-            crate::active_cache_dir(&state, &history)
+            state.active_cache_dir(&history)?
         };
         let partial = download_path(&cache_dir, &self.file_id)
             .map(|path| partial_download_path(&path))

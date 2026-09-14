@@ -51,7 +51,6 @@ import {
 
 defineProps<{
   currentUsername: string;
-  syncEnabled: boolean;
 }>();
 
 const { platformCapabilities, isMobile } = usePlatform();
@@ -252,12 +251,11 @@ const {
                   </div>
                 </div>
                 <div class="account-actions">
-                  <button class="secondary-button" type="button" :disabled="savingSettings || changingPassword" @click="signOut(true)">切换账号</button>
-                  <button class="danger-button" type="button" :disabled="savingSettings || changingPassword || !currentUsername" @click="signOut(false)">退出账号</button>
+                  <button class="danger-button" type="button" :disabled="savingSettings || changingPassword || !currentUsername" @click="signOut()">退出账号</button>
                 </div>
               </section>
 
-              <section v-if="syncEnabled && currentUsername" class="settings-section" aria-labelledby="password-settings-heading">
+              <section v-if="currentUsername" class="settings-section" aria-labelledby="password-settings-heading">
                 <div class="settings-section-heading">
                   <span class="settings-icon" aria-hidden="true"><ShieldCheck :size="18" /></span>
                   <div>

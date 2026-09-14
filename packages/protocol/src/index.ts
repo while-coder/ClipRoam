@@ -95,8 +95,7 @@ export const DeviceSchema = z.object({
   name: z.string().min(1).max(80),
   platform: z.string().min(1).max(40),
   osVersion: z.string().min(1).max(80).default("未知"),
-  // 旧客户端上报的存量设备信息没有该字段，default 保证 server 读取时兼容。
-  appVersion: z.string().min(1).max(80).default("未知"),
+  appVersion: z.string().min(1).max(80),
 });
 
 // `DeviceSchema.id` stays unconstrained on purpose: it validates device

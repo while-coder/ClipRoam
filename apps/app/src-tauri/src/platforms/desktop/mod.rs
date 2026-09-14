@@ -168,7 +168,7 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
         menu::{Menu, MenuItem},
-        tray::{TrayIconBuilder, TrayIconEvent},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
 
     let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN, "显示主界面", true, None::<&str>)?;
@@ -183,6 +183,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .icon(icon)
         .tooltip("ClipRoam")
         .menu(&menu)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_SHOW_MAIN => {
                 let _ = show_main_window(app);
@@ -191,7 +192,14 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if matches!(event, TrayIconEvent::DoubleClick { .. }) {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick { .. }
+            ) {
                 let _ = show_main_window(tray.app_handle());
             }
         })

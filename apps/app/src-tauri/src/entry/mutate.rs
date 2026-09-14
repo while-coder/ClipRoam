@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::content::ClipboardEntry;
 use crate::file::collect_local_garbage;
-use crate::store::{delete_entries_by_ids, history_path_for_key, upsert_entry_row, with_transaction};
+use crate::store::{delete_entries_by_ids, upsert_entry_row, with_transaction};
 use crate::AppState;
 
 /// Reconciling a fresh install can deliver hundreds of server entries at once;
@@ -21,7 +21,7 @@ pub(crate) fn upsert_server_entries(
     }
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let history_path = state.active_history_path(&history)?;
         // The rows go in ascending created_at order, so within one millisecond
         // the newest insert gets the highest rowid and the created_ms DESC,
         // rowid DESC index yields a stable newest-first order.
@@ -48,7 +48,7 @@ pub(crate) fn upsert_server_entries(
 pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(&history)?;
         state.with_database(&path, |connection| {
             with_transaction(connection, |transaction| {
                 delete_entries_by_ids(transaction, std::slice::from_ref(&entry_id))?;
@@ -58,7 +58,7 @@ pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, en
         // The row is gone, so the derived file-id cache is stale.
         history.file_ids = None;
         // Dropping references is what frees disk space, so the sweep runs here.
-        let cache_dir = crate::active_cache_dir(&state, &history);
+        let cache_dir = state.active_cache_dir(&history)?;
         let _ = state.with_database(&path, |connection| {
             collect_local_garbage(connection, &cache_dir)
         });

@@ -16,8 +16,8 @@ use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy}
 use crate::content::MissingFile;
 use crate::entry::entry_contents_of;
 use crate::file::{cached_file_path, cached_source_for, download_path, partial_download_path};
-use crate::store::{history_path_for_key, select_entry};
-use crate::{active_cache_dir, AppState};
+use crate::store::select_entry;
+use crate::AppState;
 
 #[derive(Default)]
 pub(crate) struct VirtualDownloadStatus {
@@ -139,8 +139,8 @@ pub(crate) fn begin_file_download(
         state.virtual_downloads.begin(&file_id);
         let final_path = {
             let history = state.history.lock().map_err(|error| error.to_string())?;
-            download_path(&crate::active_cache_dir(&state, &history), &file_id)
-                .ok_or_else(|| "内容标识不合法".to_string())?
+            let cache_dir = state.active_cache_dir(&history)?;
+            download_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?
         };
         // Cache downloads stage at `.part` exactly like direct saves; the
         // digest-verified rename in `finish_file_download` is the promotion.
@@ -327,7 +327,7 @@ pub(crate) fn list_entry_files(
     entry_id: String,
 ) -> Result<Vec<EntryFileCandidate>, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let history_path = state.active_history_path(&history)?;
     let entry = state
         .with_database(&history_path, |connection| select_entry(connection, &entry_id))?
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
@@ -375,12 +375,11 @@ pub(crate) fn read_upload_chunk(
 ) -> Result<String, String> {
     let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = active_cache_dir(&state, &history);
+        let cache_dir = state.active_cache_dir(&history)?;
+        let history_path = state.active_history_path(&history)?;
         // `cached_file_path` stats the candidates itself, so a hit is always
         // a file that exists right now.
         cached_file_path(&cache_dir, &file_id).or_else(|| {
-            let history_path =
-                history_path_for_key(&state.histories_dir, &history.active_history);
             state
                 .with_database(&history_path, |connection| {
                     Ok(cached_source_for(connection, &file_id))
