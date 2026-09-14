@@ -8,7 +8,7 @@ import {
   resetQuickPasteShortcutDraft,
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
-import { changeAccountPassword } from "../sync/syncClient";
+import { changeAccountPassword } from "../sync/syncSetup";
 import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "../sync/syncDefaults";
 import { getDeviceIdentity } from "../../utils/device";

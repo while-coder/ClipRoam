@@ -1,20 +1,14 @@
 import {
-  AuthResponseSchema,
   ENTRY_PAGE_DEFAULT_LIMIT,
   ENTRY_QUERY_BATCH,
-  FILE_CHUNK_SIZE,
   EntryActivateResponseSchema,
   EntryManifestResponseSchema,
   DeviceListResponseSchema,
   EntryPublishResponseSchema,
   type EntryPublishInput,
   EntryQueryResponseSchema,
-  entryContents,
   FileQueryResponseSchema,
   ServerMessageSchema,
-  UploadBeginResponseSchema,
-  UploadChunkResponseSchema,
-  type AuthResponse,
   type ClientMessage,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -23,55 +17,21 @@ import {
   type EntryPublishRequest,
   type EntryQueryRequest,
   type FileQueryRequest,
-  type FileRelayRequest,
   type FileStatus,
-  type UploadBeginRequest,
-  type UploadBeginResponse,
-  type UploadChunkResponse,
 } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
 
-import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
-import { downloadStoredFile } from "./fileDownload";
+import { FileTransfer, type FileReference } from "./fileTransfer";
+import { createSyncRequester, errorMessageFromBody, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 
-export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
-
-/** Structural stand-in for the protocol's zod schemas, keeping zod out of this file's imports. */
-type Schema<T> = { safeParse: (value: unknown) => { success: true; data: T } | { success: false } };
-
-function errorMessageFromBody(body: unknown, status: number): string {
-  return typeof body === "object" && body && "message" in body
-    ? String((body as { message: unknown }).message)
-    : `服务器返回错误 ${status}`;
-}
-
-/** The file-shape fields a download or upload transfer needs. */
-type FileReference = { fileId: string; size: number };
-
-/**
- * One publishable row of the Rust-side durable capture queue. The row is
- * self-contained: a files row's placeholder tree is resolved back into the
- * row itself before Peek hands it over, so `extra` is published as-is. The
- * local display id mirrors the Rust-side `temp_entry_id`: `p${seq}`.
- */
-type PendingQueueRow = {
-  seq: number;
-  kind: ClipboardEntry["kind"];
-  content: string;
-  extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
-};
-
-const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
-const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
-const SERVE_RETRY_BACKOFF_MS = 60_000;
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
 const QUEUE_FAILURE_LIMIT = 3;
 const HEARTBEAT_INTERVAL_MS = 25_000;
-// 可恢复上传失败的固定退避：不依赖 socket，退避后直接重新探测 HTTP。
-const UPLOAD_RETRY_BACKOFF_MS = 2_000;
+// 队列排空的轮询间隔：捕获到发布的最大延迟，也是空队列的空转成本。
+const DRAIN_POLL_INTERVAL_MS = 2_000;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
@@ -87,153 +47,41 @@ type SyncHandlers = {
   onAuthenticationFailed: (message: string) => void;
 };
 
-export type AuthMode = "login" | "register";
-export type ServerProtocol = "http" | "https";
+/**
+ * One publishable row of the Rust-side durable capture queue. The row is
+ * self-contained: a files row's placeholder tree is resolved back into the
+ * row itself before Peek hands it over, so `extra` is published as-is. The
+ * local display id mirrors the Rust-side `temp_entry_id`: `p${seq}`.
+ */
+type PendingQueueRow = {
+  seq: number;
+  kind: ClipboardEntry["kind"];
+  content: string;
+  extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
+};
 
-export function normalizeServerAddress(value: string): string {
-  const candidate = value.trim();
-  if (!candidate) throw new Error("请输入服务器 IP 和端口");
-  if (candidate.includes("://") || candidate.includes("/")) {
-    throw new Error("只需填写 IP 和端口，例如 192.168.1.20:4810");
-  }
-
-  let url: URL;
-  try {
-    url = new URL(`http://${candidate}`);
-  } catch {
-    throw new Error("服务器地址格式不正确");
-  }
-  if (!url.hostname || !url.port) throw new Error("服务器地址必须包含 IP 和端口");
-  return url.host;
-}
-
-export function getServerUrls(
-  address: string,
-  protocol: ServerProtocol,
-): { httpUrl: string; webSocketUrl: string } {
-  const normalized = normalizeServerAddress(address);
-  const secure = protocol === "https";
-  return {
-    httpUrl: `${secure ? "https" : "http"}://${normalized}`,
-    webSocketUrl: `${secure ? "wss" : "ws"}://${normalized}/ws`,
-  };
-}
-
-async function postJson(httpUrl: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetch(`${httpUrl}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new Error("无法连接服务器，请检查 IP、端口和网络");
-  }
-  const responseBody = await response.json().catch(() => undefined) as unknown;
-  if (!response.ok) throw new Error(errorMessageFromBody(responseBody, response.status));
-  return responseBody;
-}
-
-export async function authenticateAccount(
-  address: string,
-  username: string,
-  password: string,
-  mode: AuthMode,
-  protocol: ServerProtocol,
-  deviceId: string,
-): Promise<AuthResponse> {
-  const { httpUrl } = getServerUrls(address, protocol);
-  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, deviceId });
-  const result = AuthResponseSchema.safeParse(body);
-  if (!result.success) throw new Error("服务器返回了不兼容的登录响应");
-  return result.data;
-}
-
-export async function changeAccountPassword(
-  address: string,
-  protocol: ServerProtocol,
-  sessionToken: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<void> {
-  const { httpUrl } = getServerUrls(address, protocol);
-  await postJson(
-    httpUrl,
-    "/auth/password",
-    { currentPassword, newPassword },
-    { Authorization: `Bearer ${sessionToken}` },
-  );
-}
-
-export async function testSyncConnection(
-  url: string,
-  token: string,
-  device: Device,
-  timeoutMs = 6000,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(url);
-    let settled = false;
-
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      socket.close();
-      if (error) reject(error);
-      else resolve();
-    };
-
-    const timeout = window.setTimeout(
-      () => finish(new Error("连接超时，请检查服务器地址和网络")),
-      timeoutMs,
-    );
-
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "auth", token, device } satisfies ClientMessage));
-    });
-    socket.addEventListener("message", (event) => {
-      try {
-        const result = ServerMessageSchema.safeParse(JSON.parse(String(event.data)));
-        if (!result.success) {
-          finish(new Error("服务器返回了不兼容的响应"));
-          return;
-        }
-        if (result.data.type === "auth.ack") finish();
-        else if (result.data.type === "error") finish(new Error(result.data.message));
-      } catch {
-        finish(new Error("服务器返回了无法解析的数据"));
-      }
-    });
-    socket.addEventListener("error", () => finish(new Error("无法连接服务器，请检查地址和网络")));
-    socket.addEventListener("close", () => {
-      if (!settled) finish(new Error("服务器在认证完成前断开了连接"));
-    });
-  });
-}
-
+/**
+ * The sync orchestrator. All operations ride HTTP (see `syncHttp.ts`, the
+ * file pipeline in `fileTransfer.ts`); the socket is a push-only channel:
+ * nothing waits on it, and reconnects do not re-pull — pushes missed during
+ * a disconnect window wait for the next login.
+ */
 export class SyncClient {
   #socket?: WebSocket;
   #reconnectTimer?: number;
   #pingTimer?: number;
   #awaitingPong = false;
-  #drainRetryTimer?: number;
   #stopped = false;
-  #downloadAborts = new Set<AbortController>();
-  #servingFiles = new Set<string>();
-  #failedServes = new Map<string, number>();
-  #entryUploads = new Map<string, Promise<void>>();
-  #drainRunning = false;
-  #drainAgain = false;
   #queueFailures = new Map<number, { at: number; count: number }>();
   // Rows that exhausted their retries stay in the queue but are skipped for
   // this session so they cannot block the rows behind them; a reconnect
   // clears the set and gives them another chance.
   #skippedRows = new Set<number>();
+  #http: SyncRequester;
+  #files: FileTransfer;
 
   constructor(
-    private readonly httpUrl: string,
+    httpUrl: string,
     private readonly webSocketUrl: string,
     private readonly token: string,
     private readonly device: Device,
@@ -241,93 +89,56 @@ export class SyncClient {
     private readonly autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
     // 登录后拉取对账快照的每页数量；设置页修改随下次 startSync 生效。
     private readonly manifestPageSize = ENTRY_PAGE_DEFAULT_LIMIT,
-  ) {}
+  ) {
+    this.#http = createSyncRequester(httpUrl, token);
+    this.#files = new FileTransfer(httpUrl, token, this.#http, {
+      isStopped: () => this.#stopped,
+      onUploadProgress: handlers.onUploadProgress,
+      onUploadFinished: handlers.onUploadFinished,
+      onFileAvailable: handlers.onFileAvailable,
+      onError: handlers.onError,
+    });
+  }
 
   connect(): void {
     this.#stopped = false;
     this.#open();
+    this.#drainLoop();
   }
 
   stop(): void {
     this.#stopped = true;
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
-    if (this.#drainRetryTimer) window.clearTimeout(this.#drainRetryTimer);
-    this.#drainRetryTimer = undefined;
     this.#socket?.close();
-    // Downloads ride HTTP, so they outlive a socket blip — only an explicit
-    // stop ends them.
-    for (const abort of this.#downloadAborts) abort.abort();
-    this.#downloadAborts.clear();
+    this.#files.stop();
   }
 
-  // Nothing waits on the socket anymore: entry writes confirm through their
-  // HTTP responses, downloads ride HTTP fetches, and recoverable failures
-  // back off and re-probe HTTP directly. The socket is a push-only channel.
-
-  // Every write returns the server's stored entry: its id and timestamp are
-  // server-assigned, and the caller must adopt it into local state.
-
-  // The durable capture queue is the single replay mechanism: captures land
-  // there with their full payload, and this drain publishes them strictly in
-  // insertion order. Concurrent calls collapse into the running pass.
-  drainQueue(): void {
-    if (this.#stopped) return;
-    if (this.#drainRunning) {
-      this.#drainAgain = true;
-      return;
-    }
-    this.#drainRunning = true;
-    void this.#runDrain()
-      .catch((error: unknown) => {
-        if (!this.#stopped) {
-          this.handlers.onError(`同步剪贴板记录失败：${errorMessage(error)}`);
-        }
-      })
-      .finally(() => {
-        this.#drainRunning = false;
-        if (this.#drainAgain && !this.#stopped) {
-          this.#drainAgain = false;
-          this.drainQueue();
-        }
-      });
-  }
-
-  // Recoverable failures end the drain pass without leaving a trigger behind:
-  // no reconnect and no new capture would ever restart it. A single-flight
-  // timer gives the queue its own retry pulse.
-  #scheduleDrainRetry(): void {
-    if (this.#stopped || this.#drainRetryTimer) return;
-    this.#drainRetryTimer = window.setTimeout(() => {
-      this.#drainRetryTimer = undefined;
-      this.drainQueue();
-    }, QUEUE_FAILURE_BACKOFF_MS);
-  }
-
-  // One row per step: Rust hands back the oldest publishable row — resolving
-  // a files row's content ids into the row itself on the way — and this
-  // publishes it, dequeues it and asks for the next. The pass ends (without
-  // error) at the first row that cannot proceed right now — a recent failure
-  // backoff, a lost connection — and a later trigger restarts it.
-  async #runDrain(): Promise<void> {
+  // The resident drain loop: the durable capture queue is the single replay
+  // mechanism — captures land there with their full payload, and this loop
+  // publishes them strictly in insertion order on a fixed pulse. A row that
+  // cannot proceed right now (recent failure backoff, lost HTTP) waits for a
+  // later pulse; a row that failed three times is skipped for this session so
+  // it cannot block the rows behind it — reconnecting gives it another chance.
+  async #drainLoop(): Promise<void> {
     while (!this.#stopped) {
-      const skipSeqs = [...this.#skippedRows];
+      await new Promise((resolve) => window.setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
+      if (this.#stopped) return;
       const row = await invoke<PendingQueueRow | null>("peek_pending_entry", {
-        skipSeqs: skipSeqs.length ? skipSeqs : null,
-      });
-      if (!row) return;
+        skipSeqs: this.#skippedRows.size ? [...this.#skippedRows] : null,
+      }).catch(() => null);
+      if (!row) continue;
       const failure = this.#queueFailures.get(row.seq);
-      if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) return;
+      if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) continue;
       try {
         await this.#publishQueueRow(row);
         this.#queueFailures.delete(row.seq);
       } catch (error) {
-        if (this.#isRecoverableUploadError(error)) {
-          // End the pass and retry on the queue's own pulse — nothing waits
-          // on the socket here: HTTP comes back on its own schedule and the
-          // row keeps its place in line either way.
-          this.#scheduleDrainRetry();
-          return;
+        // Transient failures wait out the backoff without counting against
+        // the skip limit — HTTP coming back is expected, not the row's fault.
+        if (isTransientNetworkError(error)) {
+          this.#queueFailures.set(row.seq, { at: Date.now(), count: failure?.count ?? 0 });
+          continue;
         }
         const attempts = (failure?.count ?? 0) + 1;
         if (attempts >= QUEUE_FAILURE_LIMIT) {
@@ -342,7 +153,6 @@ export class SyncClient {
           continue;
         }
         this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
-        return;
       }
     }
   }
@@ -363,7 +173,7 @@ export class SyncClient {
       sourceDeviceId: this.device.id,
     };
     const stored = await this.#publishEntry(payload);
-    await this.#uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
+    await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
     if (stored.kind !== "files") {
       await this.activate(stored.id).catch(() => undefined);
     }
@@ -383,106 +193,6 @@ export class SyncClient {
     return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
   }
 
-  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
-    const existingUpload = this.#entryUploads.get(entry.id);
-    if (existingUpload) return existingUpload;
-
-    const upload = this.#uploadFiles(entry, sizeLimit);
-    this.#entryUploads.set(entry.id, upload);
-    try {
-      await upload;
-    } finally {
-      this.#entryUploads.delete(entry.id);
-    }
-  }
-
-  /**
-   * Content ids are known before publishing, so a finished upload never changes
-   * the entry — the server just learns it now holds those bytes. Everything is
-   * uploaded unconditionally: the server's content-addressed store absorbs
-   * duplicates, and locally cached availability marks would go stale anyway.
-   * The candidates derive from the entry payload itself, so this works for a
-   * published row and for a queue row that has no local entry yet alike.
-   */
-  async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
-    if (entry.kind !== "files" && entry.kind !== "image") return;
-    const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
-    if (!candidates.length) return;
-
-    const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
-    const uploadedByFileId = new Map(candidates.map((file) => [file.fileId, 0]));
-    this.handlers.onUploadProgress(entry.id, 0, totalBytes);
-    try {
-      const results = await mapWithConcurrency(
-        candidates,
-        TRANSFER_CONCURRENCY,
-        async (file) => {
-          await this.#uploadFile(file, (fileUploadedBytes) => {
-            uploadedByFileId.set(file.fileId, fileUploadedBytes);
-            const uploadedBytes = [...uploadedByFileId.values()].reduce(
-              (total, bytes) => total + bytes,
-              0,
-            );
-            this.handlers.onUploadProgress(entry.id, uploadedBytes, totalBytes);
-          });
-          return file.fileId;
-        },
-      );
-      const uploaded = results.flatMap((result) => (
-        result.status === "fulfilled" ? [result.value] : []
-      ));
-      // The server now holds these contents; the UI's live availability set
-      // picks this up without waiting for the next pool query.
-      for (const fileId of uploaded) {
-        this.handlers.onFileAvailable(fileId);
-      }
-      const failures = results.flatMap((result) => (
-        result.status === "rejected" ? [result.reason] : []
-      ));
-      if (failures.length) {
-        // A source the local machine can no longer read never becomes
-        // uploadable, so that failure keeps the published record (its bytes
-        // stay downloadable from the device that still holds them) instead of
-        // failing the entry.
-        const allMissingSource = failures.every((reason) => (
-          String(reason).includes("本机文件内容不可用")
-        ));
-        if (allMissingSource) {
-          this.handlers.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
-          return;
-        }
-        // Anything else (auth, network, server) is a real failure: surface it
-        // so the caller's retry/skip handling engages instead of leaving the
-        // content silently unuploaded.
-        throw failures[0];
-      }
-    } finally {
-      this.handlers.onUploadFinished(entry.id);
-    }
-  }
-
-  // Shared pipeline for the JSON endpoints: one fetch, one 401 check, one
-  // error-body extraction and one schema validation each. With `tolerate404`
-  // a missing resource resolves to undefined instead of failing.
-  async #request<T>(
-    method: string,
-    path: string,
-    init: RequestInit,
-    schema: Schema<T> | null,
-    incompatible: string,
-    tolerate404 = false,
-  ): Promise<T | undefined> {
-    const response = await this.#httpFetch(method, path, init);
-    if (response.status === 401) throw new Error("登录已失效，请重新登录");
-    if (tolerate404 && response.status === 404) return undefined;
-    const body = await response.json().catch(() => undefined) as unknown;
-    if (!response.ok) throw new Error(errorMessageFromBody(body, response.status));
-    if (!schema) return undefined;
-    const parsed = schema.safeParse(body);
-    if (!parsed.success) throw new Error(incompatible);
-    return parsed.data;
-  }
-
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {
     return {
       headers: { "Content-Type": "application/json" },
@@ -490,6 +200,9 @@ export class SyncClient {
       signal: AbortSignal.timeout(timeoutMs),
     };
   }
+
+  // Every write returns the server's stored entry: its id and timestamp are
+  // server-assigned, and the caller must adopt it into local state.
 
   // The HTTP response is the confirmation the socket echo used to be. The
   // queue-row payload carries no id and no createdAt: identity and timestamp
@@ -499,7 +212,7 @@ export class SyncClient {
       deviceId: this.device.id,
       entry,
     };
-    const stored = await this.#request(
+    const stored = await this.#http.request(
       "POST",
       "/entries",
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
@@ -513,7 +226,7 @@ export class SyncClient {
   // also confirms the entry exists, so reconcile can treat 404 as "gone".
   async activate(entryId: string): Promise<ClipboardEntry> {
     const request: EntryActivateRequest = { deviceId: this.device.id };
-    const stored = await this.#request(
+    const stored = await this.#http.request(
       "POST",
       `/entries/${encodeURIComponent(entryId)}/activate`,
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
@@ -534,7 +247,7 @@ export class SyncClient {
     try {
       const manifest: ClipboardManifestEntry[] = [];
       for (let page = 1; ; page += 1) {
-        const state = await this.#request(
+        const state = await this.#http.request(
           "GET",
           `/entries/manifest?page=${page}&pageSize=${this.manifestPageSize}`,
           { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
@@ -555,7 +268,7 @@ export class SyncClient {
   }
 
   async #fetchDevices(): Promise<Device[]> {
-    const devices = await this.#request(
+    const devices = await this.#http.request(
       "GET",
       "/devices",
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
@@ -567,7 +280,7 @@ export class SyncClient {
 
   async #fetchEntryBatch(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     const request: EntryQueryRequest = { entryIds: [...entryIds] };
-    const queried = await this.#request(
+    const queried = await this.#http.request(
       "POST",
       "/entries/query",
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
@@ -587,7 +300,7 @@ export class SyncClient {
 
   async #fetchFileStatusBatch(fileIds: readonly string[]): Promise<FileStatus[]> {
     const request: FileQueryRequest = { fileIds: [...fileIds] };
-    const queried = await this.#request(
+    const queried = await this.#http.request(
       "POST",
       "/files/query",
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
@@ -598,7 +311,7 @@ export class SyncClient {
   }
 
   async downloadFile(entry: ClipboardEntry, file: FileReference): Promise<void> {
-    return this.#downloadFileReference(entry.id, file);
+    return this.#files.downloadFile(entry, file);
   }
 
   async downloadFileToSave(
@@ -606,7 +319,7 @@ export class SyncClient {
     file: FileReference,
     saveId: string,
   ): Promise<void> {
-    return this.#downloadFileReference(entry.id, file, saveId);
+    return this.#files.downloadFileToSave(entry, file, saveId);
   }
 
   async downloadVirtualFile(request: {
@@ -615,44 +328,13 @@ export class SyncClient {
     size: number;
     sourceDeviceId: string;
   }): Promise<void> {
-    return this.#downloadFileReference(request.entryId, {
-      fileId: request.fileId,
-      size: request.size,
-    });
+    return this.#files.downloadVirtualFile(request);
   }
-
-  async #downloadFileReference(
-    entryId: string,
-    file: FileReference,
-    saveId?: string,
-  ): Promise<void> {
-    const abort = new AbortController();
-    this.#downloadAborts.add(abort);
-    try {
-      // 下载走纯 HTTP + Rust 落盘（公共管线），不依赖 socket；stop() 时才中止。
-      await downloadStoredFile(
-        { httpUrl: this.httpUrl, token: this.token },
-        entryId,
-        file,
-        { saveId, signal: abort.signal },
-      );
-    } finally {
-      this.#downloadAborts.delete(abort);
-    }
-  }
-
-  // Downloads pull raw bytes over one HTTP GET: the server streams stored
-  // bytes straight off the pool, and content it does not hold parks the
-  // request on a live relay pipe that a device holding the bytes fills through
-  // `PUT /files/relay/:sessionId`. A pipe that breaks (or its session expires)
-  // simply falls back to the next retry — until the deadline. The pipeline
-  // itself lives in the shared `fileDownload.ts`, so any window can download
-  // with just credentials.
 
   // A 404 is not a failure: another device may have deleted the entry first,
   // and the outcome every device converges on is the same.
   async delete(entryId: string): Promise<void> {
-    const response = await this.#httpFetch(
+    const response = await this.#http.fetch(
       "DELETE",
       `/entries/${encodeURIComponent(entryId)}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
@@ -675,8 +357,8 @@ export class SyncClient {
 
   // Liveness heartbeat: a dead peer (power loss, NAT table expiry) leaves the
   // TCP socket OPEN with nothing to read, so the status would show "已连接"
-  // forever and uploads would wait on a reconnect that never fires. One
-  // missed pong closes the socket and lets the existing reconnect loop run.
+  // forever and pushes would silently stop. One missed pong closes the socket
+  // and lets the existing reconnect loop run.
   #startHeartbeat(): void {
     this.#stopHeartbeat();
     this.#awaitingPong = false;
@@ -693,263 +375,6 @@ export class SyncClient {
     if (this.#pingTimer) window.clearInterval(this.#pingTimer);
     this.#pingTimer = undefined;
     this.#awaitingPong = false;
-  }
-
-  #isRecoverableUploadError(error: unknown): boolean {
-    return errorMessage(error) === "同步连接已断开";
-  }
-
-  async #uploadFile(
-    file: FileReference,
-    onProgress: (uploadedBytes: number) => void,
-  ): Promise<void> {
-    while (!this.#stopped) {
-      try {
-        await this.#uploadContent(file, onProgress);
-        return;
-      } catch (error) {
-        if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
-        // No socket to wait on: back off and re-probe HTTP directly.
-        await new Promise((resolve) => window.setTimeout(resolve, UPLOAD_RETRY_BACKOFF_MS));
-      }
-    }
-    throw new Error("同步连接已断开");
-  }
-
-  // Uploads run over HTTP: one POST handshake that either reports the content
-  // already stored or hands back the server's chunk ledger, then raw-byte PUTs
-  // that each answer with the authoritative ledger. No socket correlation and
-  // no ordering constraint — a chunk only needs its index.
-  async #uploadContent(
-    file: FileReference,
-    onProgress: (uploadedBytes: number) => void,
-  ): Promise<void> {
-    // The ledger can be retired under us — the TTL sweep, or another device's
-    // begin discarding state it no longer trusts. A PUT answered with 404 is
-    // not a failure: re-beginning hands back the current ledger and the
-    // upload continues from it.
-    for (let restart = 0; ; restart++) {
-      const begin = await this.#uploadBegin(file);
-      // The server already had these bytes, so the transfer is over before it
-      // began — this is what makes copying a folder twice nearly free.
-      if (begin.status === "stored") {
-        onProgress(file.size);
-        return;
-      }
-      const chunkCount = Math.ceil(file.size / FILE_CHUNK_SIZE);
-      if (begin.receivedBytes > file.size) throw new Error("服务器续传进度超出文件大小");
-      // The server may already hold chunks from another device's attempt at
-      // the same content, so its bitmap is the only source of truth.
-      let missing = decodeMissing(begin.missingChunks, chunkCount);
-      onProgress(begin.receivedBytes);
-      let retired = false;
-      while (missing.length > 0) {
-        const index = missing[0]!;
-        const offset = index * FILE_CHUNK_SIZE;
-        const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-        const data = await invoke<string>("read_upload_chunk", {
-          fileId: file.fileId, offset, length,
-        });
-        if (!data) throw new Error("本机文件内容不可用");
-        // A concurrent upload may store the same content mid-transfer; the
-        // chunk response then reports `stored` and the remaining bytes are done.
-        const chunk = await this.#uploadChunk(file.fileId, index, base64ToBytes(data));
-        if (chunk === undefined) {
-          retired = true;
-          break;
-        }
-        if (chunk.status === "stored") {
-          onProgress(file.size);
-          return;
-        }
-        const next = decodeMissing(chunk.missingChunks, chunkCount);
-        // Bits never clear, so the chunk just sent must have left the ledger;
-        // refusing to make progress would loop forever.
-        if (next.length >= missing.length) throw new Error("服务器上传进度异常");
-        missing = next;
-        onProgress(chunk.receivedBytes);
-      }
-      if (!retired) {
-        onProgress(file.size);
-        return;
-      }
-      // A bounded number of restarts keeps a server that keeps answering 404
-      // from spinning this loop forever.
-      if (restart >= 3) throw new Error("服务器上传进度反复失效");
-    }
-  }
-
-  async #uploadBegin(file: FileReference): Promise<UploadBeginResponse> {
-    const request: UploadBeginRequest = {
-      fileId: file.fileId,
-      size: file.size,
-    };
-    const begin = await this.#request(
-      "POST",
-      "/upload/begin",
-      this.#jsonInit(request, UPLOAD_BEGIN_TIMEOUT_MS),
-      UploadBeginResponseSchema,
-      "服务器返回了不兼容的上传响应",
-    );
-    return begin!;
-  }
-
-  // Returns undefined when the server no longer knows this upload — its
-  // ledger was swept or discarded; the caller re-begins to pick up the new one.
-  async #uploadChunk(fileId: string, index: number, chunk: Uint8Array): Promise<UploadChunkResponse | undefined> {
-    return this.#request(
-      "PUT",
-      `/upload/${fileId}?index=${index}`,
-      {
-        headers: { "Content-Type": "application/octet-stream" },
-        body: chunk,
-        signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
-      },
-      UploadChunkResponseSchema,
-      "服务器返回了不兼容的上传响应",
-      true,
-    );
-  }
-
-  // HTTP is shared by uploads and downloads. Network-level failures surface as
-  // a disconnected sync so the caller's retry loop can pick the transfer back
-  // up once the connection returns.
-  async #httpFetch(method: string, path: string, init: RequestInit): Promise<Response> {
-    try {
-      return await fetch(`${this.httpUrl}${path}`, {
-        ...init,
-        method,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          ...init.headers as Record<string, string>,
-        },
-      });
-    } catch (error) {
-      // A timeout means the server is reachable but too slow — and the socket
-      // is fine, so no reconnect will ever fire. It must not masquerade as a
-      // disconnect or the recoverable waits would spin on it forever.
-      if (error instanceof DOMException && error.name === "TimeoutError") {
-        throw new Error("同步服务响应超时");
-      }
-      throw new Error("同步连接已断开");
-    }
-  }
-
-  // This device may hold the content a `file.requested` push is asking for.
-  // Serving it is a loop of local reads streamed as chunked PUTs into the
-  // requester's parked relay pipe. Devices without the bytes stay quiet; the
-  // sender's own failure backoff is keyed by content so a file we cannot
-  // provide is not re-probed per session.
-  async #serveRelayRequest(request: FileRelayRequest): Promise<void> {
-    if (this.#servingFiles.has(request.sessionId)) return;
-    const failedAt = this.#failedServes.get(request.fileId);
-    if (failedAt !== undefined && Date.now() - failedAt < SERVE_RETRY_BACKOFF_MS) return;
-    // Probing the first byte first: a device that cannot actually provide the
-    // content stays quiet instead of poisoning the session for another holder.
-    if (request.size > 0) {
-      const probe = await invoke<string>("read_upload_chunk", {
-        fileId: request.fileId,
-        offset: 0,
-        length: 1,
-      });
-      if (!probe) {
-        this.#rememberFailedServe(request.fileId);
-        return;
-      }
-    }
-    this.#servingFiles.add(request.sessionId);
-    try {
-      let offset = 0;
-      for (;;) {
-        const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
-        const data = await invoke<string>("read_upload_chunk", {
-          fileId: request.fileId,
-          offset,
-          length,
-        });
-        if (!data) throw new Error("本机文件内容不可用");
-        const bytes = base64ToBytes(data);
-        const last = offset + bytes.byteLength >= request.size;
-        const put = await this.#httpFetch(
-          "PUT",
-          `/files/relay/${request.sessionId}${last ? "?end=1" : ""}`,
-          {
-            headers: { "Content-Type": "application/octet-stream" },
-            body: bytes,
-            signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
-          },
-        );
-        // 410: the requester hung up or the session expired — nothing to serve.
-        if (put.status === 410 || put.status === 409) return;
-        if (put.status === 401) throw new Error("登录已失效，请重新登录");
-        if (!put.ok) {
-          const body = await put.json().catch(() => undefined) as unknown;
-          throw new Error(errorMessageFromBody(body, put.status));
-        }
-        offset += bytes.byteLength;
-        if (last) return;
-      }
-    } catch {
-      this.#rememberFailedServe(request.fileId);
-    } finally {
-      this.#servingFiles.delete(request.sessionId);
-    }
-  }
-
-  #rememberFailedServe(fileId: string): void {
-    this.#failedServes.set(fileId, Date.now());
-    if (this.#failedServes.size > 100) {
-      const cutoff = Date.now() - SERVE_RETRY_BACKOFF_MS;
-      for (const [id, at] of this.#failedServes) {
-        if (at < cutoff) this.#failedServes.delete(id);
-      }
-    }
-  }
-
-  async #handleMessage(data: unknown): Promise<void> {
-    const result = ServerMessageSchema.safeParse(JSON.parse(String(data)));
-    if (!result.success) return;
-    const message = result.data;
-    switch (message.type) {
-      case "file.available":
-        this.handlers.onFileAvailable(message.fileId);
-        return;
-      case "file.requested":
-        // Fire-and-forget: serving streams a whole file and must not block
-        // the socket's message pump.
-        void this.#serveRelayRequest(message).catch(() => undefined);
-        return;
-      case "auth.ack":
-        this.handlers.onConnected(true);
-        this.#startHeartbeat();
-        // A fresh session gives previously skipped rows another chance.
-        this.#skippedRows.clear();
-        // The socket only confirms the session: devices and the manifest were
-        // pulled over HTTP at login, and a reconnect does not re-pull — pushes
-        // missed during a disconnect window wait for the next login.
-        return;
-      case "pong":
-        this.#awaitingPong = false;
-        return;
-      case "clipboard.created":
-        this.handlers.onEntry(message.entry);
-        return;
-      case "clipboard.activated":
-        this.handlers.onActivation(message.entry);
-        return;
-      case "clipboard.deleted":
-        this.handlers.onDelete(message.entryId);
-        return;
-      case "device.presence":
-        this.handlers.onDevicePresence(message.device);
-        return;
-      case "error":
-        this.handlers.onError(message.message);
-        if (message.code === "AUTH_FAILED" || message.code === "AUTH_REQUIRED") {
-          this.handlers.onAuthenticationFailed(message.message);
-        }
-        return;
-    }
   }
 
   #open(): void {
@@ -982,26 +407,47 @@ export class SyncClient {
 
     socket.addEventListener("error", () => socket.close());
   }
-}
 
-// The Tauri command reads chunks as base64 (its WebSocket-era shape); uploads
-// now send raw bytes, so decode before handing them to fetch. The append
-// command keeps that base64 signature, so downloads re-encode each read.
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-// Mirrors the server's ledger layout: bit `i` of byte `i >> 3`, least
-// significant bit first, one bit per chunk where 1 = still missing. Tail bits
-// past `chunkCount` are zero and skipped by the loop bound.
-function decodeMissing(missing: string, chunkCount: number): number[] {
-  const bytes = base64ToBytes(missing);
-  const indices: number[] = [];
-  for (let index = 0; index < chunkCount; index++) {
-    if (bytes[index >> 3]! & (1 << (index & 7))) indices.push(index);
+  async #handleMessage(data: unknown): Promise<void> {
+    const result = ServerMessageSchema.safeParse(JSON.parse(String(data)));
+    if (!result.success) return;
+    const message = result.data;
+    switch (message.type) {
+      case "file.available":
+        this.handlers.onFileAvailable(message.fileId);
+        return;
+      case "file.requested":
+        // Fire-and-forget: serving streams a whole file and must not block
+        // the socket's message pump.
+        void this.#files.serveRelayRequest(message).catch(() => undefined);
+        return;
+      case "auth.ack":
+        this.handlers.onConnected(true);
+        this.#startHeartbeat();
+        // A fresh session gives previously skipped rows another chance.
+        this.#skippedRows.clear();
+        return;
+      case "pong":
+        this.#awaitingPong = false;
+        return;
+      case "clipboard.created":
+        this.handlers.onEntry(message.entry);
+        return;
+      case "clipboard.activated":
+        this.handlers.onActivation(message.entry);
+        return;
+      case "clipboard.deleted":
+        this.handlers.onDelete(message.entryId);
+        return;
+      case "device.presence":
+        this.handlers.onDevicePresence(message.device);
+        return;
+      case "error":
+        this.handlers.onError(message.message);
+        if (message.code === "AUTH_FAILED" || message.code === "AUTH_REQUIRED") {
+          this.handlers.onAuthenticationFailed(message.message);
+        }
+        return;
+    }
   }
-  return indices;
 }
