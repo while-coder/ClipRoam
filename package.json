@@ -4,14 +4,11 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "pnpm --filter @cliproam/app tauri dev",
-    "dev:server": "pnpm --filter @cliproam/server dev",
+    "debug:app": "pnpm --filter @cliproam/protocol build && cargo build --manifest-path apps/app/src-tauri/Cargo.toml",
     "debug:server": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/server debug",
-    "build": "pnpm --filter @cliproam/server build && pnpm --filter @cliproam/app build",
     "build:server": "pnpm --filter @cliproam/server build",
     "docker": "node scripts/docker.js",
     "release": "node scripts/release.js",
-    "sync:icons": "node scripts/sync-icons.js",
     "sync:versions": "node scripts/sync-versions.js",
     "check": "pnpm --filter @cliproam/protocol build && pnpm -r check"
   }
