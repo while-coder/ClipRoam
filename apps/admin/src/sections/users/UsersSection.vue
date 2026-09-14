@@ -146,6 +146,7 @@ async function removeDevice(device: AdminDevice): Promise<void> {
   deviceError.value = "";
   try {
     await deleteUserDevice(user.id, device.id);
+    confirmingDeviceAction.value = undefined;
     notice.value = `设备 ${device.name} 已删除，其同步条目一并清除。`;
     await loadDevices();
   } catch (reason) {
@@ -157,6 +158,14 @@ async function removeDevice(device: AdminDevice): Promise<void> {
 
 const signingOutDeviceId = ref("");
 
+// 二次确认：记录待执行的设备操作，确认后才真正调用接口。
+const confirmingDeviceAction = ref<{ device: AdminDevice; action: "signOut" | "remove" }>();
+
+function requestDeviceAction(device: AdminDevice, action: "signOut" | "remove"): void {
+  deviceError.value = "";
+  confirmingDeviceAction.value = { device, action };
+}
+
 async function signOutDevice(device: AdminDevice): Promise<void> {
   const user = managingDevicesUser.value;
   if (!user || signingOutDeviceId.value) return;
@@ -164,6 +173,7 @@ async function signOutDevice(device: AdminDevice): Promise<void> {
   deviceError.value = "";
   try {
     await revokeUserDeviceSession(user.id, device.id);
+    confirmingDeviceAction.value = undefined;
     notice.value = `设备 ${device.name} 已下线，下次登录后恢复同步。`;
     await loadDevices();
   } catch (reason) {
@@ -288,12 +298,8 @@ onUnmounted(() => clearTimeout(searchTimer));
               <time class="muted" :datetime="device.lastSeenAt">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
             </div>
             <div class="device-actions">
-              <button class="secondary" type="button" :disabled="!!signingOutDeviceId" @click="signOutDevice(device)">
-                {{ signingOutDeviceId === device.id ? "正在下线…" : "下线" }}
-              </button>
-              <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(device)">
-                {{ removingDeviceId === device.id ? "正在删除…" : "删除" }}
-              </button>
+              <button class="secondary" type="button" :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'signOut')">下线</button>
+              <button class="danger" type="button" :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'remove')">删除</button>
             </div>
           </li>
         </ul>
@@ -302,6 +308,32 @@ onUnmounted(() => clearTimeout(searchTimer));
           <button class="secondary" type="button" @click="managingDevicesUser = undefined">关闭</button>
         </div>
       </section>
+
+      <div v-if="confirmingDeviceAction" class="modal-backdrop" role="presentation">
+        <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="device-action-title">
+          <template v-if="confirmingDeviceAction.action === 'signOut'">
+            <h2 id="device-action-title">下线设备 {{ confirmingDeviceAction.device.name }}？</h2>
+            <p>该设备的登录会话将立即失效，设备下次登录后恢复同步；设备信息与同步条目不受影响。</p>
+            <div class="form-actions">
+              <button class="secondary" type="button" :disabled="!!signingOutDeviceId" @click="confirmingDeviceAction = undefined">取消</button>
+              <button type="button" :disabled="!!signingOutDeviceId" @click="signOutDevice(confirmingDeviceAction.device)">
+                {{ signingOutDeviceId ? "正在下线…" : "确认下线" }}
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <h2 id="device-action-title">删除设备 {{ confirmingDeviceAction.device.name }}？</h2>
+            <p>将清除该设备的登录会话与设备信息，并删除它同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。此操作不可恢复。</p>
+            <div class="form-actions">
+              <button class="secondary" type="button" :disabled="!!removingDeviceId" @click="confirmingDeviceAction = undefined">取消</button>
+              <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(confirmingDeviceAction.device)">
+                {{ removingDeviceId ? "正在删除…" : "确认删除" }}
+              </button>
+            </div>
+          </template>
+          <p v-if="deviceError" class="message error" role="alert">{{ deviceError }}</p>
+        </section>
+      </div>
     </div>
   </section>
 </template>
