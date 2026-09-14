@@ -18,6 +18,7 @@ pub(crate) mod linux;
 pub(crate) mod arboard_clipboard;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size, Window, WindowEvent};
 
@@ -207,6 +208,11 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// 托盘旁 toast 窗口的自动隐藏兜底：窗口隐藏期间 webview 可能被 WebView2
+// 挂起，JS 里的隐藏定时器随之失效，toast 会一直停在托盘旁。这里由原生
+// 线程兜底；代字号保证展示新 toast 后，旧定时器不会把新 toast 提前藏掉。
+static TOAST_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) fn show_detached_toast(
     app: &AppHandle,
     payload: crate::app_shell::ToastPayload,
@@ -215,10 +221,24 @@ pub(crate) fn show_detached_toast(
         .get_webview_window("toast")
         .ok_or_else(|| "toast window is unavailable".to_string())?;
     position_toast_window(app, &window)?;
+    let tone = payload.tone.clone();
     window
         .emit("cliproam://toast", payload)
         .map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())
+    window.show().map_err(|error| error.to_string())?;
+    // 比前端定时器（error 5s / 其余 3.2s）晚 1s 触发：前端正常时先隐藏，
+    // 兜底只是收尾。
+    let generation = TOAST_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let hide_app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(if tone == "error" { 6_000 } else { 4_200 }));
+        if TOAST_GENERATION.load(Ordering::Relaxed) == generation {
+            if let Some(window) = hide_app.get_webview_window("toast") {
+                let _ = window.hide();
+            }
+        }
+    });
+    Ok(())
 }
 
 fn position_toast_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
