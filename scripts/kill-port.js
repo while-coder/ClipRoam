@@ -27,7 +27,13 @@ function findListenerPids() {
     }
     return [...pids];
   }
-  const output = execFileSync("lsof", [`-ti:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
+  // lsof 在没有找到监听进程时以退出码 1 结束,属正常情况,按空结果处理
+  let output = "";
+  try {
+    output = execFileSync("lsof", [`-ti:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" });
+  } catch (error) {
+    output = error.stdout || "";
+  }
   return [...new Set(output.split("\n").map(Number).filter(Boolean))];
 }
 
