@@ -408,6 +408,9 @@ async function showPasteWindow(): Promise<void> {
   requestProxyDevices();
   // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
   await invoke("capture_paste_target").catch(() => undefined);
+  // 主窗口可见时会参与焦点竞争：应用被点击激活时主窗口作为 key 窗口
+  // 会吞掉对粘贴窗口的第一次点击。快速粘贴期间把主窗口收起，单击才能直达。
+  await invoke("hide_main").catch(() => undefined);
   const pasteWindow = getCurrentWindow();
   try {
     const cursor = await cursorPosition();
@@ -574,11 +577,15 @@ async function activateEntry(
   }
   if (activatingEntryId.value) return;
   activatingEntryId.value = entry.id;
+  // [paste-debug] 诊断埋点，定位后移除
+  console.info(`[paste-debug] activateEntry ${command} id=${entry.id}`);
   try {
     // Rust selects the native strategy. This downloads only what the current
     // platform must materialize before it can copy or paste the entry.
     await ensurePasteReady(entry);
     await invoke(command, { entryId: entry.id });
+    // [paste-debug] 诊断埋点，定位后移除
+    console.info(`[paste-debug] activateEntry done ${command} id=${entry.id}`);
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
     // 看不见，保留确认提示。
     if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
@@ -652,6 +659,8 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
  * window and on mobile, keyboard/double-click everywhere.
  */
 function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
+  // [paste-debug] 诊断埋点，定位后移除
+  console.info(`[paste-debug] activateFromView id=${entry.id} viaClick=${viaClick} isPasteWindow=${isPasteWindow}`);
   if (viaClick) {
     if (isPasteWindow) void pasteEntry(entry);
     else if (isMobile.value) void copyEntry(entry);

@@ -50,7 +50,12 @@ fn frontmost_app_pid() -> Option<i32> {
 pub(crate) fn capture_paste_target(app: &AppHandle) -> Result<(), String> {
     if let Some(state) = app.try_state::<PasteTarget>() {
         if let Ok(mut guard) = state.0.lock() {
-            *guard = frontmost_app_pid();
+            // 前台是自己的窗口（粘贴窗口开着时再次按快捷键）时保留原目标：
+            // 用户真正要粘贴的仍是第一次弹出粘贴窗口前的前台应用。
+            let own_pid = std::process::id() as i32;
+            if *guard != Some(own_pid) {
+                *guard = frontmost_app_pid();
+            }
         }
     }
     Ok(())
@@ -77,22 +82,51 @@ fn reactivate_paste_target(app: &AppHandle) {
         .output();
 }
 
+/// 弹出粘贴窗口前的前台是否就是 ClipRoam 自己（如在主窗口前台按了快捷键）。
+/// 此时没有可粘贴的外部目标。
+fn paste_target_is_self(app: &AppHandle) -> bool {
+    let own_pid = std::process::id() as i32;
+    app.try_state::<PasteTarget>()
+        .and_then(|state| state.0.lock().ok().map(|guard| *guard == Some(own_pid)))
+        .unwrap_or(false)
+}
+
 pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> Result<(), String> {
+    // [paste-debug] 诊断埋点，定位后移除
+    tauri_plugin_log::log::info!("[paste-debug] deliver_paste enter synthesize={synthesize} self_target={}", paste_target_is_self(window.app_handle()));
     if !synthesize {
         return Ok(());
     }
-    window.hide().map_err(|error| error.to_string())?;
+    // 目标是 ClipRoam 自己时没有可自动粘贴的外部输入处；合成 Cmd+V 只会把
+    // 内容送进主窗口搜索框并把主界面带到前台。此时仅复制到剪贴板，收起
+    // 粘贴窗口与主界面，用户可在真正的目标应用里手动 Cmd+V。
+    if paste_target_is_self(window.app_handle()) {
+        window.hide().map_err(|error| error.to_string())?;
+        if let Some(main) = window.app_handle().get_webview_window("main") {
+            let _ = main.hide();
+        }
+        return Ok(());
+    }
     // 先把前台还给弹出粘贴窗口之前的应用，Cmd+V 才会落到用户原本输入的
-    // 地方；否则主界面可见时会被粘贴进主界面的搜索框。
+    // 地方；否则主界面可见时会被粘贴进主界面的搜索框。必须先切前台再隐藏
+    // 粘贴窗口：反过来时 macOS 会把焦点落给应用内下一个可见窗口（主界面），
+    // 主界面会闪现一下。
     reactivate_paste_target(window.app_handle());
     std::thread::sleep(std::time::Duration::from_millis(120));
+    window.hide().map_err(|error| error.to_string())?;
+    // [paste-debug] 诊断埋点，定位后移除
+    tauri_plugin_log::log::info!("[paste-debug] target reactivated, paste hidden, synthesizing");
     if let Err(error) = synthesize_paste() {
         // The clipboard content is still valid, but the user needs to see why
         // automatic delivery failed (for example missing macOS Accessibility
         // permission).
+        // [paste-debug] 诊断埋点，定位后移除
+        tauri_plugin_log::log::info!("[paste-debug] synthesize failed: {error}");
         let _ = window.show();
         return Err(error);
     }
+    // [paste-debug] 诊断埋点，定位后移除
+    tauri_plugin_log::log::info!("[paste-debug] synthesize ok");
     Ok(())
 }
 
