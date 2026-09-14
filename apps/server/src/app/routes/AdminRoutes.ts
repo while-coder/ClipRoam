@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
+import type { ServerMessage } from "@cliproam/protocol";
 import type { AdminService } from "../../admin/AdminService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
@@ -23,13 +24,14 @@ export type AdminRouteDeps = {
   tls: TlsCertificateService;
   config: ServerConfig;
   store: ClipRoamStore;
+  broadcast: (userId: string, message: ServerMessage) => void;
   // The running HTTP(S) server, so a new TLS certificate can be applied
   // without a restart when the runtime supports it.
   liveServer: { setSecureContext?: (context: TlsOptions) => void };
 };
 
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
-  const { admin, tls, config, store, liveServer } = deps;
+  const { admin, tls, config, store, liveServer, broadcast } = deps;
 
   const requireAdmin = (
     request: { headers: { cookie?: string } },
@@ -168,10 +170,28 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     if (!store.hasUser(userId)) {
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
-    if (!store.deleteUserDevice(userId, deviceId)) {
+    const deletedEntryIds = store.deleteUserDevice(userId, deviceId);
+    if (deletedEntryIds === null) {
       return reply.code(404).send({ code: "DEVICE_NOT_FOUND", message: "设备不存在或已被删除。" });
     }
-    return { ok: true };
+    // Every remaining device prunes its local copy of the removed entries,
+    // idempotently, exactly like the single-entry delete route.
+    for (const entryId of deletedEntryIds) {
+      broadcast(userId, { type: "clipboard.deleted", entryId });
+    }
+    return { ok: true, deletedEntries: deletedEntryIds.length };
+  });
+
+  // Revokes the device's session only: the device row and its contributed
+  // entries stay, and the device resumes syncing on its next sign-in.
+  app.delete("/admin-api/users/:userId/devices/:deviceId/session", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId, deviceId } = request.params as { userId: string; deviceId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    const revoked = store.revokeUserDeviceSession(userId, deviceId);
+    return { ok: true, revoked };
   });
 
   app.get("/admin-api/files", async (request, reply) => {

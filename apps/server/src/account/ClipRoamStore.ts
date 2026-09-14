@@ -79,10 +79,19 @@ export class ClipRoamStore {
   }
 
   // The accounts-side session for this device dies with the device row, so a
-  // removed device cannot keep syncing until its stored token expires.
-  deleteUserDevice(userId: string, deviceId: string): boolean {
+  // removed device cannot keep syncing until its stored token expires. The
+  // entries it contributed are removed with it; the caller broadcasts the
+  // returned ids so the remaining devices prune their local copies.
+  deleteUserDevice(userId: string, deviceId: string): string[] | null {
     this.#accounts.deleteSession(userId, deviceId);
     return this.#userStore(userId).deleteDevice(deviceId);
+  }
+
+  // Forces the device offline without touching its device row or the entries
+  // it contributed: the session is unique per device, and the device resumes
+  // syncing once it signs in again under the same machine identity.
+  revokeUserDeviceSession(userId: string, deviceId: string): boolean {
+    return this.#accounts.deleteSession(userId, deviceId);
   }
 
   // The account row cascades its sessions; the per-user database and directory

@@ -162,8 +162,8 @@ export class AccountStore {
     return true;
   }
 
-  deleteSession(userId: string, deviceId: string): void {
-    this.#database.prepare("DELETE FROM sessions WHERE user_id = ? AND device_id = ?").run(userId, deviceId);
+  deleteSession(userId: string, deviceId: string): boolean {
+    return this.#database.prepare("DELETE FROM sessions WHERE user_id = ? AND device_id = ?").run(userId, deviceId).changes > 0;
   }
 
   close(): void { this.#database.close(); }

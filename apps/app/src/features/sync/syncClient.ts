@@ -278,15 +278,6 @@ export class SyncClient {
   // Every write returns the server's stored entry: its id and timestamp are
   // server-assigned, and the caller must adopt it into local state.
 
-  // Re-uploads an already-published entry's contents — the settings page's
-  // "upload now" run. Nothing is published: the entry row already lives on
-  // the server, and the upload itself is purely content-addressed. Manual
-  // runs surface connection errors immediately instead of waiting on a
-  // reconnect that may never come.
-  async uploadEntryContents(entry: ClipboardEntry): Promise<void> {
-    return this.#uploadEntry(entry, MANUAL_UPLOAD_LIMIT, false);
-  }
-
   // The durable capture queue is the single replay mechanism: captures land
   // there with their full payload, and this drain publishes them strictly in
   // insertion order. Concurrent calls collapse into the running pass.
@@ -403,15 +394,11 @@ export class SyncClient {
     return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
   }
 
-  async #uploadEntry(
-    entry: ClipboardEntry,
-    sizeLimit: number,
-    retryOnRecoverable = true,
-  ): Promise<void> {
+  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
     if (existingUpload) return existingUpload;
 
-    const upload = this.#uploadFiles(entry, sizeLimit, retryOnRecoverable);
+    const upload = this.#uploadFiles(entry, sizeLimit);
     this.#entryUploads.set(entry.id, upload);
     try {
       await upload;
@@ -428,11 +415,7 @@ export class SyncClient {
    * The candidates derive from the entry payload itself, so this works for a
    * published row and for a queue row that has no local entry yet alike.
    */
-  async #uploadFiles(
-    entry: ClipboardEntry,
-    sizeLimit: number,
-    retryOnRecoverable: boolean,
-  ): Promise<void> {
+  async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
@@ -445,7 +428,7 @@ export class SyncClient {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadFile(file, retryOnRecoverable, (fileUploadedBytes) => {
+          await this.#uploadFile(file, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -746,7 +729,6 @@ export class SyncClient {
 
   async #uploadFile(
     file: FileReference,
-    retryOnRecoverable: boolean,
     onProgress: (uploadedBytes: number) => void,
   ): Promise<void> {
     while (!this.#stopped) {
@@ -755,9 +737,6 @@ export class SyncClient {
         return;
       } catch (error) {
         if (this.#stopped || !this.#isRecoverableUploadError(error)) throw error;
-        // Manual runs ("upload now") surface connection errors immediately
-        // instead of waiting on a reconnect that may never come.
-        if (!retryOnRecoverable) throw error;
         await this.#waitForConnection();
         // The socket can stay open while HTTP is briefly unreachable, so back
         // off instead of spinning on an immediately-failing fetch.

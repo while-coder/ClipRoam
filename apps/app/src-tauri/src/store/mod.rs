@@ -13,7 +13,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use uuid::Uuid;
 use chrono::DateTime;
 
 use crate::content::{entry_row_extra_json, ClipboardEntry, ClipboardEntryExtra};
@@ -35,16 +34,14 @@ pub fn with_transaction<T>(
 pub const LOCAL_HISTORY_KEY: &str = "local";
 
 /// History-level state that is not per-entry: the active profile key, the
-/// activation signatures, the device identity and the local-cache set. Entry
-/// rows live in SQLite alone.
+/// activation signatures and the local-cache set. Entry rows live in SQLite
+/// alone; the device identity lives in machine-level `device.json`.
 #[derive(Debug)]
 pub struct HistoryData {
     pub active_history: String,
     pub last_clipboard: String,
     pub last_file_signature: String,
     pub last_image_signature: String,
-    pub device_id: String,
-    pub device_name: String,
     /// Every content id the durable history references, derived from the
     /// entries' extras. `None` means stale: any write to the `entries` table
     /// resets it, and the next derivation re-derives it in one pass.
@@ -63,10 +60,6 @@ impl Default for HistoryData {
             last_clipboard: String::new(),
             last_file_signature: String::new(),
             last_image_signature: String::new(),
-            device_id: Uuid::new_v4().to_string(),
-            device_name: std::env::var("COMPUTERNAME")
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "This device".to_string()),
             file_ids: None,
             stored_file_ids: None,
         }
@@ -89,6 +82,16 @@ pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
 
 pub fn cache_dir_for(histories_dir: &Path, key: &str) -> PathBuf {
     cache_dir_for_path(&history_path_for_key(histories_dir, key))
+}
+
+/// Per-profile preference file, living next to the profile's SQLite so it
+/// shares the profile's lifecycle (deleting a profile deletes its settings).
+pub fn preferences_path_for(histories_dir: &Path, key: &str) -> PathBuf {
+    let history_path = history_path_for_key(histories_dir, key);
+    history_path
+        .parent()
+        .expect("history path always has a parent")
+        .join("preferences.json")
 }
 
 fn safe_history_directory_name(key: &str) -> String {
@@ -299,8 +302,6 @@ pub fn load_history(path: &Path, key: &str) -> HistoryData {
                     "last_clipboard" => history.last_clipboard = value,
                     "last_file_signature" => history.last_file_signature = value,
                     "last_image_signature" => history.last_image_signature = value,
-                    "device_id" => history.device_id = value,
-                    "device_name" => history.device_name = value,
                     _ => {}
                 }
             }
@@ -357,15 +358,13 @@ pub fn delete_entries_by_ids(connection: &Connection, entry_ids: &[String]) -> R
     Ok(())
 }
 
-/// Persists the history-level metadata: the activation signatures and the
-/// device identity.
+/// Persists the history-level metadata: the activation signatures. The device
+/// identity is machine-level (`device.json`) and never lands here.
 pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(), String> {
     let metadata = vec![
         ("last_clipboard", history.last_clipboard.clone()),
         ("last_file_signature", history.last_file_signature.clone()),
         ("last_image_signature", history.last_image_signature.clone()),
-        ("device_id", history.device_id.clone()),
-        ("device_name", history.device_name.clone()),
     ];
     for (key, value) in metadata {
         connection

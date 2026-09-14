@@ -95,6 +95,8 @@ export const DeviceSchema = z.object({
   name: z.string().min(1).max(80),
   platform: z.string().min(1).max(40),
   osVersion: z.string().min(1).max(80).default("未知"),
+  // 旧客户端上报的存量设备信息没有该字段，default 保证 server 读取时兼容。
+  appVersion: z.string().min(1).max(80).default("未知"),
 });
 
 // `DeviceSchema.id` stays unconstrained on purpose: it validates device
@@ -190,9 +192,7 @@ export const EntryManifestQuerySchema = z.object({
   dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)?$/, "dateEnd 必须是 UTC 日期或时间戳").optional(),
   kind: ClipboardKindSchema.optional(),
   // Source-device filter; absent/empty means no filter. A single value arrives
-  // as a plain query string, several as repeated `deviceIds=` params. The
-  // UNKNOWN_DEVICE_ID marker selects entries whose device is no longer
-  // registered on the account.
+  // as a plain query string, several as repeated `deviceIds=` params.
   deviceIds: z.preprocess(
     (value) => (value === undefined || Array.isArray(value) ? value : [value]),
     z.array(z.string().min(1).max(128)).max(32).optional(),
@@ -200,10 +200,6 @@ export const EntryManifestQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(100000).optional(),
   pageSize: z.coerce.number().int().min(ENTRY_PAGE_SIZE_RANGE.min).max(ENTRY_PAGE_SIZE_RANGE.max).optional(),
 });
-
-// The device filter's marker for "entries from devices no longer registered on
-// the account". Shared by the client filter UI and the server query.
-export const UNKNOWN_DEVICE_ID = "__unknown__";
 
 // One page of the identity listing. It doubles as the connection-time
 // reconciliation snapshot: a client pages through unfiltered while the

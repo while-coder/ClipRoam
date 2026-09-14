@@ -7,7 +7,7 @@ export type TransferSettings = {
 };
 export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
-export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; lastSeenAt: string };
+export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; appVersion: string; lastSeenAt: string };
 export type AdminFile = { fileId: string; size: number; stored: boolean; createdAt: string };
 export type FileStats = { count: number; storedCount: number; storedBytes: number };
 
@@ -58,6 +58,10 @@ export async function fetchUserDevices(userId: string): Promise<AdminDevice[]> {
 
 export async function deleteUserDevice(userId: string, deviceId: string): Promise<void> {
   await request(`users/${userId}/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+}
+
+export async function revokeUserDeviceSession(userId: string, deviceId: string): Promise<void> {
+  await request(`users/${userId}/devices/${encodeURIComponent(deviceId)}/session`, { method: "DELETE" });
 }
 
 export async function fetchFiles(search = ""): Promise<{ files: AdminFile[]; total: number; stats: FileStats }> {

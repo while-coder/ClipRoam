@@ -11,7 +11,8 @@ import {
 import { changeAccountPassword } from "../sync/syncClient";
 import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "../sync/syncDefaults";
-import type { SettingsPage, SyncConfig } from "../../types";
+import { getDeviceIdentity } from "../../utils/device";
+import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
 /**
  * 设置弹窗的模块级单例（对齐 usePlatform 风格）。弹窗状态被侧边栏、
@@ -21,15 +22,17 @@ import type { SettingsPage, SyncConfig } from "../../types";
 export type SettingsBridge = {
   getActiveConfig(): SyncConfig | undefined;
   setActiveConfig(config: SyncConfig): void;
+  getActivePreferences(): AccountPreferences;
   getUsername(): string;
   setUsername(name: string): void;
   persistSyncConfig(config: SyncConfig): Promise<void>;
+  /** 保存偏好到当前活动档案；偏好跟账号走，与全局会话配置分开持久化。 */
+  persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
   startSync(config: SyncConfig): Promise<void>;
   /** 断开当前同步客户端；参数为断开后的 syncEnabled 值（改密后为 true，退出账号为 false）。 */
   disconnect(syncEnabledAfter: boolean): void;
   /** persistSyncConfig 切换档案后重拉历史与待同步数据（新档案的数据与旧档案无关）。 */
   refreshAfterArchiveSwitch(): void;
-  uploadNowEligibleEntries(bytes: number): void;
   openSetup(o: { config?: SyncConfig; message?: string; focus?: "server" | "password" }): void;
   focusSearch(): void;
 };
@@ -55,6 +58,11 @@ const manifestPageSize = ref(ENTRY_PAGE_DEFAULT_LIMIT);
 const excludePatternsInput = ref("");
 /** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
 const serverMaxFileMb = ref(DEFAULT_SERVER_MAX_FILE_MB);
+/** 设备别名草稿；空串表示未设置，展示回退到系统机器名。 */
+const deviceAliasInput = ref("");
+const savedDeviceAlias = ref("");
+/** 系统机器名，作别名输入框的 placeholder。 */
+const systemDeviceName = ref("");
 const savingSettings = ref(false);
 const recordingQuickPasteShortcut = ref(false);
 const changingPassword = ref(false);
@@ -67,15 +75,17 @@ const confirmNewPassword = ref("");
 function openSettings(): void {
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig) return;
-  autoUploadLimitMb.value = activeConfig.autoUploadLimitMb;
-  autoReceiveClipboard.value = activeConfig.autoReceiveClipboard;
-  manifestPageSize.value = activeConfig.manifestPageSize;
-  excludePatternsInput.value = activeConfig.excludePatterns.join("\n");
-  serverMaxFileMb.value = activeConfig.serverMaxFileMb;
+  const preferences = requireBridge().getActivePreferences();
+  autoUploadLimitMb.value = preferences.autoUploadLimitMb;
+  autoReceiveClipboard.value = preferences.autoReceiveClipboard;
+  manifestPageSize.value = preferences.manifestPageSize;
+  excludePatternsInput.value = preferences.excludePatterns.join("\n");
+  serverMaxFileMb.value = preferences.serverMaxFileMb;
   // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
   if (autoUploadLimitMb.value > serverMaxFileMb.value) {
     autoUploadLimitMb.value = serverMaxFileMb.value;
   }
+  if (runningInTauri) void loadDeviceIdentity();
   resetQuickPasteShortcutDraft();
   recordingQuickPasteShortcut.value = false;
   settingsPage.value = "general";
@@ -168,6 +178,17 @@ function validatePasswordConfirmation(): boolean {
   return !passwordChangeError.value;
 }
 
+async function loadDeviceIdentity(): Promise<void> {
+  try {
+    const identity = await getDeviceIdentity();
+    savedDeviceAlias.value = identity.deviceAlias;
+    deviceAliasInput.value = identity.deviceAlias;
+    systemDeviceName.value = identity.systemDeviceName;
+  } catch {
+    systemDeviceName.value = "";
+  }
+}
+
 async function openAppDataDirectory(): Promise<void> {
   if (!runningInTauri) return;
   settingsError.value = "";
@@ -184,9 +205,8 @@ async function saveSettings(): Promise<void> {
   const { platformCapabilities } = usePlatform();
   savingSettings.value = true;
   settingsError.value = "";
-  const previousAutoUploadLimitMb = activeConfig.autoUploadLimitMb;
-  const config = {
-    ...activeConfig,
+  const activePreferences = requireBridge().getActivePreferences();
+  const preferences: AccountPreferences = {
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
     manifestPageSize: manifestPageSize.value,
@@ -194,8 +214,17 @@ async function saveSettings(): Promise<void> {
       .split("\n")
       .map((pattern) => pattern.trim())
       .filter((pattern, index, all) => pattern !== "" && all.indexOf(pattern) === index),
+    serverMaxFileMb: activePreferences.serverMaxFileMb,
+    maxCaptureFileCount: activePreferences.maxCaptureFileCount,
   };
   try {
+    // 别名变化先落 device.json：已连接时随后的 startSync 会带着新名字重连，
+    // 服务器设备列表随之刷新。
+    const deviceAlias = deviceAliasInput.value.trim();
+    if (runningInTauri && deviceAlias !== savedDeviceAlias.value) {
+      await invoke("save_device_alias", { alias: deviceAlias });
+      savedDeviceAlias.value = deviceAlias;
+    }
     if (
       runningInTauri
       && platformCapabilities.value.globalShortcut
@@ -205,19 +234,17 @@ async function saveSettings(): Promise<void> {
       settingsError.value = quickPasteShortcutStatus.value.message;
       return;
     }
-    await requireBridge().persistSyncConfig(config);
-    requireBridge().setActiveConfig(config);
+    // 偏好先落当前活动档案，再保存会话配置（enabled 变化会触发档案切换）。
+    await requireBridge().persistAccountPreferences(preferences);
+    await requireBridge().persistSyncConfig({ ...activeConfig });
     // 保存点是同步引擎的唯一驱动：显式决定连接或断开，不再依赖
     // save_sync_config 的事件回环（那个回环会造成双重连接）。
-    if (config.enabled && config.username && config.sessionToken) {
-      await requireBridge().startSync(config);
+    if (activeConfig.enabled && activeConfig.username && activeConfig.sessionToken) {
+      await requireBridge().startSync(activeConfig);
     } else {
       requireBridge().disconnect(false);
       // 关闭同步会把活动档案切回本地，重拉一次历史与待同步数据。
       requireBridge().refreshAfterArchiveSwitch();
-    }
-    if (config.autoUploadLimitMb > previousAutoUploadLimitMb) {
-      requireBridge().uploadNowEligibleEntries(config.autoUploadLimitMb * 1024 * 1024);
     }
     settingsVisible.value = false;
     await nextTick();
@@ -318,6 +345,8 @@ export {
   manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
+  deviceAliasInput,
+  systemDeviceName,
   savingSettings,
   recordingQuickPasteShortcut,
   changingPassword,

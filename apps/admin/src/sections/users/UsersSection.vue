@@ -6,6 +6,7 @@ import {
   fetchUserDevices,
   fetchUsers,
   resetUserPassword,
+  revokeUserDeviceSession,
   type AdminDevice,
   type AdminUser,
 } from "../../shared/api.js";
@@ -145,11 +146,30 @@ async function removeDevice(device: AdminDevice): Promise<void> {
   deviceError.value = "";
   try {
     await deleteUserDevice(user.id, device.id);
+    notice.value = `设备 ${device.name} 已删除，其同步条目一并清除。`;
     await loadDevices();
   } catch (reason) {
     deviceError.value = errorMessage(reason, "删除设备失败。");
   } finally {
     removingDeviceId.value = "";
+  }
+}
+
+const signingOutDeviceId = ref("");
+
+async function signOutDevice(device: AdminDevice): Promise<void> {
+  const user = managingDevicesUser.value;
+  if (!user || signingOutDeviceId.value) return;
+  signingOutDeviceId.value = device.id;
+  deviceError.value = "";
+  try {
+    await revokeUserDeviceSession(user.id, device.id);
+    notice.value = `设备 ${device.name} 已下线，下次登录后恢复同步。`;
+    await loadDevices();
+  } catch (reason) {
+    deviceError.value = errorMessage(reason, "强制下线失败。");
+  } finally {
+    signingOutDeviceId.value = "";
   }
 }
 
@@ -248,17 +268,20 @@ onUnmounted(() => clearTimeout(searchTimer));
     <div v-if="managingDevicesUser" class="modal-backdrop" role="presentation">
       <section class="confirm-dialog devices-dialog" role="dialog" aria-modal="true" aria-labelledby="devices-title">
         <h2 id="devices-title">{{ managingDevicesUser.username }} 的设备</h2>
-        <p>删除设备后，该设备的登录会话同时失效，需要重新登录才能继续同步。</p>
+        <p>「下线」只清除该设备的登录会话，设备下次登录后恢复同步；「删除」清除登录会话、设备信息及其同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。</p>
         <p v-if="devicesLoading" class="muted">正在加载设备列表…</p>
         <p v-else-if="devices.length === 0" class="muted">该用户还没有登录过任何设备。</p>
         <ul v-else class="device-list">
           <li v-for="device in devices" :key="device.id" class="device-item">
             <div class="device-info">
               <strong>{{ device.name }}</strong>
-              <span class="muted">{{ device.platform }} · {{ device.osVersion }}</span>
+              <span class="muted">{{ device.platform }} · {{ device.osVersion }} · v{{ device.appVersion }}</span>
             </div>
             <div class="device-side">
               <time class="muted" :title="'最后登录时间'">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
+              <button class="secondary" type="button" :disabled="!!signingOutDeviceId" @click="signOutDevice(device)">
+                {{ signingOutDeviceId === device.id ? "正在下线…" : "下线" }}
+              </button>
               <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(device)">
                 {{ removingDeviceId === device.id ? "正在删除…" : "删除" }}
               </button>
