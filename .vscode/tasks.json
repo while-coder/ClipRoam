@@ -36,13 +36,10 @@
       "presentation": { "reveal": "always", "panel": "shared" }
     },
     {
-      "label": "rust:build:dev",
-      "type": "process",
-      "command": "cargo",
-      "args": [
-        "build",
-        "--manifest-path=${workspaceFolder}/apps/app/src-tauri/Cargo.toml"
-      ],
+      "label": "debug:app",
+      "type": "shell",
+      "command": "pnpm run debug:app",
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": ["$rustc"],
       "presentation": { "reveal": "silent", "panel": "dedicated" }
     },
@@ -66,7 +63,7 @@
     },
     {
       "label": "tauri:before:dev",
-      "dependsOn": ["ui:kill", "rust:build:dev", "ui:dev"],
+      "dependsOn": ["ui:kill", "debug:app", "ui:dev"],
       "dependsOrder": "sequence"
     },
     {

@@ -34,8 +34,8 @@ macOS 首次自动粘贴时需要在“系统设置 → 隐私与安全性 → �
 
 ```powershell
 pnpm install
-pnpm dev:server
-pnpm dev
+pnpm --filter @cliproam/server dev
+pnpm --filter @cliproam/app tauri dev
 ```
 
 构建服务端 Docker 镜像并导出到项目根目录的 `cliproam-server.tar`：
@@ -87,7 +87,7 @@ pnpm --filter @cliproam/server start
 
 `CLIPROAM_ADMIN_PASSWORD` 可以由启动环境传入。服务固定监听 `4810`；需要更换对外端口时，请通过 Docker 端口映射或反向代理完成。
 
-从 `src/` 启动的开发模式（VS Code 的 `Launch Server`、`pnpm dev:server`）默认管理员密码为 `admin`；编译后的正常 `start` 不提供默认密码。
+从 `src/` 启动的开发模式（VS Code 的 `Launch Server`、`pnpm --filter @cliproam/server dev`）默认管理员密码为 `admin`；编译后的正常 `start` 不提供默认密码。
 
 管理后台可上传 PEM 格式的完整证书链和私钥，并支持替换或删除后台托管的证书。证书保存在 `$HOME/.cliproam/tls/`；服务已经使用 HTTPS 时会热加载替换后的证书，HTTP 服务首次配置证书后必须重启，下一次启动会自动以 HTTPS/WSS 监听同一端口。删除证书后也必须重启，重启后同一端口将回到 HTTP/WS。请仅在受信任的网络中通过 HTTP 初始配置证书；正式环境应直接使用 HTTPS 或在可信 TLS 反向代理后访问后台。
 
@@ -97,6 +97,7 @@ pnpm --filter @cliproam/server start
 
 ```powershell
 pnpm check
-pnpm build
+pnpm build:server
+pnpm --filter @cliproam/app build
 cargo check --manifest-path apps/app/src-tauri/Cargo.toml
 ```
