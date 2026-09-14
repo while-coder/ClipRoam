@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AuthMode, ServerProtocol } from "../sync/syncClient";
+import type { AuthMode, ServerProtocol } from "../sync/syncSetup";
 
 /** 提交给 App.vue 的表单草稿；serverAddress 已经过规范化。 */
 export type SetupDraft = {
@@ -14,7 +14,7 @@ export type SetupDraft = {
 <script setup lang="ts">
 import { ref } from "vue";
 import { ArrowLeft, LoaderCircle, Server, ShieldCheck } from "lucide-vue-next";
-import { normalizeServerAddress } from "../sync/syncClient";
+import { normalizeServerAddress } from "../sync/syncSetup";
 import { errorMessage } from "../../utils/error";
 import { CONFIGURED_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import type { SyncConfig } from "../../types";

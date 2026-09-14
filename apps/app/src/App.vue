@@ -18,12 +18,8 @@ import {
   LoaderCircle,
   Settings2,
 } from "lucide-vue-next";
-import {
-  SyncClient,
-  authenticateAccount,
-  getServerUrls,
-  testSyncConnection,
-} from "./features/sync/syncClient";
+import { SyncClient } from "./features/sync/syncClient";
+import { authenticateAccount, getServerUrls, testSyncConnection } from "./features/sync/syncSetup";
 import {
   requestProxyDevices,
   startPasteBridge,
@@ -949,12 +945,8 @@ async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<vo
     refreshHistory();
     // A reconcile is also the moment the persisted availability view catches
     // up against the pool — including re-asking unstored ids, since a
-    // `file.available` push may have been missed while offline — before the
-    // drain republishes the capture queue.
+    // `file.available` push may have been missed while offline.
     if (syncClient === client) await syncFileStatuses(true);
-    // Deletions and remote upserts have been replayed; now publish whatever
-    // the durable capture queue still holds (single-flight, no-op if running).
-    if (syncClient === client) client.drainQueue();
   } catch (error) {
     if (syncClient === client) {
       showToast(`同步历史失败：${errorMessage(error)}`, "error");
@@ -979,8 +971,6 @@ async function startSync(config: SyncConfig): Promise<void> {
     {
       onConnected: (value) => {
         connected.value = value;
-        // Offline captures replay the moment the socket comes back.
-        syncClient?.drainQueue();
       },
       onManifest: (manifest, devices) => {
         rememberDevices(devices);
@@ -1070,9 +1060,6 @@ async function initializeTauriServices(): Promise<void> {
     listen("cliproam://entry-created", () => {
       localClipboardRevision += 1;
       refreshHistory();
-      // Hashing (for files) and publishing both happen inside the drain, which
-      // Rust restarts after each row it resolves.
-      syncClient?.drainQueue();
     }),
     listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
