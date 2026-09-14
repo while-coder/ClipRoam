@@ -93,9 +93,8 @@ const pendingCount = ref(0);
 const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
 const activeView = ref<"history" | "pending-sync">("history");
-const devicesById = ref<Record<string, Device>>({
-  browser: { id: "browser", name: "浏览器预览", platform: "browser", osVersion: "未知", appVersion: "未知" },
-});
+/** 设备列表完全来自服务器（manifest/presence），不做任何本地预设。 */
+const devicesById = ref<Record<string, Device>>({});
 const currentTime = ref(Date.now());
 const connected = ref(false);
 const initializing = ref(true);

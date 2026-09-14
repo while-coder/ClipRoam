@@ -283,11 +283,11 @@ onUnmounted(() => clearTimeout(searchTimer));
         <ul v-else class="device-list">
           <li v-for="device in devices" :key="device.id" class="device-item">
             <div class="device-info">
-              <strong :title="device.id">{{ device.name }}</strong>
-              <span class="muted">{{ deviceMeta(device) }}</span>
+              <strong :title="device.name">{{ device.name }}</strong>
+              <span class="muted" :title="deviceMeta(device)">{{ deviceMeta(device) }}</span>
+              <time class="muted" :datetime="device.lastSeenAt">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
             </div>
-            <div class="device-side">
-              <time class="muted" :title="'最后登录时间'">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
+            <div class="device-actions">
               <button class="secondary" type="button" :disabled="!!signingOutDeviceId" @click="signOutDevice(device)">
                 {{ signingOutDeviceId === device.id ? "正在下线…" : "下线" }}
               </button>
