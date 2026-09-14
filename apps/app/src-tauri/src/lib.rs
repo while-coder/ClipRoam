@@ -22,8 +22,8 @@ use tauri::Manager;
 
 use file::collect_local_garbage;
 use store::{
-    cache_dir_for, default_active_history, history_path_for_key, load_history,
-    preferences_path_for, DatabasePool, HistoryData,
+    cache_dir_for, history_path_for_key, load_history, preferences_path_for, DatabasePool,
+    HistoryData,
 };
 use sync::SyncConfig;
 use transfer::download::{DownloadState, VirtualDownloads};
@@ -60,10 +60,24 @@ impl AppState {
         let mut pool = self.database_pool.lock().map_err(|error| error.to_string())?;
         write(pool.connection(path)?)
     }
-}
 
-fn active_cache_dir(state: &AppState, history: &HistoryData) -> PathBuf {
-    cache_dir_for(&state.histories_dir, &history.active_history)
+    /// 活动档案的数据库路径；未登录时没有档案可用。
+    pub(crate) fn active_history_path(&self, history: &HistoryData) -> Result<PathBuf, String> {
+        let key = history
+            .active_history
+            .as_deref()
+            .ok_or("同步账号未登录，历史档案不可用")?;
+        Ok(history_path_for_key(&self.histories_dir, key))
+    }
+
+    /// 活动档案的内容缓存目录；未登录时没有档案可用。
+    pub(crate) fn active_cache_dir(&self, history: &HistoryData) -> Result<PathBuf, String> {
+        let key = history
+            .active_history
+            .as_deref()
+            .ok_or("同步账号未登录，历史档案不可用")?;
+        Ok(cache_dir_for(&self.histories_dir, key))
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -91,23 +105,19 @@ pub fn run() {
             let sync_config_path = app_data_dir.join("sync-config.json");
             let device_config_path = app_data_dir.join("device.json");
             let sync_config = sync::load_sync_config(&sync_config_path);
-            let history_key = sync_config
-                .as_ref()
-                .map(sync::history_key_for_config)
-                .unwrap_or_else(default_active_history);
-            let history_path = history_path_for_key(&histories_dir, &history_key);
-            let history = load_history(&history_path, &history_key);
-            // 一次性迁移：拆分前偏好字段混在 sync-config.json 里，首次启动时
-            // 把它们搬进活动档案的 preferences.json，并重写配置剥离旧字段。
-            let preferences_path = preferences_path_for(&histories_dir, &history_key);
-            let account_preferences =
-                match sync::migrate_preferences(&preferences_path, &sync_config_path) {
-                    Ok(preferences) => preferences,
-                    Err(error) => {
-                        log::warn!("迁移账号偏好失败，使用默认值：{error}");
-                        sync::AccountPreferences::default()
-                    }
-                };
+            let history_key = sync_config.as_ref().and_then(sync::history_key_for_config);
+            // 登录态决定活动档案：未登录时没有档案，捕获与查询都不可用。
+            let (history, account_preferences) = match &history_key {
+                Some(key) => {
+                    let history_path = history_path_for_key(&histories_dir, key);
+                    let history = load_history(&history_path, key);
+                    // 偏好跟随活动档案：缺失或损坏时回落默认值。
+                    let preferences_path = preferences_path_for(&histories_dir, key);
+                    let account_preferences = sync::load_preferences(&preferences_path);
+                    (history, account_preferences)
+                }
+                None => (HistoryData::default(), sync::AccountPreferences::default()),
+            };
             app.manage(AppState {
                 history: Mutex::new(history),
                 device_config_path,
@@ -139,8 +149,12 @@ pub fn run() {
                 let Ok(history) = state.history.lock() else {
                     return;
                 };
-                let path = history_path_for_key(&state.histories_dir, &history.active_history);
-                let cache_dir = active_cache_dir(&state, &history);
+                // 未登录时没有活动档案，也没有可回收的引用。
+                let Some(key) = history.active_history.clone() else {
+                    return;
+                };
+                let path = history_path_for_key(&state.histories_dir, &key);
+                let cache_dir = cache_dir_for(&state.histories_dir, &key);
                 let _ = state.with_database(&path, |connection| {
                     collect_local_garbage(connection, &cache_dir)
                 });

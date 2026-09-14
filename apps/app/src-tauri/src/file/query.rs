@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 use super::cache::history_file_ids as cache_history_file_ids;
-use crate::store::history_path_for_key;
 use crate::AppState;
 
 /// Every content id the durable history references, derived from the entries'
@@ -15,7 +14,7 @@ pub(crate) fn derived_history_file_ids(
     history: &mut crate::store::HistoryData,
 ) -> Result<HashSet<String>, String> {
     if history.file_ids.is_none() {
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(history)?;
         let ids = state.with_database(&path, |connection| Ok(cache_history_file_ids(connection)))?;
         history.file_ids = Some(ids);
     }

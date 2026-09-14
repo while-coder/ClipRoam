@@ -44,7 +44,7 @@
         "create": false,
         "title": "ClipRoam",
         "width": 380,
-        "height": 88,
+        "height": 104,
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,

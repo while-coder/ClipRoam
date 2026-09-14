@@ -15,6 +15,11 @@ use crate::store::history_path_for_key;
 use crate::utils::hash_file;
 use crate::AppState;
 
+/// 档案切换守卫的统一判定：锁内的活动键必须仍是捕获时记下的键。
+fn still_active(history: &crate::store::HistoryData, history_key: &str) -> bool {
+    history.active_history.as_deref() == Some(history_key)
+}
+
 /// How many freshly hashed paths are folded into the row before the UI is
 /// told about the progress.
 const HASH_PROGRESS_BATCH: usize = 32;
@@ -33,7 +38,7 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
     let state = app.state::<AppState>();
     let (history_key, mut entry) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(&history)?;
         let Some(row) = state.with_database(&path, |connection| {
             Ok(list_rows(connection)?
                 .into_iter()
@@ -62,6 +67,7 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
 
     // The hash cache shares the pooled database connection; each lookup only
     // holds it briefly, so hashing a large file never blocks a history write.
+    let history_key = history_key.ok_or("同步账号未登录，历史档案不可用")?;
     let hash_database = history_path_for_key(&state.histories_dir, &history_key);
     let mut batch = Vec::new();
     for item in pending {
@@ -154,10 +160,10 @@ fn apply_hashes(
         // Hashing a large tree takes seconds, and the profile can switch in
         // that window: the UPDATE must not land on the new profile's queue
         // (same seq, unrelated row). Same guard capture paths use.
-        if history.active_history != history_key {
+        if !still_active(&history, &history_key) {
             return Err("活动档案已切换，放弃写回解析结果".to_string());
         }
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(&history)?;
         state.with_database(&path, |connection| {
             connection
                 .execute(

@@ -65,8 +65,6 @@ const props = defineProps<{
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
-  /** Upload badges stay hidden entirely while sync is not configured. */
-  syncEnabled: boolean;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
 }>();
 
@@ -185,7 +183,7 @@ function formatAge(createdAt: string): string {
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
-  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId, props.syncEnabled);
+  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
 }
 
 function entrySaveLabel(entry: LocalClipboardEntry): string {

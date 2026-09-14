@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
 
 use crate::clipboard::capture::{capture_files, capture_image, capture_text, RichText, ShareImportSummary};
-use crate::{active_cache_dir, AppState};
+use crate::AppState;
 
 pub(crate) use super::{
     begin_window_drag, create_windows, deliver_paste, manage_platform_state, on_paste_window_focus,
@@ -29,7 +29,7 @@ fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<Pat
     let state = app.state::<AppState>();
     let cache_dir = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        active_cache_dir(&state, &history)
+        state.active_cache_dir(&history)?
     };
     let request_id = uuid::Uuid::parse_str(&share.id).map_err(|_| "分享请求标识不合法".to_string())?;
     let directory = cache_dir.join("share").join(request_id.to_string());

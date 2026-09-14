@@ -18,8 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, SummaryContext};
 use crate::entry::lightweight_entry;
-use crate::store::history_path_for_key;
-use crate::{active_cache_dir, AppState};
+use crate::AppState;
 
 use rusqlite::{params, Connection};
 
@@ -128,7 +127,7 @@ pub(crate) fn peek_pending_entry(
     // files 行解析前后各读一次队列，读时只短暂持锁。
     let read = |state: &tauri::State<'_, AppState>| -> Result<Vec<PendingRow>, String> {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(&history)?;
         state.with_database(&path, |connection| list_rows(connection))
     };
     for row in read(&state)? {
@@ -175,7 +174,7 @@ fn publish_extra(extra: &str) -> serde_json::Value {
 pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64) -> Result<(), String> {
     {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(&history)?;
         state.with_database(&path, |connection| {
             connection
                 .execute("DELETE FROM pending_entries WHERE seq = ?", params![seq])
@@ -194,7 +193,7 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     state.with_database(&path, |connection| {
         connection
             .query_row("SELECT COUNT(*) FROM pending_entries", [], |row| {
@@ -210,10 +209,10 @@ pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize,
 pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let stored = crate::file::history_stored_ids(&state, &mut history)?;
-    let cache_dir = active_cache_dir(&state, &history);
+    let cache_dir = state.active_cache_dir(&history)?;
     let blobs = crate::file::blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     let rows = state.with_database(&path, |connection| list_rows(connection))?;
     let mut entries: Vec<ClipboardEntry> = rows.iter().map(row_entry).collect();
     for entry in &mut entries {

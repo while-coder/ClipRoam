@@ -26,14 +26,12 @@ export function isHashing(entry: LocalClipboardEntry): boolean {
 /**
  * Upload state is derived from the entry's summary: `storedCount` comes from
  * the local `files` table (persisted, backfilled from `/files/query`), so no
- * live server state rides in here. Sync being disabled keeps the whole badge
- * hidden rather than showing a wall of "未上传".
+ * live server state rides in here.
  */
 export function uploadStatus(
   entry: LocalClipboardEntry,
   uploadProgress: Record<string, UploadProgress>,
   downloadProgress: Record<string, DownloadProgress>,
-  syncEnabled: boolean,
 ): string | undefined {
   const summary = entry.summary;
   if (!summary.fileCount) return undefined;
@@ -49,7 +47,7 @@ export function uploadStatus(
       : 0;
     return `上传中 ${percent}%`;
   }
-  if (!summary.contentCount || !syncEnabled) return undefined;
+  if (!summary.contentCount) return undefined;
   const storedCount = summary.storedCount;
   if (storedCount >= summary.contentCount) return "已上传";
   if (storedCount) {

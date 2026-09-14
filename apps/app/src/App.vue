@@ -98,7 +98,6 @@ const devicesById = ref<Record<string, Device>>({
 });
 const currentTime = ref(Date.now());
 const connected = ref(false);
-const syncEnabled = ref(false);
 const initializing = ref(true);
 const setupVisible = ref(false);
 const hasSavedSyncConfig = ref(false);
@@ -132,10 +131,12 @@ initSettings({
   persistSyncConfig,
   persistAccountPreferences,
   startSync,
-  disconnect: (syncEnabledAfter) => {
-    stopSyncClient(syncEnabledAfter);
+  disconnect: () => {
+    stopSyncClient();
   },
-  refreshAfterArchiveSwitch: refreshHistory,
+  markSignedOut: () => {
+    hasSavedSyncConfig.value = false;
+  },
   openSetup: ({ config, message, focus }) => {
     if (message !== undefined) setupError.value = message;
     setupVisible.value = true;
@@ -149,35 +150,18 @@ initSettings({
   focusSearch,
 });
 
-/** Tears the sync client down; the optional argument updates the sync switch with it. */
-function stopSyncClient(syncEnabledAfter?: boolean): void {
+/** Tears the sync client down. */
+function stopSyncClient(): void {
   syncClient?.stop();
   syncClient = undefined;
   connected.value = false;
-  if (syncEnabledAfter !== undefined) syncEnabled.value = syncEnabledAfter;
 }
 
-const connectionStatus = computed(() => {
-  if (connected.value) {
-    return {
-      label: "已连接",
-      title: "已连接到同步服务器",
-      tone: "online",
-    };
-  }
-  if (syncEnabled.value) {
-    return {
-      label: "与服务器断开连接",
-      title: "正在等待同步服务器重新连接",
-      tone: "disconnected",
-    };
-  }
-  return {
-    label: "脱机状态",
-    title: "仅使用本地剪贴板历史",
-    tone: "offline",
-  };
-});
+const connectionStatus = computed(() =>
+  connected.value
+    ? { label: "已连接", title: "已连接到同步服务器", tone: "online" }
+    : { label: "与服务器断开连接", title: "正在等待同步服务器重新连接", tone: "disconnected" },
+);
 
 const demoEntries: LocalClipboardEntry[] = [
   {
@@ -520,8 +504,8 @@ function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T>
  */
 async function pasteDownloadCredentials(): Promise<FileDownloadCredentials> {
   const config = await loadSyncConfig();
-  if (!config || !config.enabled || !config.sessionToken) {
-    throw new Error("同步未配置或未开启，无法获取其他设备的文件");
+  if (!config?.sessionToken) {
+    throw new Error("同步未登录，无法获取其他设备的文件");
   }
   const { httpUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
   return { httpUrl, token: config.sessionToken };
@@ -720,8 +704,10 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
 
 /** 与 Rust 侧 history_key_for_config 对齐的档案键，仅用于判断是否重登同一账号。 */
 function archiveKeyFor(config: SyncConfig | undefined): string {
-  if (!config?.enabled || !config.username.trim()) return "local";
-  return `account:${config.serverAddress.trim().toLowerCase()}:${config.username.trim().toLowerCase()}`;
+  const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";
+  const username = config?.username.trim().toLowerCase() ?? "";
+  if (!username) return "";
+  return `account:${serverAddress}:${username}`;
 }
 
 async function loadSyncConfig(): Promise<SyncConfig | null> {
@@ -738,7 +724,6 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   return {
-    enabled: value.enabled === true,
     serverAddress: typeof value.serverAddress === "string" && value.serverAddress
       ? value.serverAddress
       : DEFAULT_SERVER_ADDRESS,
@@ -748,10 +733,10 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
   };
 }
 
-async function persistSyncConfig(config: SyncConfig): Promise<void> {
+async function persistSyncConfig(config: SyncConfig | null): Promise<void> {
   if (runningInTauri) await invoke("save_sync_config", { config });
   else window.localStorage.setItem(BROWSER_CONFIG_KEY, JSON.stringify(config));
-  // 配置保存可能切换活动档案（登录/退出/本地模式），偏好跟随档案——
+  // 配置保存可能切换活动档案（登录/退出账号），偏好跟随档案——
   // 无论是否切换都重读一次，保证前端内存态与活动档案一致。
   activePreferences = await loadAccountPreferences();
 }
@@ -787,32 +772,6 @@ function closeSetup(): void {
   void nextTick(focusSearch);
 }
 
-async function useLocalMode(draft: SetupDraft): Promise<void> {
-  if (testingConnection.value) return;
-  // 偏好不在这里写：本地档案沿用自己已有的 preferences.json（Rust 切档案时自动加载）。
-  const config: SyncConfig = {
-    enabled: false,
-    serverAddress: draft.serverAddress,
-    serverProtocol: draft.serverProtocol,
-    username: draft.username,
-    sessionToken: activeSyncConfig?.sessionToken ?? "",
-  };
-  setupError.value = "";
-  try {
-    await persistSyncConfig(config);
-    activeSyncConfig = config;
-    currentUsername.value = config.username;
-    hasSavedSyncConfig.value = true;
-    stopSyncClient(false);
-    setupVisible.value = false;
-    refreshHistory();
-    await nextTick();
-    await focusSearch();
-  } catch (error) {
-    setupError.value = `无法保存设置：${errorMessage(error)}`;
-  }
-}
-
 async function connectAndSave(draft: SetupDraft): Promise<void> {
   setupError.value = "";
   const { serverAddress, username, password, serverProtocol } = draft;
@@ -833,7 +792,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     const { webSocketUrl } = getServerUrls(serverAddress, serverProtocol);
     await testSyncConnection(webSocketUrl, session.sessionToken, device);
     const config: SyncConfig = {
-      enabled: true,
       serverAddress,
       serverProtocol,
       username: session.user.username,
@@ -1011,7 +969,6 @@ async function startSync(config: SyncConfig): Promise<void> {
   if (isPasteWindow) return;
   syncClient?.stop();
   connected.value = false;
-  syncEnabled.value = true;
   const device = await getDevice();
   const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
   let client: SyncClient;
@@ -1228,10 +1185,10 @@ onMounted(async () => {
   } else {
     activeSyncConfig = config;
     activePreferences = await loadAccountPreferences();
-    syncEnabled.value = config.enabled;
     currentUsername.value = config.username;
-    hasSavedSyncConfig.value = true;
-    if (config.enabled && (!config.username || !config.sessionToken)) setupVisible.value = true;
+    // 登录态完整才允许从登录页返回主界面；token 过期重登时保留返回入口。
+    hasSavedSyncConfig.value = Boolean(config.username && config.sessionToken);
+    if (!config.username || !config.sessionToken) setupVisible.value = true;
   }
   initializing.value = false;
 
@@ -1246,14 +1203,12 @@ onMounted(async () => {
     await nextTick();
     setupWizard.value?.setFields(config ?? undefined);
     setupWizard.value?.focusServerInput();
-  } else if (config?.enabled && config.username && config.sessionToken) {
+  } else if (config?.username && config.sessionToken) {
     try {
       await startSync(config);
     } catch (error) {
       showToast(`同步初始化失败：${errorMessage(error)}`, "error");
     }
-    await focusSearch();
-  } else if (config) {
     await focusSearch();
   }
 });
@@ -1292,7 +1247,6 @@ onBeforeUnmount(() => {
       :busy="testingConnection"
       :error="setupError"
       @submit="connectAndSave"
-      @local="useLocalMode"
       @close="closeSetup"
       @reset-error="setupError = ''"
     />
@@ -1359,7 +1313,6 @@ onBeforeUnmount(() => {
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
-      :sync-enabled="syncEnabled"
       :ensure-local-files="ensureLocalFiles"
       @activate="activateFromView"
       @remove="removeEntry"
@@ -1380,7 +1333,6 @@ onBeforeUnmount(() => {
     <SettingsDialog
       v-if="!isPasteWindow && settingsVisible"
       :current-username="currentUsername"
-      :sync-enabled="syncEnabled"
     />
 
   </main>

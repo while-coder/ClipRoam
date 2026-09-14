@@ -13,7 +13,7 @@ use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Deserialize;
 use tauri::State;
 
-use crate::store::{history_path_for_key, HistoryData};
+use crate::store::HistoryData;
 use crate::{utils::placeholders, AppState};
 
 /// One `/files/query` answer, straight off the wire (`FileStatus` in the
@@ -100,7 +100,7 @@ pub(crate) fn history_stored_ids(
     history: &mut HistoryData,
 ) -> Result<HashSet<String>, String> {
     if history.stored_file_ids.is_none() {
-        let path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let path = state.active_history_path(history)?;
         let ids = state.with_database(&path, |connection| stored_file_ids(connection))?;
         history.stored_file_ids = Some(ids);
     }
@@ -127,7 +127,7 @@ pub(crate) fn find_unknown_file_ids(
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let referenced = super::query::derived_history_file_ids(&state, &mut history)?;
     let referenced: Vec<String> = referenced.into_iter().collect();
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     let rows = state.with_database(&path, |connection| file_rows(connection, &referenced))?;
     let mut known = HashSet::new();
     let mut stored = HashSet::new();
@@ -151,7 +151,7 @@ pub(crate) fn upsert_server_files(
     statuses: Vec<FileStatusInput>,
 ) -> Result<(), String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = history_path_for_key(&state.histories_dir, &history.active_history);
+    let path = state.active_history_path(&history)?;
     state.with_database(&path, |connection| upsert_status_rows(connection, &statuses))?;
     if let Some(stored) = &mut history.stored_file_ids {
         for status in &statuses {

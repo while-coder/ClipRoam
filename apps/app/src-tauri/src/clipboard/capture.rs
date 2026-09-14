@@ -22,10 +22,19 @@ use crate::utils::{fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{
-    history_path_for_key, save_metadata, select_entries, upsert_entry_row, with_transaction,
-    HistoryData,
+    save_metadata, select_entries, upsert_entry_row, with_transaction, HistoryData,
 };
 use crate::AppState;
+
+/// 未登录时没有活动档案，剪贴板内容无处可存：捕获入口静默跳过。
+fn not_logged_in(state: &AppState) -> Result<bool, String> {
+    Ok(state
+        .history
+        .lock()
+        .map_err(|error| error.to_string())?
+        .active_history
+        .is_none())
+}
 
 const THUMBNAIL_MAX_EDGE: u32 = 64;
 const THUMBNAIL_MAX_BYTES: usize = 72 * 1024;
@@ -194,6 +203,9 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
     let signature = rich_text_signature(&rich_text);
     let RichText { text, html, rtf } = rich_text;
     let state = app.state::<AppState>();
+    if not_logged_in(&state)? {
+        return Ok(());
+    }
     let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         let created_at = Utc::now().to_rfc3339();
@@ -206,7 +218,7 @@ pub(crate) fn capture_text(app: &AppHandle, rich_text: RichText) -> Result<(), S
         };
         let payload = extra.json()?;
         capture_transaction(&mut history, CapturedSignature::Clipboard(signature), |history| {
-            let path = history_path_for_key(&state.histories_dir, &history.active_history);
+            let path = state.active_history_path(history)?;
             // One transaction: queue row, dedup and metadata land together, so
             // a crash cannot leave a half-written capture. A failure here skips
             // the capture entirely — without a queue row there is nothing to sync.
@@ -241,6 +253,9 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     }
     let signature = file_signature(&paths);
     let state = app.state::<AppState>();
+    if not_logged_in(&state)? {
+        return Ok(());
+    }
     // Walking a large folder can take seconds, so the duplicate check happens
     // before the tree is collected and the history lock is released for it.
     if state
@@ -270,7 +285,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     if file_count > max_capture_file_count {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
         CapturedSignature::File(signature).record(&mut history);
-        let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+        let history_path = state.active_history_path(&history)?;
         state.with_database(&history_path, |connection| {
             with_transaction(connection, |transaction| {
                 save_metadata(transaction, &history)?;
@@ -291,7 +306,7 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     let (history_path, history_key) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         (
-            history_path_for_key(&state.histories_dir, &history.active_history),
+            state.active_history_path(&history)?,
             history.active_history.clone(),
         )
     };
@@ -360,6 +375,9 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
 pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), String> {
     let signature = image_signature(&image);
     let state = app.state::<AppState>();
+    if not_logged_in(&state)? {
+        return Ok(());
+    }
     if state
         .history
         .lock()
@@ -395,7 +413,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
     let (cache_dir, history_key) = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
         (
-            crate::active_cache_dir(&state, &history),
+            state.active_cache_dir(&history)?,
             history.active_history.clone(),
         )
     };
@@ -422,7 +440,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
             if history.active_history != history_key {
                 return Err("活动档案已切换，放弃本次捕获".to_string());
             }
-            let history_path = history_path_for_key(&state.histories_dir, &history.active_history);
+            let history_path = state.active_history_path(history)?;
             // One transaction covers the queue row and the metadata.
             state.with_database(&history_path, |connection| {
                 with_transaction(connection, |transaction| {

@@ -21,18 +21,19 @@ import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
  */
 export type SettingsBridge = {
   getActiveConfig(): SyncConfig | undefined;
-  setActiveConfig(config: SyncConfig): void;
+  setActiveConfig(config: SyncConfig | undefined): void;
   getActivePreferences(): AccountPreferences;
   getUsername(): string;
   setUsername(name: string): void;
-  persistSyncConfig(config: SyncConfig): Promise<void>;
+  /** 传 null 即清除会话配置（退出账号）：未登录没有活动档案。 */
+  persistSyncConfig(config: SyncConfig | null): Promise<void>;
   /** 保存偏好到当前活动档案；偏好跟账号走，与全局会话配置分开持久化。 */
   persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
   startSync(config: SyncConfig): Promise<void>;
-  /** 断开当前同步客户端；参数为断开后的 syncEnabled 值（改密后为 true，退出账号为 false）。 */
-  disconnect(syncEnabledAfter: boolean): void;
-  /** persistSyncConfig 切换档案后重拉历史与待同步数据（新档案的数据与旧档案无关）。 */
-  refreshAfterArchiveSwitch(): void;
+  /** 断开当前同步客户端。 */
+  disconnect(): void;
+  /** 退出账号后清除「已保存过配置」标记，登录页不再提供返回主界面的入口。 */
+  markSignedOut(): void;
   openSetup(o: { config?: SyncConfig; message?: string; focus?: "server" | "password" }): void;
   focusSearch(): void;
 };
@@ -234,18 +235,11 @@ async function saveSettings(): Promise<void> {
       settingsError.value = quickPasteShortcutStatus.value.message;
       return;
     }
-    // 偏好先落当前活动档案，再保存会话配置（enabled 变化会触发档案切换）。
+    // 偏好先落当前活动档案，再保存会话配置。
     await requireBridge().persistAccountPreferences(preferences);
     await requireBridge().persistSyncConfig({ ...activeConfig });
-    // 保存点是同步引擎的唯一驱动：显式决定连接或断开，不再依赖
-    // save_sync_config 的事件回环（那个回环会造成双重连接）。
-    if (activeConfig.enabled && activeConfig.username && activeConfig.sessionToken) {
-      await requireBridge().startSync(activeConfig);
-    } else {
-      requireBridge().disconnect(false);
-      // 关闭同步会把活动档案切回本地，重拉一次历史与待同步数据。
-      requireBridge().refreshAfterArchiveSwitch();
-    }
+    // 保存点是同步引擎的唯一驱动：显式重连，让新偏好与设备别名立即生效。
+    await requireBridge().startSync(activeConfig);
     settingsVisible.value = false;
     await nextTick();
     await requireBridge().focusSearch();
@@ -283,13 +277,12 @@ async function changePassword(): Promise<void> {
     );
     const config: SyncConfig = {
       ...activeConfig,
-      enabled: true,
       sessionToken: "",
     };
     await requireBridge().persistSyncConfig(config);
     requireBridge().setActiveConfig(config);
     requireBridge().setUsername(config.username);
-    requireBridge().disconnect(true);
+    requireBridge().disconnect();
     settingsVisible.value = false;
     clearPasswordChangeFields();
     requireBridge().openSetup({
@@ -304,32 +297,22 @@ async function changePassword(): Promise<void> {
   }
 }
 
-async function signOut(openLogin: boolean): Promise<void> {
+async function signOut(): Promise<void> {
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
   savingSettings.value = true;
   settingsError.value = "";
-  const config: SyncConfig = {
-    ...activeConfig,
-    enabled: false,
-    username: "",
-    sessionToken: "",
-  };
   try {
-    await requireBridge().persistSyncConfig(config);
-    requireBridge().setActiveConfig(config);
+    // 清空会话配置：未登录没有活动档案，Rust 侧捕获与查询一并停用。
+    await requireBridge().persistSyncConfig(null);
+    requireBridge().setActiveConfig(undefined);
     requireBridge().setUsername("");
-    requireBridge().disconnect(false);
-    // 退出账号把活动档案切回本地：立刻重拉历史与待同步数据，否则界面继续
-    // 显示上一账号档案的队列行，此时点删除会误删本地档案里同 seq 的行。
-    requireBridge().refreshAfterArchiveSwitch();
+    requireBridge().disconnect();
+    // 退出即回到登录页；清掉「已保存配置」标记，登录页因此不提供
+    // 返回主界面的入口。
+    requireBridge().markSignedOut();
     settingsVisible.value = false;
-    if (openLogin) {
-      requireBridge().openSetup({ config, focus: "server" });
-    } else {
-      await nextTick();
-      await requireBridge().focusSearch();
-    }
+    requireBridge().openSetup({ focus: "server" });
   } catch (error) {
     settingsError.value = `无法退出账号：${errorMessage(error)}`;
   } finally {

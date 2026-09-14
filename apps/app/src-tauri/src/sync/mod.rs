@@ -8,29 +8,30 @@ use std::{fs, path::Path};
 use tauri::State;
 
 use crate::store::{
-    history_path_for_key, load_history, preferences_path_for, save_metadata, LOCAL_HISTORY_KEY,
+    history_path_for_key, load_history, preferences_path_for, save_metadata, HistoryData,
 };
 use crate::utils::write_file_atomic;
 use crate::AppState;
+
+mod token_store;
 
 /// 会话凭证：全局唯一（`sync-config.json`），决定本次启动激活哪个账号档案。
 /// 客户端偏好与服务器限额跟档案走，见 [`AccountPreferences`]。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncConfig {
-    pub enabled: bool,
-    #[serde(default, alias = "serverUrl")]
+    #[serde(default)]
     pub server_address: String,
     #[serde(default = "default_server_protocol")]
     pub server_protocol: String,
     #[serde(default)]
     pub username: String,
-    #[serde(default, alias = "token")]
+    #[serde(default)]
     pub session_token: String,
 }
 
 /// 账号偏好：跟随历史档案存在档案目录的 `preferences.json`，换账号登录时
-/// 互不污染；未登录的本地档案也有一份（捕获过滤与限额仍生效）。
+/// 互不污染；未登录的默认档案也有一份（捕获过滤与限额仍生效）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct AccountPreferences {
@@ -96,30 +97,47 @@ fn default_max_capture_file_count() -> u64 {
     1000
 }
 
-/// 配置对应的本地历史档案键：登录账号用 `account:{服务器}:{用户名}`，
-/// 未登录回落到本地档案。
-pub(crate) fn history_key_for_config(config: &SyncConfig) -> String {
-    if config.enabled && !config.username.trim().is_empty() {
+/// 配置对应的历史档案键：`account:{服务器}:{用户名}`。用户名为空（旧版
+/// 退出账号的残留配置）时返回 None——没有档案可用。
+pub(crate) fn history_key_for_config(config: &SyncConfig) -> Option<String> {
+    let username = config.username.trim().to_ascii_lowercase();
+    (!username.is_empty()).then(|| {
         format!(
             "account:{}:{}",
             config.server_address.trim().to_ascii_lowercase(),
-            config.username.trim().to_ascii_lowercase()
+            username
         )
-    } else {
-        LOCAL_HISTORY_KEY.to_string()
-    }
+    })
 }
 
 pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
-    fs::read_to_string(path)
+    let mut config: SyncConfig = fs::read_to_string(path)
         .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())?;
+    if config.session_token.is_empty() {
+        // 文件已剥离 token：从系统凭据库补回；拿不到则视为未登录。
+        config.session_token = token_store::load_session_token().unwrap_or_default();
+    } else if token_store::store_session_token(&config.session_token) {
+        // 一次性迁移：文件里的旧 token 能进凭据库就搬进去并重写剥离；
+        // 进不去则保持文件存储，行为与旧版一致。
+        let _ = write_sync_config(path, &Some(config.clone()));
+    }
+    Some(config)
 }
 
 pub(crate) fn write_sync_config(path: &Path, config: &Option<SyncConfig>) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
+    let mut persisted = config.clone();
+    if let Some(config) = persisted.as_mut() {
+        // token 优先进系统凭据库，成功则文件不落凭证；凭据库不可用时回落
+        // 文件（行为与旧版一致）。空 token 表示登出：同样进 token_store
+        // 清掉凭据库条目，避免重启后从凭据库「复活」已退出的会话。
+        if token_store::store_session_token(&config.session_token) {
+            config.session_token = String::new();
+        }
+    }
+    let json = serde_json::to_string_pretty(&persisted).map_err(|error| error.to_string())?;
     // 原子写：直接覆盖的话，写一半崩溃/断电会留下无法解析的配置，下次启动
-    // 回落到本地档案——用户视角等于账号历史全部「消失」。
+    // 回落到未登录档案——用户视角等于账号历史全部「消失」。
     write_file_atomic(path, json.as_bytes())
 }
 
@@ -136,58 +154,6 @@ pub(crate) fn write_preferences(
 ) -> Result<(), String> {
     let json = serde_json::to_string_pretty(preferences).map_err(|error| error.to_string())?;
     write_file_atomic(path, json.as_bytes())
-}
-
-/// 启动时确保活动档案有 preferences.json：缺失则把旧 sync-config.json 里
-/// 的偏好值（无则默认值）写入，并把配置重写为纯会话字段；已存在则直接
-/// 读取。返回本次启动生效的偏好。
-pub(crate) fn migrate_preferences(
-    preferences_path: &Path,
-    sync_config_path: &Path,
-) -> Result<AccountPreferences, String> {
-    if preferences_path.exists() {
-        return Ok(load_preferences(preferences_path));
-    }
-    let preferences = load_legacy_preferences(sync_config_path).unwrap_or_default();
-    write_preferences(preferences_path, &preferences)?;
-    if let Some(config) = load_sync_config(sync_config_path) {
-        // 重写剥离混在配置里的旧偏好字段；失败无碍，读取时多余字段会被忽略。
-        let _ = write_sync_config(sync_config_path, &Some(config));
-    }
-    Ok(preferences)
-}
-
-/// 一次性迁移：拆分前的 sync-config.json 把偏好字段和会话字段混在一起，
-/// 这里按旧字段全集只解析出偏好。文件缺失或损坏返回 None。
-fn load_legacy_preferences(path: &Path) -> Option<AccountPreferences> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct LegacyFields {
-        #[serde(default = "default_auto_upload_limit_mb")]
-        auto_upload_limit_mb: u64,
-        #[serde(default = "default_auto_receive_clipboard")]
-        auto_receive_clipboard: bool,
-        #[serde(default = "default_exclude_patterns")]
-        exclude_patterns: Vec<String>,
-        #[serde(default = "default_server_max_file_mb")]
-        server_max_file_mb: u64,
-        #[serde(default = "default_manifest_page_size")]
-        manifest_page_size: u32,
-        #[serde(default = "default_max_capture_file_count")]
-        max_capture_file_count: u64,
-    }
-
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<LegacyFields>(&raw).ok())
-        .map(|legacy| AccountPreferences {
-            auto_upload_limit_mb: legacy.auto_upload_limit_mb,
-            auto_receive_clipboard: legacy.auto_receive_clipboard,
-            exclude_patterns: legacy.exclude_patterns,
-            server_max_file_mb: legacy.server_max_file_mb,
-            manifest_page_size: legacy.manifest_page_size,
-            max_capture_file_count: legacy.max_capture_file_count,
-        })
 }
 
 #[tauri::command]
@@ -218,7 +184,11 @@ pub(crate) fn save_account_preferences(
 ) -> Result<(), String> {
     let path = {
         let history = state.history.lock().map_err(|error| error.to_string())?;
-        preferences_path_for(&state.histories_dir, &history.active_history)
+        let key = history
+            .active_history
+            .as_deref()
+            .ok_or("同步账号未登录，历史档案不可用")?;
+        preferences_path_for(&state.histories_dir, key)
     };
     write_preferences(&path, &preferences)?;
     *state
@@ -229,37 +199,52 @@ pub(crate) fn save_account_preferences(
 }
 
 /// 保存配置；键变化时切换到新档案的历史库。设备身份是机器级的
-/// （`device.json`），不随档案切换。
+/// （`device.json`），不随档案切换。传 None（退出账号）即清空配置并停用
+/// 档案：未登录时没有活动历史库，捕获与查询都不可用。
 /// 顺序很讲究：先持久化旧档案元数据，再原子写配置文件，最后才切换内存
 /// 档案。配置写失败时直接返回，内存档案原封不动——不会出现「内存已切到
-/// 账号档案、磁盘配置还是本地」的分裂状态。
+/// 账号档案、磁盘配置还是旧档案」的分裂状态。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn save_sync_config(
     state: State<'_, AppState>,
-    config: SyncConfig,
+    config: Option<SyncConfig>,
 ) -> Result<(), String> {
-    let history_key = history_key_for_config(&config);
+    let history_key = config.as_ref().and_then(history_key_for_config);
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.active_history != history_key {
         // Persist the outgoing profile's metadata before leaving it.
-        let current_path = history_path_for_key(&state.histories_dir, &history.active_history);
-        state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
+        if let Some(old_key) = history.active_history.clone() {
+            let current_path = history_path_for_key(&state.histories_dir, &old_key);
+            state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
+        }
     }
-    write_sync_config(&state.sync_config_path, &Some(config.clone()))?;
+    write_sync_config(&state.sync_config_path, &config)?;
     if history.active_history != history_key {
-        let next_path = history_path_for_key(&state.histories_dir, &history_key);
-        let next_history = load_history(&next_path, &history_key);
-        *history = next_history;
-        // 偏好跟随档案：切到新档案后加载它的 preferences.json。
-        let preferences_path = preferences_path_for(&state.histories_dir, &history_key);
-        let preferences = load_preferences(&preferences_path);
-        *state
-            .account_preferences
-            .lock()
-            .map_err(|error| error.to_string())? = preferences;
+        match &history_key {
+            Some(key) => {
+                let next_path = history_path_for_key(&state.histories_dir, key);
+                *history = load_history(&next_path, key);
+                // 偏好跟随档案：切到新档案后加载它的 preferences.json。
+                let preferences_path = preferences_path_for(&state.histories_dir, key);
+                let preferences = load_preferences(&preferences_path);
+                *state
+                    .account_preferences
+                    .lock()
+                    .map_err(|error| error.to_string())? = preferences;
+            }
+            None => {
+                *history = HistoryData::default();
+                *state
+                    .account_preferences
+                    .lock()
+                    .map_err(|error| error.to_string())? = AccountPreferences::default();
+            }
+        }
     }
-    let active_path = history_path_for_key(&state.histories_dir, &history.active_history);
-    state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
-    *state.sync_config.lock().map_err(|error| error.to_string())? = Some(config);
+    if let Some(key) = history.active_history.clone() {
+        let active_path = history_path_for_key(&state.histories_dir, &key);
+        state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
+    }
+    *state.sync_config.lock().map_err(|error| error.to_string())? = config;
     Ok(())
 }
