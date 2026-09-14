@@ -84,8 +84,8 @@ pub(crate) fn hide_main(app: AppHandle) -> Result<(), String> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToastPayload {
-    message: String,
-    tone: String,
+    pub(crate) message: String,
+    pub(crate) tone: String,
 }
 
 #[tauri::command(rename_all = "camelCase")]

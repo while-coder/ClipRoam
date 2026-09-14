@@ -260,10 +260,12 @@ export class SyncClient {
       }
       this.handlers.onManifest(manifest, await this.#fetchDevices());
     } catch (error) {
-      // An expired session must reach the re-login flow, not a toast.
+      // An expired session must reach the re-login flow, not a toast. A
+      // transient network failure stays silent too: the connection-state
+      // toast covers it, and the queue's retry pulse rides through.
       const message = errorMessage(error);
       if (message === "登录已失效，请重新登录") this.handlers.onAuthenticationFailed(message);
-      else this.handlers.onError(`获取同步历史失败：${message}`);
+      else if (!isTransientNetworkError(error)) this.handlers.onError(`获取同步历史失败：${message}`);
     }
   }
 

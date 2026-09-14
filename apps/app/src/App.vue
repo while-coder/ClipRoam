@@ -145,11 +145,18 @@ initSettings({
   focusSearch,
 });
 
+/** 连接状态唯一切换点：只在真实变化时更新，并恰好提示一次（断开→成功、成功→断开各一次）。 */
+function setConnectionState(value: boolean): void {
+  if (connected.value === value) return;
+  connected.value = value;
+  showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
+}
+
 /** Tears the sync client down. */
 function stopSyncClient(): void {
   syncClient?.stop();
   syncClient = undefined;
-  connected.value = false;
+  setConnectionState(false);
 }
 
 const connectionStatus = computed(() =>
@@ -959,7 +966,7 @@ async function startSync(config: SyncConfig): Promise<void> {
   // window keep it fresh, and a second socket would double every sync task.
   if (isPasteWindow) return;
   syncClient?.stop();
-  connected.value = false;
+  setConnectionState(false);
   const device = await getDevice();
   const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
   let client: SyncClient;
@@ -969,9 +976,7 @@ async function startSync(config: SyncConfig): Promise<void> {
     config.sessionToken,
     device,
     {
-      onConnected: (value) => {
-        connected.value = value;
-      },
+      onConnected: setConnectionState,
       onManifest: (manifest, devices) => {
         rememberDevices(devices);
         void reconcileManifest(manifest);
