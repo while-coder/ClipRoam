@@ -6,12 +6,17 @@ import type {
 
 export type { ClipboardEntry, ClipboardKind, Device };
 
+/** 会话凭证：全局唯一，决定激活哪个账号档案。 */
 export type SyncConfig = {
   enabled: boolean;
   serverAddress: string;
   serverProtocol: "http" | "https";
   username: string;
   sessionToken: string;
+};
+
+/** 账号偏好：跟随历史档案存储，换账号登录互不污染。 */
+export type AccountPreferences = {
   autoUploadLimitMb: number;
   autoReceiveClipboard: boolean;
   excludePatterns: string[];
@@ -75,6 +80,8 @@ export type EntriesManifestFilter = {
   kind?: EntryFilter;
   start?: number;
   end?: number;
+  /** 来源设备过滤；空/缺省 = 不过滤。 */
+  deviceIds?: string[];
   page?: number;
 };
 

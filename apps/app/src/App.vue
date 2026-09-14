@@ -9,7 +9,7 @@ import type {
   ClipboardManifestEntry,
 } from "@cliproam/protocol";
 import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_MAX_CAPTURE_FILE_COUNT, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_SERVER_PROTOCOL } from "./features/sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./features/sync/syncDefaults";
 import {
   Clipboard,
   Cloud,
@@ -49,15 +49,18 @@ import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import {
   BROWSER_CONFIG_KEY,
+  BROWSER_PREFERENCES_KEY,
   DEFAULT_SERVER_ADDRESS,
   DESKTOP_CAPABILITIES,
   EMPTY_SUMMARY,
   PAGE_SIZE,
 } from "./utils/constants";
-import { canSaveEntry, isHashing } from "./utils/entry";
+import { canSaveEntry } from "./utils/entry";
 import { errorMessage } from "./utils/error";
+import { getDevice } from "./utils/device";
 import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
 import type {
+  AccountPreferences,
   Device,
   DownloadProgress,
   EntriesManifestFilter,
@@ -91,7 +94,7 @@ const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
 const activeView = ref<"history" | "pending-sync">("history");
 const devicesById = ref<Record<string, Device>>({
-  browser: { id: "browser", name: "浏览器预览", platform: "browser", osVersion: "未知" },
+  browser: { id: "browser", name: "浏览器预览", platform: "browser", osVersion: "未知", appVersion: "未知" },
 });
 const currentTime = ref(Date.now());
 const connected = ref(false);
@@ -110,6 +113,8 @@ const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
 let activeSyncConfig: SyncConfig | undefined;
+/** 活动档案的偏好；跟随档案切换与保存更新（Rust 侧持久化到档案目录）。 */
+let activePreferences: AccountPreferences = defaultAccountPreferences();
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
@@ -121,15 +126,16 @@ let remoteActivationRevision = 0;
 initSettings({
   getActiveConfig: () => activeSyncConfig,
   setActiveConfig: (config) => { activeSyncConfig = config; },
+  getActivePreferences: () => activePreferences,
   getUsername: () => currentUsername.value,
   setUsername: (name) => { currentUsername.value = name; },
   persistSyncConfig,
+  persistAccountPreferences,
   startSync,
   disconnect: (syncEnabledAfter) => {
     stopSyncClient(syncEnabledAfter);
   },
   refreshAfterArchiveSwitch: refreshHistory,
-  uploadNowEligibleEntries,
   openSetup: ({ config, message, focus }) => {
     if (message !== undefined) setupError.value = message;
     setupVisible.value = true;
@@ -198,8 +204,10 @@ function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<strin
   const needle = (filter.query ?? "").trim().toLowerCase();
   const matched = previewEntries.value.filter((entry) => {
     if (filter.kind && filter.kind !== "all" && entry.kind !== filter.kind) return false;
+    const deviceIds = filter.deviceIds;
+    if (deviceIds?.length && !deviceIds.includes(entry.sourceDeviceId)) return false;
     if (needle) {
-      const deviceLabel = (deviceNames[entry.sourceDeviceId] ?? "未知设备").toLowerCase();
+      const deviceLabel = (deviceNames[entry.sourceDeviceId] ?? "").toLowerCase();
       const matches = entry.content.toLowerCase().includes(needle) || deviceLabel.includes(needle);
       if (!matches) return false;
     }
@@ -607,38 +615,6 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
   return activateEntry(entry, "paste_entry");
 }
 
-/**
- * A larger automatic-upload limit can make old local files newly eligible.
- * Nothing is published — these entries already live on the server — so this
- * only re-uploads their contents, which the content-addressed pool absorbs.
- */
-async function uploadNowEligibleEntries(sizeLimit: number): Promise<void> {
-  const client = syncClient;
-  if (!client || sizeLimit <= 0) return;
-  // The candidate filter (kind, hashing state, size limit) runs Rust-side over
-  // the durable history; the browser preview filters its demo list instead.
-  const candidates = runningInTauri
-    ? await invoke<LocalClipboardEntry[]>("list_upload_candidates", { limitBytes: sizeLimit }).catch(() => [])
-    : previewEntries.value.filter((entry) => (
-      (entry.kind === "files" || entry.kind === "image")
-      && !isHashing(entry)
-      && entry.summary.uploadableSize !== undefined
-      && entry.summary.uploadableSize < sizeLimit
-    ));
-  for (const entry of candidates) {
-    if (syncClient !== client) return;
-    try {
-      // Uploads need the directory tree, so it is fetched per entry.
-      await client.uploadEntryContents(await fullEntry(entry));
-    } catch (error) {
-      if (syncClient === client) {
-        showToast(`自动上传失败：${errorMessage(error)}`, "error");
-      }
-    }
-  }
-  if (syncClient === client) refreshHistory();
-}
-
 async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
@@ -742,26 +718,10 @@ async function removeEntry(entry: ClipboardEntry): Promise<void> {
   }
 }
 
-async function getDevice(): Promise<Device> {
-  const osVersion = detectOsVersion();
-  if (!runningInTauri) {
-    return { id: "browser", name: "浏览器预览", platform: navigator.platform || "browser", osVersion };
-  }
-  const [deviceId, deviceName] = await invoke<[string, string]>("get_device");
-  return { id: deviceId, name: deviceName, platform: navigator.platform || "desktop", osVersion };
-}
-
-function detectOsVersion(): string {
-  const userAgent = navigator.userAgent;
-  const windows = userAgent.match(/Windows NT ([\d.]+)/i);
-  if (windows) return `Windows NT ${windows[1]}`;
-  const macOS = userAgent.match(/Mac OS X ([\d_]+)/i);
-  if (macOS) return `macOS ${macOS[1].replace(/_/g, ".")}`;
-  const android = userAgent.match(/Android ([\d.]+)/i);
-  if (android) return `Android ${android[1]}`;
-  const ios = userAgent.match(/(?:iPhone|iPad).*OS ([\d_]+)/i);
-  if (ios) return `iOS ${ios[1].replace(/_/g, ".")}`;
-  return navigator.platform || "未知";
+/** 与 Rust 侧 history_key_for_config 对齐的档案键，仅用于判断是否重登同一账号。 */
+function archiveKeyFor(config: SyncConfig | undefined): string {
+  if (!config?.enabled || !config.username.trim()) return "local";
+  return `account:${config.serverAddress.trim().toLowerCase()}:${config.username.trim().toLowerCase()}`;
 }
 
 async function loadSyncConfig(): Promise<SyncConfig | null> {
@@ -785,33 +745,39 @@ async function loadSyncConfig(): Promise<SyncConfig | null> {
     serverProtocol: value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL,
     username: typeof value.username === "string" ? value.username : "",
     sessionToken: typeof value.sessionToken === "string" ? value.sessionToken : "",
-    autoUploadLimitMb: typeof value.autoUploadLimitMb === "number"
-      ? Math.max(0, value.autoUploadLimitMb)
-      : DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-    autoReceiveClipboard: value.autoReceiveClipboard !== false,
-    excludePatterns: Array.isArray(value.excludePatterns)
-      ? value.excludePatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern.trim() !== "")
-      : DEFAULT_EXCLUDE_PATTERNS,
-    serverMaxFileMb: typeof value.serverMaxFileMb === "number" && value.serverMaxFileMb > 0
-      ? Math.floor(value.serverMaxFileMb)
-      : DEFAULT_SERVER_MAX_FILE_MB,
-    manifestPageSize: typeof value.manifestPageSize === "number"
-      && Number.isInteger(value.manifestPageSize)
-      && value.manifestPageSize >= 10
-      && value.manifestPageSize <= 100
-      ? value.manifestPageSize
-      : ENTRY_PAGE_DEFAULT_LIMIT,
-    maxCaptureFileCount: typeof value.maxCaptureFileCount === "number"
-      && Number.isInteger(value.maxCaptureFileCount)
-      && value.maxCaptureFileCount > 0
-      ? value.maxCaptureFileCount
-      : DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
 }
 
 async function persistSyncConfig(config: SyncConfig): Promise<void> {
   if (runningInTauri) await invoke("save_sync_config", { config });
   else window.localStorage.setItem(BROWSER_CONFIG_KEY, JSON.stringify(config));
+  // 配置保存可能切换活动档案（登录/退出/本地模式），偏好跟随档案——
+  // 无论是否切换都重读一次，保证前端内存态与活动档案一致。
+  activePreferences = await loadAccountPreferences();
+}
+
+async function loadAccountPreferences(): Promise<AccountPreferences> {
+  if (runningInTauri) {
+    try {
+      return await invoke<AccountPreferences>("get_account_preferences");
+    } catch {
+      return defaultAccountPreferences();
+    }
+  }
+  try {
+    const stored = window.localStorage.getItem(BROWSER_PREFERENCES_KEY);
+    return stored
+      ? { ...defaultAccountPreferences(), ...(JSON.parse(stored) as Partial<AccountPreferences>) }
+      : defaultAccountPreferences();
+  } catch {
+    return defaultAccountPreferences();
+  }
+}
+
+async function persistAccountPreferences(preferences: AccountPreferences): Promise<void> {
+  if (runningInTauri) await invoke("save_account_preferences", { preferences });
+  else window.localStorage.setItem(BROWSER_PREFERENCES_KEY, JSON.stringify(preferences));
+  activePreferences = preferences;
 }
 
 function closeSetup(): void {
@@ -823,18 +789,13 @@ function closeSetup(): void {
 
 async function useLocalMode(draft: SetupDraft): Promise<void> {
   if (testingConnection.value) return;
+  // 偏好不在这里写：本地档案沿用自己已有的 preferences.json（Rust 切档案时自动加载）。
   const config: SyncConfig = {
     enabled: false,
     serverAddress: draft.serverAddress,
     serverProtocol: draft.serverProtocol,
     username: draft.username,
     sessionToken: activeSyncConfig?.sessionToken ?? "",
-    autoUploadLimitMb: activeSyncConfig?.autoUploadLimitMb ?? DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-    autoReceiveClipboard: activeSyncConfig?.autoReceiveClipboard ?? DEFAULT_AUTO_RECEIVE_CLIPBOARD,
-    excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
-    serverMaxFileMb: activeSyncConfig?.serverMaxFileMb ?? DEFAULT_SERVER_MAX_FILE_MB,
-    manifestPageSize: activeSyncConfig?.manifestPageSize ?? ENTRY_PAGE_DEFAULT_LIMIT,
-    maxCaptureFileCount: activeSyncConfig?.maxCaptureFileCount ?? DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
   setupError.value = "";
   try {
@@ -877,22 +838,33 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       serverProtocol,
       username: session.user.username,
       sessionToken: session.sessionToken,
-      // 自动上传档位不能超过服务器单文件上限：登录响应带回，随配置持久化。
+    };
+    // 重登同一账号档案保留它的偏好；换账号从默认开始，避免跨账号污染。
+    const sameArchive = archiveKeyFor(activeSyncConfig) === archiveKeyFor(config);
+    const preferences: AccountPreferences = {
+      // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
       autoUploadLimitMb: Math.min(
         DEFAULT_AUTO_UPLOAD_LIMIT_MB,
         Math.max(0, session.settings.maxStoredFileMb),
       ),
-      autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
-      excludePatterns: activeSyncConfig?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS,
+      autoReceiveClipboard: sameArchive
+        ? activePreferences.autoReceiveClipboard
+        : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+      excludePatterns: sameArchive
+        ? activePreferences.excludePatterns
+        : [...DEFAULT_EXCLUDE_PATTERNS],
       serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
-      manifestPageSize: activeSyncConfig?.manifestPageSize ?? ENTRY_PAGE_DEFAULT_LIMIT,
-      // 单次复制文件数上限跟随服务器配置，随配置持久化供 Rust 捕获时读取。
+      manifestPageSize: sameArchive
+        ? activePreferences.manifestPageSize
+        : ENTRY_PAGE_DEFAULT_LIMIT,
+      // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
       maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
     await persistSyncConfig(config);
     activeSyncConfig = config;
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
+    await persistAccountPreferences(preferences);
     setupVisible.value = false;
     refreshHistory();
     await startSync(config);
@@ -939,7 +911,7 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   const config = activeSyncConfig;
   if (
     !runningInTauri
-    || !config?.autoReceiveClipboard
+    || !activePreferences.autoReceiveClipboard
     || entry.kind === "files"
     || (isMobile.value && entry.kind !== "text")
   ) return;
@@ -952,7 +924,7 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
     // once `applyRemoteUpserts` resolves it is durable, no re-read needed.
     await applyRemoteUpserts([entry]);
     let localEntry = entry as LocalClipboardEntry;
-    if (activeSyncConfig !== config || !config.autoReceiveClipboard) return;
+    if (activeSyncConfig !== config || !activePreferences.autoReceiveClipboard) return;
     if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
 
     // A newer remote activation or a real local copy wins while an image is
@@ -961,14 +933,14 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
       activationRevision !== remoteActivationRevision
       || startingLocalRevision !== localClipboardRevision
       || activeSyncConfig !== config
-      || !config.autoReceiveClipboard
+      || !activePreferences.autoReceiveClipboard
     ) return;
     await invoke("activate_remote_entry", { entryId: localEntry.id });
   } catch (error) {
     if (
       activationRevision === remoteActivationRevision
       && activeSyncConfig === config
-      && config.autoReceiveClipboard
+      && activePreferences.autoReceiveClipboard
     ) {
       showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
     }
@@ -1103,8 +1075,8 @@ async function startSync(config: SyncConfig): Promise<void> {
         }
       },
     },
-    config.autoUploadLimitMb * 1024 * 1024,
-    config.manifestPageSize,
+    activePreferences.autoUploadLimitMb * 1024 * 1024,
+    activePreferences.manifestPageSize,
   );
   syncClient = client;
   client.connect();
@@ -1255,6 +1227,7 @@ onMounted(async () => {
     if (!isPasteWindow) setupVisible.value = true;
   } else {
     activeSyncConfig = config;
+    activePreferences = await loadAccountPreferences();
     syncEnabled.value = config.enabled;
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;

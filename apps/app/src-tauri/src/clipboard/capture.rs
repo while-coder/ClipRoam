@@ -18,7 +18,6 @@ use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature,
     ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
-use crate::sync::default_max_capture_file_count;
 use crate::utils::{fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
@@ -253,15 +252,17 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
     {
         return Ok(());
     }
-    // 过滤模式与文件数上限跟随同步配置（上限由服务器在登录时下发）；未保存过
-    // 配置时用 serde 默认值兜底。
-    let (exclude, max_capture_file_count) = state
-        .sync_config
-        .lock()
-        .map_err(|error| error.to_string())?
-        .as_ref()
-        .map(|config| (config.exclude_patterns.clone(), config.max_capture_file_count))
-        .unwrap_or_else(|| (Vec::new(), default_max_capture_file_count()));
+    // 过滤模式与文件数上限跟随活动档案的偏好（上限由服务器在登录时下发）。
+    let (exclude, max_capture_file_count) = {
+        let preferences = state
+            .account_preferences
+            .lock()
+            .map_err(|error| error.to_string())?;
+        (
+            preferences.exclude_patterns.clone(),
+            preferences.max_capture_file_count,
+        )
+    };
     let collected = collect_tree(&paths, &exclude)?;
     // 过滤后的文件数仍在同步上限之外就不入队：入队会让同步端面对上千个
     // 内容，历史里也放不下。签名落库让后续轮询静默跳过，不再重走目录。

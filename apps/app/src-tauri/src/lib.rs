@@ -22,8 +22,8 @@ use tauri::Manager;
 
 use file::collect_local_garbage;
 use store::{
-    cache_dir_for, default_active_history, history_path_for_key, load_history, DatabasePool,
-    HistoryData,
+    cache_dir_for, default_active_history, history_path_for_key, load_history,
+    preferences_path_for, DatabasePool, HistoryData,
 };
 use sync::SyncConfig;
 use transfer::download::{DownloadState, VirtualDownloads};
@@ -31,12 +31,18 @@ use transfer::save::SaveSession;
 
 struct AppState {
     history: Mutex<HistoryData>,
+    /// Machine-level device identity file (`device.json`), shared by every
+    /// history profile; resolved lazily by `get_device_id`.
+    device_config_path: PathBuf,
     histories_dir: PathBuf,
     /// One SQLite connection per history database; opening one re-runs the
     /// schema migration, so writes share these instead of reopening.
     database_pool: Mutex<DatabasePool>,
     sync_config: Mutex<Option<SyncConfig>>,
     sync_config_path: PathBuf,
+    /// Preferences of the active history profile (`preferences.json` next to
+    /// its SQLite); reloaded whenever the active profile changes.
+    account_preferences: Mutex<sync::AccountPreferences>,
     downloads: Mutex<HashMap<String, DownloadState>>,
     save_sessions: Mutex<HashMap<String, SaveSession>>,
     virtual_downloads: VirtualDownloads,
@@ -83,18 +89,33 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
             let sync_config_path = app_data_dir.join("sync-config.json");
+            let device_config_path = app_data_dir.join("device.json");
             let sync_config = sync::load_sync_config(&sync_config_path);
             let history_key = sync_config
                 .as_ref()
                 .map(sync::history_key_for_config)
                 .unwrap_or_else(default_active_history);
-            let history = load_history(&history_path_for_key(&histories_dir, &history_key), &history_key);
+            let history_path = history_path_for_key(&histories_dir, &history_key);
+            let history = load_history(&history_path, &history_key);
+            // 一次性迁移：拆分前偏好字段混在 sync-config.json 里，首次启动时
+            // 把它们搬进活动档案的 preferences.json，并重写配置剥离旧字段。
+            let preferences_path = preferences_path_for(&histories_dir, &history_key);
+            let account_preferences =
+                match sync::migrate_preferences(&preferences_path, &sync_config_path) {
+                    Ok(preferences) => preferences,
+                    Err(error) => {
+                        log::warn!("迁移账号偏好失败，使用默认值：{error}");
+                        sync::AccountPreferences::default()
+                    }
+                };
             app.manage(AppState {
                 history: Mutex::new(history),
+                device_config_path,
                 histories_dir,
                 database_pool: Mutex::new(DatabasePool::default()),
                 sync_config: Mutex::new(sync_config),
                 sync_config_path,
+                account_preferences: Mutex::new(account_preferences),
                 downloads: Mutex::new(HashMap::new()),
                 save_sessions: Mutex::new(HashMap::new()),
                 virtual_downloads: VirtualDownloads::default(),
@@ -136,14 +157,17 @@ pub fn run() {
             entry::query::list_entries_manifest,
             entry::query::find_unknown_entry_ids,
             entry::query::get_entry,
-            file::query::list_upload_candidates,
             file::store::find_unknown_file_ids,
             file::store::upsert_server_files,
             transfer::download::list_entry_files,
-            app_shell::get_device,
+            app_shell::get_device_identity,
+            app_shell::save_device_alias,
+            app_shell::get_device_info,
             sync::get_sync_config,
+            sync::get_account_preferences,
             app_shell::open_app_data_dir,
             sync::save_sync_config,
+            sync::save_account_preferences,
             entry::mutate::upsert_server_entries,
             entry::mutate::remove_server_entry,
             pending::peek_pending_entry,

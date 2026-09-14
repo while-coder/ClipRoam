@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
+import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { PAGE_SIZE } from "../../utils/constants";
@@ -133,6 +134,8 @@ onBeforeUnmount(() => { window.clearTimeout(queryDebounceTimer); });
 const deviceNames = computed(() =>
   Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
 );
+const devices = computed(() => Object.values(props.devicesById));
+const selectedDeviceIds = ref<string[]>([]);
 
 const {
   page: currentPage,
@@ -150,10 +153,11 @@ const {
     kind: filter.value,
     start: activeTimeRange.value.start,
     end: activeTimeRange.value.end,
+    deviceIds: selectedDeviceIds.value,
     page,
   }),
   revision: computed(() => props.revision),
-  filterSources: [debouncedQuery, filter, timeFilter, startDate, endDate],
+  filterSources: [debouncedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds],
   // An invalid custom range matches nothing — the backend never sees it, and
   // background revision bumps must not refill the cleared list either.
   canFetch: () => !timeRangeError.value,
@@ -366,6 +370,11 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
             v-model:start-date="startDate"
             v-model:end-date="endDate"
             :error="timeRangeError"
+          />
+          <DeviceFilterControl
+            v-if="devices.length"
+            v-model="selectedDeviceIds"
+            :devices="devices"
           />
         </div>
         <div class="filter-actions">

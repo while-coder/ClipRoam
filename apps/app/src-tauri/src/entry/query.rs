@@ -19,13 +19,11 @@ use super::lightweight_entry;
 
 /// Page size for `list_entries_manifest`; mirrors `PAGE_SIZE` in the frontend.
 const MANIFEST_PAGE_SIZE: usize = 50;
-/// Matches the fallback in the frontend's `deviceName` helper, so searching by
-/// it finds the same entries in both places.
-const UNKNOWN_DEVICE_LABEL: &str = "未知设备";
 
 /// Filters for `list_entries_manifest`, mirroring `GET /entries/manifest` on
-/// the server: keyword, kind and time range, then a page of the matches. An
-/// absent `page` returns every match — used where the whole history is needed.
+/// the server: keyword, kind, time range and source devices, then a page of
+/// the matches. An absent `page` returns every match — used where the whole
+/// history is needed.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntriesManifestFilter {
@@ -35,6 +33,9 @@ pub struct EntriesManifestFilter {
     kind: String,
     start: Option<i64>,
     end: Option<i64>,
+    /// Source-device filter; empty means no filter.
+    #[serde(default)]
+    device_ids: Vec<String>,
     page: Option<usize>,
 }
 
@@ -47,7 +48,7 @@ pub struct EntriesManifestPage {
 
 /// Builds the WHERE clause and parameters for the manifest filters. Keyword
 /// matching mirrors the frontend's `clientManifest`: entry content, or the
-/// device label with the same "未知设备" fallback. SQLite's `lower()` folds
+/// source device's display name. SQLite's `lower()` folds
 /// ASCII only — identical behaviour for CJK, narrower for accented Latin.
 fn manifest_query(
     filter: &EntriesManifestFilter,
@@ -60,34 +61,39 @@ fn manifest_query(
         clauses.push("kind = ?".to_string());
         values.push(Value::Text(filter.kind.clone()));
     }
+    // Device filter: an entry matches when its source is one of the selected
+    // devices. Empty selection filters nothing.
+    if !filter.device_ids.is_empty() {
+        let selected: HashSet<&str> =
+            filter.device_ids.iter().map(String::as_str).collect();
+        let known: Vec<&String> = device_names
+            .keys()
+            .filter(|id| selected.contains(id.as_str()))
+            .collect();
+        if !known.is_empty() {
+            clauses.push(format!(
+                "source_device_id IN ({})",
+                crate::utils::placeholders(known.len())
+            ));
+            values.extend(known.iter().map(|id| Value::Text((*id).clone())));
+        }
+    }
     if !needle.is_empty() {
         let matching_ids = device_names
             .iter()
             .filter(|(_, name)| name.to_lowercase().contains(needle))
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
-        let unknown_matches = UNKNOWN_DEVICE_LABEL.contains(needle);
-        // With no known devices every entry falls into the fallback group, so
-        // the keyword test passes for all of them.
-        if !(unknown_matches && device_names.is_empty()) {
-            let mut alternatives = vec!["LOWER(content) LIKE ? ESCAPE '\\'".to_string()];
-            values.push(Value::Text(format!("%{}%", crate::utils::escape_like(needle))));
-            if !matching_ids.is_empty() {
-                alternatives.push(format!(
-                    "source_device_id IN ({})",
-                    crate::utils::placeholders(matching_ids.len())
-                ));
-                values.extend(matching_ids.into_iter().map(Value::Text));
-            }
-            if unknown_matches {
-                alternatives.push(format!(
-                    "source_device_id NOT IN ({})",
-                    crate::utils::placeholders(device_names.len())
-                ));
-                values.extend(device_names.keys().map(|id| Value::Text(id.clone())));
-            }
-            clauses.push(format!("({})", alternatives.join(" OR ")));
+        let mut alternatives = vec!["LOWER(content) LIKE ? ESCAPE '\\'".to_string()];
+        values.push(Value::Text(format!("%{}%", crate::utils::escape_like(needle))));
+        if !matching_ids.is_empty() {
+            alternatives.push(format!(
+                "source_device_id IN ({})",
+                crate::utils::placeholders(matching_ids.len())
+            ));
+            values.extend(matching_ids.into_iter().map(Value::Text));
         }
+        clauses.push(format!("({})", alternatives.join(" OR ")));
     }
     if let Some(start) = filter.start {
         clauses.push("created_ms >= ?".to_string());

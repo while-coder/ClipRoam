@@ -117,6 +117,7 @@ export class ClipRoamServer {
       tls: this.#tls,
       config: this.config,
       store: this.#store,
+      broadcast: this.#sockets.broadcast.bind(this.#sockets),
       liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },
     });
     this.#app.addHook("onClose", async () => this.#store.close());

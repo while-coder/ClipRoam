@@ -4,7 +4,6 @@ import {
   FileInfoSchema,
   ImageInfoSchema,
   DeviceSchema,
-  UNKNOWN_DEVICE_ID,
   entryContents,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -70,19 +69,12 @@ export class UserDataStore {
   // a re-copy refreshes the timestamp while keeping its original rowid.
   listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
     // The device filter matches entries whose source is one of the selected
-    // devices, or the UNKNOWN_DEVICE_ID marker is selected and its device is
-    // no longer registered. An absent filter drops the clause entirely.
+    // devices. An absent filter drops the clause entirely.
     const selectedDeviceIds = [...new Set(query.deviceIds ?? [])];
-    const unknownSelected = selectedDeviceIds.includes(UNKNOWN_DEVICE_ID);
-    const knownDeviceIds = selectedDeviceIds.filter((id) => id !== UNKNOWN_DEVICE_ID);
-    const deviceParams = Object.fromEntries(knownDeviceIds.map((id, index) => [`device${index}`, id]));
-    const deviceInSql = knownDeviceIds.length
+    const deviceParams = Object.fromEntries(selectedDeviceIds.map((id, index) => [`device${index}`, id]));
+    const deviceClause = selectedDeviceIds.length
       ? `source_device_id IN (${Object.keys(deviceParams).map((name) => `@${name}`).join(", ")})`
       : "";
-    const unknownSql = unknownSelected
-      ? "source_device_id NOT IN (SELECT device_id FROM devices)"
-      : "";
-    const deviceClause = [deviceInSql, unknownSql].filter(Boolean).join(" OR ");
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
@@ -142,6 +134,7 @@ export class UserDataStore {
       name: device.name,
       platform: device.platform,
       osVersion: device.osVersion,
+      appVersion: device.appVersion,
     };
     this.#database.prepare(`
       INSERT INTO devices (device_id, device_info, updated_at)
@@ -172,8 +165,22 @@ export class UserDataStore {
     });
   }
 
-  deleteDevice(deviceId: string): boolean {
-    return this.#database.prepare("DELETE FROM devices WHERE device_id = ?").run(deviceId).changes > 0;
+  // A removed device takes the entries it contributed with it, so no fresh
+  // "unknown device" orphans are left behind. Returns the deleted entry ids
+  // for the route layer to broadcast (content bytes are reclaimed later by
+  // collectGarbage(), exactly like delete()), or null when the device row
+  // does not exist.
+  deleteDevice(deviceId: string): string[] | null {
+    const exists = this.#database.prepare("SELECT 1 FROM devices WHERE device_id = ?").get(deviceId);
+    if (!exists) return null;
+    return this.#transaction(() => {
+      const entryIds = (this.#database.prepare(`
+        DELETE FROM entries WHERE source_device_id = ?
+        RETURNING id
+      `).all(deviceId) as Array<{ id: number }>).map(({ id }) => String(id));
+      this.#database.prepare("DELETE FROM devices WHERE device_id = ?").run(deviceId);
+      return entryIds;
+    });
   }
 
   // The server owns identity: it dedupes by content hash, assigns the rowid

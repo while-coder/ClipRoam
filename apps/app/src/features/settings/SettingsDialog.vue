@@ -6,6 +6,7 @@ import {
   FolderOpen,
   KeyRound,
   LoaderCircle,
+  Monitor,
   RefreshCw,
   ShieldCheck,
   X,
@@ -25,6 +26,8 @@ import {
   manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
+  deviceAliasInput,
+  systemDeviceName,
   changePassword,
   changingPassword,
   closeSettings,
@@ -95,6 +98,26 @@ const {
                 <h3 id="general-settings-heading">通用</h3>
                 <p>配置当前设备的剪贴板漫游和文件同步行为。</p>
               </header>
+              <section class="settings-section" aria-labelledby="device-alias-settings-heading">
+                <div class="settings-section-heading">
+                  <span class="settings-icon" aria-hidden="true"><Monitor :size="18" /></span>
+                  <div>
+                    <h4 id="device-alias-settings-heading">本机设备</h4>
+                    <p>设备列表与历史来源中显示的名称。</p>
+                  </div>
+                </div>
+                <input
+                  v-if="runningInTauri"
+                  id="device-alias"
+                  v-model="deviceAliasInput"
+                  type="text"
+                  maxlength="80"
+                  :placeholder="systemDeviceName || '系统机器名'"
+                  spellcheck="false"
+                  :disabled="savingSettings"
+                />
+                <span class="field-hint">留空使用系统机器名；保存后下次连接同步服务时上报新名称。</span>
+              </section>
               <section class="settings-section" aria-labelledby="roaming-settings-heading">
                 <div class="settings-section-heading">
                   <span class="settings-icon" aria-hidden="true"><Clipboard :size="18" /></span>

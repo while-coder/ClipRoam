@@ -6,6 +6,7 @@ export const DEFAULT_SERVER_ADDRESS = CONFIGURED_SERVER_ADDRESS.includes("://")
   ? new URL(CONFIGURED_SERVER_ADDRESS).host
   : CONFIGURED_SERVER_ADDRESS;
 export const BROWSER_CONFIG_KEY = "cliproam.syncConfig";
+export const BROWSER_PREFERENCES_KEY = "cliproam.accountPreferences";
 
 export const PAGE_SIZE = 50;
 

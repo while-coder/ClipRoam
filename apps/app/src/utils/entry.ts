@@ -16,7 +16,7 @@ import type {
  */
 
 export function deviceName(devicesById: Record<string, Device>, entry: ClipboardEntry): string {
-  return devicesById[entry.sourceDeviceId]?.name ?? "未知设备";
+  return devicesById[entry.sourceDeviceId]?.name ?? "";
 }
 
 export function isHashing(entry: LocalClipboardEntry): boolean {
