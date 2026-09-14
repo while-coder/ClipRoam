@@ -23,6 +23,42 @@ const resultSummary = computed(() => {
   return `共 ${total.value} 项`;
 });
 
+// 客户端排序只作用于当前加载的列表页；不排序时保持服务端返回的最近注册顺序。
+type SortKey = "size" | "createdAt" | "stored";
+const sortState = ref<{ key: SortKey; dir: "desc" | "asc" }>();
+
+function compareFiles(a: AdminFile, b: AdminFile, key: SortKey): number {
+  if (key === "stored") return Number(a.stored) - Number(b.stored);
+  if (key === "createdAt") return a.createdAt.localeCompare(b.createdAt);
+  return a.size - b.size;
+}
+
+const sortedFiles = computed(() => {
+  const sort = sortState.value;
+  if (!sort) return files.value;
+  const factor = sort.dir === "desc" ? -1 : 1;
+  return [...files.value].sort((a, b) => compareFiles(a, b, sort.key) * factor);
+});
+
+function toggleSort(key: SortKey): void {
+  const current = sortState.value;
+  if (current?.key !== key) {
+    sortState.value = { key, dir: "desc" };
+  } else {
+    sortState.value = current.dir === "desc" ? { key, dir: "asc" } : undefined;
+  }
+}
+
+function sortArrow(key: SortKey): string {
+  if (sortState.value?.key !== key) return "";
+  return sortState.value.dir === "desc" ? " ↓" : " ↑";
+}
+
+function ariaSort(key: SortKey): "ascending" | "descending" | undefined {
+  if (sortState.value?.key !== key) return undefined;
+  return sortState.value.dir === "desc" ? "descending" : "ascending";
+}
+
 const searchDebounceMs = 250;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -141,14 +177,26 @@ onUnmounted(() => clearTimeout(searchTimer));
         <thead>
           <tr>
             <th scope="col">内容 ID</th>
-            <th scope="col">大小</th>
-            <th scope="col">状态</th>
-            <th scope="col">注册时间</th>
+            <th scope="col" :aria-sort="ariaSort('size')">
+              <button class="sort-toggle" type="button" @click="toggleSort('size')">
+                大小<span class="sort-arrow">{{ sortArrow("size") }}</span>
+              </button>
+            </th>
+            <th scope="col" :aria-sort="ariaSort('stored')">
+              <button class="sort-toggle" type="button" @click="toggleSort('stored')">
+                状态<span class="sort-arrow">{{ sortArrow("stored") }}</span>
+              </button>
+            </th>
+            <th scope="col" :aria-sort="ariaSort('createdAt')">
+              <button class="sort-toggle" type="button" @click="toggleSort('createdAt')">
+                注册时间<span class="sort-arrow">{{ sortArrow("createdAt") }}</span>
+              </button>
+            </th>
             <th scope="col"><span class="visually-hidden">操作</span></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="file in files" :key="file.fileId">
+          <tr v-for="file in sortedFiles" :key="file.fileId">
             <td class="mono" :title="file.fileId">{{ file.fileId }}</td>
             <td>{{ formatBytes(file.size) }}</td>
             <td>
