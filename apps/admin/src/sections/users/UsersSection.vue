@@ -177,6 +177,15 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+/** 平台 · 系统版本 · 应用版本 拼成一行；未上报的应用版本不显示。 */
+function deviceMeta(device: AdminDevice): string {
+  return [
+    device.platform,
+    device.osVersion,
+    device.appVersion && device.appVersion !== "未知" ? `v${device.appVersion}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 onMounted(load);
 onUnmounted(() => clearTimeout(searchTimer));
 </script>
@@ -274,8 +283,8 @@ onUnmounted(() => clearTimeout(searchTimer));
         <ul v-else class="device-list">
           <li v-for="device in devices" :key="device.id" class="device-item">
             <div class="device-info">
-              <strong>{{ device.name }}</strong>
-              <span class="muted">{{ device.platform }} · {{ device.osVersion }} · v{{ device.appVersion }}</span>
+              <strong :title="device.id">{{ device.name }}</strong>
+              <span class="muted">{{ deviceMeta(device) }}</span>
             </div>
             <div class="device-side">
               <time class="muted" :title="'最后登录时间'">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
