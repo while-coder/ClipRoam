@@ -102,6 +102,8 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let histories_dir = app_data_dir.join("histories");
+            // 数据目录不预建的话，首次登录写 sync-config.json 会直接 ENOENT。
+            std::fs::create_dir_all(&histories_dir).map_err(|error| error.to_string())?;
             let sync_config_path = app_data_dir.join("sync-config.json");
             let device_config_path = app_data_dir.join("device.json");
             let sync_config = sync::load_sync_config(&sync_config_path);
