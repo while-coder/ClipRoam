@@ -257,8 +257,19 @@ function closeImagePreview(): void {
 }
 
 function selectOrActivate(entry: LocalClipboardEntry): void {
+  // [paste-debug] 诊断埋点，定位后移除
+  console.info(`[paste-debug] item click id=${entry.id} isPasteWindow=${isPasteWindow} webviewFocused=${document.hasFocus()}`);
   selectedEntryId.value = entry.id;
   if (isPasteWindow || isMobile.value) emit("activate", entry, true);
+}
+
+/// 粘贴窗口用 mousedown 触发粘贴：窗口刚成为 key 窗口且焦点在搜索框时，
+/// WebKit 会把第一次点击只用于失焦、吞掉 click 事件，mousedown 不受影响。
+function activateOnMouseDown(entry: LocalClipboardEntry): void {
+  // [paste-debug] 诊断埋点，定位后移除
+  console.info(`[paste-debug] item mousedown id=${entry.id} webviewFocused=${document.hasFocus()}`);
+  selectedEntryId.value = entry.id;
+  emit("activate", entry, true);
 }
 
 function activateSelectedEntry(entry?: LocalClipboardEntry): void {
@@ -392,6 +403,7 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         :aria-disabled="activatingEntryId === entry.id"
         @mouseenter="selectedEntryId = entry.id"
         @dblclick="!isPasteWindow && !isMobile && activateSelectedEntry(entry)"
+        @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
         @click="selectOrActivate(entry)"
         @keydown.enter.stop="activateSelectedEntry(entry)"
         @keydown.space.prevent.stop="activateSelectedEntry(entry)"

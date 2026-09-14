@@ -144,7 +144,15 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
 
 pub(crate) fn create_windows(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     for window_config in app.config().app.windows.clone() {
-        tauri::WebviewWindowBuilder::from_config(app, &window_config)?.build()?;
+        let builder = tauri::WebviewWindowBuilder::from_config(app, &window_config)?;
+        // 粘贴窗口弹出时应用通常在后台，macOS 默认把第一次点击用于激活窗口，
+        // 用户就得点两次才能粘贴；允许首次点击直接穿透到 webview。
+        let builder = if window_config.label == "paste" {
+            builder.accept_first_mouse(true)
+        } else {
+            builder
+        };
+        builder.build()?;
     }
     Ok(())
 }
