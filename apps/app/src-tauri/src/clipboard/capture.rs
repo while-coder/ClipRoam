@@ -574,10 +574,10 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ShareImportSummary {
-    shares: usize,
-    texts: usize,
-    images: usize,
-    files: usize,
+    pub(crate) shares: usize,
+    pub(crate) texts: usize,
+    pub(crate) images: usize,
+    pub(crate) files: usize,
 }
 
 #[tauri::command(async)]
