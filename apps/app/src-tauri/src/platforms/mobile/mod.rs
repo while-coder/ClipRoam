@@ -9,6 +9,7 @@ pub(crate) mod ios;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::clipboard::capture::{RichText, ShareImportSummary};
 use crate::content::ClipboardEntry;
