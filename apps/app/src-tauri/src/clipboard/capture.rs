@@ -88,8 +88,15 @@ pub(crate) fn image_signature(image: &[u8]) -> String {
     // history images are WebP. Hash canonical RGBA pixels so writing an image
     // does not make the monitor capture the same pixels as a new entry.
     let canonical = image::load_from_memory(image).ok().map(|decoded| {
-        let rgba = decoded.into_rgba8();
+        let mut rgba = decoded.into_rgba8();
         let (width, height) = rgba.dimensions();
+        // The 32bpp DIB roundtrip on Windows does not carry a trusted alpha
+        // byte (plain BITMAPINFOHEADER has no alpha masks), so the same image
+        // can come back opaque after an activation wrote it with alpha. The
+        // signature only cares about visible content: hash everything opaque.
+        for (_, _, pixel) in rgba.enumerate_pixels_mut() {
+            pixel[3] = 255;
+        }
         (width, height, rgba.into_raw())
     });
     let (prefix, bytes) = match canonical {
@@ -489,13 +496,44 @@ pub(crate) fn encode_image_as_webp(image: &[u8]) -> Result<(Vec<u8>, u32, u32, O
     ))
 }
 
+/// Encodes an image as a 32bpp BMP with the 40-byte BITMAPINFOHEADER (V3,
+/// BI_RGB). The `image` crate's encoder emits a 108-byte BITMAPV4HEADER with
+/// BI_BITFIELDS, and clipboard-win's `set_bitmap_inner` only copies the first
+/// 40 header bytes before handing the buffer to CreateDIBitmap — the V4
+/// channel masks are dropped, so GDI reads garbage colors (everything pasted
+/// or roamed onto Windows came out hue-shifted). V3 + BI_RGB carries no masks
+/// and decodes back losslessly; readers treat the unused fourth byte as
+/// padding, and `image` forces alpha back to 255 on decode.
 pub(crate) fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
-    let decoded = image::load_from_memory(image).map_err(|error| error.to_string())?;
-    let mut output = Cursor::new(Vec::new());
-    decoded
-        .write_to(&mut output, ImageFormat::Bmp)
-        .map_err(|error| error.to_string())?;
-    Ok(output.into_inner())
+    let rgba = image::load_from_memory(image)
+        .map_err(|error| error.to_string())?
+        .into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let (width, height) = (width as usize, height as usize);
+    let pixels = rgba.into_raw();
+    let data_size = pixels.len();
+    let mut output = Vec::with_capacity(54 + data_size);
+    // BITMAPFILEHEADER
+    output.extend_from_slice(b"BM");
+    output.extend_from_slice(&((54 + data_size) as u32).to_le_bytes());
+    output.extend_from_slice(&[0; 4]);
+    output.extend_from_slice(&54u32.to_le_bytes());
+    // BITMAPINFOHEADER: positive height = bottom-up rows.
+    output.extend_from_slice(&40u32.to_le_bytes());
+    output.extend_from_slice(&(width as i32).to_le_bytes());
+    output.extend_from_slice(&(height as i32).to_le_bytes());
+    output.extend_from_slice(&1u16.to_le_bytes());
+    output.extend_from_slice(&32u16.to_le_bytes());
+    output.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+    output.extend_from_slice(&(data_size as u32).to_le_bytes());
+    output.extend_from_slice(&[0; 16]); // ppm, color counts
+    // Pixel rows bottom-up, RGBA -> BGRA.
+    for row in pixels.chunks_exact(width * 4).rev() {
+        for pixel in row.chunks_exact(4) {
+            output.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    Ok(output)
 }
 
 // ---------------------------------------------------------------------------
