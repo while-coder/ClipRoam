@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.while.cliproam.share"
+    namespace = "com.whilecode.cliproam.share"
     compileSdk = 36
 
     defaultConfig {
