@@ -147,6 +147,17 @@ export class UserDataStore {
     return this.#listDeviceRows().map(({ device }) => device);
   }
 
+  // WS 认证时的会话反查：拿 session 绑定的 deviceId 取设备信息，省掉客户端
+  // 在 auth 消息里重复上报。
+  getDevice(deviceId: string): Device | undefined {
+    const row = this.#database.prepare("SELECT device_info FROM devices WHERE device_id = ?").get(deviceId) as
+      | { device_info: string }
+      | undefined;
+    if (!row) return undefined;
+    const result = DeviceSchema.safeParse({ ...JSON.parse(row.device_info), id: deviceId });
+    return result.success ? result.data : undefined;
+  }
+
   // Admin view: the row's updated_at doubles as the last time the device
   // signed in or re-registered.
   listDevicesWithLastSeen(): Array<Device & { lastSeenAt: string }> {

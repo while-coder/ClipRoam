@@ -1,10 +1,9 @@
 import {
   AuthResponseSchema,
-  ServerMessageSchema,
   type AuthResponse,
-  type ClientMessage,
   type Device,
 } from "@cliproam/protocol";
+
 
 import { errorMessageFromBody } from "./syncHttp";
 
@@ -62,13 +61,26 @@ export async function authenticateAccount(
   password: string,
   mode: AuthMode,
   protocol: ServerProtocol,
-  deviceId: string,
+  device: Device,
 ): Promise<AuthResponse> {
   const { httpUrl } = getServerUrls(address, protocol);
-  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, deviceId });
+  // 设备信息随登录上报：登录即注册设备行，不依赖推送通道连得上。
+  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, deviceId: device.id, device });
   const result = AuthResponseSchema.safeParse(body);
   if (!result.success) throw new Error("服务器返回了不兼容的登录响应");
   return result.data;
+}
+
+// 设备信息（别名等）变化后主动上报。旧服务器没有该端点会失败，由调用方
+// 忽略——重连时的 WS auth 消息仍会携带 device 兜底。
+export async function pushDeviceInfo(
+  address: string,
+  protocol: ServerProtocol,
+  sessionToken: string,
+  device: Device,
+): Promise<void> {
+  const { httpUrl } = getServerUrls(address, protocol);
+  await postJson(httpUrl, "/devices/current", device, { Authorization: `Bearer ${sessionToken}` });
 }
 
 export async function changeAccountPassword(
@@ -85,51 +97,4 @@ export async function changeAccountPassword(
     { currentPassword, newPassword },
     { Authorization: `Bearer ${sessionToken}` },
   );
-}
-
-export async function testSyncConnection(
-  url: string,
-  token: string,
-  device: Device,
-  timeoutMs = 6000,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(url);
-    let settled = false;
-
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      socket.close();
-      if (error) reject(error);
-      else resolve();
-    };
-
-    const timeout = window.setTimeout(
-      () => finish(new Error("连接超时，请检查服务器地址和网络")),
-      timeoutMs,
-    );
-
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "auth", token, device } satisfies ClientMessage));
-    });
-    socket.addEventListener("message", (event) => {
-      try {
-        const result = ServerMessageSchema.safeParse(JSON.parse(String(event.data)));
-        if (!result.success) {
-          finish(new Error("服务器返回了不兼容的响应"));
-          return;
-        }
-        if (result.data.type === "auth.ack") finish();
-        else if (result.data.type === "error") finish(new Error(result.data.message));
-      } catch {
-        finish(new Error("服务器返回了无法解析的数据"));
-      }
-    });
-    socket.addEventListener("error", () => finish(new Error("无法连接服务器，请检查地址和网络")));
-    socket.addEventListener("close", () => {
-      if (!settled) finish(new Error("服务器在认证完成前断开了连接"));
-    });
-  });
 }

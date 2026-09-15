@@ -19,7 +19,7 @@ import {
   Settings2,
 } from "lucide-vue-next";
 import { SyncClient } from "./features/sync/syncClient";
-import { authenticateAccount, getServerUrls, testSyncConnection } from "./features/sync/syncSetup";
+import { authenticateAccount, getServerUrls } from "./features/sync/syncSetup";
 import {
   requestProxyDevices,
   startPasteBridge,
@@ -797,11 +797,11 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       password,
       draft.authMode,
       serverProtocol,
-      device.id,
+      device,
     );
     accountCreated = draft.authMode === "register";
-    const { webSocketUrl } = getServerUrls(serverAddress, serverProtocol);
-    await testSyncConnection(webSocketUrl, session.sessionToken, device);
+    // 推送通道不设登录门槛：连不上只影响实时推送，登录后的常驻连接会自行
+    // 重连并以 toast 报告状态。
     const config: SyncConfig = {
       serverAddress,
       serverProtocol,

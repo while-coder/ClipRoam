@@ -195,12 +195,25 @@ pub(crate) struct DeviceIdentityDto {
 /// 设备展示信息（机器名、CPU、OS 类型与版本、App 版本），除 App 版本外每次
 /// 现取、不缓存：机器改名后下次读取立即生效。OS 类型为
 /// `windows`/`macos`/`linux`/`android`/`ios`。
+/// 设备名：Windows 读 COMPUTERNAME，Linux/macOS 读 HOSTNAME，缺失或为空时
+/// 回退系统 hostname，仍为空则用占位名。服务器要求设备名非空，空名会导致
+/// WebSocket 认证被拒、登录失败（Android 上两个环境变量都不存在）。
+fn read_device_name() -> String {
+    let from_env = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default();
+    let name = if from_env.trim().is_empty() {
+        tauri_plugin_os::hostname()
+    } else {
+        from_env
+    };
+    if name.trim().is_empty() { "未知设备".to_string() } else { name }
+}
+
 #[tauri::command]
 pub(crate) fn get_device_info(app: AppHandle) -> Result<DeviceInfo, String> {
     Ok(DeviceInfo {
-        device_name: std::env::var("COMPUTERNAME")
-            .or_else(|_| std::env::var("HOSTNAME"))
-            .unwrap_or_default(),
+        device_name: read_device_name(),
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "未知".to_string()),
         os_type: tauri_plugin_os::platform().to_string(),
         os_version: tauri_plugin_os::version().to_string(),

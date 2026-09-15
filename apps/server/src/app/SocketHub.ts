@@ -18,9 +18,12 @@ type ConnectionTarget = Pick<ClientConnection, "socket">;
 const logger = getLogger("SocketHub");
 
 // Everything the hub needs from the rest of the server, expressed as plain
-// functions so the hub stays ignorant of stores and sessions.
+// functions so the hub stays ignorant of stores and sessions. Device info
+// rides the HTTP login; `authenticateSession` already carries the device id,
+// so the hub can resolve the device itself when `auth.device` is absent.
 export type SocketHubDeps = {
-  authenticateSession: (token: string) => { id: string } | undefined;
+  authenticateSession: (token: string) => { id: string; deviceId: string } | undefined;
+  getDevice: (userId: string, deviceId: string) => Device | undefined;
   registerDevice: (userId: string, device: Device) => void;
 };
 
@@ -39,11 +42,12 @@ export class SocketHub {
       try {
         const parsed = ClientMessageSchema.safeParse(JSON.parse(data.toString()));
         if (!parsed.success) {
+          // 详细原因只进日志，客户端拿通用文案——Zod 原文对用户是天书。
           logger.warn(`Rejected invalid WebSocket message: ${parsed.error.issues[0]?.message ?? "unknown validation error"}`);
           this.#send({ socket }, {
             type: "error",
             code: "INVALID_MESSAGE",
-            message: parsed.error.issues[0]?.message ?? "Invalid message",
+            message: "消息格式不正确，请升级客户端后重试",
           });
           return;
         }
@@ -109,10 +113,25 @@ export class SocketHub {
     }
   }
 
-  #authenticateClient(socket: WebSocket, token: string, device: Device): ClientConnection | undefined {
+  #authenticateClient(socket: WebSocket, token: string, messageDevice: Device | undefined): ClientConnection | undefined {
     const user = this.deps.authenticateSession(token);
     if (!user) {
-      logger.warn(`Rejected WebSocket authentication for device ${device.id}`);
+      logger.warn(`Rejected WebSocket authentication for device ${messageDevice?.id ?? "unknown"}`);
+      this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
+      socket.close(1008, "Authentication failed");
+      return undefined;
+    }
+    // Session 设备号是权威标识：消息里带的 device（旧客户端/兼容字段）id 不
+    // 一致说明客户端本机身份已被重置，拒绝并让其重新登录以重新上报。
+    if (messageDevice && messageDevice.id !== user.deviceId) {
+      logger.warn(`Device id mismatch on WebSocket authentication: session=${user.deviceId} message=${messageDevice.id}`);
+      this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
+      socket.close(1008, "Authentication failed");
+      return undefined;
+    }
+    const device = messageDevice ?? this.deps.getDevice(user.id, user.deviceId);
+    if (!device) {
+      logger.warn(`No device info available for user ${user.id} device ${user.deviceId}`);
       this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
       socket.close(1008, "Authentication failed");
       return undefined;
