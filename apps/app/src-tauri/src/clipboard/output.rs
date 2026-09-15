@@ -148,12 +148,33 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, signatur
     history.last_image_signature = image;
 }
 
-/// Locks history, records the activation signature and persists the metadata
-/// rows. Call only after the clipboard write succeeded — see the comment at
-/// the call sites.
-fn persist_activation_signature(state: &AppState, signature: (String, String, String)) -> Result<(), String> {
+/// Writes the payload and records the activation signature as one serialized
+/// step: the signature is recorded first and the clipboard write happens
+/// inside the history lock, so the monitor — which locks the same mutex
+/// between reading the clipboard and capturing — can never observe the new
+/// clipboard value against the old signatures and re-capture what we just
+/// wrote (the old write-then-record order left exactly that window, and it
+/// stretched whenever the metadata write below had to wait on the database).
+/// On write failure the in-memory signature rolls back while the database is
+/// untouched, so the old clipboard content still matches its old signature.
+fn activate_with_signature(
+    state: &AppState,
+    signature: (String, String, String),
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    let previous = (
+        history.last_clipboard.clone(),
+        history.last_file_signature.clone(),
+        history.last_image_signature.clone(),
+    );
     record_activation_signature(&mut history, signature);
+    if let Err(error) = write() {
+        history.last_clipboard = previous.0;
+        history.last_file_signature = previous.1;
+        history.last_image_signature = previous.2;
+        return Err(error);
+    }
     // Only the activation signatures changed — persist the metadata rows.
     let path = state.active_history_path(&history)?;
     state.with_database(&path, |connection| save_metadata(connection, &history))
@@ -176,16 +197,11 @@ pub(crate) fn activate_remote_entry(
     };
     let signature = activation_signature(&payload);
 
-    match payload {
-        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text)?,
-        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image)?,
+    activate_with_signature(&state, signature, || match payload {
+        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
+        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
         _ => unreachable!("file activations are rejected above"),
-    }
-
-    // Signatures are recorded only after the write succeeded: recording first
-    // would make the monitor re-capture the old clipboard content as a
-    // duplicate when the write failed, and suppress the real copy afterwards.
-    persist_activation_signature(&state, signature)?;
+    })?;
     Ok(())
 }
 
@@ -244,19 +260,14 @@ pub(crate) fn apply_clipboard_entry(
 
     let signature = activation_signature(&payload);
 
-    match payload {
-        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text)?,
-        ClipboardPayload::Files(paths) => crate::platforms::write_clipboard_files(&app, &paths)?,
+    activate_with_signature(&state, signature, || match payload {
+        ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
+        ClipboardPayload::Files(paths) => crate::platforms::write_clipboard_files(&app, &paths),
         ClipboardPayload::VirtualFiles(entry) => {
-            crate::platforms::set_virtual_file_clipboard(&app, window.label(), *entry)?
+            crate::platforms::set_virtual_file_clipboard(&app, window.label(), *entry)
         }
-        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image)?,
-    }
-
-    // Signatures are recorded only after the write succeeded: recording first
-    // would make the monitor re-capture the old clipboard content as a
-    // duplicate when the write failed, and suppress the real copy afterwards.
-    persist_activation_signature(&state, signature)?;
+        ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
+    })?;
 
     crate::platforms::deliver_paste(&window, synthesize)
 }
