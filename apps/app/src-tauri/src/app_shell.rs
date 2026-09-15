@@ -200,7 +200,7 @@ pub(crate) fn get_device_info(app: AppHandle) -> Result<DeviceInfo, String> {
     Ok(DeviceInfo {
         device_name: std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
-            .unwrap_or_else(|_| "This device".to_string()),
+            .unwrap_or_default(),
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "未知".to_string()),
         os_type: tauri_plugin_os::platform().to_string(),
         os_version: tauri_plugin_os::version().to_string(),
