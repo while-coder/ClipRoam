@@ -50,6 +50,8 @@ rfd = "0.15"
 # macOS 上 WKWebView 透明背景走私有 API（toast 窗口 transparent: true 依赖它）
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
+# 辅助功能权限检测与授权弹窗（AXIsProcessTrustedWithOptions，见 macos/mod.rs）
+core-foundation = "0.10"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

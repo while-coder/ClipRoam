@@ -100,7 +100,13 @@ const setupError = ref("");
 const testingConnection = ref(false);
 const currentUsername = ref("");
 const importingShare = ref(false);
-const activatingEntryId = ref("");
+const activatingEntryIds = ref(new Set<string>());
+/** 每个 entryId 一个下载取消句柄；仅取消路径读取，无需响应式。 */
+const downloadAborts = new Map<string, AbortController>();
+/** 取消专用哨兵：downloadMissingFiles 在 abort 后抛出，调用方据此静默收尾。 */
+class DownloadCancelledError extends Error {}
+/** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
+let clipboardWriteChain: Promise<unknown> = Promise.resolve();
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
 const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
 const savingEntryId = ref("");
@@ -477,8 +483,10 @@ async function hideWindow(): Promise<void> {
 async function downloadMissingFiles(
   entryId: string,
   missing: MissingFile[],
-  downloadOne: (file: MissingFile) => Promise<void>,
+  downloadOne: (file: MissingFile, signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
+  const controller = new AbortController();
+  downloadAborts.set(entryId, controller);
   let finished = 0;
   const reportProgress = () => {
     downloadProgressByEntryId.value = {
@@ -487,14 +495,22 @@ async function downloadMissingFiles(
     };
   };
   reportProgress();
-  const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
-    await downloadOne(file);
-    finished += 1;
-    reportProgress();
-  });
-  const failures = results.filter((result) => result.status === "rejected").length;
-  if (failures) {
-    throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
+  try {
+    const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
+      // mapWithConcurrency 没有提前退出：取消后靠这里跳过排队中的文件。
+      if (controller.signal.aborted) throw new DownloadCancelledError("已取消");
+      await downloadOne(file, controller.signal);
+      finished += 1;
+      reportProgress();
+    });
+    // 先看取消再数失败：abort 引起的 reject 不算「下载失败」。
+    if (controller.signal.aborted) throw new DownloadCancelledError("已取消");
+    const failures = results.filter((result) => result.status === "rejected").length;
+    if (failures) {
+      throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
+    }
+  } finally {
+    if (downloadAborts.get(entryId) === controller) downloadAborts.delete(entryId);
   }
 }
 
@@ -531,8 +547,8 @@ async function downloadRequiredFiles(
     // Rust 写入共享的内容寻址缓存，完成后重读条目即可。
     try {
       const credentials = await pasteDownloadCredentials();
-      await downloadMissingFiles(entry.id, missing, (file) =>
-        downloadStoredFile(credentials, entry.id, { fileId: file.fileId, size: file.size }));
+      await downloadMissingFiles(entry.id, missing, (file, signal) =>
+        downloadStoredFile(credentials, entry.id, { fileId: file.fileId, size: file.size }, { signal }));
     } finally {
       downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
       refreshHistory();
@@ -543,8 +559,8 @@ async function downloadRequiredFiles(
   if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
 
   try {
-    await downloadMissingFiles(entry.id, missing, (file) =>
-      client.downloadFile(entry, { fileId: file.fileId, size: file.size }));
+    await downloadMissingFiles(entry.id, missing, (file, signal) =>
+      client.downloadFile(entry, { fileId: file.fileId, size: file.size }, { signal }));
   } finally {
     downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
     refreshHistory();
@@ -575,28 +591,41 @@ async function activateEntry(
     await saveEntry(entry);
     return;
   }
-  if (activatingEntryId.value) return;
-  activatingEntryId.value = entry.id;
+  if (activatingEntryIds.value.has(entry.id)) {
+    // 下载中再次激活 = 取消该下载；无下载（如纯文本快速粘贴）则维持防重复。
+    const controller = downloadAborts.get(entry.id);
+    if (controller) {
+      controller.abort();
+      showToast("已取消下载", "info");
+    }
+    return;
+  }
+  activatingEntryIds.value.add(entry.id);
   // [paste-debug] 诊断埋点，定位后移除
   console.info(`[paste-debug] activateEntry ${command} id=${entry.id}`);
   try {
     // Rust selects the native strategy. This downloads only what the current
     // platform must materialize before it can copy or paste the entry.
     await ensurePasteReady(entry);
-    await invoke(command, { entryId: entry.id });
+    // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
+    const write = clipboardWriteChain.then(() => invoke(command, { entryId: entry.id }));
+    clipboardWriteChain = write.catch(() => undefined);
+    await write;
     // [paste-debug] 诊断埋点，定位后移除
     console.info(`[paste-debug] activateEntry done ${command} id=${entry.id}`);
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
     // 看不见，保留确认提示。
     if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
   } catch (error) {
+    // 取消的提示已由取消方给出，原激活方静默收尾。
+    if (error instanceof DownloadCancelledError) return;
     if (String(error).includes("clipboard entry was not found")) {
       refreshHistory();
       return;
     }
     showToast(String(error), "error");
   } finally {
-    activatingEntryId.value = "";
+    activatingEntryIds.value.delete(entry.id);
   }
 }
 
@@ -627,16 +656,16 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
         if (isPasteWindow) {
           // 与粘贴同理：paste 窗口凭持久化配置直接走公共 HTTP 下载管线。
           const credentials = await pasteDownloadCredentials();
-          await downloadMissingFiles(entry.id, preparation.missing, (file) =>
+          await downloadMissingFiles(entry.id, preparation.missing, (file, signal) =>
             downloadStoredFile(credentials, entry.id, {
               fileId: file.fileId,
               size: file.size,
-            }, { saveId: preparation.saveId }));
+            }, { saveId: preparation.saveId, signal }));
         } else {
           const client = syncClient;
           if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
-          await downloadMissingFiles(entry.id, preparation.missing, (file) =>
-            client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId));
+          await downloadMissingFiles(entry.id, preparation.missing, (file, signal) =>
+            client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId, { signal }));
         }
       }
 
@@ -645,6 +674,7 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
+    if (error instanceof DownloadCancelledError) return;
     if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
     showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
@@ -1311,7 +1341,7 @@ onBeforeUnmount(() => {
       :connection-status="connectionStatus"
       :current-time="currentTime"
       :importing-share="importingShare"
-      :activating-entry-id="activatingEntryId"
+      :activating-entry-ids="activatingEntryIds"
       :saving-entry-id="savingEntryId"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"

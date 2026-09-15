@@ -29,7 +29,54 @@ pub(crate) fn manage_platform_state(app: &AppHandle) -> Result<(), String> {
     let clipboard = super::arboard_clipboard::PlatformClipboard::new()?;
     app.manage(clipboard);
     app.manage(PasteTarget::default());
+    ensure_accessibility_prompted();
     Ok(())
+}
+
+/// 启动时未授权就触发系统弹窗：用户点"打开系统设置"后列表里就有
+/// ClipRoam 了；不弹的话列表里永远找不到它，快捷粘贴必然失败。
+#[cfg(target_os = "macos")]
+fn ensure_accessibility_prompted() {
+    if !accessibility::is_trusted() {
+        accessibility::prompt();
+    }
+}
+
+/// 非 macOS 编译（Windows 测试构建等）无辅助功能权限一说，空实现。
+#[cfg(not(target_os = "macos"))]
+fn ensure_accessibility_prompted() {}
+
+/// 辅助功能（Accessibility）权限检测。合成 Cmd+V 走 osascript，TCC 会把
+/// 按键行为追溯到 ClipRoam 本身，未授权时报 1002 且应用不会自动出现在
+/// 辅助功能列表里——只有主动调 AXIsProcessTrustedWithOptions 弹窗，系统
+/// 才会把 ClipRoam 加进列表。
+#[cfg(target_os = "macos")]
+mod accessibility {
+    use std::os::raw::c_void;
+
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
+    }
+
+    /// 当前进程是否已获得辅助功能授权。
+    pub(crate) fn is_trusted() -> bool {
+        unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) != 0 }
+    }
+
+    /// 触发系统授权弹窗，系统会把 ClipRoam 自动加进辅助功能列表。
+    /// 返回调用后是否已授信（用户当场同意才为 true）。
+    pub(crate) fn prompt() -> bool {
+        let options = CFDictionary::from_CFType_pairs(&[(
+            CFString::new("AXTrustedCheckOptionPrompt").as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        )]);
+        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) != 0 }
+    }
 }
 
 fn frontmost_app_pid() -> Option<i32> {
@@ -139,6 +186,14 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
         ],
     )
     .map_err(|error| {
+        // osascript 的原始报错（如 1002）对用户没有指导意义；未授权时直接
+        // 给出可操作的路径。
+        #[cfg(target_os = "macos")]
+        if !accessibility::is_trusted() {
+            return "快速粘贴需要在 系统设置 → 隐私与安全性 → 辅助功能 中打开 \
+                    ClipRoam；列表里没有就点 + 添加\"应用程序\"目录里的 ClipRoam"
+                .to_string();
+        }
         format!("无法模拟 Command+V，请在系统设置中允许 ClipRoam 使用辅助功能：{error}")
     })
 }
