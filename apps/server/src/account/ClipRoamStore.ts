@@ -62,6 +62,7 @@ export class ClipRoamStore {
   }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
+  getDevice(userId: string, deviceId: string): Device | undefined { return this.#userStore(userId).getDevice(deviceId); }
   upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
     return this.#userStore(userId).upsert(entry);
   }

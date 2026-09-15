@@ -33,6 +33,7 @@ export class ClipRoamServer {
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
     this.#sockets = new SocketHub({
       authenticateSession: (token) => this.#auth.authenticateSession(token),
+      getDevice: (userId, deviceId) => this.#store.getDevice(userId, deviceId),
       registerDevice: (userId, device) => this.#store.upsertDevice(userId, device),
     });
     this.#relays = new FileRelayService();
