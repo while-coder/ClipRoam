@@ -333,6 +333,9 @@ kbd {
 }
 .result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .result-summary.error { color: #fca5a5; }
+/* 下拉 trigger 里的选中文案可能很长（如设备名），收不住会撑爆筛选行 */
+.time-filter-trigger > span,
+.device-filter-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .toast-window-shell { width: 100%; height: 100%; background: transparent; }
 .toast-layer {
   position: fixed;
@@ -546,6 +549,9 @@ button.image-thumbnail { cursor: zoom-in; }
   white-space: nowrap;
 }
 .footer-hint span { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* 空间不足时收缩开头的说明文字，保住右侧分页按钮不被裁 */
+.footer-hint > span { flex: 0 0 auto; }
+.footer-hint > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .pagination-control { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
 .pagination-button {
   display: flex;
@@ -584,11 +590,34 @@ button.image-thumbnail { cursor: zoom-in; }
   grid-template-rows: 52px auto minmax(0, 1fr) 36px;
   background: #10192e;
 }
+/* grid item 默认 min-width:auto，会把筛选行的 min-content（最宽 479px）
+   反向撑成整列宽度；窄视口下内容列因此横向溢出，聚焦输入框时还会把
+   overflow:hidden 的容器滚偏。归零后溢出收敛到 filter-scroll 自己的横向滚动。 */
+.history-content > * { min-width: 0; }
 .paste-app { display: block; }
 /* 快捷粘贴窗口没有标题栏：搜索/筛选工具栏整体兼作拖拽区（控件除外） */
 .paste-app .toolbar { cursor: grab; user-select: none; }
 .paste-app .toolbar:active { cursor: grabbing; }
 .paste-app .footer-hint { gap: 8px; }
+/* 快速粘贴窗口宽度有限（默认 560，最小 480）：筛选下拉去掉“时间/设备”文字
+   标签与固定最小宽，并把 trigger 压成和筛选按钮一致的轻量样式——原带边框
+   底色的盒子在小窗里既占宽度又显突兀 */
+.paste-app .time-filter-label,
+.paste-app .device-filter-label { display: none; }
+.paste-app .time-filter-control,
+.paste-app .device-filter-control { margin-left: 0; padding-left: 0; border-left: 0; }
+.paste-app .time-filter-trigger,
+.paste-app .device-filter-trigger {
+  min-width: 0;
+  height: 27px;
+  padding: 0 9px;
+  background: transparent;
+  border-color: transparent;
+  font-size: 12px;
+}
+.paste-app .time-filter-trigger:hover,
+.paste-app .device-filter-trigger:hover { background: rgba(255, 255, 255, 0.05); }
+.paste-app .device-filter-trigger > span { max-width: 108px; }
 .paste-app .app-content {
   height: 100%;
   border: 0;
@@ -1103,6 +1132,8 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-app .item-action { width: 44px; height: 44px; border-radius: 10px; }
 .mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
+/* 窄屏放不下"共 N 条 · 第 x/y 页"整段文字，条数在筛选行已展示，只留翻页按钮 */
+.mobile-app .pagination-status { display: none; }
 .mobile-app .settings-backdrop { padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0); }
 .mobile-app .settings-dialog { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; }
 .mobile-app .settings-dialog-header { min-height: 60px; padding-inline: 16px; }

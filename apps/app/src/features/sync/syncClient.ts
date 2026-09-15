@@ -312,16 +312,21 @@ export class SyncClient {
     return queried!.files;
   }
 
-  async downloadFile(entry: ClipboardEntry, file: FileReference): Promise<void> {
-    return this.#files.downloadFile(entry, file);
+  async downloadFile(
+    entry: ClipboardEntry,
+    file: FileReference,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this.#files.downloadFile(entry, file, options);
   }
 
   async downloadFileToSave(
     entry: ClipboardEntry,
     file: FileReference,
     saveId: string,
+    options: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    return this.#files.downloadFileToSave(entry, file, saveId);
+    return this.#files.downloadFileToSave(entry, file, saveId, options);
   }
 
   async downloadVirtualFile(request: {

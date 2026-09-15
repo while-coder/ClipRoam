@@ -599,6 +599,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clipboard-win",
+ "core-foundation 0.10.1",
  "image",
  "indexmap 2.14.0",
  "keyring",

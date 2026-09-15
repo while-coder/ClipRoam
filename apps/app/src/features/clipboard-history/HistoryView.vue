@@ -61,7 +61,7 @@ const props = defineProps<{
   connectionStatus: { label: string; title: string; tone: string };
   currentTime: number;
   importingShare: boolean;
-  activatingEntryId: string;
+  activatingEntryIds: ReadonlySet<string>;
   savingEntryId: string;
   uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
@@ -277,6 +277,14 @@ function activateSelectedEntry(entry?: LocalClipboardEntry): void {
   emit("activate", entry, false);
 }
 
+/** paste 窗口下载中的条目：再次激活即取消，用 title 告知。 */
+function downloadCancelHint(entry: LocalClipboardEntry): string | undefined {
+  if (isPasteWindow && props.activatingEntryIds.has(entry.id) && props.downloadProgressByEntryId[entry.id]) {
+    return "下载中，再次按 Enter 或点击可取消";
+  }
+  return undefined;
+}
+
 function moveSelection(offset: -1 | 1): void {
   if (!manifestTotal.value) return;
   // With no selection, ArrowDown takes the first entry and ArrowUp the last;
@@ -399,8 +407,9 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         class="history-item"
         :class="{ selected: selectedEntryId === entry.id, 'image-entry': entry.kind === 'image' }"
         role="button"
-        :tabindex="activatingEntryId === entry.id ? -1 : 0"
-        :aria-disabled="activatingEntryId === entry.id"
+        :tabindex="activatingEntryIds.has(entry.id) ? -1 : 0"
+        :aria-disabled="activatingEntryIds.has(entry.id)"
+        :title="downloadCancelHint(entry)"
         @mouseenter="selectedEntryId = entry.id"
         @dblclick="!isPasteWindow && !isMobile && activateSelectedEntry(entry)"
         @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
@@ -424,7 +433,7 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
           <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
         </span>
         <span v-else class="kind-icon">
-          <LoaderCircle v-if="activatingEntryId === entry.id" :size="18" class="spin" />
+          <LoaderCircle v-if="activatingEntryIds.has(entry.id)" :size="18" class="spin" />
           <FileText v-else-if="entry.kind === 'text'" :size="18" />
           <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
           <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />

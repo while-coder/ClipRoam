@@ -256,16 +256,21 @@ export class FileTransfer {
     );
   }
 
-  async downloadFile(entry: ClipboardEntry, file: FileReference): Promise<void> {
-    return this.#downloadFileReference(entry.id, file);
+  async downloadFile(
+    entry: ClipboardEntry,
+    file: FileReference,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this.#downloadFileReference(entry.id, file, undefined, options.signal);
   }
 
   async downloadFileToSave(
     entry: ClipboardEntry,
     file: FileReference,
     saveId: string,
+    options: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    return this.#downloadFileReference(entry.id, file, saveId);
+    return this.#downloadFileReference(entry.id, file, saveId, options.signal);
   }
 
   async downloadVirtualFile(request: {
@@ -284,8 +289,14 @@ export class FileTransfer {
     entryId: string,
     file: FileReference,
     saveId?: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     const abort = new AbortController();
+    // 外部取消（如 UI 取消下载）也走同一中止通道；stop() 仍全局中止。
+    if (signal) {
+      if (signal.aborted) abort.abort();
+      else signal.addEventListener("abort", () => abort.abort(), { once: true });
+    }
     this.#downloadAborts.add(abort);
     try {
       // 下载走纯 HTTP + Rust 落盘（公共管线），不依赖 socket；stop() 时才中止。
