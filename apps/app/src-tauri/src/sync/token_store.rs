@@ -27,7 +27,7 @@ pub(crate) fn load_session_token() -> Option<String> {
 mod imp {
     use keyring::Entry;
 
-    const SERVICE: &str = "com.while.cliproam";
+    const SERVICE: &str = "com.whilecode.cliproam";
     const USER: &str = "sync-session-token";
 
     fn entry() -> Option<Entry> {
