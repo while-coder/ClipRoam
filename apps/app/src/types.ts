@@ -29,12 +29,6 @@ export type AccountPreferences = {
 
 export type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
 export type SavePreparation = { saveId: string; missing: MissingFile[] };
-export type VirtualFileRequest = {
-  entryId: string;
-  fileId: string;
-  size: number;
-  sourceDeviceId: string;
-};
 
 export type PlatformCapabilities = {
   mobile: boolean;

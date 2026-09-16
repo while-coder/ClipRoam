@@ -15,6 +15,7 @@ import {
   Cloud,
   CloudOff,
   CloudUpload,
+  Download,
   LoaderCircle,
   Settings2,
 } from "lucide-vue-next";
@@ -26,8 +27,11 @@ import {
   startSyncBridgeService,
   SYNC_BRIDGE_DEVICES_EVENT,
 } from "./features/sync/bridge";
-import { downloadStoredFile, type FileDownloadCredentials } from "./features/sync/fileDownload";
-import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./features/sync/concurrency";
+import {
+  DownloadCancelledError,
+  Downloader,
+  type DownloadTaskSnapshot,
+} from "./features/sync/fileTransfer";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
@@ -38,6 +42,7 @@ import { initSettings } from "./features/settings/useSettings";
 import { closeSettings, openSettings, settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
+import DownloadsView from "./features/downloads/DownloadsView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
 import SetupWizard from "./features/setup/SetupWizard.vue";
 import type { SetupDraft } from "./features/setup/SetupWizard.vue";
@@ -69,7 +74,6 @@ import type {
   ShareReceiverEvent,
   SyncConfig,
   UploadProgress,
-  VirtualFileRequest,
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
@@ -88,7 +92,7 @@ const pendingCount = ref(0);
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
-const activeView = ref<"history" | "pending-sync">("history");
+const activeView = ref<"history" | "pending-sync" | "downloads">("history");
 /** 设备列表完全来自服务器（manifest/presence），不做任何本地预设。 */
 const devicesById = ref<Record<string, Device>>({});
 const currentTime = ref(Date.now());
@@ -101,14 +105,31 @@ const testingConnection = ref(false);
 const currentUsername = ref("");
 const importingShare = ref(false);
 const activatingEntryIds = ref(new Set<string>());
-/** 每个 entryId 一个下载取消句柄；仅取消路径读取，无需响应式。 */
-const downloadAborts = new Map<string, AbortController>();
-/** 取消专用哨兵：downloadMissingFiles 在 abort 后抛出，调用方据此静默收尾。 */
-class DownloadCancelledError extends Error {}
 /** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
 let clipboardWriteChain: Promise<unknown> = Promise.resolve();
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
-const downloadProgressByEntryId = ref<Record<string, DownloadProgress>>({});
+/** 下载面板的任务快照；Rust Downloader 事件推来时由薄桥整体替换。 */
+const downloadTasks = ref<DownloadTaskSnapshot[]>([]);
+const downloader = new Downloader({
+  onTasksChanged: () => { downloadTasks.value = [...downloader.tasksSnapshot()]; },
+});
+/** 派生的逐条目下载进度：只看每个 entry 最新批次，批内仍有活动任务才显示。 */
+const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() => {
+  const progress: Record<string, DownloadProgress> = {};
+  for (const task of downloadTasks.value) {
+    if (task.status !== "queued" && task.status !== "downloading") continue;
+    const batch = downloadTasks.value.filter((candidate) =>
+      candidate.entryId === task.entryId && candidate.batchId === task.batchId);
+    progress[task.entryId] = {
+      finished: batch.filter((candidate) => candidate.status === "succeeded").length,
+      total: batch.length,
+    };
+  }
+  return progress;
+});
+/** 侧边栏「下载」入口的角标：排队 + 下载中的任务数。 */
+const activeDownloadCount = computed(() =>
+  downloadTasks.value.filter((task) => task.status === "queued" || task.status === "downloading").length);
 const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
@@ -162,6 +183,8 @@ function setConnectionState(value: boolean): void {
 function stopSyncClient(): void {
   syncClient?.stop();
   syncClient = undefined;
+  // 旧 FileTransfer.stop 的语义：同步断开时中止全部下载（凭据已失效）。
+  downloader.stopAll("同步已断开");
   setConnectionState(false);
 }
 
@@ -474,66 +497,15 @@ async function hideWindow(): Promise<void> {
   if (runningInTauri && !isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
 }
 
-/**
- * Downloads the given contents through the fixed transfer pool, reporting
- * per-entry progress and failing with the aggregate failure count. One failure
- * does not abort the rest — a 3000-file folder should not be lost to a single
- * bad transfer.
- */
-async function downloadMissingFiles(
-  entryId: string,
-  missing: MissingFile[],
-  downloadOne: (file: MissingFile, signal: AbortSignal) => Promise<void>,
-): Promise<void> {
-  const controller = new AbortController();
-  downloadAborts.set(entryId, controller);
-  let finished = 0;
-  const reportProgress = () => {
-    downloadProgressByEntryId.value = {
-      ...downloadProgressByEntryId.value,
-      [entryId]: { finished, total: missing.length },
-    };
-  };
-  reportProgress();
-  try {
-    const results = await mapWithConcurrency(missing, TRANSFER_CONCURRENCY, async (file) => {
-      // mapWithConcurrency 没有提前退出：取消后靠这里跳过排队中的文件。
-      if (controller.signal.aborted) throw new DownloadCancelledError("已取消");
-      await downloadOne(file, controller.signal);
-      finished += 1;
-      reportProgress();
-    });
-    // 先看取消再数失败：abort 引起的 reject 不算「下载失败」。
-    if (controller.signal.aborted) throw new DownloadCancelledError("已取消");
-    const failures = results.filter((result) => result.status === "rejected").length;
-    if (failures) {
-      throw new Error(`有 ${failures} 个文件下载失败（共 ${missing.length} 个）`);
-    }
-  } finally {
-    if (downloadAborts.get(entryId) === controller) downloadAborts.delete(entryId);
-  }
-}
-
 function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T> {
   const { [id]: _, ...remaining } = record;
   return remaining;
 }
 
 /**
- * paste 窗口直连下载的凭据：现读持久化配置，保证拿到最新 token；
- * 未配置同步时给出明确错误。
- */
-async function pasteDownloadCredentials(): Promise<FileDownloadCredentials> {
-  const config = await loadSyncConfig();
-  if (!config?.sessionToken) {
-    throw new Error("同步未登录，无法获取其他设备的文件");
-  }
-  const { httpUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
-  return { httpUrl, token: config.sessionToken };
-}
-
-/**
- * Fetches every content this device is missing.
+ * Fetches every content this device is missing. All windows go through the
+ * shared Downloader; queueing, credentials and the HTTP pull itself
+ * live in the Rust-side downloader.
  */
 async function downloadRequiredFiles(
   entry: LocalClipboardEntry,
@@ -542,27 +514,9 @@ async function downloadRequiredFiles(
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
   const missing = await invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
   if (!missing.length) return entry;
-  if (isPasteWindow) {
-    // paste 窗口不持有 sync 客户端：凭持久化配置直接走公共 HTTP 下载管线，
-    // Rust 写入共享的内容寻址缓存，完成后重读条目即可。
-    try {
-      const credentials = await pasteDownloadCredentials();
-      await downloadMissingFiles(entry.id, missing, (file, signal) =>
-        downloadStoredFile(credentials, entry.id, { fileId: file.fileId, size: file.size }, { signal }));
-    } finally {
-      downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
-      refreshHistory();
-    }
-    return (await fullEntry(entry)) as LocalClipboardEntry;
-  }
-  const client = syncClient;
-  if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
-
   try {
-    await downloadMissingFiles(entry.id, missing, (file, signal) =>
-      client.downloadFile(entry, { fileId: file.fileId, size: file.size }, { signal }));
+    await downloader.downloadFiles(entry.id, missing, { entryLabel: entry.content });
   } finally {
-    downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
     refreshHistory();
   }
   // Re-read the persisted entry: its availability summary changed on disk.
@@ -593,11 +547,7 @@ async function activateEntry(
   }
   if (activatingEntryIds.value.has(entry.id)) {
     // 下载中再次激活 = 取消该下载；无下载（如纯文本快速粘贴）则维持防重复。
-    const controller = downloadAborts.get(entry.id);
-    if (controller) {
-      controller.abort();
-      showToast("已取消下载", "info");
-    }
+    if (await downloader.cancelEntry(entry.id) > 0) showToast("已取消下载", "info");
     return;
   }
   activatingEntryIds.value.add(entry.id);
@@ -653,20 +603,11 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       saveId = preparation.saveId;
 
       if (preparation.missing.length) {
-        if (isPasteWindow) {
-          // 与粘贴同理：paste 窗口凭持久化配置直接走公共 HTTP 下载管线。
-          const credentials = await pasteDownloadCredentials();
-          await downloadMissingFiles(entry.id, preparation.missing, (file, signal) =>
-            downloadStoredFile(credentials, entry.id, {
-              fileId: file.fileId,
-              size: file.size,
-            }, { saveId: preparation.saveId, signal }));
-        } else {
-          const client = syncClient;
-          if (!client) throw new Error("同步服务未连接，无法获取其他设备的文件");
-          await downloadMissingFiles(entry.id, preparation.missing, (file, signal) =>
-            client.downloadFileToSave(entry, { fileId: file.fileId, size: file.size }, preparation.saveId, { signal }));
-        }
+        // saveId 隔离任务：落盘到另存 staging 而非内容寻址缓存。
+        await downloader.downloadFiles(entry.id, preparation.missing, {
+          saveId: preparation.saveId,
+          entryLabel: entry.content,
+        });
       }
 
       const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
@@ -678,7 +619,6 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
     if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
     showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
-    downloadProgressByEntryId.value = withoutKey(downloadProgressByEntryId.value, entry.id);
     savingEntryId.value = "";
   }
 }
@@ -1110,42 +1050,10 @@ async function initializeTauriServices(): Promise<void> {
     isPasteWindow
       ? startPasteBridge({ onDevices: rememberDevices })
       : startSyncBridgeService({ getDevices: () => Object.values(devicesById.value) }),
-    listen<VirtualFileRequest>("cliproam://virtual-file-request", async ({ payload }) => {
-      if (isPasteWindow) {
-        // paste 窗口凭持久化配置直接走公共 HTTP 下载管线；失败回执给 Rust，
-        // Explorer 重试时 VirtualDownloads 的复位语义会重新发起请求。
-        try {
-          const credentials = await pasteDownloadCredentials();
-          await downloadStoredFile(credentials, payload.entryId, {
-            fileId: payload.fileId,
-            size: payload.size,
-          });
-          refreshHistory();
-        } catch (error) {
-          await invoke("fail_virtual_file_request", {
-            fileId: payload.fileId,
-            message: errorMessage(error),
-          }).catch(() => undefined);
-        }
-        return;
-      }
-      const client = syncClient;
-      if (!client) {
-        await invoke("fail_virtual_file_request", {
-          fileId: payload.fileId,
-          message: "同步服务未连接，无法获取其他设备的文件",
-        });
-        return;
-      }
-      try {
-        await client.downloadVirtualFile(payload);
-        refreshHistory();
-      } catch (error) {
-        await invoke("fail_virtual_file_request", {
-          fileId: payload.fileId,
-          message: errorMessage(error),
-        }).catch(() => undefined);
-      }
+    // 下载任务快照由 Rust 全局 Downloader 推送（main / paste 共享同一实例）；
+    // Windows 虚拟文件的按需拉取也已在 Rust 侧直接入队，前端不再经手。
+    listen<DownloadTaskSnapshot[]>("cliproam://download-changed", ({ payload }) => {
+      downloader.applySnapshot(payload);
     }),
   ]);
   unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -1153,6 +1061,9 @@ async function initializeTauriServices(): Promise<void> {
   if (listenerError?.status === "rejected") {
     showToast(`部分后台事件监听初始化失败：${String(listenerError.reason)}`, "error");
   }
+
+  // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
+  await downloader.refresh().catch(() => undefined);
 
   if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
     const registered = await initializeQuickPasteShortcut();
@@ -1317,6 +1228,17 @@ onBeforeUnmount(() => {
           <span>待同步</span>
           <span v-if="pendingCount" class="nav-count">{{ pendingCount }}</span>
         </button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'downloads' }"
+          type="button"
+          :aria-current="activeView === 'downloads' ? 'page' : undefined"
+          @click="activeView = 'downloads'"
+        >
+          <Download :size="17" aria-hidden="true" />
+          <span>下载</span>
+          <span v-if="activeDownloadCount" class="nav-count">{{ activeDownloadCount }}</span>
+        </button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -1354,12 +1276,19 @@ onBeforeUnmount(() => {
     />
 
     <PendingSyncView
-      v-else
+      v-else-if="activeView === 'pending-sync'"
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       @remove="removeEntry"
+    />
+
+    <DownloadsView
+      v-else
+      :download-tasks="downloadTasks"
+      @cancel-download="downloader.cancel($event)"
+      @cancel-all-downloads="downloader.stopAll()"
     />
 
     <SettingsDialog

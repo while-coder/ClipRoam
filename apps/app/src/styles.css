@@ -258,7 +258,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 }
 .icon-button:hover { background: rgba(255, 255, 255, 0.08); }
 
-.toolbar { padding-top: 12px; padding-bottom: 9px; }
+.toolbar { position: relative; padding-top: 12px; padding-bottom: 9px; }
 .search-field {
   display: grid;
   grid-template-columns: 20px 1fr auto;
@@ -331,6 +331,37 @@ kbd {
   padding-left: 8px;
   border-left: 1px solid rgba(148, 163, 184, 0.14);
 }
+/* 下载页（侧边栏「下载」视图）的任务行样式 */
+.downloads-cancel-all {
+  padding: 2px 8px;
+  color: #fca5a5;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid rgba(252, 165, 165, 0.35);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.downloads-cancel-all:hover { border-color: rgba(252, 165, 165, 0.6); }
+.downloads-list .download-row { gap: 12px; }
+.download-row { display: flex; align-items: center; gap: 8px; }
+.download-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.download-label { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.download-status { color: #64748b; font-size: 11px; }
+.download-status.downloading { color: #94a3b8; }
+.download-status.failed { color: #fca5a5; }
+.download-status.succeeded { color: var(--color-accent); }
+.download-bar { height: 3px; overflow: hidden; background: rgba(148, 163, 184, 0.18); border-radius: 999px; }
+.download-bar-fill { display: block; height: 100%; background: var(--color-accent); border-radius: 999px; transition: width 0.2s ease; }
+.download-cancel {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.download-cancel:hover { color: #fca5a5; }
 .result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .result-summary.error { color: #fca5a5; }
 /* 下拉 trigger 里的选中文案可能很长（如设备名），收不住会撑爆筛选行 */

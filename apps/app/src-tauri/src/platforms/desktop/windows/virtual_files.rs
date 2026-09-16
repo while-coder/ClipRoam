@@ -11,7 +11,6 @@ use crate::{
     file::{download_path, is_file_id, partial_download_path},
     AppState,
 };
-use serde::Serialize;
 use std::{
     ffi::c_void,
     fs,
@@ -24,7 +23,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use windows::{
     core::{implement, Error, Ref, Result as WinResult, HRESULT},
     Win32::{
@@ -64,15 +63,6 @@ struct VirtualItem {
     file_id: Option<String>,
     size: Option<u64>,
     is_dir: bool,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct VirtualFileRequest {
-    entry_id: String,
-    file_id: String,
-    size: u64,
-    source_device_id: String,
 }
 
 fn format_etc(format: u16, lindex: i32, tymed: i32) -> FORMATETC {
@@ -255,21 +245,13 @@ impl VirtualFileStream {
 
     fn request_download(&self) -> Result<(), String> {
         let state = self.app.state::<AppState>();
-        let should_emit = state.virtual_downloads.request(&self.file_id);
-        if should_emit {
+        // request() 复位门：失败态置位后 Explorer 重读会再次放行，重新入队。
+        let should_enqueue = state.virtual_downloads.request(&self.file_id);
+        if should_enqueue {
             let transfer_size = self.size.unwrap_or_default();
-            self.app
-                .emit_to(
-                    &self.window_label,
-                    "cliproam://virtual-file-request",
-                    VirtualFileRequest {
-                        entry_id: self.entry_id.clone(),
-                        file_id: self.file_id.clone(),
-                        size: transfer_size,
-                        source_device_id: self.source_device_id.clone(),
-                    },
-                )
-                .map_err(|error| error.to_string())?;
+            state
+                .downloader
+                .enqueue_virtual(&self.entry_id, &self.file_id, transfer_size);
         }
         Ok(())
     }

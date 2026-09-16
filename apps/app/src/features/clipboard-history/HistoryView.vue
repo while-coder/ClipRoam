@@ -285,6 +285,9 @@ function downloadCancelHint(entry: LocalClipboardEntry): string | undefined {
   return undefined;
 }
 
+// —— 下载列表面板（仅主窗口）——
+// 已迁移到主界面侧边栏的「下载」页（features/downloads/DownloadsView.vue）。
+
 function moveSelection(offset: -1 | 1): void {
   if (!manifestTotal.value) return;
   // With no selection, ArrowDown takes the first entry and ArrowUp the last;

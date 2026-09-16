@@ -22,7 +22,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
-import { FileTransfer, type FileReference } from "./fileTransfer";
+import { FileTransfer } from "./fileTransfer";
 import { createSyncRequester, errorMessageFromBody, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 
@@ -91,7 +91,7 @@ export class SyncClient {
     private readonly manifestPageSize = ENTRY_PAGE_DEFAULT_LIMIT,
   ) {
     this.#http = createSyncRequester(httpUrl, token);
-    this.#files = new FileTransfer(httpUrl, token, this.#http, {
+    this.#files = new FileTransfer(this.#http, {
       isStopped: () => this.#stopped,
       onUploadProgress: handlers.onUploadProgress,
       onUploadFinished: handlers.onUploadFinished,
@@ -111,7 +111,7 @@ export class SyncClient {
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
     this.#socket?.close();
-    this.#files.stop();
+    // 下载已移交 Downloader，由调用方（App.vue stopSyncClient）统一 stopAll。
   }
 
   // The resident drain loop: the durable capture queue is the single replay
@@ -310,32 +310,6 @@ export class SyncClient {
       "服务器返回了不兼容的文件状态响应",
     );
     return queried!.files;
-  }
-
-  async downloadFile(
-    entry: ClipboardEntry,
-    file: FileReference,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<void> {
-    return this.#files.downloadFile(entry, file, options);
-  }
-
-  async downloadFileToSave(
-    entry: ClipboardEntry,
-    file: FileReference,
-    saveId: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<void> {
-    return this.#files.downloadFileToSave(entry, file, saveId, options);
-  }
-
-  async downloadVirtualFile(request: {
-    entryId: string;
-    fileId: string;
-    size: number;
-    sourceDeviceId: string;
-  }): Promise<void> {
-    return this.#files.downloadVirtualFile(request);
   }
 
   // A 404 is not a failure: another device may have deleted the entry first,

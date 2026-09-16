@@ -106,6 +106,32 @@ pub(crate) fn history_key_for_config(config: &SyncConfig) -> String {
     )
 }
 
+/// 配置对应的服务器 HTTP 基址（`http(s)://{host}:{port}`）。校验规则与前端
+/// `normalizeServerAddress`（apps/app/src/features/sync/syncSetup.ts）保持一致：
+/// 只接受 `host:port`，不带 scheme 或路径。
+pub(crate) fn server_http_url(config: &SyncConfig) -> Result<String, String> {
+    let candidate = config.server_address.trim();
+    if candidate.is_empty() {
+        return Err("请输入服务器 IP 和端口".to_string());
+    }
+    if candidate.contains("://") || candidate.contains('/') {
+        return Err("只需填写 IP 和端口，例如 192.168.1.20:4810".to_string());
+    }
+    let parsed = url::Url::parse(&format!("http://{candidate}"))
+        .map_err(|_| "服务器地址格式不正确".to_string())?;
+    let host_empty = parsed.host_str().map(str::is_empty).unwrap_or(true);
+    if host_empty || parsed.port().is_none() {
+        return Err("服务器地址必须包含 IP 和端口".to_string());
+    }
+    let secure = config.server_protocol == "https";
+    Ok(format!(
+        "{}://{}:{}",
+        if secure { "https" } else { "http" },
+        parsed.host_str().expect("checked above"),
+        parsed.port().expect("checked above"),
+    ))
+}
+
 pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
     let mut config: SyncConfig = fs::read_to_string(path)
         .ok()

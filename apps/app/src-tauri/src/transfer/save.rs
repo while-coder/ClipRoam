@@ -11,7 +11,6 @@ use tauri::State;
 
 use crate::clipboard::output::{missing_files, snapshot_entry};
 use crate::content::{rebuild_tree, tree_contents, MissingFile, TreeNode};
-use crate::transfer::download::DownloadTarget;
 use crate::AppState;
 
 pub(crate) struct SaveSession {
@@ -94,28 +93,15 @@ pub(crate) async fn prepare_save_entry(
 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> Result<(), String> {
+    // 先停掉属于该会话的下载任务（downloader 会删 `.part` 并回滚 in_progress），
+    // 再删会话与 staging 目录：worker 的异步清理对已消失的会话是容错的。
+    state.downloader.cancel_by_save_id(&save_id);
     let session = state
         .save_sessions
         .lock()
         .map_err(|error| error.to_string())?
         .remove(&save_id);
     if let Some(session) = session {
-        let mut downloads = state.downloads.lock().map_err(|error| error.to_string())?;
-        let transfer_ids = downloads
-            .iter()
-            .filter_map(|(transfer_id, download)| match &download.target {
-                DownloadTarget::Save { save_id: target_id, .. } if target_id == &save_id => {
-                    Some(transfer_id.clone())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for transfer_id in transfer_ids {
-            if let Some(download) = downloads.remove(&transfer_id) {
-                let _ = fs::remove_file(download.path);
-            }
-        }
-        drop(downloads);
         let _ = fs::remove_dir_all(session.staging_dir);
     }
     Ok(())
