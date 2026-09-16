@@ -12,7 +12,6 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 
 import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "./concurrency";
-import { downloadStoredFile } from "./fileDownload";
 import { errorMessageFromBody, isTransientNetworkError, TRANSIENT_NETWORK_ERROR_MESSAGE, type SyncRequester } from "./syncHttp";
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
@@ -35,32 +34,20 @@ type TransferDeps = {
 };
 
 /**
- * The file pipeline: chunked resumable uploads, history downloads and
- * `file.requested` relay serving. Everything here is plain HTTP — uploads are
- * content-addressed chunk PUTs driven by the server's ledger bitmap,
- * downloads stream from the pool (parking on a relay pipe for content the
- * server does not hold yet), and serving streams local bytes into a
- * requester's pipe. None of it waits on the socket.
+ * 文件传输管线：分块续传上传 + `file.requested` 中继应答（下载侧的排队/
+ * 去重/拉流在 Rust 侧 Downloader，见文件尾的薄桥）。这里全部走普通 HTTP——
+ * 上传是按服务器台账位图驱动的 content-addressed 分块 PUT，应答是把本地
+ * 字节流灌进请求方的管道。均不等待 socket。
  */
 export class FileTransfer {
-  #downloadAborts = new Set<AbortController>();
   #servingFiles = new Set<string>();
   #failedServes = new Map<string, number>();
   #entryUploads = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly httpUrl: string,
-    private readonly token: string,
     private readonly http: SyncRequester,
     private readonly deps: TransferDeps,
   ) {}
-
-  // Downloads ride HTTP, so they outlive a socket blip — only an explicit
-  // stop ends them.
-  stop(): void {
-    for (const abort of this.#downloadAborts) abort.abort();
-    this.#downloadAborts.clear();
-  }
 
   async uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     const existingUpload = this.#entryUploads.get(entry.id);
@@ -256,68 +243,8 @@ export class FileTransfer {
     );
   }
 
-  async downloadFile(
-    entry: ClipboardEntry,
-    file: FileReference,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<void> {
-    return this.#downloadFileReference(entry.id, file, undefined, options.signal);
-  }
-
-  async downloadFileToSave(
-    entry: ClipboardEntry,
-    file: FileReference,
-    saveId: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<void> {
-    return this.#downloadFileReference(entry.id, file, saveId, options.signal);
-  }
-
-  async downloadVirtualFile(request: {
-    entryId: string;
-    fileId: string;
-    size: number;
-    sourceDeviceId: string;
-  }): Promise<void> {
-    return this.#downloadFileReference(request.entryId, {
-      fileId: request.fileId,
-      size: request.size,
-    });
-  }
-
-  async #downloadFileReference(
-    entryId: string,
-    file: FileReference,
-    saveId?: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    const abort = new AbortController();
-    // 外部取消（如 UI 取消下载）也走同一中止通道；stop() 仍全局中止。
-    if (signal) {
-      if (signal.aborted) abort.abort();
-      else signal.addEventListener("abort", () => abort.abort(), { once: true });
-    }
-    this.#downloadAborts.add(abort);
-    try {
-      // 下载走纯 HTTP + Rust 落盘（公共管线），不依赖 socket；stop() 时才中止。
-      await downloadStoredFile(
-        { httpUrl: this.httpUrl, token: this.token },
-        entryId,
-        file,
-        { saveId, signal: abort.signal },
-      );
-    } finally {
-      this.#downloadAborts.delete(abort);
-    }
-  }
-
-  // Downloads pull raw bytes over one HTTP GET: the server streams stored
-  // bytes straight off the pool, and content it does not hold parks the
-  // request on a live relay pipe that a device holding the bytes fills through
-  // `PUT /files/relay/:sessionId`. A pipe that breaks (or its session expires)
-  // simply falls back to the next retry — until the deadline. The pipeline
-  // itself lives in the shared `fileDownload.ts`, so any window can download
-  // with just credentials.
+  // Downloads moved to the shared Downloader (Rust transfer/download.rs); this
+  // class now owns uploads and relay serving only.
 
   // This device may hold the content a `file.requested` push is asking for.
   // Serving it is a loop of local reads streamed as chunked PUTs into the
@@ -411,4 +338,114 @@ function decodeMissing(missing: string, chunkCount: number): number[] {
     if (bytes[index >> 3]! & (1 << (index & 7))) indices.push(index);
   }
   return indices;
+}
+
+// ---------------------------------------------------------------------------
+// 下载薄桥（Downloader）：真正的下载管理在 Rust 侧 transfer/download.rs
+// ---------------------------------------------------------------------------
+/**
+ * 下载管理器（Downloader）的 TS 薄桥：任务表 / FIFO 队列 / 并发上限 / in-flight 去重 /
+ * 取消 / 字节进度全部在 Rust 侧全局 Downloader（main 与 paste 两个窗口共享
+ * 同一个实例，跨窗口同文件天然合并）。这里只做 invoke 与缓存事件快照——
+ * 订阅 onTasksChanged 后重拉 tasksSnapshot() 即可（同 SyncClient 模式）。
+ */
+
+/** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
+export class DownloadCancelledError extends Error {}
+
+export type DownloadTaskStatus = "queued" | "downloading" | "succeeded" | "failed" | "cancelled";
+
+/** Rust `cliproam://download-changed` 事件推送的任务快照，字段一一对应。 */
+export type DownloadTaskSnapshot = {
+  id: string;
+  /** 每次 downloadFiles() 自增；同 entry 重复批次按此归代，派生进度只看最新批。 */
+  batchId: number;
+  entryId: string;
+  fileId: string;
+  saveId?: string;
+  /** 面板显示名：entryLabel + 序号，缺省用 fileId 前 8 位。 */
+  label: string;
+  size: number;
+  status: DownloadTaskStatus;
+  receivedBytes: number;
+  error?: string;
+};
+
+export type DownloadRequest = {
+  fileId: string;
+  size: number;
+};
+
+type BatchOutcome = {
+  cancelled: boolean;
+  failedCount: number;
+  total: number;
+};
+
+export type DownloaderDeps = {
+  /** 任务列表变化（Rust 事件推来，含节流后的字节进度）后触发；调用方在此重拉快照。 */
+  onTasksChanged?: () => void;
+};
+
+export class Downloader {
+  #deps: DownloaderDeps;
+  #tasks: DownloadTaskSnapshot[] = [];
+
+  constructor(deps: DownloaderDeps) {
+    this.#deps = deps;
+  }
+
+  /**
+   * 一批文件（同一 entry）：任一失败聚合报错，任一取消抛 DownloadCancelledError。
+   * 并发与去重在 Rust 侧；webview 中途销毁只影响本次调用，任务照常跑完。
+   */
+  async downloadFiles(
+    entryId: string,
+    files: readonly DownloadRequest[],
+    options: { saveId?: string; entryLabel?: string } = {},
+  ): Promise<void> {
+    const outcome = await invoke<BatchOutcome>("download_files", {
+      entryId,
+      files,
+      saveId: options.saveId,
+      entryLabel: options.entryLabel,
+    });
+    if (outcome.cancelled) throw new DownloadCancelledError("已取消");
+    if (outcome.failedCount > 0) {
+      throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
+    }
+  }
+
+  cancel(taskId: string): void {
+    void invoke("cancel_download", { taskId }).catch(() => undefined);
+  }
+
+  /** 取消该 entry 所有非终态任务；返回取消数，0 = 没有下载在跑。 */
+  async cancelEntry(entryId: string): Promise<number> {
+    return invoke<number>("cancel_entry_downloads", { entryId });
+  }
+
+  /** 中止全部活动任务并清空队列（stopSyncClient / 面板「全部取消」共用）。 */
+  stopAll(reason?: string): void {
+    void invoke("stop_all_downloads", { reason }).catch(() => undefined);
+  }
+
+  /** 窗口打开时的初始拉取；之后靠 download-changed 事件跟进。 */
+  async refresh(): Promise<void> {
+    this.applySnapshot(await invoke<DownloadTaskSnapshot[]>("download_tasks"));
+  }
+
+  /** downloading → queued → 终态 排序的任务快照（Rust 已排好序，原样缓存）。 */
+  tasksSnapshot(): readonly DownloadTaskSnapshot[] {
+    return this.#tasks;
+  }
+
+  applySnapshot(payload: DownloadTaskSnapshot[]): void {
+    this.#tasks = payload;
+    this.#deps.onTasksChanged?.();
+  }
+
+  dispose(): void {
+    this.#tasks = [];
+  }
 }

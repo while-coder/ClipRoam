@@ -27,6 +27,14 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "gif
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 indexmap = { version = "2", features = ["serde"] }
+# 下载管理器直连拉流：stream 提供 bytes_stream。TLS 用 rustls，但 provider
+# 显式选 ring（tauri/updater 已在用，依赖树里现成）——reqwest 默认的
+# aws-lc-rs 在 rsproxy 镜像上缺新版本，拉不下来。
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+url = "2"
 
 [dev-dependencies]
 # Compiles the shared macOS/Linux clipboard wrapper during Windows tests too,

@@ -26,7 +26,7 @@ use store::{
     HistoryData,
 };
 use sync::SyncConfig;
-use transfer::download::{DownloadState, VirtualDownloads};
+use transfer::download::{DownloadState, Downloader, VirtualDownloads};
 use transfer::save::SaveSession;
 
 struct AppState {
@@ -46,6 +46,8 @@ struct AppState {
     downloads: Mutex<HashMap<String, DownloadState>>,
     save_sessions: Mutex<HashMap<String, SaveSession>>,
     virtual_downloads: VirtualDownloads,
+    /// 全局下载管理器：队列/并发/去重/拉流都在这里（main 与 paste 共享）。
+    downloader: Downloader,
     share_import: Mutex<()>,
 }
 
@@ -131,6 +133,7 @@ pub fn run() {
                 downloads: Mutex::new(HashMap::new()),
                 save_sessions: Mutex::new(HashMap::new()),
                 virtual_downloads: VirtualDownloads::default(),
+                downloader: Downloader::new(app.handle().clone()),
                 share_import: Mutex::new(()),
             });
             platforms::manage_platform_state(app.handle())?;
@@ -200,13 +203,13 @@ pub fn run() {
             transfer::download::prepare_paste_entry,
             transfer::save::prepare_save_entry,
             transfer::download::read_upload_chunk,
-            transfer::download::begin_file_download,
-            transfer::download::append_file_download,
-            transfer::download::finish_file_download,
-            transfer::download::cancel_file_download,
+            transfer::download::download_files,
+            transfer::download::cancel_download,
+            transfer::download::cancel_entry_downloads,
+            transfer::download::stop_all_downloads,
+            transfer::download::download_tasks,
             transfer::save::cancel_save_entry,
             transfer::save::finish_save_entry,
-            transfer::download::fail_virtual_file_request,
             clipboard::output::activate_remote_entry,
             clipboard::output::copy_entry,
             clipboard::output::paste_entry
