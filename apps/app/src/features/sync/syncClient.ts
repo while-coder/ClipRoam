@@ -45,6 +45,9 @@ type SyncHandlers = {
   onUploadFinished: (entryId: string) => void;
   onError: (message: string) => void;
   onAuthenticationFailed: (message: string) => void;
+  /** 中继应答（file.requested）任务台账变化；「上传」页数据源。 */
+  onServeTasksChanged?: () => void;
+  resolveEntryLabel?: (entryId: string) => Promise<string | undefined>;
 };
 
 /**
@@ -97,6 +100,8 @@ export class SyncClient {
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
+      onServeTasksChanged: handlers.onServeTasksChanged,
+      resolveEntryLabel: handlers.resolveEntryLabel,
     });
   }
 
@@ -112,6 +117,11 @@ export class SyncClient {
     this.#stopHeartbeat();
     this.#socket?.close();
     // 下载已移交 Downloader，由调用方（App.vue stopSyncClient）统一 stopAll。
+  }
+
+  /** 中继应答任务快照（内存台账，随客户端重建清空）；「上传」页读取。 */
+  serveTasksSnapshot() {
+    return this.#files.serveTasksSnapshot();
   }
 
   // The resident drain loop: the durable capture queue is the single replay
