@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature,
@@ -471,6 +472,34 @@ pub(crate) fn capture_current_clipboard_text(app: AppHandle) -> Result<bool, Str
         return Ok(false);
     };
     capture_text(&app, rich_text)?;
+    Ok(true)
+}
+
+/// 历史列表手动上传入口：唤起系统文件/文件夹选择器，把选中的路径交给
+/// capture_files，与剪贴板复制走同一条 pending 流程（建树、去重、入队）。
+/// 对话框用回调 + channel 等待结果 —— plugin-dialog 的 blocking API 只有
+/// 桌面版提供，回调式全平台通用。
+#[tauri::command(async)]
+pub(crate) fn capture_files_from_picker(app: AppHandle, mode: String) -> Result<bool, String> {
+    let (sender, receiver) = std::sync::mpsc::channel::<Option<Vec<FilePath>>>();
+    let dialog = app.dialog().file();
+    match mode.as_str() {
+        "file" => dialog.pick_files(move |paths| drop(sender.send(paths))),
+        "folder" => dialog.pick_folders(move |paths| drop(sender.send(paths))),
+        other => return Err(format!("未知的选择模式：{other}")),
+    }
+    let picked = receiver.recv().map_err(|error| error.to_string())?;
+    let paths: Vec<PathBuf> = picked
+        .unwrap_or_default()
+        .into_iter()
+        // content:// 这类 URI 转不成真实路径（Android SAF 可能返回），而
+        // collect_tree/哈希/分块读取都要求文件系统路径，只能丢弃。
+        .filter_map(|path| path.into_path().ok())
+        .collect();
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    capture_files(&app, paths)?;
     Ok(true)
 }
 

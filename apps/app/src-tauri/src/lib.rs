@@ -96,7 +96,8 @@ pub fn run() {
     // 日志插件随后注册，尽量覆盖后续插件与 setup 阶段的日志
     let builder = builder
         .plugin(logging::logging_plugin())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init());
     let builder = platforms::register_plugins(builder);
     let builder = tauri_updater_kit::attach_updater(builder);
 
@@ -172,6 +173,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_shell::get_platform_capabilities,
             clipboard::capture::capture_current_clipboard_text,
+            clipboard::capture::capture_files_from_picker,
             clipboard::capture::consume_mobile_shares,
             entry::query::list_entries_manifest,
             entry::query::find_unknown_entry_ids,

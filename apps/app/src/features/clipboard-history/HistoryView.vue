@@ -3,19 +3,20 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
-  Download,
   File,
+  FilePlus,
   FileText,
   FolderOpen,
+  FolderPlus,
   Image,
   LoaderCircle,
   Monitor,
   Search,
   Settings2,
-  Trash2,
   X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
+import EntryContextMenu from "./EntryContextMenu.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
@@ -31,10 +32,8 @@ import {
   validateDateRange,
 } from "../../utils/format";
 import {
-  canSaveEntry,
   deviceName as deviceDisplayName,
   fileEntrySummary,
-  saveEntryLabel,
   uploadStatus as uploadStatusOf,
 } from "../../utils/entry";
 import type {
@@ -85,6 +84,10 @@ const startDate = ref("");
 const endDate = ref("");
 const selectedEntryId = ref("");
 const capturingClipboard = ref(false);
+const uploadingFiles = ref(false);
+const menuEntry = ref<LocalClipboardEntry>();
+const menuX = ref(0);
+const menuY = ref(0);
 const previewImage = ref<LocalClipboardEntry>();
 const previewLoading = ref(false);
 const previewDialog = ref<HTMLElement>();
@@ -127,7 +130,7 @@ watch(query, () => {
   window.clearTimeout(queryDebounceTimer);
   queryDebounceTimer = window.setTimeout(() => { debouncedQuery.value = query.value; }, 200);
 });
-onBeforeUnmount(() => { window.clearTimeout(queryDebounceTimer); });
+onBeforeUnmount(() => { window.clearTimeout(queryDebounceTimer); cancelLongPress(); });
 
 const deviceNames = computed(() =>
   Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
@@ -186,9 +189,6 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
 }
 
-function entrySaveLabel(entry: LocalClipboardEntry): string {
-  return saveEntryLabel(entry, props.savingEntryId, isMobile.value);
-}
 
 function imageSource(entry: LocalClipboardEntry): string | undefined {
   const path = entry.summary.previewPath;
@@ -235,6 +235,20 @@ async function captureCurrentClipboard(): Promise<void> {
   }
 }
 
+async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
+  if (!runningInTauri || uploadingFiles.value) return;
+  uploadingFiles.value = true;
+  try {
+    const captured = await invoke<boolean>("capture_files_from_picker", { mode });
+    emit("refresh");
+    showToast(captured ? "已加入上传队列" : "未选择文件", captured ? "success" : "info");
+  } catch (error) {
+    showToast(`选择文件失败：${errorMessage(error)}`, "error");
+  } finally {
+    uploadingFiles.value = false;
+  }
+}
+
 async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
   if (isPasteWindow || previewLoading.value) return;
   previewLoading.value = true;
@@ -259,8 +273,85 @@ function closeImagePreview(): void {
 function selectOrActivate(entry: LocalClipboardEntry): void {
   // [paste-debug] 诊断埋点，定位后移除
   console.info(`[paste-debug] item click id=${entry.id} isPasteWindow=${isPasteWindow} webviewFocused=${document.hasFocus()}`);
+  // 长按弹菜单后的那次 click 是抬手带出来的，不算选择，避免移动端误触发激活。
+  if (longPressFired) {
+    longPressFired = false;
+    return;
+  }
   selectedEntryId.value = entry.id;
   if (isPasteWindow || isMobile.value) emit("activate", entry, true);
+}
+
+// —— 条目右键/长按菜单 ——
+// 桌面右键原生触发 contextmenu；Android WebView 长按也会合成该事件，触摸
+// timer 只是 iOS 等不合成场景的兜底。两者都落在本函数，靠时间戳守卫防双开。
+let lastMenuOpenedAt = 0;
+let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+let longPressFired = false;
+let longPressX = 0;
+let longPressY = 0;
+
+function openEntryMenu(entry: LocalClipboardEntry, x: number, y: number): void {
+  if (isPasteWindow) return;
+  const now = Date.now();
+  if (now - lastMenuOpenedAt < 600 && menuEntry.value?.id === entry.id) return;
+  lastMenuOpenedAt = now;
+  selectedEntryId.value = entry.id;
+  menuX.value = x;
+  menuY.value = y;
+  menuEntry.value = entry;
+}
+
+function cancelLongPress(): void {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+  }
+}
+
+function handleEntryTouchStart(entry: LocalClipboardEntry, event: TouchEvent): void {
+  if (isPasteWindow || event.touches.length !== 1) {
+    cancelLongPress();
+    return;
+  }
+  const touch = event.touches[0]!;
+  longPressX = touch.clientX;
+  longPressY = touch.clientY;
+  longPressFired = false;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = undefined;
+    longPressFired = true;
+    openEntryMenu(entry, longPressX, longPressY);
+  }, 500);
+}
+
+function handleEntryTouchMove(event: TouchEvent): void {
+  if (!longPressTimer) return;
+  const touch = event.touches[0];
+  if (!touch) return;
+  const dx = touch.clientX - longPressX;
+  const dy = touch.clientY - longPressY;
+  if (dx * dx + dy * dy > 100) cancelLongPress();
+}
+
+function handleEntryTouchEnd(): void {
+  cancelLongPress();
+}
+
+function closeEntryMenu(): void {
+  menuEntry.value = undefined;
+}
+
+function onMenuActivate(entry: LocalClipboardEntry): void {
+  emit("activate", entry, false);
+}
+
+function onMenuSave(entry: LocalClipboardEntry): void {
+  emit("save", entry);
+}
+
+function onMenuRemove(entry: LocalClipboardEntry): void {
+  emit("remove", entry);
 }
 
 /// 粘贴窗口用 mousedown 触发粘贴：窗口刚成为 key 窗口且焦点在搜索框时，
@@ -358,6 +449,13 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       </div>
       <div class="titlebar-actions">
         <span v-if="isMobile" class="mobile-connection" :class="connectionStatus.tone">{{ connectionStatus.label }}</span>
+        <button class="icon-button" type="button" title="上传文件" aria-label="上传文件" :disabled="uploadingFiles" @click="captureFilesFromPicker('file')">
+          <LoaderCircle v-if="uploadingFiles" :size="18" class="spin" aria-hidden="true" />
+          <FilePlus v-else :size="18" aria-hidden="true" />
+        </button>
+        <button class="icon-button" type="button" title="上传文件夹" aria-label="上传文件夹" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
+          <FolderPlus :size="18" aria-hidden="true" />
+        </button>
         <button v-if="isMobile" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="emit('open-settings')">
           <Settings2 :size="19" />
         </button>
@@ -403,7 +501,7 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       </div>
     </section>
 
-    <section ref="historyListElement" class="history-list" aria-label="剪贴板历史">
+    <section ref="historyListElement" class="history-list" aria-label="剪贴板历史" @scroll="closeEntryMenu">
       <div
         v-for="entry in pageEntries"
         :key="entry.id"
@@ -414,11 +512,15 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         :aria-disabled="activatingEntryIds.has(entry.id)"
         :title="downloadCancelHint(entry)"
         @mouseenter="selectedEntryId = entry.id"
-        @dblclick="!isPasteWindow && !isMobile && activateSelectedEntry(entry)"
         @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
         @click="selectOrActivate(entry)"
         @keydown.enter.stop="activateSelectedEntry(entry)"
         @keydown.space.prevent.stop="activateSelectedEntry(entry)"
+        @contextmenu.prevent="openEntryMenu(entry, $event.clientX, $event.clientY)"
+        @touchstart="handleEntryTouchStart(entry, $event)"
+        @touchmove="handleEntryTouchMove"
+        @touchend="handleEntryTouchEnd"
+        @touchcancel="handleEntryTouchEnd"
       >
         <button
           v-if="entry.kind === 'image' && !isPasteWindow"
@@ -427,7 +529,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
           @click.stop="openImagePreview(entry)"
-          @dblclick.stop
         >
           <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
           <Image v-else :size="18" aria-hidden="true" />
@@ -459,27 +560,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
             </template>
           </span>
         </span>
-        <span v-if="!isPasteWindow" class="entry-actions">
-          <span
-            v-if="canSaveEntry(entry)"
-            class="item-action"
-            role="button"
-            tabindex="0"
-            :title="entrySaveLabel(entry)"
-            :aria-label="entrySaveLabel(entry)"
-            @click.stop="emit('save', entry)"
-            @keydown.enter.stop="emit('save', entry)"
-          ><LoaderCircle v-if="savingEntryId === entry.id" :size="15" class="spin" /><Download v-else :size="15" /></span>
-          <span
-            class="item-action danger"
-            role="button"
-            tabindex="0"
-            title="删除"
-            aria-label="删除"
-            @click.stop="emit('remove', entry)"
-            @keydown.enter.stop="emit('remove', entry)"
-          ><Trash2 :size="15" /></span>
-        </span>
       </div>
 
       <div v-if="!manifestTotal" class="empty-state">
@@ -491,9 +571,9 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
     </section>
 
     <footer class="footer-hint">
-      <span v-if="isMobile">点按文本复制，点按文件下载到缓存</span>
+      <span v-if="isMobile">点按文本复制，点按文件下载到缓存，长按打开菜单</span>
       <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
-      <span v-else>单击选择，双击复制</span>
+      <span v-else>单击选择，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
       <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
@@ -504,6 +584,20 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         @update:page="changePage"
       />
     </footer>
+
+    <EntryContextMenu
+      v-if="menuEntry"
+      :entry="menuEntry"
+      :x="menuX"
+      :y="menuY"
+      :activating="activatingEntryIds.has(menuEntry.id)"
+      :saving-entry-id="savingEntryId"
+      :is-mobile="isMobile"
+      @activate="onMenuActivate"
+      @save="onMenuSave"
+      @remove="onMenuRemove"
+      @close="closeEntryMenu"
+    />
 
     <div v-if="previewImage" class="image-preview-backdrop" @mousedown.self="closeImagePreview">
       <section ref="previewDialog" class="image-preview-dialog" role="dialog" aria-modal="true" :aria-label="previewImage.content" tabindex="-1">
