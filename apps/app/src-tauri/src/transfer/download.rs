@@ -393,7 +393,7 @@ const MAX_CONCURRENT_DOWNLOADS: usize = 4;
 /// 字节进度事件的节流间隔；状态转换不受限，立即推送。
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
 /// 终态任务在列表里保留多久供面板展示结果。
-const TERMINAL_RETENTION: Duration = Duration::from_secs(8);
+const TERMINAL_RETENTION: Duration = Duration::from_secs(60);
 /// 断流后的固定退避；期间可被取消打断。
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 /// 单文件下载总预算：超时即认为没有设备能提供该内容。

@@ -25,7 +25,7 @@ export type SettingsBridge = {
   getActivePreferences(): AccountPreferences;
   getUsername(): string;
   setUsername(name: string): void;
-  /** 传 null 即清除会话配置（退出账号）：未登录没有活动档案。 */
+  /** 保存会话配置；退出账号传空 token：Rust 侧视为未登录（没有活动档案）。 */
   persistSyncConfig(config: SyncConfig | null): Promise<void>;
   /** 保存偏好到当前活动档案；偏好跟账号走，与全局会话配置分开持久化。 */
   persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
@@ -307,9 +307,11 @@ async function signOut(): Promise<void> {
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
   savingSettings.value = true;
   settingsError.value = "";
+  // 只清 sessionToken：服务器地址与用户名保留在配置里，登录页据此回填。
+  // Rust 侧把空 token 视为未登录——没有活动档案，捕获与查询一并停用。
+  const signedOutConfig: SyncConfig = { ...activeConfig, sessionToken: "" };
   try {
-    // 清空会话配置：未登录没有活动档案，Rust 侧捕获与查询一并停用。
-    await requireBridge().persistSyncConfig(null);
+    await requireBridge().persistSyncConfig(signedOutConfig);
     requireBridge().setActiveConfig(undefined);
     requireBridge().setUsername("");
     requireBridge().disconnect();
@@ -317,7 +319,7 @@ async function signOut(): Promise<void> {
     // 返回主界面的入口。
     requireBridge().markSignedOut();
     settingsVisible.value = false;
-    requireBridge().openSetup({ focus: "server" });
+    requireBridge().openSetup({ config: signedOutConfig, focus: "server" });
   } catch (error) {
     settingsError.value = `无法退出账号：${errorMessage(error)}`;
   } finally {
