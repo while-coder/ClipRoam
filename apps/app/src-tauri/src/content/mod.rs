@@ -218,7 +218,7 @@ pub fn clipboard_relative_path(relative_path: &str) -> Result<PathBuf, String> {
 
 /// Root names double as path components when the tree is rebuilt, so the
 /// characters a filesystem would reject are replaced up front.
-fn sanitize_root_name(name: &str) -> String {
+pub(crate) fn sanitize_root_name(name: &str) -> String {
     let cleaned = name
         .chars()
         .map(|character| {
