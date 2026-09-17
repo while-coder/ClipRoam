@@ -4,11 +4,7 @@ import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, monitorFromPoint, PhysicalPosition, type Monitor } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
-import type {
-  ClipboardEntry,
-  ClipboardManifestEntry,
-} from "@cliproam/protocol";
-import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
+import type { ClipboardEntry } from "@cliproam/protocol";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./features/sync/syncDefaults";
 import {
   Clipboard,
@@ -164,6 +160,10 @@ initSettings({
   setUsername: (name) => { currentUsername.value = name; },
   persistSyncConfig,
   persistAccountPreferences,
+  // 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。
+  applyAutoUploadLimit: (limitMb: number) => {
+    syncClient?.setAutoUploadLimit(limitMb * 1024 * 1024);
+  },
   startSync,
   disconnect: () => {
     stopSyncClient();
@@ -189,6 +189,9 @@ function setConnectionState(value: boolean): void {
   if (connected.value === value) return;
   connected.value = value;
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
+  // 重连成功后重查一次"未存储"的文件可用性，兜住离线期间错过的
+  // `file.available` 推送（原对账时机已随登录对账移除）。
+  if (value) void syncFileStatuses(true);
 }
 
 /** Tears the sync client down. */
@@ -569,8 +572,6 @@ async function activateEntry(
     return;
   }
   activatingEntryIds.value.add(entry.id);
-  // [paste-debug] 诊断埋点，定位后移除
-  console.info(`[paste-debug] activateEntry ${command} id=${entry.id}`);
   try {
     // Rust selects the native strategy. This downloads only what the current
     // platform must materialize before it can copy or paste the entry.
@@ -579,8 +580,6 @@ async function activateEntry(
     const write = clipboardWriteChain.then(() => invoke(command, { entryId: entry.id }));
     clipboardWriteChain = write.catch(() => undefined);
     await write;
-    // [paste-debug] 诊断埋点，定位后移除
-    console.info(`[paste-debug] activateEntry done ${command} id=${entry.id}`);
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
     // 看不见，保留确认提示。
     if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
@@ -647,8 +646,6 @@ async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
  * window and on mobile, keyboard/double-click everywhere.
  */
 function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
-  // [paste-debug] 诊断埋点，定位后移除
-  console.info(`[paste-debug] activateFromView id=${entry.id} viaClick=${viaClick} isPasteWindow=${isPasteWindow}`);
   if (viaClick) {
     if (isPasteWindow) void pasteEntry(entry);
     else if (isMobile.value) void copyEntry(entry);
@@ -811,9 +808,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
         ? activePreferences.excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
       serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
-      manifestPageSize: sameArchive
-        ? activePreferences.manifestPageSize
-        : ENTRY_PAGE_DEFAULT_LIMIT,
       // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
       maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
@@ -913,51 +907,6 @@ async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEn
   return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
 }
 
-async function reconcileManifest(manifest: ClipboardManifestEntry[]): Promise<void> {
-  const client = syncClient;
-  if (!client) return;
-
-  try {
-    // The manifest covers only the newest page of server rows, so marks merge
-    // instead of rebuilding: entries older than that page keep the "synced"
-    // state they were given when last seen in a manifest. Remote deletions
-    // still clear marks through the `clipboard.deleted` push.
-    const knownSynced = new Set(syncedEntryIds.value);
-    for (const entry of manifest) {
-      knownSynced.add(entry.id);
-    }
-    syncedEntryIds.value = knownSynced;
-    // The diff runs Rust-side: the manifest carries at most one page of ids,
-    // so membership is tested in SQL rather than hauling every local id across
-    // the IPC boundary. The preview diffs its in-memory list instead.
-    const localPreviewIds = new Set(previewEntries.value.map((entry) => entry.id));
-    const remoteOnlyEntryIds = runningInTauri
-      ? await invoke<string[]>("find_unknown_entry_ids", {
-          entryIds: manifest.map((entry) => entry.id),
-        })
-      : manifest
-          .filter((entry) => !localPreviewIds.has(entry.id))
-          .map((entry) => entry.id);
-    const remoteEntries = await client.fetchEntries(remoteOnlyEntryIds);
-
-    // One batch write for the whole gap instead of a full history rewrite and
-    // list refresh per entry.
-    if (remoteEntries.length && syncClient === client) {
-      await applyRemoteUpserts(remoteEntries);
-    }
-
-    refreshHistory();
-    // A reconcile is also the moment the persisted availability view catches
-    // up against the pool — including re-asking unstored ids, since a
-    // `file.available` push may have been missed while offline.
-    if (syncClient === client) await syncFileStatuses(true);
-  } catch (error) {
-    if (syncClient === client) {
-      showToast(`同步历史失败：${errorMessage(error)}`, "error");
-    }
-  }
-}
-
 async function startSync(config: SyncConfig): Promise<void> {
   // The quick-paste window only reads local history; broadcasts from the main
   // window keep it fresh, and a second socket would double every sync task.
@@ -974,10 +923,7 @@ async function startSync(config: SyncConfig): Promise<void> {
     device,
     {
       onConnected: setConnectionState,
-      onManifest: (manifest, devices) => {
-        rememberDevices(devices);
-        void reconcileManifest(manifest);
-      },
+      onDevices: (devices) => { rememberDevices(devices); },
       onDevicePresence: (device) => { rememberDevices([device]); },
       onEntry: (entry) => {
         void queueRemoteUpsert(entry);
@@ -1032,12 +978,12 @@ async function startSync(config: SyncConfig): Promise<void> {
       },
     },
     activePreferences.autoUploadLimitMb * 1024 * 1024,
-    activePreferences.manifestPageSize,
   );
   syncClient = client;
   client.connect();
-  // 登录即拉取设备表与对账快照：纯 HTTP，不依赖 socket；auth.ack 只确认连接。
-  void client.fetchConnectionState();
+  // 登录即拉取设备表：纯 HTTP，不依赖 socket；auth.ack 只确认连接。
+  // 不做历史对账：本地历史靠实时推送增量维护，登录不回拉服务器存量。
+  void client.pullDevices();
 }
 
 function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T> {

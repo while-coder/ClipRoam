@@ -23,7 +23,6 @@ import { useUpdater } from "./useUpdater";
 import {
   autoReceiveClipboard,
   autoUploadLimitMb,
-  manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
   deviceAliasInput,
@@ -55,10 +54,18 @@ defineProps<{
 
 const { platformCapabilities, isMobile } = usePlatform();
 
-/** 自动上传档位：0 = 关闭，其余不超过服务器单文件存储上限。 */
-const autoUploadLimitOptions = computed(() =>
-  [0, 50, 100, 150, 200].filter((limit) => limit === 0 || limit <= serverMaxFileMb.value),
-);
+/**
+ * 自动上传档位：0 = 关闭。刻度按服务器单文件存储上限动态生成——
+ * 上限很小的服务器也至少能选到「小于上限本身」，而不是只剩关闭。
+ * 当前已存档位始终并入选项，避免 select 值不在列表里时显示错位。
+ */
+const autoUploadLimitOptions = computed(() => {
+  const max = serverMaxFileMb.value;
+  const standard = [10, 25, 50, 75, 100, 150, 200, 300, 500, 1000]
+    .filter((limit) => limit <= max);
+  const values = new Set<number>([0, ...standard, max, autoUploadLimitMb.value]);
+  return [...values].filter((limit) => limit === 0 || limit <= max).sort((a, b) => a - b);
+});
 
 const {
   appVersion,
@@ -115,7 +122,7 @@ const {
                   spellcheck="false"
                   :disabled="savingSettings"
                 />
-                <span class="field-hint">留空使用系统机器名；保存后下次连接同步服务时上报新名称。</span>
+                <span class="field-hint">留空使用系统机器名；保存后立即上报新名称。</span>
               </section>
               <section class="settings-section" aria-labelledby="roaming-settings-heading">
                 <div class="settings-section-heading">
@@ -151,20 +158,6 @@ const {
                   </option>
                 </select>
                 <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
-              </section>
-              <section class="settings-section" aria-labelledby="page-size-settings-heading">
-                <div class="settings-section-heading">
-                  <span class="settings-icon" aria-hidden="true"><Clipboard :size="18" /></span>
-                  <div>
-                    <h4 id="page-size-settings-heading">同步历史</h4>
-                    <p>连接后一次拉取的同步历史条数。</p>
-                  </div>
-                </div>
-                <label for="manifest-page-size">每页数量</label>
-                <select id="manifest-page-size" v-model.number="manifestPageSize" :disabled="savingSettings">
-                  <option v-for="size in [10, 20, 50, 100]" :key="size" :value="size">{{ size }} 条</option>
-                </select>
-                <span class="field-hint">修改后下次连接同步服务时生效。</span>
               </section>
               <section class="settings-section" aria-labelledby="exclude-settings-heading">
                 <div class="settings-section-heading">

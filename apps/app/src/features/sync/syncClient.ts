@@ -1,21 +1,16 @@
 import {
-  ENTRY_PAGE_DEFAULT_LIMIT,
   ENTRY_QUERY_BATCH,
   EntryActivateResponseSchema,
-  EntryManifestResponseSchema,
   DeviceListResponseSchema,
   EntryPublishResponseSchema,
   type EntryPublishInput,
-  EntryQueryResponseSchema,
   FileQueryResponseSchema,
   ServerMessageSchema,
   type ClientMessage,
   type ClipboardEntry,
-  type ClipboardManifestEntry,
   type Device,
   type EntryActivateRequest,
   type EntryPublishRequest,
-  type EntryQueryRequest,
   type FileQueryRequest,
   type FileStatus,
 } from "@cliproam/protocol";
@@ -35,7 +30,8 @@ const DRAIN_POLL_INTERVAL_MS = 2_000;
 
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
-  onManifest: (entries: ClipboardManifestEntry[], devices: Device[]) => void;
+  /** 登录后拉取的一次性设备表；此后设备增减走 device.presence 推送。 */
+  onDevices: (devices: Device[]) => void;
   onDevicePresence: (device: Device) => void;
   onEntry: (entry: ClipboardEntry) => void;
   onActivation: (entry: ClipboardEntry) => void;
@@ -66,8 +62,10 @@ type PendingQueueRow = {
 /**
  * The sync orchestrator. All operations ride HTTP (see `syncHttp.ts`, the
  * file pipeline in `fileTransfer.ts`); the socket is a push-only channel:
- * nothing waits on it, and reconnects do not re-pull — pushes missed during
- * a disconnect window wait for the next login.
+ * nothing waits on it. History is maintained purely by live pushes — login
+ * does not back-pull the server's stored entries, and pushes missed during a
+ * disconnect window are not re-fetched (file availability self-heals via the
+ * reconnect-time `/files/query` recheck).
  */
 export class SyncClient {
   #socket?: WebSocket;
@@ -89,9 +87,7 @@ export class SyncClient {
     private readonly token: string,
     private readonly device: Device,
     private readonly handlers: SyncHandlers,
-    private readonly autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
-    // 登录后拉取对账快照的每页数量；设置页修改随下次 startSync 生效。
-    private readonly manifestPageSize = ENTRY_PAGE_DEFAULT_LIMIT,
+    private autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
   ) {
     this.#http = createSyncRequester(httpUrl, token);
     this.#files = new FileTransfer(this.#http, {
@@ -122,6 +118,11 @@ export class SyncClient {
   /** 中继应答任务快照（内存台账，随客户端重建清空）；「上传」页读取。 */
   serveTasksSnapshot() {
     return this.#files.serveTasksSnapshot();
+  }
+
+  /** 设置保存即生效：运行期更新自动上传档位，无需重建客户端。 */
+  setAutoUploadLimit(limitBytes: number): void {
+    this.autoUploadLimit = limitBytes;
   }
 
   // The resident drain loop: the durable capture queue is the single replay
@@ -199,10 +200,6 @@ export class SyncClient {
     return results;
   }
 
-  async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
-    return this.#queryBatched(entryIds, (batch) => this.#fetchEntryBatch(batch));
-  }
-
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {
     return {
       headers: { "Content-Type": "application/json" },
@@ -246,36 +243,21 @@ export class SyncClient {
     return stored!.entry;
   }
 
-  // The login-time reconciliation snapshot, pulled over HTTP with no socket
-  // involved: the full unfiltered manifest (ids only, never cached) plus the
-  // account's devices. Reconnects do not re-pull — pushes missed during a
-  // disconnect window wait for the next login. The protocol's paging contract
-  // is "keep walking while the fetched count is below total" — stopping after
-  // one page would strand everything past it on a fresh install or rebuilt
-  // profile. Details of missing entries follow through fetchEntries().
-  async fetchConnectionState(): Promise<void> {
+  // The login-time device table, pulled over HTTP with no socket involved.
+  // History is NOT reconciled at login: live pushes maintain local history,
+  // and a fresh device simply starts from the moment it joins (its own new
+  // captures included). File availability self-heals at reconnect through the
+  // `/files/query` recheck in App.vue.
+  async pullDevices(): Promise<void> {
     try {
-      const manifest: ClipboardManifestEntry[] = [];
-      for (let page = 1; ; page += 1) {
-        const state = await this.#http.request(
-          "GET",
-          `/entries/manifest?page=${page}&pageSize=${this.manifestPageSize}`,
-          { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
-          EntryManifestResponseSchema,
-          "服务器返回了不兼容的连接状态响应",
-        );
-        manifest.push(...state!.manifest);
-        // The empty-page check ends the walk if `total` drifts upward mid-paging.
-        if (manifest.length >= state!.total || state!.manifest.length === 0) break;
-      }
-      this.handlers.onManifest(manifest, await this.#fetchDevices());
+      this.handlers.onDevices(await this.#fetchDevices());
     } catch (error) {
       // An expired session must reach the re-login flow, not a toast. A
       // transient network failure stays silent too: the connection-state
       // toast covers it, and the queue's retry pulse rides through.
       const message = errorMessage(error);
       if (message === "登录已失效，请重新登录") this.handlers.onAuthenticationFailed(message);
-      else if (!isTransientNetworkError(error)) this.handlers.onError(`获取同步历史失败：${message}`);
+      else if (!isTransientNetworkError(error)) this.handlers.onError(`获取设备列表失败：${message}`);
     }
   }
 
@@ -288,18 +270,6 @@ export class SyncClient {
       "服务器返回了不兼容的设备列表响应",
     );
     return devices!.devices;
-  }
-
-  async #fetchEntryBatch(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
-    const request: EntryQueryRequest = { entryIds: [...entryIds] };
-    const queried = await this.#http.request(
-      "POST",
-      "/entries/query",
-      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      EntryQueryResponseSchema,
-      "服务器返回了不兼容的查询响应",
-    );
-    return queried!.entries;
   }
 
   // Pool availability for a batch of content ids. This replaces the per-entry
