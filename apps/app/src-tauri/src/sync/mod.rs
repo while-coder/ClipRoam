@@ -97,6 +97,12 @@ fn default_max_capture_file_count() -> u64 {
     1000
 }
 
+/// 已登录的配置：登出只是清空 token，配置（服务器地址、用户名）保留供
+/// 登录页回填；无 token 即未登录，等价于没有配置。
+pub(crate) fn signed_in_config(config: &SyncConfig) -> Option<&SyncConfig> {
+    (!config.session_token.trim().is_empty()).then_some(config)
+}
+
 /// 配置对应的历史档案键：`account:{服务器}:{用户名}`。
 pub(crate) fn history_key_for_config(config: &SyncConfig) -> String {
     format!(
@@ -217,8 +223,9 @@ pub(crate) fn save_account_preferences(
 }
 
 /// 保存配置；键变化时切换到新档案的历史库。设备身份是机器级的
-/// （`device.json`），不随档案切换。传 None（退出账号）即清空配置并停用
-/// 档案：未登录时没有活动历史库，捕获与查询都不可用。
+/// （`device.json`），不随档案切换。session_token 为空（退出账号）或传 None
+/// 都视为未登录：停用档案——没有活动历史库，捕获与查询都不可用；但配置
+/// 本身保留，登录页靠它回填上次的服务器地址与用户名。
 /// 顺序很讲究：先持久化旧档案元数据，再原子写配置文件，最后才切换内存
 /// 档案。配置写失败时直接返回，内存档案原封不动——不会出现「内存已切到
 /// 账号档案、磁盘配置还是旧档案」的分裂状态。
@@ -227,7 +234,10 @@ pub(crate) fn save_sync_config(
     state: State<'_, AppState>,
     config: Option<SyncConfig>,
 ) -> Result<(), String> {
-    let history_key = config.as_ref().map(history_key_for_config);
+    let history_key = config
+        .as_ref()
+        .and_then(signed_in_config)
+        .map(history_key_for_config);
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     if history.active_history != history_key {
         // Persist the outgoing profile's metadata before leaving it.

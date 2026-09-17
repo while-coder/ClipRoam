@@ -245,6 +245,11 @@ async function fetchManifest(
   if (!runningInTauri) {
     return clientManifest(filter, deviceNames);
   }
+  // 未登录没有活动档案；隐藏的 paste 窗口启动时也会来查，这里返回空页，
+  // 不让「同步账号未登录」的错误以 toast 形式盖到主窗口的登录页上。
+  if (!activeSyncConfig?.sessionToken) {
+    return { total: 0, entries: [] };
+  }
   return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
 }
 
