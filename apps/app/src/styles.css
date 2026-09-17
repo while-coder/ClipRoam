@@ -352,6 +352,8 @@ kbd {
 .download-status.succeeded { color: var(--color-accent); }
 .download-bar { height: 3px; overflow: hidden; background: rgba(148, 163, 184, 0.18); border-radius: 999px; }
 .download-bar-fill { display: block; height: 100%; background: var(--color-accent); border-radius: 999px; transition: width 0.2s ease; }
+/* 历史行内的下载进度条：跟随 entry-body 栅格，宽度撑满文本区。 */
+.entry-download-bar { width: 100%; }
 .download-cancel {
   display: inline-flex;
   flex: 0 0 auto;

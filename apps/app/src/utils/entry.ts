@@ -39,7 +39,17 @@ export function uploadStatus(
   // locally before it can be addressed on the server.
   if (isHashing(entry)) return `计算中 ${summary.hashedCount}/${summary.fileCount}`;
   const download = downloadProgress[entry.id];
-  if (download) return `下载中 ${download.finished}/${download.total}`;
+  if (download) {
+    const percent = download.totalBytes
+      ? Math.min(99, Math.floor((download.receivedBytes / download.totalBytes) * 100))
+      : 0;
+    // 多文件批次保留「已完成/总数」；单文件它没有信息量，直接给字节进度。
+    const count = download.total > 1 ? `${download.finished}/${download.total} · ` : "";
+    const bytes = download.totalBytes
+      ? ` · ${formatFileSize(download.receivedBytes)}/${formatFileSize(download.totalBytes)}`
+      : "";
+    return `下载中 ${count}${percent}%${bytes}`;
+  }
   const progress = uploadProgress[entry.id];
   if (progress) {
     const percent = progress.totalBytes

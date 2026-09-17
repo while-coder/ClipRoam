@@ -189,6 +189,16 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
 }
 
+/** 下载中的条目在行内显示进度条；排队中 receivedBytes 为 0，从 0% 起步。 */
+function entryDownloadProgress(entry: LocalClipboardEntry): DownloadProgress | undefined {
+  return props.downloadProgressByEntryId[entry.id];
+}
+
+function downloadPercentOf(progress: DownloadProgress): number {
+  if (!progress.totalBytes) return 0;
+  return Math.min(100, Math.floor((progress.receivedBytes / progress.totalBytes) * 100));
+}
+
 
 function imageSource(entry: LocalClipboardEntry): string | undefined {
   const path = entry.summary.previewPath;
@@ -558,6 +568,9 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
               <span>·</span>
               <span class="upload-status" :class="{ uploaded: entryUploadStatus(entry) === '已上传', uploading: entryUploadStatus(entry)?.startsWith('上传中') }">{{ entryUploadStatus(entry) }}</span>
             </template>
+          </span>
+          <span v-if="entryDownloadProgress(entry)" class="download-bar entry-download-bar" aria-hidden="true">
+            <span class="download-bar-fill" :style="{ width: `${downloadPercentOf(entryDownloadProgress(entry)!)}%` }"></span>
           </span>
         </span>
       </div>

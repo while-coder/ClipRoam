@@ -18,6 +18,7 @@ import {
   Download,
   LoaderCircle,
   Settings2,
+  Upload,
 } from "lucide-vue-next";
 import { SyncClient } from "./features/sync/syncClient";
 import { authenticateAccount, getServerUrls } from "./features/sync/syncSetup";
@@ -31,6 +32,7 @@ import {
   DownloadCancelledError,
   Downloader,
   type DownloadTaskSnapshot,
+  type ServeTaskSnapshot,
 } from "./features/sync/fileTransfer";
 import {
   disposeQuickPasteShortcut,
@@ -43,6 +45,7 @@ import { closeSettings, openSettings, settingsVisible } from "./features/setting
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
+import UploadsView from "./features/uploads/UploadsView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
 import SetupWizard from "./features/setup/SetupWizard.vue";
 import type { SetupDraft } from "./features/setup/SetupWizard.vue";
@@ -92,7 +95,7 @@ const pendingCount = ref(0);
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 const historyRevision = ref(0);
 const syncedEntryIds = ref(new Set<string>());
-const activeView = ref<"history" | "pending-sync" | "downloads">("history");
+const activeView = ref<"history" | "pending-sync" | "uploads" | "downloads">("history");
 /** 设备列表完全来自服务器（manifest/presence），不做任何本地预设。 */
 const devicesById = ref<Record<string, Device>>({});
 const currentTime = ref(Date.now());
@@ -123,6 +126,8 @@ const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() 
     progress[task.entryId] = {
       finished: batch.filter((candidate) => candidate.status === "succeeded").length,
       total: batch.length,
+      receivedBytes: batch.reduce((sum, candidate) => sum + candidate.receivedBytes, 0),
+      totalBytes: batch.reduce((sum, candidate) => sum + candidate.size, 0),
     };
   }
   return progress;
@@ -130,6 +135,11 @@ const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() 
 /** 侧边栏「下载」入口的角标：排队 + 下载中的任务数。 */
 const activeDownloadCount = computed(() =>
   downloadTasks.value.filter((task) => task.status === "queued" || task.status === "downloading").length);
+/** 「上传」页的中继应答任务快照：file.requested 且本机应答时记入（内存台账，随客户端重建清空）。 */
+const uploadTasks = ref<ServeTaskSnapshot[]>([]);
+/** 侧边栏「上传」入口的角标：待发送 + 发送中的任务数。 */
+const activeUploadCount = computed(() =>
+  uploadTasks.value.filter((task) => task.status === "pending" || task.status === "serving").length);
 const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
@@ -139,6 +149,8 @@ let activePreferences: AccountPreferences = defaultAccountPreferences();
 let syncClient: SyncClient | undefined;
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
+/** 「下载」页可见时的快照轮询兜底；事件流丢包时列表最多滞后一个周期。 */
+let downloadPollTimer: number | undefined;
 let shareReceiverListener: PluginListener | undefined;
 let localClipboardRevision = 0;
 let remoteActivationRevision = 0;
@@ -185,6 +197,7 @@ function stopSyncClient(): void {
   syncClient = undefined;
   // 旧 FileTransfer.stop 的语义：同步断开时中止全部下载（凭据已失效）。
   downloader.stopAll("同步已断开");
+  uploadTasks.value = [];
   setConnectionState(false);
 }
 
@@ -995,6 +1008,14 @@ async function startSync(config: SyncConfig): Promise<void> {
         uploadProgressByEntryId.value = withoutKey(uploadProgressByEntryId.value, entryId);
       },
       onError: (message) => { showToast(message, "error"); },
+      onServeTasksChanged: () => {
+        if (syncClient !== client) return;
+        uploadTasks.value = [...client.serveTasksSnapshot()];
+      },
+      resolveEntryLabel: (entryId) =>
+        invoke<ClipboardEntry>("get_entry", { entryId })
+          .then((entry) => entry.content)
+          .catch(() => undefined),
       onAuthenticationFailed: (message) => {
         if (syncClient !== client) return;
         stopSyncClient();
@@ -1060,6 +1081,11 @@ async function initializeTauriServices(): Promise<void> {
     listen<DownloadTaskSnapshot[]>("cliproam://download-changed", ({ payload }) => {
       downloader.applySnapshot(payload);
     }),
+    // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
+    // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
+    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) void downloader.refresh().catch(() => undefined);
+    }),
   ]);
   unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
   const listenerError = listenerResults.find((result) => result.status === "rejected");
@@ -1069,6 +1095,10 @@ async function initializeTauriServices(): Promise<void> {
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
   await downloader.refresh().catch(() => undefined);
+  // 「下载」页可见时的轮询兜底：隐藏窗口期间丢过事件也能在两个周期内追平。
+  downloadPollTimer = window.setInterval(() => {
+    if (activeView.value === "downloads") void downloader.refresh().catch(() => undefined);
+  }, 2000);
 
   if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
     const registered = await initializeQuickPasteShortcut();
@@ -1163,6 +1193,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
+  if (downloadPollTimer !== undefined) window.clearInterval(downloadPollTimer);
   disposeToast();
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
   if (pendingRemoteUpserts.size) {
@@ -1235,6 +1266,17 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="nav-item"
+          :class="{ active: activeView === 'uploads' }"
+          type="button"
+          :aria-current="activeView === 'uploads' ? 'page' : undefined"
+          @click="activeView = 'uploads'"
+        >
+          <Upload :size="17" aria-hidden="true" />
+          <span>上传</span>
+          <span v-if="activeUploadCount" class="nav-count">{{ activeUploadCount }}</span>
+        </button>
+        <button
+          class="nav-item"
           :class="{ active: activeView === 'downloads' }"
           type="button"
           :aria-current="activeView === 'downloads' ? 'page' : undefined"
@@ -1287,6 +1329,11 @@ onBeforeUnmount(() => {
       :current-time="currentTime"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       @remove="removeEntry"
+    />
+
+    <UploadsView
+      v-else-if="activeView === 'uploads'"
+      :serve-tasks="uploadTasks"
     />
 
     <DownloadsView
