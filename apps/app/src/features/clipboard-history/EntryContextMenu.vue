@@ -29,6 +29,29 @@ const menu = ref<HTMLElement>();
 const menuStyle = ref<Record<string, string>>({});
 const saving = computed(() => props.savingEntryId === props.entry.id);
 const saveLabel = computed(() => saveEntryLabel(props.entry, props.savingEntryId, props.isMobile));
+// 删除二次确认：第一击进入待确认态（3 秒无操作自动复位），第二击才执行。
+const confirmingRemove = ref(false);
+let confirmResetTimer: ReturnType<typeof setTimeout> | undefined;
+
+function resetConfirm(): void {
+  confirmingRemove.value = false;
+  if (confirmResetTimer) {
+    clearTimeout(confirmResetTimer);
+    confirmResetTimer = undefined;
+  }
+}
+
+function requestRemove(entry: LocalClipboardEntry): void {
+  if (!confirmingRemove.value) {
+    confirmingRemove.value = true;
+    if (confirmResetTimer) clearTimeout(confirmResetTimer);
+    confirmResetTimer = setTimeout(resetConfirm, 3_000);
+    return;
+  }
+  resetConfirm();
+  emit("close");
+  emit("remove", entry);
+}
 
 // 右键点可能贴近屏幕右/下边缘，先按(宽, 项数×高)估算 clamp，渲染后再按
 // 实际尺寸修正一次，保证菜单完整落在视口内。
@@ -52,7 +75,6 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
-const onRemove = run((entry) => emit("remove", entry));
 
 function handleMenuKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
@@ -60,6 +82,11 @@ function handleMenuKeydown(event: KeyboardEvent): void {
   const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
   if (event.key === "Escape") {
     event.preventDefault();
+    // 待确认态下 Esc 先退回普通态，再按才关菜单。
+    if (confirmingRemove.value) {
+      resetConfirm();
+      return;
+    }
     emit("close");
     return;
   }
@@ -101,6 +128,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  resetConfirm();
   document.removeEventListener("pointerdown", handlePointerDown);
   window.removeEventListener("resize", handleViewportChange);
   window.removeEventListener("scroll", handleViewportChange, true);
@@ -133,9 +161,9 @@ onBeforeUnmount(() => {
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
       </button>
-      <button type="button" role="menuitem" class="danger" @click="onRemove(entry)">
+      <button type="button" role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
-        <span>删除</span>
+        <span>{{ confirmingRemove ? "确认删除？" : "删除" }}</span>
       </button>
     </div>
   </Teleport>
@@ -148,6 +176,7 @@ onBeforeUnmount(() => {
 .entry-context-menu button:disabled { color: #64748b; cursor: default; }
 .entry-context-menu button.danger { color: #fca5a5; }
 .entry-context-menu button.danger:hover:not(:disabled), .entry-context-menu button.danger:focus-visible:not(:disabled) { color: #fecaca; background: rgba(248, 113, 113, 0.14); }
+.entry-context-menu button.danger.confirming { color: #fff; background: rgba(220, 38, 38, 0.85); }
 @media (max-width: 640px) {
   .entry-context-menu button { min-height: 44px; font-size: 14px; }
 }

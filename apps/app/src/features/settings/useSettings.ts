@@ -9,7 +9,6 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
-import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "../sync/syncDefaults";
 import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
@@ -29,6 +28,8 @@ export type SettingsBridge = {
   persistSyncConfig(config: SyncConfig | null): Promise<void>;
   /** 保存偏好到当前活动档案；偏好跟账号走，与全局会话配置分开持久化。 */
   persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
+  /** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，经此运行期下发。 */
+  applyAutoUploadLimit(limitMb: number): void;
   startSync(config: SyncConfig): Promise<void>;
   /** 断开当前同步客户端。 */
   disconnect(): void;
@@ -53,8 +54,6 @@ const settingsVisible = ref(false);
 const settingsPage = ref<SettingsPage>("general");
 const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
 const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
-/** 连接后拉取同步历史的每页数量（10-100）。 */
-const manifestPageSize = ref(ENTRY_PAGE_DEFAULT_LIMIT);
 /** 文本域里的过滤模式，一行一条；保存时拆成数组。 */
 const excludePatternsInput = ref("");
 /** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
@@ -79,7 +78,6 @@ function openSettings(): void {
   const preferences = requireBridge().getActivePreferences();
   autoUploadLimitMb.value = preferences.autoUploadLimitMb;
   autoReceiveClipboard.value = preferences.autoReceiveClipboard;
-  manifestPageSize.value = preferences.manifestPageSize;
   excludePatternsInput.value = preferences.excludePatterns.join("\n");
   serverMaxFileMb.value = preferences.serverMaxFileMb;
   // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
@@ -210,7 +208,6 @@ async function saveSettings(): Promise<void> {
   const preferences: AccountPreferences = {
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
-    manifestPageSize: manifestPageSize.value,
     excludePatterns: excludePatternsInput.value
       .split("\n")
       .map((pattern) => pattern.trim())
@@ -240,11 +237,11 @@ async function saveSettings(): Promise<void> {
       settingsError.value = quickPasteShortcutStatus.value.message;
       return;
     }
-    // 偏好先落当前活动档案，再保存会话配置。
+    // 偏好落当前活动档案。Rust 侧 save_account_preferences 即时更新内存，
+    // 捕获路径（过滤规则、复制上限）无需重连即生效；自动上传档位经 setter
+    // 下发给运行中的 SyncClient。均不需要断开重连 WS。
     await requireBridge().persistAccountPreferences(preferences);
-    await requireBridge().persistSyncConfig({ ...activeConfig });
-    // 保存点是同步引擎的唯一驱动：显式重连，让新偏好与设备别名立即生效。
-    await requireBridge().startSync(activeConfig);
+    requireBridge().applyAutoUploadLimit(preferences.autoUploadLimitMb);
     settingsVisible.value = false;
     await nextTick();
     await requireBridge().focusSearch();
@@ -332,7 +329,6 @@ export {
   settingsPage,
   autoUploadLimitMb,
   autoReceiveClipboard,
-  manifestPageSize,
   excludePatternsInput,
   serverMaxFileMb,
   deviceAliasInput,

@@ -1,7 +1,6 @@
 // App 侧账号偏好的默认值。仅供本 app 使用，不进入三端共享的
 // @cliproam/protocol；Rust 侧的 serde 兜底（apps/app/src-tauri/src/sync/mod.rs）
 // 必须与这里的数值保持一致。
-import { ENTRY_PAGE_DEFAULT_LIMIT } from "@cliproam/protocol";
 import type { AccountPreferences } from "../../types";
 
 export const DEFAULT_SERVER_PROTOCOL = "http";
@@ -21,7 +20,6 @@ export function defaultAccountPreferences(): AccountPreferences {
     autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS],
     serverMaxFileMb: DEFAULT_SERVER_MAX_FILE_MB,
-    manifestPageSize: ENTRY_PAGE_DEFAULT_LIMIT,
     maxCaptureFileCount: DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
 }

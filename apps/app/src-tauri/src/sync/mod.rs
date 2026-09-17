@@ -45,9 +45,6 @@ pub(crate) struct AccountPreferences {
     /// 约束自动上传档位。
     #[serde(default = "default_server_max_file_mb")]
     pub server_max_file_mb: u64,
-    /// 连接后拉取同步历史的每页数量（10-100）；Rust 侧只透传持久化。
-    #[serde(default = "default_manifest_page_size")]
-    pub manifest_page_size: u32,
     /// 单次复制文件数上限（登录时服务器下发的 settings.maxCaptureFileCount）；
     /// 捕获时超过则不捕获、不同步。
     #[serde(default = "default_max_capture_file_count")]
@@ -61,7 +58,6 @@ impl Default for AccountPreferences {
             auto_receive_clipboard: default_auto_receive_clipboard(),
             exclude_patterns: default_exclude_patterns(),
             server_max_file_mb: default_server_max_file_mb(),
-            manifest_page_size: default_manifest_page_size(),
             max_capture_file_count: default_max_capture_file_count(),
         }
     }
@@ -87,10 +83,6 @@ fn default_exclude_patterns() -> Vec<String> {
 
 fn default_server_max_file_mb() -> u64 {
     200
-}
-
-fn default_manifest_page_size() -> u32 {
-    100
 }
 
 fn default_max_capture_file_count() -> u64 {

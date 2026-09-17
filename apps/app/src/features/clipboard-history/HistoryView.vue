@@ -20,7 +20,6 @@ import EntryContextMenu from "./EntryContextMenu.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { PAGE_SIZE } from "../../utils/constants";
 import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
@@ -123,14 +122,17 @@ const timeFilterSummary = computed(() => {
   return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
 });
 
-const debouncedQuery = ref("");
-let queryDebounceTimer: number | undefined;
-// Typing runs the keyword filter in Rust, so the round-trip is debounced.
-watch(query, () => {
-  window.clearTimeout(queryDebounceTimer);
-  queryDebounceTimer = window.setTimeout(() => { debouncedQuery.value = query.value; }, 200);
-});
-onBeforeUnmount(() => { window.clearTimeout(queryDebounceTimer); cancelLongPress(); });
+// 搜索关键词按 Enter 提交（含输入法 composition 结束）；输入过程不打扰列表。
+const committedQuery = ref("");
+function commitSearch(): void {
+  if (committedQuery.value === query.value.trim()) {
+    // 关键词没变（如清空后原样回车）也允许显式重查。
+    void fetchManifestPage(1, true);
+    return;
+  }
+  committedQuery.value = query.value.trim();
+}
+onBeforeUnmount(() => { cancelLongPress(); });
 
 const deviceNames = computed(() =>
   Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
@@ -150,7 +152,7 @@ const {
   fetchManifest: props.fetchManifest,
   deviceNames: () => deviceNames.value,
   buildFilter: (page) => ({
-    query: debouncedQuery.value,
+    query: committedQuery.value,
     kind: filter.value,
     start: activeTimeRange.value.start,
     end: activeTimeRange.value.end,
@@ -158,7 +160,7 @@ const {
     page,
   }),
   revision: computed(() => props.revision),
-  filterSources: [debouncedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds],
+  filterSources: [committedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds],
   // An invalid custom range matches nothing — the backend never sees it, and
   // background revision bumps must not refill the cleared list either.
   canFetch: () => !timeRangeError.value,
@@ -220,7 +222,7 @@ async function startWindowDrag(event: MouseEvent): Promise<void> {
 
 async function focusSearch(): Promise<void> {
   query.value = "";
-  debouncedQuery.value = "";
+  committedQuery.value = "";
   if (isPasteWindow) {
     filter.value = "all";
     timeFilter.value = "all";
@@ -281,8 +283,6 @@ function closeImagePreview(): void {
 }
 
 function selectOrActivate(entry: LocalClipboardEntry): void {
-  // [paste-debug] 诊断埋点，定位后移除
-  console.info(`[paste-debug] item click id=${entry.id} isPasteWindow=${isPasteWindow} webviewFocused=${document.hasFocus()}`);
   // 长按弹菜单后的那次 click 是抬手带出来的，不算选择，避免移动端误触发激活。
   if (longPressFired) {
     longPressFired = false;
@@ -367,8 +367,6 @@ function onMenuRemove(entry: LocalClipboardEntry): void {
 /// 粘贴窗口用 mousedown 触发粘贴：窗口刚成为 key 窗口且焦点在搜索框时，
 /// WebKit 会把第一次点击只用于失焦、吞掉 click 事件，mousedown 不受影响。
 function activateOnMouseDown(entry: LocalClipboardEntry): void {
-  // [paste-debug] 诊断埋点，定位后移除
-  console.info(`[paste-debug] item mousedown id=${entry.id} webviewFocused=${document.hasFocus()}`);
   selectedEntryId.value = entry.id;
   emit("activate", entry, true);
 }
@@ -389,22 +387,6 @@ function downloadCancelHint(entry: LocalClipboardEntry): string | undefined {
 // —— 下载列表面板（仅主窗口）——
 // 已迁移到主界面侧边栏的「下载」页（features/downloads/DownloadsView.vue）。
 
-function moveSelection(offset: -1 | 1): void {
-  if (!manifestTotal.value) return;
-  // With no selection, ArrowDown takes the first entry and ArrowUp the last;
-  // the selection index is absolute, so crossing a page boundary fetches it.
-  const currentIndex = selectedLocalIndex.value >= 0
-    ? (currentPage.value - 1) * PAGE_SIZE + selectedLocalIndex.value
-    : offset === 1 ? -1 : manifestTotal.value;
-  const nextIndex = Math.min(Math.max(currentIndex + offset, 0), manifestTotal.value - 1);
-  const targetPage = Math.floor(nextIndex / PAGE_SIZE) + 1;
-  void (async () => {
-    if (targetPage !== currentPage.value) await fetchManifestPage(targetPage);
-    const localIndex = nextIndex - (currentPage.value - 1) * PAGE_SIZE;
-    selectedEntryId.value = pageEntries.value[localIndex]?.id ?? pageEntries.value[0]?.id ?? "";
-  })();
-}
-
 function resetTimeFilter(): void {
   timeFilter.value = "all";
   startDate.value = "";
@@ -422,16 +404,6 @@ function handleKeydown(event: KeyboardEvent): boolean {
       event.preventDefault();
       closeImagePreview();
     }
-    return true;
-  }
-  if (event.key === "ArrowDown") {
-    event.preventDefault();
-    moveSelection(1);
-    return true;
-  }
-  if (event.key === "ArrowUp") {
-    event.preventDefault();
-    moveSelection(-1);
     return true;
   }
   if (event.key === "Enter" && !event.shiftKey) {
@@ -479,7 +451,16 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       </div>
       <label class="search-field">
         <Search :size="17" aria-hidden="true" />
-        <input ref="searchInput" v-model="query" type="search" placeholder="搜索剪贴板历史" aria-label="搜索剪贴板历史" />
+        <input
+          ref="searchInput"
+          v-model="query"
+          type="search"
+          placeholder="搜索剪贴板历史"
+          aria-label="搜索剪贴板历史"
+          enterkeyhint="search"
+          @keydown.enter="!$event.isComposing && commitSearch()"
+          @search="commitSearch"
+        />
         <kbd>Enter</kbd>
       </label>
       <button v-if="isMobile" class="mobile-capture-button" type="button" :disabled="capturingClipboard" @click="captureCurrentClipboard">
@@ -587,7 +568,6 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       <span v-if="isMobile">点按文本复制，点按文件下载到缓存，长按打开菜单</span>
       <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
       <span v-else>单击选择，右键打开菜单</span>
-      <span v-if="!isMobile"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
       <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <PaginationControl
