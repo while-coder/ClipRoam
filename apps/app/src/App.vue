@@ -107,23 +107,61 @@ const activatingEntryIds = ref(new Set<string>());
 /** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
 let clipboardWriteChain: Promise<unknown> = Promise.resolve();
 const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
+/**
+ * 上传进度节流：chunk 回调频率高（多路并发叠加），逐次展开响应式 record
+ * 会放大 GC 与整列表重渲染。chunk 只更新待写缓存，200ms 合并一次提交；
+ * 上传结束走立即路径，避免缓存里的旧值把删除动作覆盖回去。
+ */
+const UPLOAD_PROGRESS_THROTTLE_MS = 200;
+const pendingUploadProgress = new Map<string, UploadProgress>();
+let uploadProgressFlushTimer: number | undefined;
+
+function flushUploadProgress(): void {
+  uploadProgressFlushTimer = undefined;
+  if (!pendingUploadProgress.size) return;
+  const batch = pendingUploadProgress;
+  pendingUploadProgress.clear();
+  uploadProgressByEntryId.value = {
+    ...uploadProgressByEntryId.value,
+    ...Object.fromEntries(batch),
+  };
+}
+
+function queueUploadProgress(entryId: string, uploadedBytes: number, totalBytes: number): void {
+  pendingUploadProgress.set(entryId, { uploadedBytes, totalBytes });
+  if (uploadProgressFlushTimer === undefined) {
+    uploadProgressFlushTimer = window.setTimeout(flushUploadProgress, UPLOAD_PROGRESS_THROTTLE_MS);
+  }
+}
+
+function finishUploadProgress(entryId: string): void {
+  pendingUploadProgress.delete(entryId);
+  uploadProgressByEntryId.value = withoutKey(uploadProgressByEntryId.value, entryId);
+}
 /** 下载面板的任务快照；Rust Downloader 事件推来时由薄桥整体替换。 */
 const downloadTasks = ref<DownloadTaskSnapshot[]>([]);
 const downloader = new Downloader({
   onTasksChanged: () => { downloadTasks.value = [...downloader.tasksSnapshot()]; },
 });
-/** 派生的逐条目下载进度：只看每个 entry 最新批次，批内仍有活动任务才显示。 */
+/** 派生的逐条目下载进度：按 (entryId, batchId) 一次分组聚合——同批全部任务
+ * 参与统计（含已成功的），只有批内仍有活动任务的批次才输出；避免逐任务
+ * 全表扫描、同批重复计算。 */
 const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() => {
-  const progress: Record<string, DownloadProgress> = {};
+  const batches = new Map<string, DownloadTaskSnapshot[]>();
   for (const task of downloadTasks.value) {
-    if (task.status !== "queued" && task.status !== "downloading") continue;
-    const batch = downloadTasks.value.filter((candidate) =>
-      candidate.entryId === task.entryId && candidate.batchId === task.batchId);
-    progress[task.entryId] = {
-      finished: batch.filter((candidate) => candidate.status === "succeeded").length,
-      total: batch.length,
-      receivedBytes: batch.reduce((sum, candidate) => sum + candidate.receivedBytes, 0),
-      totalBytes: batch.reduce((sum, candidate) => sum + candidate.size, 0),
+    const key = `${task.entryId}#${task.batchId}`;
+    const group = batches.get(key);
+    if (group) group.push(task);
+    else batches.set(key, [task]);
+  }
+  const progress: Record<string, DownloadProgress> = {};
+  for (const group of batches.values()) {
+    if (!group.some((task) => task.status === "queued" || task.status === "downloading")) continue;
+    progress[group[0]!.entryId] = {
+      finished: group.filter((task) => task.status === "succeeded").length,
+      total: group.length,
+      receivedBytes: group.reduce((sum, task) => sum + task.receivedBytes, 0),
+      totalBytes: group.reduce((sum, task) => sum + task.size, 0),
     };
   }
   return progress;
@@ -389,7 +427,7 @@ function upsertLocalEntry(entry: ClipboardEntry): void {
 }
 
 async function applyRemoteUpserts(batch: ClipboardEntry[], refresh = true): Promise<void> {
-  for (const entry of batch) markEntrySynced(entry);
+  markEntriesSynced(batch);
   if (!runningInTauri) {
     for (const entry of batch) upsertLocalEntry(entry);
     return;
@@ -414,9 +452,18 @@ function rememberDevices(devices: Device[]): void {
   }
 }
 
-function markEntrySynced(entry: ClipboardEntry): void {
-  if (syncedEntryIds.value.has(entry.id)) return;
-  syncedEntryIds.value = new Set(syncedEntryIds.value).add(entry.id);
+/** 批量标记已同步：一次构建新 Set，避免逐条 clone 整个集合（burst 推送时是 O(n²)）。 */
+function markEntriesSynced(entries: readonly ClipboardEntry[]): void {
+  if (!entries.length) return;
+  const known = new Set(syncedEntryIds.value);
+  let changed = false;
+  for (const entry of entries) {
+    if (!known.has(entry.id)) {
+      known.add(entry.id);
+      changed = true;
+    }
+  }
+  if (changed) syncedEntryIds.value = known;
 }
 
 function isEntrySynced(entry: ClipboardEntry): boolean {
@@ -944,15 +991,8 @@ async function startSync(config: SyncConfig): Promise<void> {
         // this only nudges the refresh burst that triggers it.
         refreshHistory();
       },
-      onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
-        uploadProgressByEntryId.value = {
-          ...uploadProgressByEntryId.value,
-          [entryId]: { uploadedBytes, totalBytes },
-        };
-      },
-      onUploadFinished: (entryId) => {
-        uploadProgressByEntryId.value = withoutKey(uploadProgressByEntryId.value, entryId);
-      },
+      onUploadProgress: queueUploadProgress,
+      onUploadFinished: finishUploadProgress,
       onError: (message) => { showToast(message, "error"); },
       onServeTasksChanged: () => {
         if (syncClient !== client) return;
@@ -1142,6 +1182,7 @@ onBeforeUnmount(() => {
   if (downloadPollTimer !== undefined) window.clearInterval(downloadPollTimer);
   disposeToast();
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+  if (uploadProgressFlushTimer !== undefined) window.clearTimeout(uploadProgressFlushTimer);
   if (pendingRemoteUpserts.size) {
     void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
     pendingRemoteUpserts.clear();
