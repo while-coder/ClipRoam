@@ -231,6 +231,11 @@ async function focusSearch(): Promise<void> {
   searchInput.value?.focus();
 }
 
+/** 只把焦点还给搜索框；不清搜索词、不重拉列表（关设置弹窗等场景用）。 */
+function focusSearchInput(): void {
+  searchInput.value?.focus();
+}
+
 async function captureCurrentClipboard(): Promise<void> {
   if (capturingClipboard.value) return;
   capturingClipboard.value = true;
@@ -401,7 +406,7 @@ function handleKeydown(event: KeyboardEvent): boolean {
   return false;
 }
 
-defineExpose({ handleKeydown, focusSearch, currentPage });
+defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>

@@ -16,10 +16,11 @@ import type {
  * 批量合并、服务器文件可用性对账。引擎客户端与 pending 刷新经 App.vue
  * 装配时注入，保持静态依赖单向。
  */
-/** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, currentPage })）。 */
+/** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage })）。 */
 interface HistorySyncViewRef {
   currentPage?: number;
   focusSearch(): Promise<void>;
+  focusSearchInput(): void;
 }
 
 interface HistorySyncDeps {
@@ -162,6 +163,11 @@ export function isEntrySynced(entry: ClipboardEntry): boolean {
 
 export function focusSearch(): void {
   void nextTick(() => deps.getHistoryView()?.focusSearch());
+}
+
+/** 只把焦点还给搜索框：不清搜索词、不重拉第 1 页（关弹窗、启动完成用）。 */
+export function focusSearchInput(): void {
+  void nextTick(() => deps.getHistoryView()?.focusSearchInput());
 }
 
 /**

@@ -76,7 +76,7 @@ import {
   cancelRefreshBurst,
   fetchManifest,
   flushPendingRemoteUpserts,
-  focusSearch,
+  focusSearchInput,
   historyRevision,
   initHistorySync,
   refreshHistory,
@@ -177,7 +177,7 @@ initSettings({
       else if (focus === "server") setupWizard.value?.focusServerInput();
     });
   },
-  focusSearch,
+  focusSearchInput,
 });
 
 watch(activeView, (view) => {
@@ -212,7 +212,7 @@ function closeSetup(): void {
   if (testingConnection.value || !hasSavedSyncConfig.value) return;
   setupVisible.value = false;
   setupError.value = "";
-  void nextTick(focusSearch);
+  void nextTick(focusSearchInput);
 }
 
 async function connectAndSave(draft: SetupDraft): Promise<void> {
@@ -264,10 +264,11 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     hasSavedSyncConfig.value = true;
     await persistAccountPreferences(preferences);
     setupVisible.value = false;
-    refreshHistory();
+    // 先 startSync 再刷新：burst 200ms 后跑文件状态对账时，新 client 必已就位。
     await startSync(config);
+    refreshHistory();
     await nextTick();
-    await focusSearch();
+    await focusSearchInput();
   } catch (error) {
     const message = errorMessage(error);
     if (accountCreated) {
@@ -450,7 +451,7 @@ onMounted(async () => {
     } catch (error) {
       showToast(`同步初始化失败：${errorMessage(error)}`, "error");
     }
-    await focusSearch();
+    await focusSearchInput();
   }
 });
 

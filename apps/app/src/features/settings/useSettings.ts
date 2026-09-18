@@ -35,7 +35,7 @@ export type SettingsBridge = {
   /** 退出账号后清除「已保存过配置」标记，登录页不再提供返回主界面的入口。 */
   markSignedOut(): void;
   openSetup(o: { config?: SyncConfig; message?: string; focus?: "server" | "password" }): void;
-  focusSearch(): void;
+  focusSearchInput(): void;
 };
 
 let bridge: SettingsBridge | undefined;
@@ -155,7 +155,7 @@ function closeSettings(): void {
   settingsVisible.value = false;
   settingsError.value = "";
   clearPasswordChangeFields();
-  void nextTick(() => { void requireBridge().focusSearch(); });
+  void nextTick(() => { void requireBridge().focusSearchInput(); });
 }
 
 function clearPasswordChangeFields(): void {
@@ -241,7 +241,7 @@ async function saveSettings(): Promise<void> {
     requireBridge().applyAutoUploadLimit(preferences.autoUploadLimitMb);
     settingsVisible.value = false;
     await nextTick();
-    await requireBridge().focusSearch();
+    await requireBridge().focusSearchInput();
   } catch (error) {
     settingsError.value = `无法保存设置：${errorMessage(error)}`;
   } finally {
