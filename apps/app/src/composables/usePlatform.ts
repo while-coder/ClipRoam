@@ -18,9 +18,10 @@ const forceMobile = new URLSearchParams(window.location.search).has("mobile");
 const platformCapabilities = ref<PlatformCapabilities>(
   forceMobile ? { ...DESKTOP_CAPABILITIES, mobile: true } : DESKTOP_CAPABILITIES,
 );
+/** 模块级单例：后台模块（引擎、条目动作）不经过 usePlatform() 也要读移动端分支。 */
+export const isMobile = computed(() => platformCapabilities.value.mobile);
 
 export function usePlatform() {
-  const isMobile = computed(() => platformCapabilities.value.mobile);
   return {
     platformCapabilities,
     isMobile,
