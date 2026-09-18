@@ -53,9 +53,8 @@ export async function loadSyncConfig(): Promise<SyncConfig | null> {
 
 export async function persistSyncConfig(config: SyncConfig | null): Promise<void> {
   await invoke("save_sync_config", { config });
-  // 配置保存可能切换活动档案（登录/退出账号），偏好跟随档案——
-  // 无论是否切换都重读一次，保证前端内存态与活动档案一致。
-  activePreferences = await loadAccountPreferences();
+  // 不在这里重读偏好：登录路径紧接着写入显式构造的偏好；token 失效/退出
+  // 账号后保留内存中的偏好，让「重登同一账号档案保留偏好」的语义成立。
 }
 
 export async function loadAccountPreferences(): Promise<AccountPreferences> {
