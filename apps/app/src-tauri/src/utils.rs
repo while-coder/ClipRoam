@@ -98,6 +98,27 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+/// 确保目标文件的父目录存在。
+pub fn ensure_parent_dir(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// 把任意名称压成安全的文件名片段：仅保留 ASCII 字母数字与 `.-_`，其余替换为 `_`。
+pub fn sanitize_name_component(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // 名称过滤
 // ---------------------------------------------------------------------------

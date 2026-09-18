@@ -32,6 +32,7 @@ use crate::entry::entry_contents_of;
 use crate::file::{cached_file_path, cached_source_for, download_path, partial_download_path};
 use crate::store::select_entry;
 use crate::sync::server_http_url;
+use crate::utils::ensure_parent_dir;
 use crate::AppState;
 
 #[derive(Default)]
@@ -165,9 +166,7 @@ pub(crate) fn begin_transfer(
         (path, DownloadTarget::Cache { final_path })
     };
     let prepared = (|| {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
+        ensure_parent_dir(&path)?;
         fs::File::create(&path).map_err(|error| error.to_string())?;
         Ok::<(), String>(())
     })();
@@ -595,36 +594,35 @@ impl Downloader {
 
     /// 取消该条目所有非终态任务；返回取消数（0 = 没有下载在跑）。
     pub(crate) fn cancel_entry(&self, entry_id: &str) -> usize {
-        let ids = {
-            let inner = self.inner.lock().expect("downloader lock");
-            inner
-                .tasks
-                .values()
-                .filter(|task| task.entry_id == entry_id && is_active(task.status))
-                .map(|task| task_id_of(task))
-                .collect::<Vec<_>>()
-        };
-        let mut cancelled = 0;
-        for task_id in ids {
-            if self.cancel_one(&task_id, "已取消") {
-                cancelled += 1;
-            }
-        }
-        if cancelled > 0 {
-            self.emit_snapshot();
-        }
-        cancelled
+        self.cancel_matching(|task| task.entry_id == entry_id, "已取消")
     }
 
     /// 中止全部活动任务并清空队列（断开同步 / 面板「全部取消」共用）。
     pub(crate) fn stop_all(&self, reason: &str) {
+        self.cancel_matching(|_| true, reason);
+    }
+
+    /// 另存会话被取消时（cancel_save_entry）停掉属于它的任务。
+    pub(crate) fn cancel_by_save_id(&self, save_id: &str) {
+        self.cancel_matching(|task| task.save_id.as_deref() == Some(save_id), "另存为已取消");
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<TaskSnapshot> {
+        let inner = self.inner.lock().expect("downloader lock");
+        self.snapshot_locked(&inner)
+    }
+
+    // ----- 内部 -----
+
+    /// 取消所有命中条件的活动任务；返回取消数，有取消时推送一次快照。
+    fn cancel_matching(&self, filter: impl Fn(&DownloadTask) -> bool, reason: &str) -> usize {
         let ids = {
             let inner = self.inner.lock().expect("downloader lock");
             inner
                 .tasks
                 .values()
-                .filter(|task| is_active(task.status))
-                .map(|task| task_id_of(task))
+                .filter(|task| filter(task) && is_active(task.status))
+                .map(|task| task.id.clone())
                 .collect::<Vec<_>>()
         };
         let mut cancelled = 0;
@@ -636,36 +634,8 @@ impl Downloader {
         if cancelled > 0 {
             self.emit_snapshot();
         }
+        cancelled
     }
-
-    /// 另存会话被取消时（cancel_save_entry）停掉属于它的任务。
-    pub(crate) fn cancel_by_save_id(&self, save_id: &str) {
-        let ids = {
-            let inner = self.inner.lock().expect("downloader lock");
-            inner
-                .tasks
-                .values()
-                .filter(|task| task.save_id.as_deref() == Some(save_id) && is_active(task.status))
-                .map(|task| task_id_of(task))
-                .collect::<Vec<_>>()
-        };
-        let mut cancelled = 0;
-        for task_id in ids {
-            if self.cancel_one(&task_id, "另存为已取消") {
-                cancelled += 1;
-            }
-        }
-        if cancelled > 0 {
-            self.emit_snapshot();
-        }
-    }
-
-    pub(crate) fn snapshot(&self) -> Vec<TaskSnapshot> {
-        let inner = self.inner.lock().expect("downloader lock");
-        self.snapshot_locked(&inner)
-    }
-
-    // ----- 内部 -----
 
     /// 放行队列：并发名额内的 queued 任务标记 downloading 并 spawn worker。
     /// 持锁调用安全——spawn 只调度，不内联执行。
@@ -815,7 +785,7 @@ impl Downloader {
         tasks
             .into_iter()
             .map(|task| TaskSnapshot {
-                id: task_id_of(task),
+                id: task.id.clone(),
                 batch_id: task.batch_id,
                 entry_id: task.entry_id.clone(),
                 file_id: task.file_id.clone(),
@@ -867,10 +837,6 @@ impl Downloader {
 
 fn is_active(status: DownloadStatus) -> bool {
     matches!(status, DownloadStatus::Queued | DownloadStatus::Downloading)
-}
-
-fn task_id_of(task: &DownloadTask) -> String {
-    task.id.clone()
 }
 
 /// 面板显示名：有 entryLabel 时多文件拼序号，缺省用 fileId 前 8 位。

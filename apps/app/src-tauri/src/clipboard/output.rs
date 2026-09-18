@@ -12,9 +12,10 @@ use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry
 use crate::file::cached_source_for;
 use crate::store::{save_metadata, select_entry};
 use crate::entry::entry_contents_of;
+use crate::utils::sanitize_name_component;
 use crate::AppState;
 
-use super::capture::{image_signature, rich_text_signature, safe_file_name, RichText};
+use super::capture::{image_signature, rich_text_signature, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePasteStrategy {
@@ -237,7 +238,7 @@ pub(crate) fn apply_clipboard_entry(
                         let view = snapshot
                             .cache_dir
                             .join("views")
-                            .join(safe_file_name(&snapshot.entry.id));
+                            .join(sanitize_name_component(&snapshot.entry.id));
                         let _ = fs::remove_dir_all(&view);
                         // Real copies, not hard links: the view is handed to
                         // other applications, and an in-place edit there must

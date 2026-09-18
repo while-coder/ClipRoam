@@ -157,10 +157,6 @@ function markEntriesSynced(entries: readonly ClipboardEntry[]): void {
   if (changed) syncedEntryIds.value = known;
 }
 
-export function isEntrySynced(entry: ClipboardEntry): boolean {
-  return syncedEntryIds.value.has(entry.id);
-}
-
 export function focusSearch(): void {
   void nextTick(() => deps.getHistoryView()?.focusSearch());
 }

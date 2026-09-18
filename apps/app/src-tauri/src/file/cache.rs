@@ -11,7 +11,18 @@ use crate::utils::{modified_millis, now_millis};
 pub const HASH_CACHE_LIMIT: i64 = 20_000;
 pub const DOWNLOAD_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 
-fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i64) -> Option<String> {
+/// Content id of a source file, answered from the recorded
+/// (source, size, modified_at) signature. `None` means the cache has no
+/// entry — the caller hashes the bytes itself and records the result with
+/// [`remember_file_hash`]. The split exists so the hash never runs under a
+/// lock: hashing a large file takes a while, and every database command
+/// queues behind the connection pool.
+pub fn cached_file_hash(
+    connection: &Connection,
+    source: &str,
+    size: u64,
+    modified_at: i64,
+) -> Option<String> {
     connection
         .query_row(
             "SELECT hash FROM hash_cache WHERE source = ? AND size = ? AND modified_at = ?",
@@ -23,7 +34,7 @@ fn cached_hash(connection: &Connection, source: &str, size: u64, modified_at: i6
         .flatten()
 }
 
-fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, hash: &str) {
+pub fn remember_file_hash(connection: &Connection, source: &str, size: u64, modified_at: i64, hash: &str) {
     let _ = connection.execute(
         "INSERT INTO hash_cache (source, size, modified_at, hash) VALUES (?, ?, ?, ?) ON CONFLICT(source, size, modified_at) DO UPDATE SET hash = excluded.hash",
         params![source, size, modified_at, hash],
@@ -37,31 +48,6 @@ fn remember_hash(connection: &Connection, source: &str, size: u64, modified_at: 
             params![count / 2],
         );
     }
-}
-
-/// Content id of a source file, answered from the recorded
-/// (source, size, modified_at) signature. `None` means the cache has no
-/// entry — the caller hashes the bytes itself and records the result with
-/// [`remember_file_hash`]. The split exists so the hash never runs under a
-/// lock: hashing a large file takes a while, and every database command
-/// queues behind the connection pool.
-pub fn cached_file_hash(
-    connection: &Connection,
-    source: &str,
-    size: u64,
-    modified_at: i64,
-) -> Option<String> {
-    cached_hash(connection, source, size, modified_at)
-}
-
-pub fn remember_file_hash(
-    connection: &Connection,
-    source: &str,
-    size: u64,
-    modified_at: i64,
-    hash: &str,
-) {
-    remember_hash(connection, source, size, modified_at, hash);
 }
 
 /// Every content id the durable history references (image contents plus file

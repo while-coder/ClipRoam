@@ -545,8 +545,4 @@ export class Downloader {
     this.#tasks = payload;
     this.#deps.onTasksChanged?.();
   }
-
-  dispose(): void {
-    this.#tasks = [];
-  }
 }

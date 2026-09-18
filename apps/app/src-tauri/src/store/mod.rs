@@ -10,13 +10,12 @@
 use rusqlite::{params, params_from_iter, Connection, Transaction};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     path::{Path, PathBuf},
 };
 use chrono::DateTime;
 
 use crate::content::{entry_row_extra_json, ClipboardEntry, ClipboardEntryExtra};
-use crate::utils::placeholders;
+use crate::utils::{ensure_parent_dir, placeholders, sanitize_name_component};
 
 /// Runs `work` inside one transaction: begin, run, commit. An uncommitted
 /// transaction rolls back when dropped, so a failing `work` needs no explicit
@@ -78,18 +77,7 @@ pub fn preferences_path_for(histories_dir: &Path, key: &str) -> PathBuf {
 }
 
 fn safe_history_directory_name(key: &str) -> String {
-    let name = key
-        .strip_prefix("account:")
-        .unwrap_or(key)
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
+    let name = sanitize_name_component(key.strip_prefix("account:").unwrap_or(key));
     if name.is_empty() {
         "local".to_string()
     } else {
@@ -121,9 +109,7 @@ impl DatabasePool {
 /// 打开一个历史库。当作第一次启动：只建缺失的表，不做任何存在性检测或
 /// 旧数据迁移。
 pub fn open_history_database(path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    ensure_parent_dir(path)?;
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
