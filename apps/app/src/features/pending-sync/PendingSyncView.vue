@@ -1,15 +1,8 @@
 <script setup lang="ts">
-import {
-  Clipboard,
-  File,
-  FileText,
-  FolderOpen,
-  Image,
-  Monitor,
-  Trash2,
-} from "lucide-vue-next";
+import { Monitor, Trash2 } from "lucide-vue-next";
+import EntryKindIcon from "../clipboard-history/EntryKindIcon.vue";
 import { deviceName as deviceDisplayName, isHashing } from "../../utils/entry";
-import { formatAge as formatAgeRelative, formatExactDateTime } from "../../utils/format";
+import { formatAge as formatAgeRelative, formatExactDateTime, percentOf } from "../../utils/format";
 import type { ClipboardEntry, Device, LocalClipboardEntry, UploadProgress } from "../../types";
 
 /**
@@ -40,10 +33,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   if (isHashing(entry)) return `计算中 ${entry.summary.hashedCount}/${entry.summary.fileCount}`;
   const progress = props.uploadProgressByEntryId[entry.id];
   if (!progress) return undefined;
-  const percent = progress.totalBytes
-    ? Math.min(99, Math.floor((progress.uploadedBytes / progress.totalBytes) * 100))
-    : 0;
-  return `上传中 ${percent}%`;
+  return `上传中 ${percentOf(progress.uploadedBytes, progress.totalBytes, 99)}%`;
 }
 </script>
 
@@ -61,13 +51,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
 
     <section class="history-list" aria-label="待同步列表">
       <div v-for="entry in entries" :key="entry.id" class="history-item pending-item">
-        <span class="kind-icon">
-          <FileText v-if="entry.kind === 'text'" :size="18" />
-          <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
-          <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />
-          <Image v-else-if="entry.kind === 'image'" :size="18" />
-          <Clipboard v-else :size="18" />
-        </span>
+        <EntryKindIcon :kind="entry.kind" :root-kind="entry.summary.rootKind" />
         <span class="entry-body">
           <span class="entry-content">{{ entry.content }}</span>
           <span class="entry-meta">

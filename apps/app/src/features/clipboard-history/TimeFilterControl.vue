@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-vue-next";
 import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange } from "../../utils/format";
+import { usePopoverMenu } from "./usePopoverMenu";
 import type { TimeFilter } from "../../types";
 
 type CalendarDay = { key: string; label: number; inMonth: boolean };
@@ -31,9 +32,13 @@ const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
 const trigger = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const calendarDialog = ref<HTMLElement>();
-const menuOpen = ref(false);
 const calendarOpen = ref(false);
-const menuStyle = ref<Record<string, string>>({});
+const { menuOpen, menuStyle, toggleMenu, openMenuFromKeyboard, handleMenuKeydown } = usePopoverMenu({
+  trigger,
+  menu,
+  width: 172,
+  focusSelector: "[aria-selected='true']",
+});
 const displayMonth = ref(startOfMonth(new Date()));
 const draftStartDate = ref("");
 const draftEndDate = ref("");
@@ -74,59 +79,6 @@ function formatDate(date: Date): string {
 
 function displayDate(value: string): string {
   return value ? value.replace(/-/g, "/") : "请选择";
-}
-
-function positionMenu(): void {
-  const rect = trigger.value?.getBoundingClientRect();
-  if (!rect) return;
-  const width = 172;
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  menuStyle.value = { left: `${left}px`, top: `${rect.bottom + 6}px`, width: `${width}px` };
-}
-
-async function openMenu(): Promise<void> {
-  await nextTick();
-  positionMenu();
-  menu.value?.querySelector<HTMLButtonElement>("[aria-selected='true']")?.focus();
-}
-
-async function toggleMenu(): Promise<void> {
-  menuOpen.value = !menuOpen.value;
-  if (menuOpen.value) await openMenu();
-}
-
-async function openMenuFromKeyboard(): Promise<void> {
-  if (menuOpen.value) return;
-  menuOpen.value = true;
-  await openMenu();
-}
-
-function handleMenuKeydown(event: KeyboardEvent): void {
-  event.stopPropagation();
-  const buttons = Array.from(menu.value?.querySelectorAll<HTMLButtonElement>("button") ?? []);
-  const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
-  if (event.key === "Escape") {
-    event.preventDefault();
-    menuOpen.value = false;
-    trigger.value?.focus();
-    return;
-  }
-  if (event.key === "Tab") {
-    menuOpen.value = false;
-    return;
-  }
-  const targetIndex = event.key === "ArrowDown"
-    ? Math.min(buttons.length - 1, currentIndex + 1)
-    : event.key === "ArrowUp"
-      ? Math.max(0, currentIndex - 1)
-      : event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? buttons.length - 1
-          : -1;
-  if (targetIndex < 0) return;
-  event.preventDefault();
-  buttons[targetIndex]?.focus();
 }
 
 function selectOption(value: TimeFilter): void {
@@ -196,29 +148,6 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
     "in-range": Boolean(draftStartDate.value && draftEndDate.value && day.key > draftStartDate.value && day.key < draftEndDate.value),
   };
 }
-
-function handlePointerDown(event: PointerEvent): void {
-  if (!menuOpen.value) return;
-  const target = event.target as Node;
-  if (trigger.value?.contains(target) || menu.value?.contains(target)) return;
-  menuOpen.value = false;
-}
-
-function handleViewportChange(): void {
-  if (menuOpen.value) positionMenu();
-}
-
-onMounted(() => {
-  document.addEventListener("pointerdown", handlePointerDown);
-  window.addEventListener("resize", handleViewportChange);
-  window.addEventListener("scroll", handleViewportChange, true);
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener("pointerdown", handlePointerDown);
-  window.removeEventListener("resize", handleViewportChange);
-  window.removeEventListener("scroll", handleViewportChange, true);
-});
 </script>
 
 <template>

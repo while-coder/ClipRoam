@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { Download, LoaderCircle, X } from "lucide-vue-next";
-import { computed } from "vue";
-import { formatFileSize } from "../../utils/format";
+import { formatFileSize, percentOf } from "../../utils/format";
+import { activeDownloadCount } from "./useDownloads";
 import type { DownloadTaskSnapshot } from "../sync/fileTransfer";
 
 /**
  * 主窗口侧边栏的「下载」页：Rust 全局 Downloader 的任务快照在这里整页展示，
  * 快照由 App.vue 缓存并透传（事件驱动，无需本组件订阅）。
  */
-const props = defineProps<{
+defineProps<{
   downloadTasks: readonly DownloadTaskSnapshot[];
 }>();
 
@@ -16,9 +16,6 @@ const emit = defineEmits<{
   "cancel-download": [taskId: string];
   "cancel-all-downloads": [];
 }>();
-
-const activeDownloadCount = computed(() =>
-  props.downloadTasks.filter((task) => task.status === "queued" || task.status === "downloading").length);
 
 function downloadTaskStatusText(task: DownloadTaskSnapshot): string {
   switch (task.status) {
@@ -31,8 +28,7 @@ function downloadTaskStatusText(task: DownloadTaskSnapshot): string {
 }
 
 function downloadPercent(task: DownloadTaskSnapshot): number {
-  if (!task.size) return 0;
-  return Math.min(100, Math.floor((task.receivedBytes / task.size) * 100));
+  return percentOf(task.receivedBytes, task.size);
 }
 </script>
 

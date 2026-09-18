@@ -10,35 +10,36 @@ const toastPayload = ref<ToastPayload>();
 let toastTimer: number | undefined;
 let toastWindowHideTimer: number | undefined;
 
-function displayToast(payload: ToastPayload): void {
+function clearTimers(): void {
   if (toastTimer !== undefined) window.clearTimeout(toastTimer);
   if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
+}
+
+/** toast 消失后延迟隐藏通知窗口，让收尾动画播完。 */
+function scheduleToastWindowHide(): void {
+  if (!isToastWindow) return;
+  toastWindowHideTimer = window.setTimeout(() => {
+    void invoke("hide_toast").catch(() => {});
+    toastWindowHideTimer = undefined;
+  }, 180);
+}
+
+function displayToast(payload: ToastPayload): void {
+  clearTimers();
   toastPayload.value = payload;
   toastTimer = window.setTimeout(() => {
     toastPayload.value = undefined;
     toastTimer = undefined;
-    if (isToastWindow) {
-      toastWindowHideTimer = window.setTimeout(() => {
-        void invoke("hide_toast");
-        toastWindowHideTimer = undefined;
-      }, 180);
-    }
+    scheduleToastWindowHide();
   }, payload.tone === "error" ? 5_000 : 3_200);
 }
 
 /** 立即关闭 toast（托盘通知的关闭按钮）。 */
 function hideToastNow(): void {
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
+  clearTimers();
   toastPayload.value = undefined;
   toastTimer = undefined;
-  toastWindowHideTimer = undefined;
-  if (isToastWindow) {
-    toastWindowHideTimer = window.setTimeout(() => {
-      void invoke("hide_toast").catch(() => {});
-      toastWindowHideTimer = undefined;
-    }, 180);
-  }
+  scheduleToastWindowHide();
 }
 
 function showToast(message: string, tone: ToastTone = "info"): void {
@@ -50,8 +51,7 @@ function showToast(message: string, tone: ToastTone = "info"): void {
 
 /** 清理 toast 相关 timer（组件卸载时调用）。 */
 function disposeToast(): void {
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
+  clearTimers();
 }
 
 /** toast 专用窗口（tray 旁的通知窗口）只监听 toast 事件，不初始化其他服务。 */

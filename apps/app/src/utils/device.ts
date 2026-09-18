@@ -4,7 +4,7 @@ import type { Device } from "../types";
 type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
 type RustDeviceIdentity = { deviceId: string; deviceAlias: string | null };
 
-export type DeviceIdentity = {
+type DeviceIdentity = {
   deviceId: string;
   /** 用户设置的别名；空串表示未设置。 */
   deviceAlias: string;

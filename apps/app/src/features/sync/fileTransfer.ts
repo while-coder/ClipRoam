@@ -23,7 +23,7 @@ const UPLOAD_RETRY_BACKOFF_MS = 2_000;
 export const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
 
 /** The file-shape fields a download or upload transfer needs. */
-export type FileReference = { fileId: string; size: number };
+type FileReference = { fileId: string; size: number };
 
 type TransferDeps = {
   isStopped: () => boolean;
@@ -43,7 +43,7 @@ type TransferDeps = {
 // 与跨窗口共享的 Rust Downloader 不同，重连后自然清空。
 // ---------------------------------------------------------------------------
 
-export type ServeTaskStatus = "pending" | "serving" | "succeeded" | "skipped" | "failed";
+type ServeTaskStatus = "pending" | "serving" | "succeeded" | "skipped" | "failed";
 
 export type ServeTaskSnapshot = {
   id: string;
@@ -454,7 +454,7 @@ function decodeMissing(missing: string, chunkCount: number): number[] {
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
 
-export type DownloadTaskStatus = "queued" | "downloading" | "succeeded" | "failed" | "cancelled";
+type DownloadTaskStatus = "queued" | "downloading" | "succeeded" | "failed" | "cancelled";
 
 /** Rust `cliproam://download-changed` 事件推送的任务快照，字段一一对应。 */
 export type DownloadTaskSnapshot = {
@@ -472,7 +472,7 @@ export type DownloadTaskSnapshot = {
   error?: string;
 };
 
-export type DownloadRequest = {
+type DownloadRequest = {
   fileId: string;
   size: number;
 };
@@ -483,7 +483,7 @@ type BatchOutcome = {
   total: number;
 };
 
-export type DownloaderDeps = {
+type DownloaderDeps = {
   /** 任务列表变化（Rust 事件推来，含节流后的字节进度）后触发；调用方在此重拉快照。 */
   onTasksChanged?: () => void;
 };

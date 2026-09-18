@@ -3,7 +3,7 @@ import { emitTo } from "@tauri-apps/api/event";
 import { errorMessage } from "../../utils/error";
 
 const STORAGE_KEY = "cliproam.quickPasteShortcut";
-export const DEFAULT_QUICK_PASTE_SHORTCUT = "CommandOrControl+Shift+V";
+const DEFAULT_QUICK_PASTE_SHORTCUT = "CommandOrControl+Shift+V";
 
 type ShortcutStatus = {
   state: "idle" | "ok" | "error";

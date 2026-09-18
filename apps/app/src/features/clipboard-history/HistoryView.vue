@@ -3,10 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
-  File,
   FilePlus,
-  FileText,
-  FolderOpen,
   FolderPlus,
   Image,
   LoaderCircle,
@@ -17,6 +14,7 @@ import {
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
+import EntryKindIcon from "./EntryKindIcon.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
@@ -27,6 +25,7 @@ import {
   formatAge as formatAgeRelative,
   formatExactDateTime,
   parseLocalDate,
+  percentOf,
   TIME_FILTER_LABELS,
   validateDateRange,
 } from "../../utils/format";
@@ -197,8 +196,7 @@ function entryDownloadProgress(entry: LocalClipboardEntry): DownloadProgress | u
 }
 
 function downloadPercentOf(progress: DownloadProgress): number {
-  if (!progress.totalBytes) return 0;
-  return Math.min(100, Math.floor((progress.receivedBytes / progress.totalBytes) * 100));
+  return percentOf(progress.receivedBytes, progress.totalBytes);
 }
 
 
@@ -352,18 +350,6 @@ function closeEntryMenu(): void {
   menuEntry.value = undefined;
 }
 
-function onMenuActivate(entry: LocalClipboardEntry): void {
-  emit("activate", entry, false);
-}
-
-function onMenuSave(entry: LocalClipboardEntry): void {
-  emit("save", entry);
-}
-
-function onMenuRemove(entry: LocalClipboardEntry): void {
-  emit("remove", entry);
-}
-
 /// 粘贴窗口用 mousedown 触发粘贴：窗口刚成为 key 窗口且焦点在搜索框时，
 /// WebKit 会把第一次点击只用于失焦、吞掉 click 事件，mousedown 不受影响。
 function activateOnMouseDown(entry: LocalClipboardEntry): void {
@@ -383,9 +369,6 @@ function downloadCancelHint(entry: LocalClipboardEntry): string | undefined {
   }
   return undefined;
 }
-
-// —— 下载列表面板（仅主窗口）——
-// 已迁移到主界面侧边栏的「下载」页（features/downloads/DownloadsView.vue）。
 
 function resetTimeFilter(): void {
   timeFilter.value = "all";
@@ -527,14 +510,12 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
         <span v-else-if="entry.kind === 'image' && thumbnailSource(entry)" class="image-thumbnail" aria-hidden="true">
           <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
         </span>
-        <span v-else class="kind-icon">
-          <LoaderCircle v-if="activatingEntryIds.has(entry.id)" :size="18" class="spin" />
-          <FileText v-else-if="entry.kind === 'text'" :size="18" />
-          <File v-else-if="entry.kind === 'files' && entry.summary.rootKind === 'file'" :size="18" />
-          <FolderOpen v-else-if="entry.kind === 'files'" :size="18" />
-          <Image v-else-if="entry.kind === 'image'" :size="18" />
-          <Clipboard v-else :size="18" />
-        </span>
+        <EntryKindIcon
+          v-else
+          :kind="entry.kind"
+          :root-kind="entry.summary.rootKind"
+          :loading="activatingEntryIds.has(entry.id)"
+        />
         <span class="entry-body">
           <span class="entry-content">{{ entry.content }}</span>
           <span class="entry-meta">
@@ -586,9 +567,9 @@ defineExpose({ handleKeydown, focusSearch, currentPage });
       :activating="activatingEntryIds.has(menuEntry.id)"
       :saving-entry-id="savingEntryId"
       :is-mobile="isMobile"
-      @activate="onMenuActivate"
-      @save="onMenuSave"
-      @remove="onMenuRemove"
+      @activate="emit('activate', $event, false)"
+      @save="emit('save', $event)"
+      @remove="emit('remove', $event)"
       @close="closeEntryMenu"
     />
 

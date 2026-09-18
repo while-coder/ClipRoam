@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils/error";
 
 /** Structural stand-in for the protocol's zod schemas, keeping zod out of call sites' imports. */
-export type Schema<T> = { safeParse: (value: unknown) => { success: true; data: T } | { success: false } };
+type Schema<T> = { safeParse: (value: unknown) => { success: true; data: T } | { success: false } };
 
 export function errorMessageFromBody(body: unknown, status: number): string {
   return typeof body === "object" && body && "message" in body

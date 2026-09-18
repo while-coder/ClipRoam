@@ -30,7 +30,6 @@ export type SettingsBridge = {
   persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
   /** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，经此运行期下发。 */
   applyAutoUploadLimit(limitMb: number): void;
-  startSync(config: SyncConfig): Promise<void>;
   /** 断开当前同步客户端。 */
   disconnect(): void;
   /** 退出账号后清除「已保存过配置」标记，登录页不再提供返回主界面的入口。 */

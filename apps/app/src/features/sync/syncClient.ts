@@ -18,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { FileTransfer } from "./fileTransfer";
-import { createSyncRequester, errorMessageFromBody, isTransientNetworkError, type SyncRequester } from "./syncHttp";
+import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
@@ -295,17 +295,14 @@ export class SyncClient {
   // A 404 is not a failure: another device may have deleted the entry first,
   // and the outcome every device converges on is the same.
   async delete(entryId: string): Promise<void> {
-    const response = await this.#http.fetch(
+    await this.#http.request(
       "DELETE",
       `/entries/${encodeURIComponent(entryId)}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+      null,
+      "",
+      true,
     );
-    if (response.status === 401) throw new Error("登录已失效，请重新登录");
-    if (response.status === 404) return;
-    if (!response.ok) {
-      const body = await response.json().catch(() => undefined) as unknown;
-      throw new Error(errorMessageFromBody(body, response.status));
-    }
   }
 
   #send(message: ClientMessage): boolean {
@@ -348,13 +345,11 @@ export class SyncClient {
     });
 
     socket.addEventListener("message", (event) => {
-      try {
-        void this.#handleMessage(event.data).catch(() => {
-          this.handlers.onError("同步服务返回了无法解析的数据");
-        });
-      } catch {
+      // #handleMessage 是 async：同步段抛错也会变成 rejected promise，
+      // 一个 .catch 就能兜住，不需要外层 try。
+      void this.#handleMessage(event.data).catch(() => {
         this.handlers.onError("同步服务返回了无法解析的数据");
-      }
+      });
     });
 
     socket.addEventListener("close", () => {

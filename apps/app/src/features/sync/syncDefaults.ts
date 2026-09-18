@@ -12,7 +12,7 @@ export const DEFAULT_EXCLUDE_PATTERNS = ["node_modules"];
 // 服务器单文件存储上限的兜底显示值；登录响应的 settings.maxStoredFileMb 才是权威值。
 export const DEFAULT_SERVER_MAX_FILE_MB = 200;
 // 单次复制文件数上限的兜底值；登录响应的 settings.maxCaptureFileCount 才是权威值。
-export const DEFAULT_MAX_CAPTURE_FILE_COUNT = 1000;
+const DEFAULT_MAX_CAPTURE_FILE_COUNT = 1000;
 
 export function defaultAccountPreferences(): AccountPreferences {
   return {
