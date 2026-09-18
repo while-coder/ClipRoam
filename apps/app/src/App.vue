@@ -43,10 +43,9 @@ import {
 } from "./features/clipboard-history/useEntryActions";
 import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
-import { DESKTOP_CAPABILITIES } from "./utils/constants";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
-import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
+import { isToastWindow, isPasteWindow, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
 import {
   archiveKeyFor,
@@ -197,7 +196,7 @@ function shareImportMessage(summary: ShareImportSummary): string {
 }
 
 async function consumeMobileShares(): Promise<void> {
-  if (!runningInTauri || !platformCapabilities.value.shareReceiver || importingShare.value) return;
+  if (!platformCapabilities.value.shareReceiver || importingShare.value) return;
   importingShare.value = true;
   try {
     const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
@@ -404,12 +403,10 @@ onMounted(async () => {
 
   let config: SyncConfig | null = null;
   let startupWarning = "";
-  const platformPromise = runningInTauri
-    ? withStartupTimeout(
-        invoke<PlatformCapabilities>("get_platform_capabilities"),
-        "读取平台能力超时",
-      )
-    : Promise.resolve(DESKTOP_CAPABILITIES);
+  const platformPromise = withStartupTimeout(
+    invoke<PlatformCapabilities>("get_platform_capabilities"),
+    "读取平台能力超时",
+  );
   const [capabilitiesResult, configResult] = await Promise.allSettled([
     platformPromise,
     withStartupTimeout(loadSyncConfig(), "读取连接配置超时"),
@@ -443,7 +440,7 @@ onMounted(async () => {
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
-  if (runningInTauri) void initializeTauriServices();
+  void initializeTauriServices();
 
   if (setupVisible.value) {
     await nextTick();

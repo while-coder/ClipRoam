@@ -20,7 +20,7 @@ import EntryContextMenu from "./EntryContextMenu.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { isPasteWindow, runningInTauri, usePlatform } from "../../composables/usePlatform";
+import { isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import {
@@ -204,7 +204,7 @@ function downloadPercentOf(progress: DownloadProgress): number {
 
 function imageSource(entry: LocalClipboardEntry): string | undefined {
   const path = entry.summary.previewPath;
-  return path && runningInTauri ? convertFileSrc(path) : undefined;
+  return path ? convertFileSrc(path) : undefined;
 }
 
 function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
@@ -214,7 +214,7 @@ function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
 }
 
 async function startWindowDrag(event: MouseEvent): Promise<void> {
-  if (!runningInTauri || isMobile.value || event.button !== 0) return;
+  if (isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, select, textarea, kbd, [role='button']")) return;
   await invoke("start_window_drag");
@@ -234,7 +234,7 @@ async function focusSearch(): Promise<void> {
 }
 
 async function captureCurrentClipboard(): Promise<void> {
-  if (!runningInTauri || capturingClipboard.value) return;
+  if (capturingClipboard.value) return;
   capturingClipboard.value = true;
   try {
     const captured = await invoke<boolean>("capture_current_clipboard_text");
@@ -248,7 +248,7 @@ async function captureCurrentClipboard(): Promise<void> {
 }
 
 async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
-  if (!runningInTauri || uploadingFiles.value) return;
+  if (uploadingFiles.value) return;
   uploadingFiles.value = true;
   try {
     const captured = await invoke<boolean>("capture_files_from_picker", { mode });

@@ -2,7 +2,7 @@ import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isPasteWindow, runningInTauri } from "../../composables/usePlatform";
+import { isMobile, isPasteWindow } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { getDevice } from "../../utils/device";
@@ -15,7 +15,6 @@ import {
 } from "./syncSession";
 import {
   applyRemoteUpserts,
-  previewEntries,
   queueRemoteUpsert,
   refreshHistory,
   syncFileStatuses,
@@ -95,7 +94,7 @@ export function rememberDevices(devices: Device[]): void {
     ...Object.fromEntries(devices.map((device) => [device.id, device])),
   };
   // paste 窗口不持有 sync 客户端，设备名靠主窗口广播补充。
-  if (runningInTauri && !isPasteWindow) {
+  if (!isPasteWindow) {
     void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, { devices }).catch(() => undefined);
   }
 }
@@ -108,8 +107,7 @@ export function setSyncAutoUploadLimit(limitMb: number): void {
 async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   const config = getActiveConfig();
   if (
-    !runningInTauri
-    || !getActivePreferences().autoReceiveClipboard
+    !getActivePreferences().autoReceiveClipboard
     || entry.kind === "files"
     || (isMobile.value && entry.kind !== "text")
   ) return;
@@ -173,8 +171,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
         const remaining = new Set(syncedEntryIds.value);
         remaining.delete(entryId);
         syncedEntryIds.value = remaining;
-        if (runningInTauri) void invoke("remove_server_entry", { entryId });
-        else previewEntries.value = previewEntries.value.filter((entry) => entry.id !== entryId);
+        void invoke("remove_server_entry", { entryId });
       },
       onFileAvailable: () => {
         // Content-addressed push: the server now holds this content. The

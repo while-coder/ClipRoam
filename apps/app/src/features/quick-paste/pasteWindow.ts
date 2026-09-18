@@ -6,7 +6,7 @@ import {
   PhysicalPosition,
   type Monitor,
 } from "@tauri-apps/api/window";
-import { isMobile, isPasteWindow, runningInTauri } from "../../composables/usePlatform";
+import { isMobile, isPasteWindow } from "../../composables/usePlatform";
 import { requestProxyDevices } from "../sync/bridge";
 import { focusSearch } from "../clipboard-history/useHistorySync";
 
@@ -36,7 +36,7 @@ function calculatePasteWindowPosition(
 }
 
 export async function showPasteWindow(): Promise<void> {
-  if (!isPasteWindow || !runningInTauri) return;
+  if (!isPasteWindow) return;
   // 每次弹出时向主窗口要一次设备名，兜住错过广播的启动竞态；失败静默。
   requestProxyDevices();
   // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
@@ -74,5 +74,5 @@ export async function showPasteWindow(): Promise<void> {
 }
 
 export async function hideWindow(): Promise<void> {
-  if (runningInTauri && !isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
+  if (!isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
 }

@@ -1,6 +1,6 @@
 import { nextTick, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { runningInTauri, usePlatform } from "../../composables/usePlatform";
+import { usePlatform } from "../../composables/usePlatform";
 import { errorMessage } from "../../utils/error";
 import {
   quickPasteShortcut,
@@ -84,7 +84,7 @@ function openSettings(): void {
   if (autoUploadLimitMb.value > serverMaxFileMb.value) {
     autoUploadLimitMb.value = serverMaxFileMb.value;
   }
-  if (runningInTauri) void loadDeviceIdentity();
+  void loadDeviceIdentity();
   resetQuickPasteShortcutDraft();
   recordingQuickPasteShortcut.value = false;
   settingsPage.value = "general";
@@ -189,7 +189,6 @@ async function loadDeviceIdentity(): Promise<void> {
 }
 
 async function openAppDataDirectory(): Promise<void> {
-  if (!runningInTauri) return;
   settingsError.value = "";
   try {
     await invoke("open_app_data_dir");
@@ -219,7 +218,7 @@ async function saveSettings(): Promise<void> {
     // 别名变化先落 device.json，再走 HTTP 立即上报服务器；旧服务器没有该
     // 端点时忽略，随后的 startSync 重连仍会带着新名字兜底。
     const deviceAlias = deviceAliasInput.value.trim();
-    if (runningInTauri && deviceAlias !== savedDeviceAlias.value) {
+    if (deviceAlias !== savedDeviceAlias.value) {
       await invoke("save_device_alias", { alias: deviceAlias });
       savedDeviceAlias.value = deviceAlias;
       try {
@@ -229,8 +228,7 @@ async function saveSettings(): Promise<void> {
       }
     }
     if (
-      runningInTauri
-      && platformCapabilities.value.globalShortcut
+      platformCapabilities.value.globalShortcut
       && settingsPage.value === "shortcuts"
       && !(await saveQuickPasteShortcut())
     ) {
