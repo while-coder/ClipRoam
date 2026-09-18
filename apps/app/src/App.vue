@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
-import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { cursorPosition, getCurrentWindow, monitorFromPoint, PhysicalPosition, type Monitor } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
-import type { ClipboardEntry } from "@cliproam/protocol";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./features/sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS } from "./features/sync/syncDefaults";
 import {
   Clipboard,
   Cloud,
@@ -16,25 +15,15 @@ import {
   Settings2,
   Upload,
 } from "lucide-vue-next";
-import { SyncClient } from "./features/sync/syncClient";
-import { authenticateAccount, getServerUrls } from "./features/sync/syncSetup";
-import {
-  requestProxyDevices,
-  startPasteBridge,
-  startSyncBridgeService,
-  SYNC_BRIDGE_DEVICES_EVENT,
-} from "./features/sync/bridge";
-import {
-  DownloadCancelledError,
-  Downloader,
-  type DownloadTaskSnapshot,
-  type ServeTaskSnapshot,
-} from "./features/sync/fileTransfer";
+import { authenticateAccount } from "./features/sync/syncSetup";
+import { startPasteBridge, startSyncBridgeService } from "./features/sync/bridge";
+import type { DownloadTaskSnapshot } from "./features/sync/fileTransfer";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
   quickPasteShortcutStatus,
 } from "./features/quick-paste/quickPasteShortcut";
+import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { initSettings } from "./features/settings/useSettings";
 import { closeSettings, openSettings, settingsVisible } from "./features/settings/useSettings";
@@ -45,167 +34,139 @@ import UploadsView from "./features/uploads/UploadsView.vue";
 import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
 import SetupWizard from "./features/setup/SetupWizard.vue";
 import type { SetupDraft } from "./features/setup/SetupWizard.vue";
+import {
+  activatingEntryIds,
+  activateFromView,
+  removeEntry,
+  saveEntry,
+  savingEntryId,
+} from "./features/clipboard-history/useEntryActions";
 import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
-import {
-  BROWSER_CONFIG_KEY,
-  BROWSER_PREFERENCES_KEY,
-  DEFAULT_SERVER_ADDRESS,
-  DESKTOP_CAPABILITIES,
-  EMPTY_SUMMARY,
-  PAGE_SIZE,
-} from "./utils/constants";
-import { canSaveEntry } from "./utils/entry";
+import { DESKTOP_CAPABILITIES } from "./utils/constants";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
 import { isToastWindow, isPasteWindow, runningInTauri, usePlatform } from "./composables/usePlatform";
+import { activeView } from "./composables/useActiveView";
+import {
+  archiveKeyFor,
+  currentUsername,
+  getActiveConfig,
+  getActivePreferences,
+  hasSavedSyncConfig,
+  loadAccountPreferences,
+  loadSyncConfig,
+  persistAccountPreferences,
+  persistSyncConfig,
+  setActiveConfig,
+  setActivePreferences,
+} from "./features/sync/syncSession";
+import {
+  bumpLocalClipboardRevision,
+  connected,
+  connectionStatus,
+  devicesById,
+  getSyncClient,
+  initSyncEngine,
+  rememberDevices,
+  setSyncAutoUploadLimit,
+  startSync,
+  stopActiveClient,
+  stopSyncClient,
+} from "./features/sync/syncEngine";
+import {
+  cancelRefreshBurst,
+  fetchManifest,
+  flushPendingRemoteUpserts,
+  focusSearch,
+  historyRevision,
+  initHistorySync,
+  refreshHistory,
+} from "./features/clipboard-history/useHistorySync";
+import {
+  pendingCount,
+  pendingEntries,
+  refreshPendingCount,
+  refreshPendingEntries,
+} from "./features/pending-sync/usePendingSync";
+import {
+  activeDownloadCount,
+  downloadProgressByEntryId,
+  downloadTasks,
+  downloader,
+  ensureLocalFiles,
+} from "./features/downloads/useDownloads";
+import {
+  activeUploadCount,
+  cancelUploadProgressFlush,
+  uploadProgressByEntryId,
+  uploadTasks,
+} from "./features/uploads/useUploads";
 import type {
   AccountPreferences,
-  Device,
-  DownloadProgress,
-  EntriesManifestFilter,
-  EntriesManifestPage,
-  LocalClipboardEntry,
-  MissingFile,
   PlatformCapabilities,
-  SavePreparation,
   ShareImportSummary,
   ShareReceiverEvent,
   SyncConfig,
-  UploadProgress,
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
 
 const { initUpdaterVersion } = useUpdater();
 
-/**
- * The durable upload queue's rows: captured offline or waiting to publish.
- * Served by Rust's `list_pending_entries` (every queue row as an entry-shaped
- * view with a temporary `p{seq}` id) — never derived from a whole-history read.
- * Details load only while the pending-sync view is open; refresh bursts
- * elsewhere carry the O(1) `count_pending_entries` instead.
- */
-const pendingEntries = ref<LocalClipboardEntry[]>([]);
-const pendingCount = ref(0);
-/** Bumped whenever the history may have changed; the history view refetches its page on it. */
-const historyRevision = ref(0);
-const syncedEntryIds = ref(new Set<string>());
-const activeView = ref<"history" | "pending-sync" | "uploads" | "downloads">("history");
-/** 设备列表完全来自服务器（manifest/presence），不做任何本地预设。 */
-const devicesById = ref<Record<string, Device>>({});
-const currentTime = ref(Date.now());
-const connected = ref(false);
-const initializing = ref(true);
-const setupVisible = ref(false);
-const hasSavedSyncConfig = ref(false);
-const setupError = ref("");
-const testingConnection = ref(false);
-const currentUsername = ref("");
-const importingShare = ref(false);
-const activatingEntryIds = ref(new Set<string>());
-/** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
-let clipboardWriteChain: Promise<unknown> = Promise.resolve();
-const uploadProgressByEntryId = ref<Record<string, UploadProgress>>({});
-/**
- * 上传进度节流：chunk 回调频率高（多路并发叠加），逐次展开响应式 record
- * 会放大 GC 与整列表重渲染。chunk 只更新待写缓存，200ms 合并一次提交；
- * 上传结束走立即路径，避免缓存里的旧值把删除动作覆盖回去。
- */
-const UPLOAD_PROGRESS_THROTTLE_MS = 200;
-const pendingUploadProgress = new Map<string, UploadProgress>();
-let uploadProgressFlushTimer: number | undefined;
-
-function flushUploadProgress(): void {
-  uploadProgressFlushTimer = undefined;
-  if (!pendingUploadProgress.size) return;
-  const batch = pendingUploadProgress;
-  pendingUploadProgress.clear();
-  uploadProgressByEntryId.value = {
-    ...uploadProgressByEntryId.value,
-    ...Object.fromEntries(batch),
-  };
-}
-
-function queueUploadProgress(entryId: string, uploadedBytes: number, totalBytes: number): void {
-  pendingUploadProgress.set(entryId, { uploadedBytes, totalBytes });
-  if (uploadProgressFlushTimer === undefined) {
-    uploadProgressFlushTimer = window.setTimeout(flushUploadProgress, UPLOAD_PROGRESS_THROTTLE_MS);
-  }
-}
-
-function finishUploadProgress(entryId: string): void {
-  pendingUploadProgress.delete(entryId);
-  uploadProgressByEntryId.value = withoutKey(uploadProgressByEntryId.value, entryId);
-}
-/** 下载面板的任务快照；Rust Downloader 事件推来时由薄桥整体替换。 */
-const downloadTasks = ref<DownloadTaskSnapshot[]>([]);
-const downloader = new Downloader({
-  onTasksChanged: () => { downloadTasks.value = [...downloader.tasksSnapshot()]; },
-});
-/** 派生的逐条目下载进度：按 (entryId, batchId) 一次分组聚合——同批全部任务
- * 参与统计（含已成功的），只有批内仍有活动任务的批次才输出；避免逐任务
- * 全表扫描、同批重复计算。 */
-const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() => {
-  const batches = new Map<string, DownloadTaskSnapshot[]>();
-  for (const task of downloadTasks.value) {
-    const key = `${task.entryId}#${task.batchId}`;
-    const group = batches.get(key);
-    if (group) group.push(task);
-    else batches.set(key, [task]);
-  }
-  const progress: Record<string, DownloadProgress> = {};
-  for (const group of batches.values()) {
-    if (!group.some((task) => task.status === "queued" || task.status === "downloading")) continue;
-    progress[group[0]!.entryId] = {
-      finished: group.filter((task) => task.status === "succeeded").length,
-      total: group.length,
-      receivedBytes: group.reduce((sum, task) => sum + task.receivedBytes, 0),
-      totalBytes: group.reduce((sum, task) => sum + task.size, 0),
-    };
-  }
-  return progress;
-});
-/** 侧边栏「下载」入口的角标：排队 + 下载中的任务数。 */
-const activeDownloadCount = computed(() =>
-  downloadTasks.value.filter((task) => task.status === "queued" || task.status === "downloading").length);
-/** 「上传」页的中继应答任务快照：file.requested 且本机应答时记入（内存台账，随客户端重建清空）。 */
-const uploadTasks = ref<ServeTaskSnapshot[]>([]);
-/** 侧边栏「上传」入口的角标：待发送 + 发送中的任务数。 */
-const activeUploadCount = computed(() =>
-  uploadTasks.value.filter((task) => task.status === "pending" || task.status === "serving").length);
-const savingEntryId = ref("");
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
-let activeSyncConfig: SyncConfig | undefined;
-/** 活动档案的偏好；跟随档案切换与保存更新（Rust 侧持久化到档案目录）。 */
-let activePreferences: AccountPreferences = defaultAccountPreferences();
-let syncClient: SyncClient | undefined;
+const currentTime = ref(Date.now());
+const initializing = ref(true);
+const setupVisible = ref(false);
+const setupError = ref("");
+const testingConnection = ref(false);
+const importingShare = ref(false);
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
 /** 「下载」页可见时的快照轮询兜底；事件流丢包时列表最多滞后一个周期。 */
 let downloadPollTimer: number | undefined;
 let shareReceiverListener: PluginListener | undefined;
-let localClipboardRevision = 0;
-let remoteActivationRevision = 0;
 
-// 设置弹窗（useSettings 单例）通过 bridge 触达同步引擎；App.vue 持有引擎状态。
+// 历史同步视图（useHistorySync 单例）的装配：引擎客户端经 engine 导出触达，
+// 历史视图 ref 留在本组件，经注入读取。
+initHistorySync({
+  getSyncClient,
+  refreshPendingCount,
+  refreshPendingEntries,
+  getHistoryView: () => historyView.value,
+});
+
+// token 失效后的登录页处理留在本组件（setupVisible/setupError/setupWizard）；
+// 引擎只负责 stale 判断与停机，其余经回调交回。
+initSyncEngine({
+  onAuthenticationFailed: (message, config) => {
+    const alreadyRelogging = setupVisible.value && !getActiveConfig()?.sessionToken;
+    const expiredConfig = { ...config, sessionToken: "" };
+    setActiveConfig(expiredConfig);
+    currentUsername.value = expiredConfig.username;
+    setupError.value = message;
+    setupVisible.value = true;
+    if (!alreadyRelogging) {
+      void persistSyncConfig(expiredConfig);
+      void nextTick(() => setupWizard.value?.setFields(expiredConfig));
+    }
+  },
+});
+
+// 设置弹窗（useSettings 单例）通过 bridge 触达同步引擎；引擎状态已下沉各模块。
 initSettings({
-  getActiveConfig: () => activeSyncConfig,
-  setActiveConfig: (config) => { activeSyncConfig = config; },
-  getActivePreferences: () => activePreferences,
+  getActiveConfig,
+  setActiveConfig,
+  getActivePreferences,
   getUsername: () => currentUsername.value,
   setUsername: (name) => { currentUsername.value = name; },
   persistSyncConfig,
   persistAccountPreferences,
   // 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。
-  applyAutoUploadLimit: (limitMb: number) => {
-    syncClient?.setAutoUploadLimit(limitMb * 1024 * 1024);
-  },
+  applyAutoUploadLimit: setSyncAutoUploadLimit,
   startSync,
-  disconnect: () => {
-    stopSyncClient();
-  },
+  disconnect: stopSyncClient,
   markSignedOut: () => {
     hasSavedSyncConfig.value = false;
   },
@@ -222,320 +183,9 @@ initSettings({
   focusSearch,
 });
 
-/** 连接状态唯一切换点：只在真实变化时更新，并恰好提示一次（断开→成功、成功→断开各一次）。 */
-function setConnectionState(value: boolean): void {
-  if (connected.value === value) return;
-  connected.value = value;
-  showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
-  // 重连成功后重查一次"未存储"的文件可用性，兜住离线期间错过的
-  // `file.available` 推送（原对账时机已随登录对账移除）。
-  if (value) void syncFileStatuses(true);
-}
-
-/** Tears the sync client down. */
-function stopSyncClient(): void {
-  syncClient?.stop();
-  syncClient = undefined;
-  // 旧 FileTransfer.stop 的语义：同步断开时中止全部下载（凭据已失效）。
-  downloader.stopAll("同步已断开");
-  uploadTasks.value = [];
-  setConnectionState(false);
-}
-
-const connectionStatus = computed(() =>
-  connected.value
-    ? { label: "已连接", title: "已连接到同步服务器", tone: "online" }
-    : { label: "与服务器断开连接", title: "正在等待同步服务器重新连接", tone: "disconnected" },
-);
-
-const demoEntries: LocalClipboardEntry[] = [
-  {
-    id: "welcome",
-    kind: "text",
-    content: "ClipRoam 已准备好。复制一段文字，它会自动出现在这里。",
-    sourceDeviceId: "browser",
-    createdAt: new Date().toISOString(),
-    summary: EMPTY_SUMMARY,
-  },
-];
-
-/**
- * Browser-preview only: the stand-in list `clientManifest` filters, standing in
- * for the durable history that lives in SQLite when running inside Tauri.
- */
-const previewEntries = ref<LocalClipboardEntry[]>(demoEntries);
-
-/**
- * Browser-preview stand-in for `list_entries_manifest`: the same filters the
- * Rust command applies, over the local demo list.
- */
-function clientManifest(filter: EntriesManifestFilter, deviceNames: Record<string, string>): EntriesManifestPage {
-  const needle = (filter.query ?? "").trim().toLowerCase();
-  const matched = previewEntries.value.filter((entry) => {
-    if (filter.kind && filter.kind !== "all" && entry.kind !== filter.kind) return false;
-    const deviceIds = filter.deviceIds;
-    if (deviceIds?.length && !deviceIds.includes(entry.sourceDeviceId)) return false;
-    if (needle) {
-      const deviceLabel = (deviceNames[entry.sourceDeviceId] ?? "").toLowerCase();
-      const matches = entry.content.toLowerCase().includes(needle) || deviceLabel.includes(needle);
-      if (!matches) return false;
-    }
-    const createdAt = new Date(entry.createdAt).getTime();
-    if (filter.start !== undefined && createdAt < filter.start) return false;
-    if (filter.end !== undefined && createdAt > filter.end) return false;
-    return true;
-  });
-  const page = filter.page;
-  return {
-    total: matched.length,
-    entries: page ? matched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : matched,
-  };
-}
-
-async function fetchManifest(
-  filter: EntriesManifestFilter,
-  deviceNames: Record<string, string>,
-): Promise<EntriesManifestPage> {
-  if (!runningInTauri) {
-    return clientManifest(filter, deviceNames);
-  }
-  // 未登录没有活动档案；隐藏的 paste 窗口启动时也会来查，这里返回空页，
-  // 不让「同步账号未登录」的错误以 toast 形式盖到主窗口的登录页上。
-  if (!activeSyncConfig?.sessionToken) {
-    return { total: 0, entries: [] };
-  }
-  return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
-}
-
-/** The pending-sync list re-queries Rust; the browser preview derives it. */
-async function refreshPendingEntries(): Promise<void> {
-  if (!runningInTauri) {
-    pendingEntries.value = previewEntries.value.filter((entry) => !isEntrySynced(entry));
-    pendingCount.value = pendingEntries.value.length;
-    return;
-  }
-  try {
-    pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_pending_entries");
-    pendingCount.value = pendingEntries.value.length;
-  } catch (error) {
-    showToast(`待同步记录读取失败：${errorMessage(error)}`, "error");
-  }
-}
-
-/**
- * Sidebar badge only: an O(1) count, so refresh bursts outside the pending
- * view never haul the queue rows across the IPC boundary.
- */
-async function refreshPendingCount(): Promise<void> {
-  if (!runningInTauri) {
-    pendingCount.value = previewEntries.value.filter((entry) => !isEntrySynced(entry)).length;
-    return;
-  }
-  try {
-    pendingCount.value = await invoke<number>("count_pending_entries");
-  } catch {
-    // The badge is auxiliary; a failed refresh keeps the previous value.
-  }
-}
-
 watch(activeView, (view) => {
   if (view === "pending-sync") void refreshPendingEntries();
 });
-
-let refreshTimer: number | undefined;
-
-/**
- * Background events (captures, remote upserts, file availability) arrive in
- * bursts; each one only invalidates views. A burst coalesces into one pass:
- * the history view refetches its current page on the revision bump, while the
- * pending badge (and, when its view is open, the queue details) re-query
- * Rust-side. Nothing reads whole history.
- */
-function refreshHistory(): void {
-  if (refreshTimer !== undefined) return;
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = undefined;
-    historyRevision.value += 1;
-    void refreshPendingCount();
-    if (activeView.value === "pending-sync") void refreshPendingEntries();
-    void syncFileStatuses();
-  }, 200);
-}
-
-/**
- * Server-pool availability is persisted in the local `files` table; this only
- * fills its gaps. Rust reports the content ids without a confirmed pool
- * answer, one batched `/files/query` answers them, and the result lands in
- * the table where the summaries read it. Steady state returns an empty list,
- * so it costs nothing; a failure just leaves the gap for the next pass.
- * `recheckUnstored` (reconnect only) also re-asks ids last answered "not
- * stored", healing a `file.available` push missed while offline.
- */
-async function syncFileStatuses(recheckUnstored = false): Promise<void> {
-  const client = syncClient;
-  if (!runningInTauri || !client) return;
-  try {
-    const fileIds = await invoke<string[]>("find_unknown_file_ids", { recheckUnstored });
-    if (!fileIds.length) return;
-    const statuses = await client.fetchFiles(fileIds);
-    await invoke("upsert_server_files", { statuses });
-    // The summaries changed, so the history view refetches its current page.
-    historyRevision.value += 1;
-  } catch {
-    // Auxiliary display state; the next refresh retries.
-  }
-}
-
-const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
-let remoteUpsertFlush: Promise<void> | undefined;
-
-/**
- * Whether the history view needs a visible refresh for a newly arrived entry.
- * The entry lands on page 1, so only a view sitting there must refetch; deeper
- * pages keep their scroll (their slice shifts by one and the next page change
- * or revision bump catches up), and an unmounted view refetches page 1 on
- * remount anyway.
- */
-function historyOnFirstPage(): boolean {
-  return historyView.value?.currentPage === 1;
-}
-
-/**
- * Remote entry echoes arrive one per published entry, but each write rewrites
- * the durable history. Queue them so a burst becomes a single batch command.
- */
-function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
-  pendingRemoteUpserts.set(entry.id, entry);
-  if (remoteUpsertFlush) return remoteUpsertFlush;
-  remoteUpsertFlush = new Promise<void>((resolve) => {
-    window.setTimeout(() => {
-      const batch = [...pendingRemoteUpserts.values()];
-      pendingRemoteUpserts.clear();
-      remoteUpsertFlush = undefined;
-      void applyRemoteUpserts(batch, historyOnFirstPage()).finally(resolve);
-    }, 200);
-  });
-  return remoteUpsertFlush;
-}
-
-/** Browser-preview variant of a remote upsert: plain local list surgery. */
-function upsertLocalEntry(entry: ClipboardEntry): void {
-  previewEntries.value = [
-    { ...entry, summary: EMPTY_SUMMARY },
-    ...previewEntries.value.filter((item) => item.id !== entry.id),
-  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-async function applyRemoteUpserts(batch: ClipboardEntry[], refresh = true): Promise<void> {
-  markEntriesSynced(batch);
-  if (!runningInTauri) {
-    for (const entry of batch) upsertLocalEntry(entry);
-    return;
-  }
-  try {
-    await invoke("upsert_server_entries", { entries: batch });
-  } catch (error) {
-    showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
-    return;
-  }
-  if (refresh) refreshHistory();
-}
-
-function rememberDevices(devices: Device[]): void {
-  devicesById.value = {
-    ...devicesById.value,
-    ...Object.fromEntries(devices.map((device) => [device.id, device])),
-  };
-  // paste 窗口不持有 sync 客户端，设备名靠主窗口广播补充。
-  if (runningInTauri && !isPasteWindow) {
-    void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, { devices }).catch(() => undefined);
-  }
-}
-
-/** 批量标记已同步：一次构建新 Set，避免逐条 clone 整个集合（burst 推送时是 O(n²)）。 */
-function markEntriesSynced(entries: readonly ClipboardEntry[]): void {
-  if (!entries.length) return;
-  const known = new Set(syncedEntryIds.value);
-  let changed = false;
-  for (const entry of entries) {
-    if (!known.has(entry.id)) {
-      known.add(entry.id);
-      changed = true;
-    }
-  }
-  if (changed) syncedEntryIds.value = known;
-}
-
-function isEntrySynced(entry: ClipboardEntry): boolean {
-  return syncedEntryIds.value.has(entry.id);
-}
-
-function focusSearch(): void {
-  void nextTick(() => historyView.value?.focusSearch());
-}
-
-// Mirrors the former Rust-side paste positioning: center the window below the
-// cursor and clamp it inside the monitor's work area. All values are physical
-// pixels.
-function calculatePasteWindowPosition(
-  cursorX: number,
-  cursorY: number,
-  workX: number,
-  workY: number,
-  workWidth: number,
-  workHeight: number,
-  windowWidth: number,
-  windowHeight: number,
-): { x: number; y: number } {
-  const CURSOR_GAP = 12;
-  const SCREEN_MARGIN = 8;
-  const minX = workX + SCREEN_MARGIN;
-  const minY = workY + SCREEN_MARGIN;
-  const maxX = Math.max(workX + workWidth - windowWidth - SCREEN_MARGIN, minX);
-  const maxY = Math.max(workY + workHeight - windowHeight - SCREEN_MARGIN, minY);
-  const x = Math.min(Math.max(cursorX - Math.floor(windowWidth / 2), minX), maxX);
-  const belowCursor = cursorY + CURSOR_GAP;
-  const preferredY = belowCursor <= maxY ? belowCursor : cursorY - windowHeight - CURSOR_GAP;
-  return { x, y: Math.min(Math.max(preferredY, minY), maxY) };
-}
-
-async function showPasteWindow(): Promise<void> {
-  if (!isPasteWindow || !runningInTauri) return;
-  // 每次弹出时向主窗口要一次设备名，兜住错过广播的启动竞态；失败静默。
-  requestProxyDevices();
-  // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
-  await invoke("capture_paste_target").catch(() => undefined);
-  // 主窗口可见时会参与焦点竞争：应用被点击激活时主窗口作为 key 窗口
-  // 会吞掉对粘贴窗口的第一次点击。快速粘贴期间把主窗口收起，单击才能直达。
-  await invoke("hide_main").catch(() => undefined);
-  const pasteWindow = getCurrentWindow();
-  try {
-    const cursor = await cursorPosition();
-    const monitor: Monitor | null = await monitorFromPoint(cursor.x, cursor.y);
-    if (monitor) {
-      const windowSize = await pasteWindow.outerSize();
-      const workArea = monitor.workArea;
-      const position = calculatePasteWindowPosition(
-        Math.round(cursor.x),
-        Math.round(cursor.y),
-        workArea.position.x,
-        workArea.position.y,
-        workArea.size.width,
-        workArea.size.height,
-        windowSize.width,
-        windowSize.height,
-      );
-      await pasteWindow.setPosition(new PhysicalPosition(position.x, position.y));
-    }
-  } catch (error) {
-    // The window still opens even if positioning is unavailable.
-    console.error("定位快捷粘贴窗口失败：", error);
-  }
-  await pasteWindow.show();
-  await pasteWindow.unminimize();
-  await pasteWindow.setFocus();
-  focusSearch();
-}
 
 function shareImportMessage(summary: ShareImportSummary): string {
   const parts = [
@@ -559,253 +209,6 @@ async function consumeMobileShares(): Promise<void> {
   } finally {
     importingShare.value = false;
   }
-}
-
-async function hideWindow(): Promise<void> {
-  if (runningInTauri && !isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
-}
-
-function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T> {
-  const { [id]: _, ...remaining } = record;
-  return remaining;
-}
-
-/**
- * Fetches every content this device is missing. All windows go through the
- * shared Downloader; queueing, credentials and the HTTP pull itself
- * live in the Rust-side downloader.
- */
-async function downloadRequiredFiles(
-  entry: LocalClipboardEntry,
-  prepareCommand: "prepare_entry_files" | "prepare_paste_entry",
-): Promise<LocalClipboardEntry> {
-  if (entry.kind !== "files" && entry.kind !== "image") return entry;
-  const missing = await invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
-  if (!missing.length) return entry;
-  try {
-    await downloader.downloadFiles(entry.id, missing, { entryLabel: entry.content });
-  } finally {
-    refreshHistory();
-  }
-  // Re-read the persisted entry: its availability summary changed on disk.
-  return (await fullEntry(entry)) as LocalClipboardEntry;
-}
-
-async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_entry_files");
-}
-
-async function ensurePasteReady(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_paste_entry");
-}
-
-async function activateEntry(
-  entry: LocalClipboardEntry | undefined,
-  command: "copy_entry" | "paste_entry",
-): Promise<void> {
-  if (!entry) return;
-  if (!runningInTauri) {
-    await navigator.clipboard.writeText(entry.content);
-    showToast("已复制到系统剪贴板", "success");
-    return;
-  }
-  if (isMobile.value && entry.kind !== "text") {
-    await saveEntry(entry);
-    return;
-  }
-  if (activatingEntryIds.value.has(entry.id)) {
-    // 下载中再次激活 = 取消该下载；无下载（如纯文本快速粘贴）则维持防重复。
-    if (await downloader.cancelEntry(entry.id) > 0) showToast("已取消下载", "info");
-    return;
-  }
-  activatingEntryIds.value.add(entry.id);
-  try {
-    // Rust selects the native strategy. This downloads only what the current
-    // platform must materialize before it can copy or paste the entry.
-    await ensurePasteReady(entry);
-    // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
-    const write = clipboardWriteChain.then(() => invoke(command, { entryId: entry.id }));
-    clipboardWriteChain = write.catch(() => undefined);
-    await write;
-    // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
-    // 看不见，保留确认提示。
-    if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
-  } catch (error) {
-    // 取消的提示已由取消方给出，原激活方静默收尾。
-    if (error instanceof DownloadCancelledError) return;
-    if (String(error).includes("clipboard entry was not found")) {
-      refreshHistory();
-      return;
-    }
-    showToast(String(error), "error");
-  } finally {
-    activatingEntryIds.value.delete(entry.id);
-  }
-}
-
-function copyEntry(entry?: LocalClipboardEntry): Promise<void> {
-  return activateEntry(entry, "copy_entry");
-}
-
-function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
-  return activateEntry(entry, "paste_entry");
-}
-
-async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
-  if (savingEntryId.value || !canSaveEntry(entry)) return;
-  savingEntryId.value = entry.id;
-  let saveId: string | undefined;
-  try {
-    if (isMobile.value) {
-      await ensureLocalFiles(entry);
-      showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
-    } else {
-      const preparation = await invoke<SavePreparation | null>("prepare_save_entry", {
-        entryId: entry.id,
-      });
-      if (!preparation) return;
-      saveId = preparation.saveId;
-
-      if (preparation.missing.length) {
-        // saveId 隔离任务：落盘到另存 staging 而非内容寻址缓存。
-        await downloader.downloadFiles(entry.id, preparation.missing, {
-          saveId: preparation.saveId,
-          entryLabel: entry.content,
-        });
-      }
-
-      const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
-      saveId = undefined;
-      if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
-    }
-  } catch (error) {
-    if (error instanceof DownloadCancelledError) return;
-    if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
-    showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
-  } finally {
-    savingEntryId.value = "";
-  }
-}
-
-/**
- * Activation requests from the history view. `viaClick` mirrors the old
- * select-or-activate split: clicks activate immediately only in the paste
- * window and on mobile, keyboard/double-click everywhere.
- */
-function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
-  if (viaClick) {
-    if (isPasteWindow) void pasteEntry(entry);
-    else if (isMobile.value) void copyEntry(entry);
-    return;
-  }
-  if (isPasteWindow) void pasteEntry(entry);
-  else if (entry.kind === "files") {
-    showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“另存为…”手动下载", "info");
-  } else {
-    void copyEntry(entry);
-  }
-}
-
-/** A pending row's display id is `p{seq}`; extract the seq its Dequeue takes. */
-function pendingSeqOf(entryId: string): number | null {
-  return /^p\d+$/.test(entryId) ? Number(entryId.slice(1)) : null;
-}
-
-// Deletion is server-authoritative: the request goes out, and the local entry
-// is only cleaned up when the `clipboard.deleted` echo arrives (the server
-// broadcasts to every device, including the initiator). A pending queue row
-// never reached the server, so it is dequeued outright.
-async function removeEntry(entry: ClipboardEntry): Promise<void> {
-  const seq = pendingSeqOf(entry.id);
-  if (seq !== null) {
-    await invoke("dequeue_pending_entry", { seq }).catch((error) => {
-      showToast(`删除失败：${errorMessage(error)}`, "error");
-    });
-    return;
-  }
-  const client = syncClient;
-  if (!client) {
-    showToast("网络异常，暂时无法删除，请检查同步连接", "error");
-    return;
-  }
-  try {
-    await client.delete(entry.id);
-  } catch (error) {
-    showToast(`删除失败：${errorMessage(error)}`, "error");
-    return;
-  }
-  // Idempotent fallback in case the echo is lost (e.g. disconnect right after
-  // the response); cleanup stays a no-op if the echo already handled it.
-  if (runningInTauri) {
-    setTimeout(() => {
-      // The command emits `cliproam://history-changed`, which refreshes the
-      // views; no explicit invalidation needed here.
-      void invoke("remove_server_entry", { entryId: entry.id });
-    }, 5000);
-  }
-}
-
-/** 与 Rust 侧 history_key_for_config 对齐的档案键，仅用于判断是否重登同一账号。 */
-function archiveKeyFor(config: SyncConfig | undefined): string {
-  const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";
-  const username = config?.username.trim().toLowerCase() ?? "";
-  if (!username) return "";
-  return `account:${serverAddress}:${username}`;
-}
-
-async function loadSyncConfig(): Promise<SyncConfig | null> {
-  let raw: unknown;
-  if (runningInTauri) raw = await invoke<unknown>("get_sync_config");
-  else {
-    try {
-      const stored = window.localStorage.getItem(BROWSER_CONFIG_KEY);
-      raw = stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  }
-  if (!raw || typeof raw !== "object") return null;
-  const value = raw as Record<string, unknown>;
-  return {
-    serverAddress: typeof value.serverAddress === "string" && value.serverAddress
-      ? value.serverAddress
-      : DEFAULT_SERVER_ADDRESS,
-    serverProtocol: value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL,
-    username: typeof value.username === "string" ? value.username : "",
-    sessionToken: typeof value.sessionToken === "string" ? value.sessionToken : "",
-  };
-}
-
-async function persistSyncConfig(config: SyncConfig | null): Promise<void> {
-  if (runningInTauri) await invoke("save_sync_config", { config });
-  else window.localStorage.setItem(BROWSER_CONFIG_KEY, JSON.stringify(config));
-  // 配置保存可能切换活动档案（登录/退出账号），偏好跟随档案——
-  // 无论是否切换都重读一次，保证前端内存态与活动档案一致。
-  activePreferences = await loadAccountPreferences();
-}
-
-async function loadAccountPreferences(): Promise<AccountPreferences> {
-  if (runningInTauri) {
-    try {
-      return await invoke<AccountPreferences>("get_account_preferences");
-    } catch {
-      return defaultAccountPreferences();
-    }
-  }
-  try {
-    const stored = window.localStorage.getItem(BROWSER_PREFERENCES_KEY);
-    return stored
-      ? { ...defaultAccountPreferences(), ...(JSON.parse(stored) as Partial<AccountPreferences>) }
-      : defaultAccountPreferences();
-  } catch {
-    return defaultAccountPreferences();
-  }
-}
-
-async function persistAccountPreferences(preferences: AccountPreferences): Promise<void> {
-  if (runningInTauri) await invoke("save_account_preferences", { preferences });
-  else window.localStorage.setItem(BROWSER_PREFERENCES_KEY, JSON.stringify(preferences));
-  activePreferences = preferences;
 }
 
 function closeSetup(): void {
@@ -841,7 +244,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       sessionToken: session.sessionToken,
     };
     // 重登同一账号档案保留它的偏好；换账号从默认开始，避免跨账号污染。
-    const sameArchive = archiveKeyFor(activeSyncConfig) === archiveKeyFor(config);
+    const sameArchive = archiveKeyFor(getActiveConfig()) === archiveKeyFor(config);
     const preferences: AccountPreferences = {
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
       autoUploadLimitMb: Math.min(
@@ -849,17 +252,17 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
         Math.max(0, session.settings.maxStoredFileMb),
       ),
       autoReceiveClipboard: sameArchive
-        ? activePreferences.autoReceiveClipboard
+        ? getActivePreferences().autoReceiveClipboard
         : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
       excludePatterns: sameArchive
-        ? activePreferences.excludePatterns
+        ? getActivePreferences().excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
       serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
       // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
       maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
     await persistSyncConfig(config);
-    activeSyncConfig = config;
+    setActiveConfig(config);
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
     await persistAccountPreferences(preferences);
@@ -905,127 +308,6 @@ function handleKeys(event: KeyboardEvent): void {
   }
 }
 
-async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
-  const config = activeSyncConfig;
-  if (
-    !runningInTauri
-    || !activePreferences.autoReceiveClipboard
-    || entry.kind === "files"
-    || (isMobile.value && entry.kind !== "text")
-  ) return;
-
-  const activationRevision = ++remoteActivationRevision;
-  const startingLocalRevision = localClipboardRevision;
-  try {
-    // The activation carries the complete entry so it remains safe even when
-    // its history update and activation messages are handled concurrently —
-    // once `applyRemoteUpserts` resolves it is durable, no re-read needed.
-    await applyRemoteUpserts([entry]);
-    let localEntry = entry as LocalClipboardEntry;
-    if (activeSyncConfig !== config || !activePreferences.autoReceiveClipboard) return;
-    if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
-
-    // A newer remote activation or a real local copy wins while an image is
-    // downloading; never replace content the user copied in the meantime.
-    if (
-      activationRevision !== remoteActivationRevision
-      || startingLocalRevision !== localClipboardRevision
-      || activeSyncConfig !== config
-      || !activePreferences.autoReceiveClipboard
-    ) return;
-    await invoke("activate_remote_entry", { entryId: localEntry.id });
-  } catch (error) {
-    if (
-      activationRevision === remoteActivationRevision
-      && activeSyncConfig === config
-      && activePreferences.autoReceiveClipboard
-    ) {
-      showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
-    }
-  }
-}
-
-/**
- * The rendered list carries only aggregates. Publishing needs the directory tree,
- * so it is fetched per entry instead of for the whole history.
- */
-async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEntry> {
-  if (!runningInTauri) return entry as ClipboardEntry;
-  return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
-}
-
-async function startSync(config: SyncConfig): Promise<void> {
-  // The quick-paste window only reads local history; broadcasts from the main
-  // window keep it fresh, and a second socket would double every sync task.
-  if (isPasteWindow) return;
-  syncClient?.stop();
-  setConnectionState(false);
-  const device = await getDevice();
-  const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
-  let client: SyncClient;
-  client = new SyncClient(
-    httpUrl,
-    webSocketUrl,
-    config.sessionToken,
-    device,
-    {
-      onConnected: setConnectionState,
-      onDevices: (devices) => { rememberDevices(devices); },
-      onDevicePresence: (device) => { rememberDevices([device]); },
-      onEntry: (entry) => {
-        void queueRemoteUpsert(entry);
-      },
-      onActivation: (entry) => {
-        if (syncClient === client) void activateRemoteClipboard(entry);
-      },
-      onDelete: (entryId) => {
-        const remaining = new Set(syncedEntryIds.value);
-        remaining.delete(entryId);
-        syncedEntryIds.value = remaining;
-        if (runningInTauri) void invoke("remove_server_entry", { entryId });
-        else previewEntries.value = previewEntries.value.filter((entry) => entry.id !== entryId);
-      },
-      onFileAvailable: () => {
-        // Content-addressed push: the server now holds this content. The
-        // persisted row is written by the next `/files/query` backfill —
-        // this only nudges the refresh burst that triggers it.
-        refreshHistory();
-      },
-      onUploadProgress: queueUploadProgress,
-      onUploadFinished: finishUploadProgress,
-      onError: (message) => { showToast(message, "error"); },
-      onServeTasksChanged: () => {
-        if (syncClient !== client) return;
-        uploadTasks.value = [...client.serveTasksSnapshot()];
-      },
-      resolveEntryLabel: (entryId) =>
-        invoke<ClipboardEntry>("get_entry", { entryId })
-          .then((entry) => entry.content)
-          .catch(() => undefined),
-      onAuthenticationFailed: (message) => {
-        if (syncClient !== client) return;
-        stopSyncClient();
-        const alreadyRelogging = setupVisible.value && !activeSyncConfig?.sessionToken;
-        const expiredConfig = { ...config, sessionToken: "" };
-        activeSyncConfig = expiredConfig;
-        currentUsername.value = expiredConfig.username;
-        setupError.value = message;
-        setupVisible.value = true;
-        if (!alreadyRelogging) {
-          void persistSyncConfig(expiredConfig);
-          void nextTick(() => setupWizard.value?.setFields(expiredConfig));
-        }
-      },
-    },
-    activePreferences.autoUploadLimitMb * 1024 * 1024,
-  );
-  syncClient = client;
-  client.connect();
-  // 登录即拉取设备表：纯 HTTP，不依赖 socket；auth.ack 只确认连接。
-  // 不做历史对账：本地历史靠实时推送增量维护，登录不回拉服务器存量。
-  void client.pullDevices();
-}
-
 function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(message)), 5_000);
@@ -1054,7 +336,7 @@ async function initializeTauriServices(): Promise<void> {
   const listenerResults = await Promise.allSettled([
     startToastWindowListener(),
     listen("cliproam://entry-created", () => {
-      localClipboardRevision += 1;
+      bumpLocalClipboardRevision();
       refreshHistory();
     }),
     listen("cliproam://history-changed", refreshHistory),
@@ -1147,8 +429,8 @@ onMounted(async () => {
   if (!config) {
     if (!isPasteWindow) setupVisible.value = true;
   } else {
-    activeSyncConfig = config;
-    activePreferences = await loadAccountPreferences();
+    setActiveConfig(config);
+    setActivePreferences(await loadAccountPreferences());
     currentUsername.value = config.username;
     // 登录态完整才允许从登录页返回主界面；token 过期重登时保留返回入口。
     hasSavedSyncConfig.value = Boolean(config.username && config.sessionToken);
@@ -1181,16 +463,13 @@ onBeforeUnmount(() => {
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
   if (downloadPollTimer !== undefined) window.clearInterval(downloadPollTimer);
   disposeToast();
-  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-  if (uploadProgressFlushTimer !== undefined) window.clearTimeout(uploadProgressFlushTimer);
-  if (pendingRemoteUpserts.size) {
-    void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
-    pendingRemoteUpserts.clear();
-  }
+  cancelRefreshBurst();
+  cancelUploadProgressFlush();
+  flushPendingRemoteUpserts();
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();
-  syncClient?.stop();
+  stopActiveClient();
   if (!isPasteWindow) void disposeQuickPasteShortcut();
 });
 </script>
