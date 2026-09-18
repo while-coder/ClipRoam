@@ -32,7 +32,6 @@ export function useHistoryManifest(options: ManifestOptions) {
   const page = ref(1);
   const total = ref(0);
   const entries = ref<LocalClipboardEntry[]>([]);
-  const loading = ref(false);
   let fetchToken = 0;
   // 请求的目标页：revision 自增落在一次拉取中途时（例如重开快捷粘贴窗口的
   // 第 1 页重置还没返回），按目标页重拉，而不是被过期的旧 page.value 抢占。
@@ -44,7 +43,6 @@ export function useHistoryManifest(options: ManifestOptions) {
     if (options.canFetch && !options.canFetch()) return;
     const token = ++fetchToken;
     targetPage = requestedPage;
-    loading.value = true;
     try {
       const result = await options.fetchManifest(
         options.buildFilter(requestedPage),
@@ -72,8 +70,6 @@ export function useHistoryManifest(options: ManifestOptions) {
       // Keep the stale page on screen rather than silently appearing empty;
       // the caller decides how the failure is surfaced.
       if (token === fetchToken) options.onError?.(errorMessage(error));
-    } finally {
-      if (token === fetchToken) loading.value = false;
     }
   }
 
@@ -82,7 +78,6 @@ export function useHistoryManifest(options: ManifestOptions) {
     fetchToken += 1;
     total.value = 0;
     entries.value = [];
-    loading.value = false;
   }
 
   watch(options.filterSources, () => { void fetch(1, true); });
@@ -95,5 +90,5 @@ export function useHistoryManifest(options: ManifestOptions) {
     await fetch(next, true);
   }
 
-  return { page, total, pageCount, entries, loading, fetch, clear, changePage };
+  return { page, total, pageCount, entries, fetch, clear, changePage };
 }

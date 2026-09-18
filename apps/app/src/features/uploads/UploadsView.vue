@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { LoaderCircle, Upload } from "lucide-vue-next";
 import { computed } from "vue";
-import { formatFileSize } from "../../utils/format";
+import { formatFileSize, percentOf } from "../../utils/format";
 import type { ServeTaskSnapshot } from "../sync/fileTransfer";
 
 /**
@@ -28,7 +28,7 @@ function serveTaskStatusText(task: ServeTaskSnapshot): string {
 
 function servePercent(task: ServeTaskSnapshot): number {
   if (!task.size) return task.status === "succeeded" ? 100 : 0;
-  return Math.min(100, Math.floor((task.sentBytes / task.size) * 100));
+  return percentOf(task.sentBytes, task.size);
 }
 </script>
 

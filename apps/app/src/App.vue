@@ -70,7 +70,6 @@ import {
   rememberDevices,
   setSyncAutoUploadLimit,
   startSync,
-  stopActiveClient,
   stopSyncClient,
 } from "./features/sync/syncEngine";
 import {
@@ -164,7 +163,6 @@ initSettings({
   persistAccountPreferences,
   // 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。
   applyAutoUploadLimit: setSyncAutoUploadLimit,
-  startSync,
   disconnect: stopSyncClient,
   markSignedOut: () => {
     hasSavedSyncConfig.value = false;
@@ -466,7 +464,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();
-  stopActiveClient();
+  stopSyncClient({ activeOnly: true });
   if (!isPasteWindow) void disposeQuickPasteShortcut();
 });
 </script>

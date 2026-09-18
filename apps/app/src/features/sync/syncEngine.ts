@@ -58,7 +58,7 @@ export function bumpLocalClipboardRevision(): void {
 }
 
 /** 连接状态唯一切换点：只在真实变化时更新，并恰好提示一次（断开→成功、成功→断开各一次）。 */
-export function setConnectionState(value: boolean): void {
+function setConnectionState(value: boolean): void {
   if (connected.value === value) return;
   connected.value = value;
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
@@ -67,19 +67,18 @@ export function setConnectionState(value: boolean): void {
   if (value) void syncFileStatuses(true);
 }
 
-/** Tears the sync client down. */
-export function stopSyncClient(): void {
+/**
+ * Tears the sync client down. `activeOnly` 是卸载兜底：只停 socket；断开
+ * 提示与下载中止是运行期断开（设置退出、token 失效）的语义。
+ */
+export function stopSyncClient(options: { activeOnly?: boolean } = {}): void {
   syncClient?.stop();
   syncClient = undefined;
+  if (options.activeOnly) return;
   // 旧 FileTransfer.stop 的语义：同步断开时中止全部下载（凭据已失效）。
   downloader.stopAll("同步已断开");
   uploadTasks.value = [];
   setConnectionState(false);
-}
-
-/** 卸载兜底：只停 socket；断开提示与下载中止是 stopSyncClient 的运行期语义。 */
-export function stopActiveClient(): void {
-  syncClient?.stop();
 }
 
 export const connectionStatus = computed(() =>

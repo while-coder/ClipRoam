@@ -54,3 +54,9 @@ export function formatFileSize(bytes: number): string {
   }
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
+
+/** cur/total 的整数百分比，clamp 到 cap（进行中默认 99 封顶，到位由终态接管）；total 无效时为 0。 */
+export function percentOf(cur: number, total: number, cap = 100): number {
+  if (!total) return 0;
+  return Math.min(cap, Math.floor((cur / total) * 100));
+}

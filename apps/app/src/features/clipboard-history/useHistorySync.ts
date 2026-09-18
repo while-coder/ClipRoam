@@ -17,12 +17,12 @@ import type {
  * 装配时注入，保持静态依赖单向。
  */
 /** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, currentPage })）。 */
-export interface HistorySyncViewRef {
+interface HistorySyncViewRef {
   currentPage?: number;
   focusSearch(): Promise<void>;
 }
 
-export interface HistorySyncDeps {
+interface HistorySyncDeps {
   getSyncClient(): SyncClient | undefined;
   refreshPendingCount(): Promise<void>;
   refreshPendingEntries(): Promise<void>;

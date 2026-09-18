@@ -1,5 +1,5 @@
 import { MANUAL_UPLOAD_LIMIT } from "../features/sync/fileTransfer";
-import { formatFileSize } from "./format";
+import { formatFileSize, percentOf } from "./format";
 import type {
   ClipboardEntry,
   Device,
@@ -39,9 +39,7 @@ export function uploadStatus(
   if (isHashing(entry)) return `计算中 ${summary.hashedCount}/${summary.fileCount}`;
   const download = downloadProgress[entry.id];
   if (download) {
-    const percent = download.totalBytes
-      ? Math.min(99, Math.floor((download.receivedBytes / download.totalBytes) * 100))
-      : 0;
+    const percent = percentOf(download.receivedBytes, download.totalBytes, 99);
     // 多文件批次保留「已完成/总数」；单文件它没有信息量，直接给字节进度。
     const count = download.total > 1 ? `${download.finished}/${download.total} · ` : "";
     const bytes = download.totalBytes
@@ -51,10 +49,7 @@ export function uploadStatus(
   }
   const progress = uploadProgress[entry.id];
   if (progress) {
-    const percent = progress.totalBytes
-      ? Math.min(99, Math.floor((progress.uploadedBytes / progress.totalBytes) * 100))
-      : 0;
-    return `上传中 ${percent}%`;
+    return `上传中 ${percentOf(progress.uploadedBytes, progress.totalBytes, 99)}%`;
   }
   if (!summary.contentCount) return undefined;
   const storedCount = summary.storedCount;

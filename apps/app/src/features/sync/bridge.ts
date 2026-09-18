@@ -8,7 +8,7 @@ import type { Device } from "@cliproam/protocol";
  */
 
 /** paste → main 的设备列表请求（fire-and-forget，主窗口经广播回）。 */
-export const SYNC_BRIDGE_DEVICES_REQUEST_EVENT = "cliproam://sync-bridge-devices-request";
+const SYNC_BRIDGE_DEVICES_REQUEST_EVENT = "cliproam://sync-bridge-devices-request";
 /** main → paste 的设备表广播（主动推送兼请求回执）。 */
 export const SYNC_BRIDGE_DEVICES_EVENT = "cliproam://sync-bridge-devices";
 
