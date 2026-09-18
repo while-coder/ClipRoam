@@ -6,7 +6,6 @@ use chrono::Utc;
 use image::{GenericImageView, ImageFormat};
 use serde::Serialize;
 use std::{
-    fs,
     io::Cursor,
     path::PathBuf,
     thread,
@@ -19,7 +18,7 @@ use crate::content::{
     collect_tree, describe_roots, file_entry_signature, file_signature,
     ClipboardEntry, ClipboardEntryExtra, ImageInfo, LocalSources,
 };
-use crate::utils::{fnv1a, hash_bytes, write_file_atomic};
+use crate::utils::{ensure_parent_dir, fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{
@@ -45,18 +44,6 @@ pub(crate) struct RichText {
     pub text: String,
     pub html: Option<String>,
     pub rtf: Option<String>,
-}
-
-pub(crate) fn safe_file_name(name: &str) -> String {
-    name.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 pub(crate) fn rich_text_signature(rich_text: &RichText) -> String {
@@ -426,9 +413,7 @@ pub(crate) fn capture_image(app: &AppHandle, image: Vec<u8>) -> Result<(), Strin
         )
     };
     let image_path = upload_image_path(&cache_dir, &file_id).ok_or_else(|| "内容标识不合法".to_string())?;
-    if let Some(parent) = image_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    ensure_parent_dir(&image_path)?;
     if !image_path.is_file() {
         // The write is atomic because the target is content-addressed: a plain
         // interrupted write would leave a truncated file that every later

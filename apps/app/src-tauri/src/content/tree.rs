@@ -10,7 +10,7 @@ use super::{
     ClipboardEntry, CollectedTree, EntrySummary, FileInfo, LocalSource, LocalSources, TreeNode,
 };
 use crate::file::cached_file_path;
-use crate::utils::{modified_millis, name_matches_any};
+use crate::utils::{ensure_parent_dir, modified_millis, name_matches_any};
 
 /// Every content the map references, de-duplicated in encounter order, with
 /// the size each leaf reports.
@@ -334,9 +334,7 @@ fn build_dir(
                 build_dir(children, &target, resolve, link, written)?;
             }
             TreeNode::File { f, .. } => {
-                if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                }
+                ensure_parent_dir(&target)?;
                 let source = resolve(f).ok_or_else(|| format!("文件内容不可用：{name}"))?;
                 if target.exists() {
                     fs::remove_file(&target).map_err(|error| error.to_string())?;

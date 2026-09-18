@@ -297,8 +297,8 @@ function handleKeys(event: KeyboardEvent): void {
     }
     return;
   }
-  // The history view handles its own dialogs (clear-history confirm, image
-  // preview) plus selection keys; a true return means the key was consumed.
+  // The history view handles its own dialogs (image preview) plus selection
+  // keys; a true return means the key was consumed.
   if (historyView.value?.handleKeydown(event)) return;
   if (event.key === "Escape") {
     event.preventDefault();
