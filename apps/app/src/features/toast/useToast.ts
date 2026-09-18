@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { isToastWindow, runningInTauri } from "../../composables/usePlatform";
+import { isToastWindow } from "../../composables/usePlatform";
 import type { ToastPayload, ToastTone } from "../../types";
 
 /** 模块级单例（对齐 usePlatform 风格）：所有窗口内组件共享同一个 toast 状态。 */
@@ -45,10 +45,6 @@ function showToast(message: string, tone: ToastTone = "info"): void {
   const normalized = message.trim();
   if (!normalized) return;
   const payload = { message: normalized, tone };
-  if (!runningInTauri) {
-    displayToast(payload);
-    return;
-  }
   void invoke("show_toast", payload).catch(() => displayToast(payload));
 }
 

@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-vue-next";
 import { computed } from "vue";
-import { runningInTauri, usePlatform } from "../../composables/usePlatform";
+import { usePlatform } from "../../composables/usePlatform";
 import {
   displayShortcut,
   quickPasteShortcut,
@@ -92,7 +92,7 @@ const {
         <div class="settings-layout">
           <nav class="settings-nav" aria-label="设置分类" role="tablist">
             <button :class="{ active: settingsPage === 'general' }" type="button" role="tab" aria-controls="settings-general-panel" :aria-selected="settingsPage === 'general'" @click="selectSettingsPage('general')">通用</button>
-            <button v-if="runningInTauri && platformCapabilities.globalShortcut" :class="{ active: settingsPage === 'shortcuts' }" type="button" role="tab" aria-controls="settings-shortcuts-panel" :aria-selected="settingsPage === 'shortcuts'" @click="selectSettingsPage('shortcuts')">快捷键</button>
+            <button v-if="platformCapabilities.globalShortcut" :class="{ active: settingsPage === 'shortcuts' }" type="button" role="tab" aria-controls="settings-shortcuts-panel" :aria-selected="settingsPage === 'shortcuts'" @click="selectSettingsPage('shortcuts')">快捷键</button>
             <button :class="{ active: settingsPage === 'account' }" type="button" role="tab" aria-controls="settings-account-panel" :aria-selected="settingsPage === 'account'" @click="selectSettingsPage('account')">账号与安全</button>
             <button :class="{ active: settingsPage === 'data' }" type="button" role="tab" aria-controls="settings-data-panel" :aria-selected="settingsPage === 'data'" @click="selectSettingsPage('data')">应用数据</button>
             <button :class="{ active: settingsPage === 'about' }" type="button" role="tab" aria-controls="settings-about-panel" :aria-selected="settingsPage === 'about'" @click="selectSettingsPage('about')">关于</button>
@@ -113,7 +113,6 @@ const {
                   </div>
                 </div>
                 <input
-                  v-if="runningInTauri"
                   id="device-alias"
                   v-model="deviceAliasInput"
                   type="text"

@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isPasteWindow, runningInTauri } from "../../composables/usePlatform";
+import { isMobile, isPasteWindow } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
@@ -25,11 +25,6 @@ async function activateEntry(
   command: "copy_entry" | "paste_entry",
 ): Promise<void> {
   if (!entry) return;
-  if (!runningInTauri) {
-    await navigator.clipboard.writeText(entry.content);
-    showToast("已复制到系统剪贴板", "success");
-    return;
-  }
   if (isMobile.value && entry.kind !== "text") {
     await saveEntry(entry);
     return;
@@ -157,11 +152,9 @@ export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   }
   // Idempotent fallback in case the echo is lost (e.g. disconnect right after
   // the response); cleanup stays a no-op if the echo already handled it.
-  if (runningInTauri) {
-    setTimeout(() => {
-      // The command emits `cliproam://history-changed`, which refreshes the
-      // views; no explicit invalidation needed here.
-      void invoke("remove_server_entry", { entryId: entry.id });
-    }, 5000);
-  }
+  setTimeout(() => {
+    // The command emits `cliproam://history-changed`, which refreshes the
+    // views; no explicit invalidation needed here.
+    void invoke("remove_server_entry", { entryId: entry.id });
+  }, 5000);
 }

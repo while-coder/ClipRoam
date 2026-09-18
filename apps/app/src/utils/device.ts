@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { runningInTauri } from "../composables/usePlatform";
 import type { Device } from "../types";
 
 type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
@@ -16,9 +15,6 @@ export type DeviceIdentity = {
 };
 
 export async function getDeviceIdentity(): Promise<DeviceIdentity> {
-  if (!runningInTauri) {
-    return { deviceId: "browser", deviceAlias: "", systemDeviceName: "浏览器预览", osType: "browser", osVersion: "浏览器", appVersion: "未知" };
-  }
   // id 与别名读 device.json；展示信息每次从系统取，机器改名后立即生效。
   const [identity, info] = await Promise.all([
     invoke<RustDeviceIdentity>("get_device_identity"),

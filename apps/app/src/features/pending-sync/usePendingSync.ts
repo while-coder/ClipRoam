@@ -1,7 +1,5 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { runningInTauri } from "../../composables/usePlatform";
-import { isEntrySynced, previewEntries } from "../clipboard-history/useHistorySync";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
@@ -16,13 +14,8 @@ import type { LocalClipboardEntry } from "../../types";
 export const pendingEntries = ref<LocalClipboardEntry[]>([]);
 export const pendingCount = ref(0);
 
-/** The pending-sync list re-queries Rust; the browser preview derives it. */
+/** The pending-sync list re-queries Rust on every refresh. */
 export async function refreshPendingEntries(): Promise<void> {
-  if (!runningInTauri) {
-    pendingEntries.value = previewEntries.value.filter((entry) => !isEntrySynced(entry));
-    pendingCount.value = pendingEntries.value.length;
-    return;
-  }
   try {
     pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_pending_entries");
     pendingCount.value = pendingEntries.value.length;
@@ -36,10 +29,6 @@ export async function refreshPendingEntries(): Promise<void> {
  * view never haul the queue rows across the IPC boundary.
  */
 export async function refreshPendingCount(): Promise<void> {
-  if (!runningInTauri) {
-    pendingCount.value = previewEntries.value.filter((entry) => !isEntrySynced(entry)).length;
-    return;
-  }
   try {
     pendingCount.value = await invoke<number>("count_pending_entries");
   } catch {

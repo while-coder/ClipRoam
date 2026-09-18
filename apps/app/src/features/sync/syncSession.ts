@@ -1,11 +1,6 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { runningInTauri } from "../../composables/usePlatform";
-import {
-  BROWSER_CONFIG_KEY,
-  BROWSER_PREFERENCES_KEY,
-  DEFAULT_SERVER_ADDRESS,
-} from "../../utils/constants";
+import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
 import type { AccountPreferences, SyncConfig } from "../../types";
 
@@ -43,16 +38,7 @@ export function archiveKeyFor(config: SyncConfig | undefined): string {
 }
 
 export async function loadSyncConfig(): Promise<SyncConfig | null> {
-  let raw: unknown;
-  if (runningInTauri) raw = await invoke<unknown>("get_sync_config");
-  else {
-    try {
-      const stored = window.localStorage.getItem(BROWSER_CONFIG_KEY);
-      raw = stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  }
+  const raw = await invoke<unknown>("get_sync_config");
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   return {
@@ -66,33 +52,21 @@ export async function loadSyncConfig(): Promise<SyncConfig | null> {
 }
 
 export async function persistSyncConfig(config: SyncConfig | null): Promise<void> {
-  if (runningInTauri) await invoke("save_sync_config", { config });
-  else window.localStorage.setItem(BROWSER_CONFIG_KEY, JSON.stringify(config));
+  await invoke("save_sync_config", { config });
   // 配置保存可能切换活动档案（登录/退出账号），偏好跟随档案——
   // 无论是否切换都重读一次，保证前端内存态与活动档案一致。
   activePreferences = await loadAccountPreferences();
 }
 
 export async function loadAccountPreferences(): Promise<AccountPreferences> {
-  if (runningInTauri) {
-    try {
-      return await invoke<AccountPreferences>("get_account_preferences");
-    } catch {
-      return defaultAccountPreferences();
-    }
-  }
   try {
-    const stored = window.localStorage.getItem(BROWSER_PREFERENCES_KEY);
-    return stored
-      ? { ...defaultAccountPreferences(), ...(JSON.parse(stored) as Partial<AccountPreferences>) }
-      : defaultAccountPreferences();
+    return await invoke<AccountPreferences>("get_account_preferences");
   } catch {
     return defaultAccountPreferences();
   }
 }
 
 export async function persistAccountPreferences(preferences: AccountPreferences): Promise<void> {
-  if (runningInTauri) await invoke("save_account_preferences", { preferences });
-  else window.localStorage.setItem(BROWSER_PREFERENCES_KEY, JSON.stringify(preferences));
+  await invoke("save_account_preferences", { preferences });
   activePreferences = preferences;
 }

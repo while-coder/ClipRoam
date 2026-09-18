@@ -1,5 +1,4 @@
 import { MANUAL_UPLOAD_LIMIT } from "../features/sync/fileTransfer";
-import { runningInTauri } from "../composables/usePlatform";
 import { formatFileSize } from "./format";
 import type {
   ClipboardEntry,
@@ -77,8 +76,7 @@ export function fileEntrySummary(entry: LocalClipboardEntry): string | undefined
 }
 
 export function canSaveEntry(entry: LocalClipboardEntry): boolean {
-  return runningInTauri
-    && (entry.kind === "files" || entry.kind === "image")
+  return (entry.kind === "files" || entry.kind === "image")
     && entry.summary.contentCount > 0;
 }
 
