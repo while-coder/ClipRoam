@@ -3,9 +3,11 @@ import { once } from "node:events";
 import { PassThrough } from "node:stream";
 
 // A relay session lives exactly as long as the requester's held GET. If no
-// holder claims it within this window the stream is torn down and the
-// requester simply retries.
-const SESSION_IDLE_MS = 60_000;
+// holder claims it within the unclaimed window the stream is torn down and
+// the requester simply retries; once claimed, the transfer is only swept
+// when the sender goes silent for the idle window.
+const UNCLAIMED_TIMEOUT_MS = 15_000;
+const CLAIMED_IDLE_MS = 60_000;
 
 // One session per waiting download, but a misbehaving client must not be able
 // to pin unbounded streams to the server.
@@ -25,7 +27,7 @@ export type RelaySession = {
   claimedBy?: string;
   createdAt: number;
   // Last byte the sender fed in; a claimed session with no activity for
-  // SESSION_IDLE_MS is a half-open transfer and gets swept like an idle one.
+  // CLAIMED_IDLE_MS is a half-open transfer and gets swept like an idle one.
   lastActivity: number;
   // Serializes `push` calls: backpressure waits happen on this chain, so two
   // concurrent PUTs cannot interleave their writes and corrupt the byte order.
@@ -45,8 +47,10 @@ export class FileRelayService {
   constructor() {
     // Session lifecycle is driven by the requester's GET and the sender's
     // PUTs, neither of which guarantees a `create` to prune after — so the
-    // sweep runs on its own (unref'd, purely advisory) timer as well.
-    const timer = setInterval(() => this.#prune(), SESSION_IDLE_MS / 2);
+    // sweep runs on its own (unref'd, purely advisory) timer as well. The
+    // interval is well under the unclaimed window so expiry stays close to
+    // the intended timeout.
+    const timer = setInterval(() => this.#prune(), UNCLAIMED_TIMEOUT_MS / 3);
     timer.unref?.();
   }
 
@@ -141,8 +145,10 @@ export class FileRelayService {
   #prune(): void {
     const now = Date.now();
     for (const [id, session] of this.#sessions) {
-      const idleSince = session.claimed ? session.lastActivity : session.createdAt;
-      if (now - idleSince > SESSION_IDLE_MS) {
+      const expired = session.claimed
+        ? now - session.lastActivity > CLAIMED_IDLE_MS
+        : now - session.createdAt > UNCLAIMED_TIMEOUT_MS;
+      if (expired) {
         this.#sessions.delete(id);
         if (!session.stream.destroyed) session.stream.destroy();
       }
