@@ -470,7 +470,12 @@ pub(crate) fn capture_files_from_picker(app: AppHandle, mode: String) -> Result<
     let dialog = app.dialog().file();
     match mode.as_str() {
         "file" => dialog.pick_files(move |paths| drop(sender.send(paths))),
+        // pick_folder(s) 是 plugin-dialog 的桌面专属 API（#[cfg(desktop)]），
+        // 移动端 SAF 不提供文件夹选择。
+        #[cfg(desktop)]
         "folder" => dialog.pick_folders(move |paths| drop(sender.send(paths))),
+        #[cfg(mobile)]
+        "folder" => return Err("移动端暂不支持上传文件夹".to_string()),
         other => return Err(format!("未知的选择模式：{other}")),
     }
     let picked = receiver.recv().map_err(|error| error.to_string())?;

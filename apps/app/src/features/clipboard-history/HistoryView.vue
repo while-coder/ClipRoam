@@ -423,7 +423,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
           <LoaderCircle v-if="uploadingFiles" :size="18" class="spin" aria-hidden="true" />
           <FilePlus v-else :size="18" aria-hidden="true" />
         </button>
-        <button class="icon-button" type="button" title="上传文件夹" aria-label="上传文件夹" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
+        <button v-if="!isMobile" class="icon-button" type="button" title="上传文件夹" aria-label="上传文件夹" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
           <FolderPlus :size="18" aria-hidden="true" />
         </button>
         <button v-if="isMobile" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="emit('open-settings')">
