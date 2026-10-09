@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -27,8 +27,9 @@ import {
 import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { initSettings } from "./features/settings/useSettings";
-import { openSettings, settingsVisible } from "./features/settings/useSettings";
+import { openSettings as openDesktopSettings, settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
+import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
 import UploadsView from "./features/uploads/UploadsView.vue";
@@ -110,6 +111,19 @@ import type {
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
+const mobileSettingsVisible = ref(false);
+
+function openSettings(): void {
+  if (isMobile.value) mobileSettingsVisible.value = true;
+  else openDesktopSettings();
+}
+
+const mobilePages = computed(() => [
+  { view: "history" as const, label: "历史", icon: Clipboard, count: 0 },
+  { view: "pending-sync" as const, label: "待同步", icon: CloudUpload, count: pendingCount.value },
+  { view: "uploads" as const, label: "上传", icon: Upload, count: activeUploadCount.value },
+  { view: "downloads" as const, label: "下载", icon: Download, count: activeDownloadCount.value },
+]);
 
 const { initUpdaterVersion } = useUpdater();
 
@@ -608,9 +622,31 @@ onBeforeUnmount(() => {
       @cancel-all-downloads="downloader.stopAll()"
     />
 
+    <nav v-if="isMobile && !isPasteWindow" class="mobile-navigation" aria-label="主导航">
+      <button
+        v-for="page in mobilePages"
+        :key="page.view"
+        type="button"
+        class="mobile-nav-item"
+        :class="{ active: activeView === page.view }"
+        :aria-current="activeView === page.view ? 'page' : undefined"
+        @click="activeView = page.view"
+      >
+        <span class="mobile-nav-icon">
+          <component :is="page.icon" :size="18" aria-hidden="true" />
+          <span v-if="page.count" class="mobile-nav-count" :aria-label="`${page.count} 个任务`">{{ page.count > 99 ? '99+' : page.count }}</span>
+        </span>
+        <span>{{ page.label }}</span>
+      </button>
+    </nav>
+
     <SettingsDialog
-      v-if="!isPasteWindow && settingsVisible"
+      v-if="!isPasteWindow && !isMobile && settingsVisible"
       :current-username="currentUsername"
+    />
+    <MobileSettingsDialog
+      v-if="!isPasteWindow && isMobile && mobileSettingsVisible"
+      @close="mobileSettingsVisible = false"
     />
 
   </main>

@@ -112,7 +112,7 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - uses: while-coder/workflows/.github/actions/install-pnpm-dependencies@main
 
       - name: Build server distribution
         run: pnpm build:server

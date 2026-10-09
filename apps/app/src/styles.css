@@ -796,6 +796,7 @@ button:focus-visible, [role="button"]:focus-visible {
 
 .mobile-app {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   padding-top: env(safe-area-inset-top, 0);
   padding-bottom: env(safe-area-inset-bottom, 0);
   border: 0;
@@ -803,7 +804,50 @@ button:focus-visible, [role="button"]:focus-visible {
   overscroll-behavior: contain;
   touch-action: manipulation;
 }
+.mobile-navigation {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-row: 2;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-background);
+}
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 48px;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--color-secondary-text);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-nav-item.active { color: #bfdbfe; background: var(--color-primary); }
+.mobile-nav-item:active { background: var(--sui-bg-active); }
+.mobile-nav-icon { position: relative; display: flex; }
+.mobile-nav-count {
+  position: absolute;
+  top: -5px;
+  left: 14px;
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  color: var(--color-background);
+  background: #93c5fd;
+  font-size: 10px;
+  line-height: 1.4;
+}
 .mobile-app .history-content { grid-template-rows: 60px auto minmax(0, 1fr) 48px; }
+.mobile-app .pending-content { grid-template-rows: 60px minmax(0, 1fr); }
 .mobile-app .workspace-titlebar { padding-inline: 16px; }
 .mobile-app .page-title > span { display: none; }
 .mobile-app .page-title h1 { font-size: 18px; }
@@ -894,6 +938,11 @@ button:focus-visible, [role="button"]:focus-visible {
   opacity: 1;
 }
 .mobile-app .item-action { width: 44px; height: 44px; border-radius: 10px; }
+.mobile-app .download-row,
+.mobile-app .pending-item { grid-template-columns: 44px minmax(0, 1fr) auto; }
+.mobile-app .pending-content .entry-actions { grid-column: auto; padding-top: 0; }
+.mobile-app .download-status { overflow-wrap: anywhere; }
+.mobile-app .pending-content .titlebar-actions .s-button { min-height: 44px; }
 /* SIconButton 尺寸是 inline style（:size 生成），移动端 44px 触达规则必须 !important。 */
 .mobile-app .s-icon-button { width: 44px !important; height: 44px !important; border-radius: 10px !important; }
 .mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
@@ -908,5 +957,6 @@ button:focus-visible, [role="button"]:focus-visible {
 
 @media (orientation: landscape) and (max-height: 520px) {
   .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr) 48px; }
+  .mobile-app .pending-content { grid-template-rows: 52px minmax(0, 1fr); }
   .mobile-app .workspace-titlebar { min-height: 52px; }
 }

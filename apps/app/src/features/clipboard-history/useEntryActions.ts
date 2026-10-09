@@ -69,6 +69,10 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
 }
 
 export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
+  if (savingEntryId.value === entry.id) {
+    if (await downloader.cancelEntry(entry.id) > 0) showToast("已取消下载", "info");
+    return;
+  }
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
   let saveId: string | undefined;
@@ -97,8 +101,8 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       else if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
-    if (error instanceof DownloadCancelledError) return;
     if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
+    if (error instanceof DownloadCancelledError) return;
     showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
     savingEntryId.value = "";

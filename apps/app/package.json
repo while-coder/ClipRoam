@@ -29,6 +29,9 @@
     "lucide-vue-next": "^0.468.0",
     "vue": "^3.5.43"
   },
+  "ciDependencies": {
+    "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^5.2.1",

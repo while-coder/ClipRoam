@@ -75,7 +75,7 @@ pub(crate) async fn prepare_save_entry(
             // SAF URIs are not filesystem paths. Reconstruct the export in the
             // sandbox, then let ContentResolver write it into the chosen tree.
             let directory = snapshot.cache_dir.join(format!(".cliproam-export-{save_id}"));
-            let path = if single_file { directory.join(&name) } else { directory };
+            let path = if single_file { directory.join(sanitize_root_name(&name)) } else { directory };
             (path, Some(uri))
         }
     };
@@ -217,7 +217,11 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
             session.destination.as_path()
         };
         // Staging contains content-id blobs, which must never be exported.
-        let _ = fs::remove_dir_all(&session.staging_dir);
+        if let Err(error) = fs::remove_dir_all(&session.staging_dir) {
+            if error.kind() != std::io::ErrorKind::NotFound && result.is_ok() {
+                result = Err(format!("无法清理下载暂存目录：{error}"));
+            }
+        }
         if result.is_ok() {
             result = crate::platforms::export_saved_directory(&app, export_root, uri);
         }

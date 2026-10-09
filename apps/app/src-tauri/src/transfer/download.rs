@@ -860,8 +860,9 @@ fn task_label(entry_label: Option<&str>, index: usize, total: usize, file_id: &s
 
 async fn run_task(app: AppHandle, spec: TaskSpec) {
     let outcome = download_with_retries(&app, &spec).await;
-    if let TaskOutcome::Cancelled(reason) = &outcome {
-        // 取消路径的传输清理（删 .part / 回滚另存会话 / 唤醒虚拟文件等待者）。
+    if let TaskOutcome::Cancelled(reason) | TaskOutcome::Failed(reason) = &outcome {
+        // Terminal errors and cancellation both release partial files and
+        // save-session bookkeeping before resolving the waiting batch.
         let state = app.state::<AppState>();
         cancel_transfer(&state, &spec.task_id, reason);
     }

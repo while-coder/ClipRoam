@@ -13,6 +13,9 @@
     "vue": "^3.5.43",
     "vue-router": "^5.3.1"
   },
+  "ciDependencies": {
+    "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
+  },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
     "typescript": "~5.6.2",
