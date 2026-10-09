@@ -145,6 +145,7 @@ let shareReceiverListener: PluginListener | undefined;
 // 历史视图 ref 留在本组件，经注入读取。
 initHistorySync({
   getSyncClient,
+  isConnected: () => connected.value,
   refreshPendingCount,
   refreshPendingEntries,
   getHistoryView: () => historyView.value,

@@ -93,6 +93,8 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // reqwest uses rustls-no-provider, so register ring before any HTTP client is created.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // 单实例最先注册：第二次启动会自行退出，并唤醒已运行实例的主窗口。
     // 移动端由系统保证单实例，插件也仅支持桌面端。
     #[cfg(desktop)]

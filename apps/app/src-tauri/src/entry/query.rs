@@ -34,6 +34,8 @@ pub struct EntriesManifestFilter {
     /// Source-device filter; empty means no filter.
     #[serde(default)]
     device_ids: Vec<String>,
+    /// Exact identities of a server page; local cache order/total are not authoritative.
+    entry_ids: Option<Vec<String>>,
     page: Option<usize>,
 }
 
@@ -55,6 +57,14 @@ fn manifest_query(
 ) -> (String, Vec<Value>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
+    if let Some(ids) = &filter.entry_ids {
+        if ids.is_empty() {
+            clauses.push("0".to_string());
+        } else {
+            clauses.push(format!("id IN ({})", placeholders(ids.len())));
+            values.extend(ids.iter().cloned().map(Value::Text));
+        }
+    }
     if filter.kind != "all" {
         clauses.push("kind = ?".to_string());
         values.push(Value::Text(filter.kind.clone()));

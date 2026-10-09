@@ -6,6 +6,7 @@ import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
+import { isPasteWindow } from "../../composables/usePlatform";
 import type {
   EntriesManifestFilter,
   EntriesManifestPage,
@@ -25,6 +26,7 @@ interface HistorySyncViewRef {
 
 interface HistorySyncDeps {
   getSyncClient(): SyncClient | undefined;
+  isConnected(): boolean;
   refreshPendingCount(): Promise<void>;
   refreshPendingEntries(): Promise<void>;
   getHistoryView(): HistorySyncViewRef | undefined;
@@ -49,7 +51,28 @@ export async function fetchManifest(
   if (!getActiveConfig()?.sessionToken) {
     return { total: 0, entries: [] };
   }
-  return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
+  // 快捷粘贴窗口通过主窗口同步的本地缓存工作，不建立第二个同步客户端。
+  if (isPasteWindow) return invoke<EntriesManifestPage>("list_entries_manifest", { filter, deviceNames });
+  const client = deps.getSyncClient();
+  if (!client || !deps.isConnected()) return { total: 0, entries: [] };
+  const result = await client.fetchHistoryPage(filter);
+  const entryIds = result.manifest.map((entry) => entry.id);
+  if (!entryIds.length) return { total: result.total, entries: [] };
+  const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+  if (missing.length) {
+    const entries = await client.fetchEntries(missing);
+    if (deps.getSyncClient() !== client) return { total: 0, entries: [] };
+    await invoke("upsert_server_entries", { entries });
+  }
+  if (deps.getSyncClient() !== client) return { total: 0, entries: [] };
+  const cached = await invoke<EntriesManifestPage>("list_entries_manifest", {
+    filter: { kind: "all", entryIds }, deviceNames,
+  });
+  const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
+  return {
+    total: result.total,
+    entries: entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; }),
+  };
 }
 
 let refreshTimer: number | undefined;

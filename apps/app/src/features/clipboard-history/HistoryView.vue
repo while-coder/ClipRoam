@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
+  ChevronDown,
   FilePlus,
   FolderPlus,
   Image,
@@ -462,7 +463,13 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       </SButton>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
-          <STagFilter :value="[FILTER_LABELS[filter]]" :options="FILTER_OPTIONS" :multiple="false" @update:value="onFilterTagUpdate" />
+          <label v-if="isMobile" class="mobile-type-filter">
+            <select v-model="filter" aria-label="内容类型">
+              <option v-for="(label, value) in FILTER_LABELS" :key="value" :value="value">{{ label }}</option>
+            </select>
+            <ChevronDown :size="14" aria-hidden="true" />
+          </label>
+          <STagFilter v-else :value="[FILTER_LABELS[filter]]" :options="FILTER_OPTIONS" :multiple="false" @update:value="onFilterTagUpdate" />
           <TimeFilterControl
             v-model="timeFilter"
             v-model:start-date="startDate"
@@ -475,7 +482,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
             :devices="devices"
           />
         </div>
-        <div class="filter-actions">
+        <div v-if="!isMobile" class="filter-actions">
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>

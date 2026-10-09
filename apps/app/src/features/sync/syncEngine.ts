@@ -64,7 +64,10 @@ function setConnectionState(value: boolean): void {
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
   // 重连成功后重查一次"未存储"的文件可用性，兜住离线期间错过的
   // `file.available` 推送（原对账时机已随登录对账移除）。
-  if (value) void syncFileStatuses(true);
+  if (value) {
+    refreshHistory();
+    void syncFileStatuses(true);
+  }
 }
 
 /**
@@ -199,7 +202,6 @@ export async function startSync(config: SyncConfig): Promise<void> {
   );
   syncClient = client;
   client.connect();
-  // 登录即拉取设备表：纯 HTTP，不依赖 socket；auth.ack 只确认连接。
-  // 不做历史对账：本地历史靠实时推送增量维护，登录不回拉服务器存量。
+  // 设备表直接走 HTTP；连接成功后由当前视图请求服务器对应页。
   void client.pullDevices();
 }

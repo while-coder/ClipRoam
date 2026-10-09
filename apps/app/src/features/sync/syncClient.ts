@@ -1,5 +1,7 @@
 import {
   ENTRY_QUERY_BATCH,
+  EntryManifestResponseSchema,
+  EntryQueryResponseSchema,
   EntryActivateResponseSchema,
   DeviceListResponseSchema,
   EntryPublishResponseSchema,
@@ -20,6 +22,8 @@ import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { FileTransfer } from "./fileTransfer";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
+import { PAGE_SIZE } from "../../utils/constants";
+import type { EntriesManifestFilter } from "../../types";
 
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
@@ -62,10 +66,8 @@ type PendingQueueRow = {
 /**
  * The sync orchestrator. All operations ride HTTP (see `syncHttp.ts`, the
  * file pipeline in `fileTransfer.ts`); the socket is a push-only channel:
- * nothing waits on it. History is maintained purely by live pushes — login
- * does not back-pull the server's stored entries, and pushes missed during a
- * disconnect window are not re-fetched (file availability self-heals via the
- * reconnect-time `/files/query` recheck).
+ * nothing waits on it. History pages come from HTTP; local storage caches
+ * entry details and live pushes keep those details current.
  */
 export class SyncClient {
   #socket?: WebSocket;
@@ -244,10 +246,6 @@ export class SyncClient {
   }
 
   // The login-time device table, pulled over HTTP with no socket involved.
-  // History is NOT reconciled at login: live pushes maintain local history,
-  // and a fresh device simply starts from the moment it joins (its own new
-  // captures included). File availability self-heals at reconnect through the
-  // `/files/query` recheck in App.vue.
   async pullDevices(): Promise<void> {
     try {
       this.handlers.onDevices(await this.#fetchDevices());
@@ -270,6 +268,33 @@ export class SyncClient {
       "服务器返回了不兼容的设备列表响应",
     );
     return devices!.devices;
+  }
+
+  /** One server page defines both the visible identities and the total. */
+  async fetchHistoryPage(filter: EntriesManifestFilter) {
+    const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
+    if (filter.query?.trim()) params.set("search", filter.query.trim());
+    if (filter.kind && filter.kind !== "all") params.set("kind", filter.kind);
+    if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
+    if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
+    for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
+    const result = await this.#http.request(
+      "GET", `/entries/manifest?${params}`,
+      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+      EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
+    );
+    return result!;
+  }
+
+  async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
+    return this.#queryBatched(entryIds, async (batch) => {
+      const result = await this.#http.request(
+        "POST", "/entries/query",
+        this.#jsonInit({ entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
+        EntryQueryResponseSchema, "服务器返回了不兼容的历史记录响应",
+      );
+      return result!.entries;
+    });
   }
 
   // Pool availability for a batch of content ids. This replaces the per-entry
