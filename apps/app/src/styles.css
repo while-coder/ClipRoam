@@ -665,22 +665,6 @@ button.image-thumbnail { cursor: zoom-in; }
 .history-content .history-list { padding: 2px 14px 8px; }
 .history-content .footer-hint { padding-inline: 20px; }
 
-.image-preview-stage {
-  display: grid;
-  place-items: center;
-  min-height: 0;
-  /* 预览已是 SModal 内容：高度自算（视口 - 标题栏/内边距），img max-height:100% 才有约束。 */
-  height: min(640px, calc(100vh - 200px));
-  padding: 20px;
-  /* 缩放/平移全走 transform：溢出即裁剪，不给 scale 生成滚动条。 */
-  overflow: hidden;
-  /* 手势交给 pointer 处理（移动端双指捏合/单指拖），不触发页面自身的缩放滚动。 */
-  touch-action: none;
-  cursor: grab;
-  background: radial-gradient(circle at center, #17233c, #050a14 74%);
-}
-.image-preview-stage:active { cursor: grabbing; }
-.image-preview-stage img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; }
 /* fill-height 只定 box 高，kit 没写 body 拉伸：补 flex:1 让 body 撑满，内部 form 才能拿到确定高度。 */
 .s-modal-box.fill-height .s-modal-body { flex: 1; }
 /* 设置页固定高度（参考 sterm）：body 不滚，form 纵向 flex —— STabs 吃满剩余并内部滚动（左 tabs 固定）。 */

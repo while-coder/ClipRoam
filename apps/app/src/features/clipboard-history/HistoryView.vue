@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
   FilePlus,
@@ -15,6 +15,8 @@ import EntryContextMenu from "./EntryContextMenu.vue";
 import EntryKindIcon from "./EntryKindIcon.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
+import ImagePreview from "./ImagePreview.vue";
+import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
@@ -84,22 +86,7 @@ const uploadingFiles = ref(false);
 const menuEntry = ref<LocalClipboardEntry>();
 const menuX = ref(0);
 const menuY = ref(0);
-const previewImage = ref<LocalClipboardEntry>();
-const previewLoading = ref(false);
-// 预览缩放/平移：desktop 滚轮缩放、左键拖拽平移；移动端双指捏合缩放、单指拖拽；
-// 双击复位。全部走 transform，不产生滚动条。
-const previewZoom = ref(1);
-const previewPanX = ref(0);
-const previewPanY = ref(0);
-const PREVIEW_ZOOM_MIN = 0.25;
-const PREVIEW_ZOOM_MAX = 6;
-const previewPointers = new Map<number, { x: number; y: number; type: string }>();
-let previewPanDrag: { id: number; startX: number; startY: number; panX: number; panY: number } | null = null;
-let previewPinch: { distance: number; zoom: number } | null = null;
-// stage/img 的布局尺寸：平移边界要用，手势开始与图片加载时读一次，之后纯算术。
-const previewStageElement = ref<HTMLElement>();
-const previewImageElement = ref<HTMLImageElement>();
-let previewMetrics: { contentW: number; contentH: number; imgW: number; imgH: number } | null = null;
+const previewEntry = ref<LocalClipboardEntry>();
 // SInput 不 expose 内部 input：实例根节点上 querySelector 一次拿原生元素。
 const searchInput = ref<{ $el?: Element }>();
 const historyListElement = ref<HTMLElement>();
@@ -162,7 +149,7 @@ function commitSearch(): void {
 function onQueryUpdate(value: string): void {
   if (!value) commitSearch();
 }
-onBeforeUnmount(() => { cancelLongPress(); resetPreviewGesture(); });
+onBeforeUnmount(cancelLongPress);
 
 const deviceNames = computed(() =>
   Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
@@ -239,11 +226,6 @@ function downloadPercentOf(progress: DownloadProgress): number {
 }
 
 
-function imageSource(entry: LocalClipboardEntry): string | undefined {
-  const path = entry.summary.previewPath;
-  return path ? convertFileSrc(path) : undefined;
-}
-
 function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
   return entry.imageInfo?.thumbnail
     ? `data:image/webp;base64,${entry.imageInfo.thumbnail}`
@@ -303,150 +285,14 @@ async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
   }
 }
 
-async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
-  if (isPasteWindow || previewLoading.value) return;
-  previewLoading.value = true;
-  try {
-    const localEntry = await props.ensureLocalFiles(entry);
-    if (!imageSource(localEntry)) throw new Error("图片文件不可用");
-    previewImage.value = localEntry;
-    resetPreviewTransform();
-  } catch (error) {
-    showToast(`无法预览图片：${errorMessage(error)}`, "error");
-  } finally {
-    previewLoading.value = false;
-  }
+function openEntryPreview(entry: LocalClipboardEntry): void {
+  if (isPasteWindow || entry.kind === "text") return;
+  previewEntry.value = entry;
 }
 
-function closeImagePreview(): void {
-  previewImage.value = undefined;
-  resetPreviewTransform();
-  resetPreviewGesture();
+function closeEntryPreview(): void {
+  previewEntry.value = undefined;
   void nextTick(focusSearchInputEl);
-}
-
-function clampPreviewZoom(value: number): number {
-  return Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, value));
-}
-
-function resetPreviewTransform(): void {
-  previewZoom.value = 1;
-  previewPanX.value = 0;
-  previewPanY.value = 0;
-}
-
-/** 读取 stage 内容区与图片的布局尺寸，作为平移边界计算的基准。 */
-function readPreviewMetrics(): void {
-  const stage = previewStageElement.value;
-  const image = previewImageElement.value;
-  if (!stage || !image) {
-    previewMetrics = null;
-    return;
-  }
-  const padding = getComputedStyle(stage);
-  previewMetrics = {
-    contentW: stage.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight),
-    contentH: stage.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom),
-    imgW: image.offsetWidth,
-    imgH: image.offsetHeight,
-  };
-}
-
-/** 平移限制在「缩放后的图片不被拖出 stage 内容区」范围内；尺寸未知时不作限制。 */
-function clampPreviewPan(): void {
-  if (!previewMetrics) return;
-  const limitX = Math.max(0, (previewMetrics.imgW * previewZoom.value - previewMetrics.contentW) / 2);
-  const limitY = Math.max(0, (previewMetrics.imgH * previewZoom.value - previewMetrics.contentH) / 2);
-  previewPanX.value = Math.min(limitX, Math.max(-limitX, previewPanX.value));
-  previewPanY.value = Math.min(limitY, Math.max(-limitY, previewPanY.value));
-}
-
-function onPreviewWheel(event: WheelEvent): void {
-  readPreviewMetrics();
-  previewZoom.value = clampPreviewZoom(previewZoom.value * Math.exp(-event.deltaY * 0.002));
-  clampPreviewPan();
-}
-
-function onPreviewImageLoad(): void {
-  readPreviewMetrics();
-  clampPreviewPan();
-}
-
-function previewPointersDistance(): number {
-  const [first, second] = [...previewPointers.values()];
-  return Math.hypot(first.x - second.x, first.y - second.y);
-}
-
-/** 仅剩一根指针且不在捏合时，把它设为新的平移基线（避免松指后跳位）。 */
-function syncPreviewPanDrag(): void {
-  if (previewPointers.size !== 1 || previewPinch) {
-    previewPanDrag = null;
-    return;
-  }
-  const [id, point] = [...previewPointers.entries()][0];
-  previewPanDrag = { id, startX: point.x, startY: point.y, panX: previewPanX.value, panY: previewPanY.value };
-}
-
-function detachPreviewPointerListeners(): void {
-  window.removeEventListener("pointermove", onPreviewPointerMove);
-  window.removeEventListener("pointerup", onPreviewPointerUp);
-  window.removeEventListener("pointercancel", onPreviewPointerUp);
-}
-
-/** 清掉手势状态与 window 监听；关闭预览与组件卸载时调用。 */
-function resetPreviewGesture(): void {
-  previewPointers.clear();
-  previewPanDrag = null;
-  previewPinch = null;
-  detachPreviewPointerListeners();
-}
-
-function onPreviewPointerDown(event: PointerEvent): void {
-  if (event.button !== 0) return;
-  // 指针可能在窗口外松开、收不到 pointerup（鼠标 pointerId 恒定）：残留的幽灵
-  // 记录会让本次手势被误判成双指捏合，表现为拖不动。同类型非 touch 只有一个活跃指针。
-  if (event.pointerType !== "touch") {
-    for (const [id, point] of [...previewPointers.entries()]) {
-      if (point.type === event.pointerType) previewPointers.delete(id);
-    }
-    if (previewPointers.size < 2) previewPinch = null;
-  }
-  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
-  if (previewPointers.size === 2) {
-    previewPinch = { distance: previewPointersDistance(), zoom: previewZoom.value };
-    previewPanDrag = null;
-  } else {
-    syncPreviewPanDrag();
-  }
-  // move/up 挂 window：拖出 stage 或窗口边缘都不丢事件（比 setPointerCapture 稳）。
-  readPreviewMetrics();
-  window.addEventListener("pointermove", onPreviewPointerMove);
-  window.addEventListener("pointerup", onPreviewPointerUp);
-  window.addEventListener("pointercancel", onPreviewPointerUp);
-}
-
-function onPreviewPointerMove(event: PointerEvent): void {
-  if (!previewPointers.has(event.pointerId)) return;
-  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
-  if (previewPinch && previewPointers.size >= 2) {
-    previewZoom.value = clampPreviewZoom(previewPinch.zoom * (previewPointersDistance() / previewPinch.distance));
-    clampPreviewPan();
-  } else if (previewPanDrag?.id === event.pointerId) {
-    previewPanX.value = previewPanDrag.panX + event.clientX - previewPanDrag.startX;
-    previewPanY.value = previewPanDrag.panY + event.clientY - previewPanDrag.startY;
-    clampPreviewPan();
-  }
-}
-
-function onPreviewPointerUp(event: PointerEvent): void {
-  previewPointers.delete(event.pointerId);
-  if (previewPointers.size < 2) previewPinch = null;
-  if (previewPanDrag?.id === event.pointerId) previewPanDrag = null;
-  if (previewPointers.size > 0) {
-    syncPreviewPanDrag();
-    return;
-  }
-  detachPreviewPointerListeners();
 }
 
 function selectOrActivate(entry: LocalClipboardEntry): void {
@@ -648,6 +494,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         @mouseenter="selectedEntryId = entry.id"
         @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
         @click="selectOrActivate(entry)"
+        @dblclick.stop="openEntryPreview(entry)"
         @keydown.enter.stop="activateSelectedEntry(entry)"
         @keydown.space.prevent.stop="activateSelectedEntry(entry)"
         @contextmenu.prevent="openEntryMenu(entry, $event.clientX, $event.clientY)"
@@ -662,7 +509,9 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
-          @click.stop="openImagePreview(entry)"
+          @click.stop="openEntryPreview(entry)"
+          @keydown.stop
+          @touchstart.stop
         >
           <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
           <Image v-else :size="18" aria-hidden="true" />
@@ -670,6 +519,18 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         <span v-else-if="entry.kind === 'image' && thumbnailSource(entry)" class="image-thumbnail" aria-hidden="true">
           <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
         </span>
+        <button
+          v-else-if="entry.kind === 'files' && !isPasteWindow"
+          class="file-preview-trigger"
+          type="button"
+          :aria-label="`预览${entry.content}`"
+          :title="`预览${entry.content}`"
+          @click.stop="openEntryPreview(entry)"
+          @keydown.stop
+          @touchstart.stop
+        >
+          <EntryKindIcon :kind="entry.kind" :root-kind="entry.summary.rootKind" :loading="activatingEntryIds.has(entry.id)" />
+        </button>
         <EntryKindIcon
           v-else
           :kind="entry.kind"
@@ -708,7 +569,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
     <footer class="footer-hint">
       <span v-if="isMobile">点按文本复制，点按文件下载到缓存，长按打开菜单</span>
       <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
-      <span v-else>单击选择，右键打开菜单</span>
+      <span v-else>单击选择，双击预览图片或文件，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <PaginationControl
@@ -728,34 +589,32 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       :saving-entry-id="savingEntryId"
       :is-mobile="isMobile"
       @activate="emit('activate', $event, false)"
+      @preview="openEntryPreview"
       @save="emit('save', $event)"
       @remove="emit('remove', $event)"
       @close="closeEntryMenu"
     />
 
-    <SModal
-      :show="!!previewImage"
-      :title="previewImage?.content ?? ''"
-      width="980px"
-      @update:show="(value: boolean) => { if (!value) closeImagePreview() }"
-    >
-      <div
-        v-if="previewImage"
-        ref="previewStageElement"
-        class="image-preview-stage"
-        @wheel.prevent="onPreviewWheel"
-        @pointerdown="onPreviewPointerDown"
-        @dblclick="resetPreviewTransform"
-      >
-        <img
-          ref="previewImageElement"
-          :src="imageSource(previewImage)"
-          :alt="previewImage.content"
-          :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})` }"
-          draggable="false"
-          @load="onPreviewImageLoad"
-        />
-      </div>
-    </SModal>
+    <ImagePreview
+      v-if="previewEntry?.kind === 'image'"
+      :key="previewEntry.id"
+      :entry="previewEntry"
+      :ensure-local-files="ensureLocalFiles"
+      @close="closeEntryPreview"
+    />
+    <FilePreview
+      v-else-if="previewEntry?.kind === 'files'"
+      :key="previewEntry.id"
+      :entry="previewEntry"
+      @close="closeEntryPreview"
+    />
   </section>
 </template>
+
+<style scoped>
+.file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+.file-preview-trigger:hover { background: var(--sui-bg-hover); }
+@media (max-width: 640px) {
+  .file-preview-trigger { min-width: 44px; min-height: 44px; }
+}
+</style>

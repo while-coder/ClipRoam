@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Trash2 } from "lucide-vue-next";
+import { Copy, Download, Eye, Trash2 } from "lucide-vue-next";
 import { canSaveEntry, saveEntryLabel } from "../../utils/entry";
 import type { LocalClipboardEntry } from "../../types";
 
@@ -20,6 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry];
+  preview: [entry: LocalClipboardEntry];
   save: [entry: LocalClipboardEntry];
   remove: [entry: LocalClipboardEntry];
   close: [];
@@ -60,7 +61,7 @@ const MENU_ITEM_HEIGHT = props.isMobile ? 44 : 36;
 
 function positionMenu(): void {
   const rect = menu.value?.getBoundingClientRect();
-  const height = rect?.height ?? MENU_ITEM_HEIGHT * 3 + 10;
+  const height = rect?.height ?? MENU_ITEM_HEIGHT * 4 + 10;
   const left = Math.max(8, Math.min(props.x, window.innerWidth - MENU_WIDTH - 8));
   const top = Math.max(8, Math.min(props.y, window.innerHeight - height - 8));
   menuStyle.value = { left: `${left}px`, top: `${top}px`, width: `${MENU_WIDTH}px` };
@@ -75,6 +76,7 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
+const onPreview = run((entry) => emit("preview", entry));
 
 function handleMenuKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
@@ -154,6 +156,10 @@ onBeforeUnmount(() => {
         <span v-if="saving" class="s-spinner" aria-hidden="true" />
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
+      </SButton>
+      <SButton v-if="entry.kind !== 'text'" type="text" block role="menuitem" @click="onPreview(entry)">
+        <Eye :size="15" aria-hidden="true" />
+        <span>{{ entry.kind === "image" ? "预览图片" : "预览文件" }}</span>
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
