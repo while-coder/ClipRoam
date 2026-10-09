@@ -23,7 +23,7 @@ import { FileTransfer } from "./fileTransfer";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import { PAGE_SIZE } from "../../utils/constants";
-import type { EntriesManifestFilter } from "../../types";
+import type { EntriesManifestFilter, EntriesManifestPage } from "../../types";
 
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
@@ -271,7 +271,10 @@ export class SyncClient {
   }
 
   /** One server page defines both the visible identities and the total. */
-  async fetchHistoryPage(filter: EntriesManifestFilter) {
+  async fetchHistoryPage(
+    filter: EntriesManifestFilter,
+    deviceNames: Record<string, string>,
+  ): Promise<EntriesManifestPage> {
     const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
     if (filter.query?.trim()) params.set("search", filter.query.trim());
     if (filter.kind && filter.kind !== "all") params.set("kind", filter.kind);
@@ -283,10 +286,28 @@ export class SyncClient {
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
       EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
     );
-    return result!;
+    if (this.#stopped) return { total: 0, entries: [] };
+    const entryIds = result!.manifest.map((entry) => entry.id);
+    if (!entryIds.length) return { total: result!.total, entries: [] };
+    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+    if (this.#stopped) return { total: 0, entries: [] };
+    if (missing.length) {
+      const entries = await this.#fetchEntries(missing);
+      if (this.#stopped) return { total: 0, entries: [] };
+      await invoke("upsert_server_entries", { entries });
+    }
+    if (this.#stopped) return { total: 0, entries: [] };
+    const cached = await invoke<EntriesManifestPage>("list_entries_manifest", {
+      filter: { kind: "all", entryIds }, deviceNames,
+    });
+    const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
+    return {
+      total: result!.total,
+      entries: entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; }),
+    };
   }
 
-  async fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
+  async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     return this.#queryBatched(entryIds, async (batch) => {
       const result = await this.#http.request(
         "POST", "/entries/query",

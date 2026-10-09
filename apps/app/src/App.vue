@@ -76,6 +76,7 @@ import {
 } from "./features/sync/syncEngine";
 import {
   cancelRefreshBurst,
+  fetchHistoryPage,
   fetchManifest,
   flushPendingRemoteUpserts,
   focusSearchInput,
@@ -145,7 +146,7 @@ let shareReceiverListener: PluginListener | undefined;
 // 历史视图 ref 留在本组件，经注入读取。
 initHistorySync({
   getSyncClient,
-  isConnected: () => connected.value,
+  canFetchHistory: () => isPasteWindow || connected.value,
   refreshPendingCount,
   refreshPendingEntries,
   getHistoryView: () => historyView.value,
@@ -584,6 +585,7 @@ onBeforeUnmount(() => {
     <HistoryView
       v-if="activeView === 'history'"
       ref="historyView"
+      :fetch-history-page="fetchHistoryPage"
       :fetch-manifest="fetchManifest"
       :revision="historyRevision"
       :devices-by-id="devicesById"

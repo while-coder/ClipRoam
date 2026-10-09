@@ -146,9 +146,6 @@ async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
 }
 
 export async function startSync(config: SyncConfig): Promise<void> {
-  // The quick-paste window only reads local history; broadcasts from the main
-  // window keep it fresh, and a second socket would double every sync task.
-  if (isPasteWindow) return;
   syncClient?.stop();
   setConnectionState(false);
   const device = await getDevice();
@@ -201,6 +198,11 @@ export async function startSync(config: SyncConfig): Promise<void> {
     getActivePreferences().autoUploadLimitMb * 1024 * 1024,
   );
   syncClient = client;
+  // 快捷粘贴窗口只使用 HTTP 查询历史；不启动 socket、捕获队列或上传循环。
+  if (isPasteWindow) {
+    refreshHistory();
+    return;
+  }
   client.connect();
   // 设备表直接走 HTTP；连接成功后由当前视图请求服务器对应页。
   void client.pullDevices();

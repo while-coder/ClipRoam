@@ -69,8 +69,8 @@ export type EntrySummary = {
 export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
 
 /**
- * Mirrors `GET /entries/manifest` on the server: keyword, kind and time-range
- * filters, then a page of the matches. An absent `page` returns every match.
+ * History page filters. Page numbers start at 1 in the app, HTTP and local
+ * SQLite queries.
  */
 export type EntriesManifestFilter = {
   query?: string;
@@ -79,6 +79,7 @@ export type EntriesManifestFilter = {
   end?: number;
   /** 来源设备过滤；空/缺省 = 不过滤。 */
   deviceIds?: string[];
+  /** 1-based page number; omitted means the first page for server requests. */
   page?: number;
 };
 

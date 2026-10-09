@@ -8,6 +8,10 @@ type ManifestOptions = {
     filter: EntriesManifestFilter,
     deviceNames: Record<string, string>,
   ) => Promise<EntriesManifestPage>;
+  fetchHistoryPage: (
+    filter: EntriesManifestFilter,
+    deviceNames: Record<string, string>,
+  ) => Promise<EntriesManifestPage>;
   deviceNames: () => Record<string, string>;
   buildFilter: (page: number) => EntriesManifestFilter;
   /** Bumped whenever the underlying history may have changed in the background. */
@@ -44,7 +48,8 @@ export function useHistoryManifest(options: ManifestOptions) {
     const token = ++fetchToken;
     targetPage = requestedPage;
     try {
-      const result = await options.fetchManifest(
+      const fetchPage = requestedPage === 1 ? options.fetchManifest : options.fetchHistoryPage;
+      const result = await fetchPage(
         options.buildFilter(requestedPage),
         options.deviceNames(),
       );

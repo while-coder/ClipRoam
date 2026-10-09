@@ -48,8 +48,12 @@ import type {
 } from "../../types";
 
 const props = defineProps<{
-  /** Server-style manifest fetch: filtering and paging run in Rust. */
   fetchManifest: (
+    filter: EntriesManifestFilter,
+    deviceNames: Record<string, string>,
+  ) => Promise<EntriesManifestPage>;
+  /** Server-style manifest fetch: filtering and paging run in Rust. */
+  fetchHistoryPage: (
     filter: EntriesManifestFilter,
     deviceNames: Record<string, string>,
   ) => Promise<EntriesManifestPage>;
@@ -140,7 +144,7 @@ const committedQuery = ref("");
 function commitSearch(): void {
   if (committedQuery.value === query.value.trim()) {
     // 关键词没变（如清空后原样回车）也允许显式重查。
-    void fetchManifestPage(1, true);
+    void fetchPage(1, true);
     return;
   }
   committedQuery.value = query.value.trim();
@@ -163,10 +167,11 @@ const {
   total: manifestTotal,
   pageCount,
   entries: pageEntries,
-  fetch: fetchManifestPage,
+  fetch: fetchPage,
   clear: clearManifest,
   changePage,
 } = useHistoryManifest({
+  fetchHistoryPage: props.fetchHistoryPage,
   fetchManifest: props.fetchManifest,
   deviceNames: () => deviceNames.value,
   buildFilter: (page) => ({
@@ -247,7 +252,7 @@ async function focusSearch(): Promise<void> {
     filter.value = "all";
     timeFilter.value = "all";
   }
-  await fetchManifestPage(1, true);
+  await fetchPage(1, true);
   selectedEntryId.value = pageEntries.value[0]?.id ?? "";
   await nextTick();
   focusSearchInputEl();
