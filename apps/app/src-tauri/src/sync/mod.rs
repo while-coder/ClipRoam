@@ -38,6 +38,12 @@ pub(crate) struct AccountPreferences {
     #[serde(default = "default_auto_upload_limit_mb")]
     pub auto_upload_limit_mb: u64,
     pub auto_receive_clipboard: bool,
+    /// 是否监听本机剪贴板（轮询捕获复制内容进历史）；关闭后仅接收同步内容。
+    /// 桌面端监听线程每轮读取；旧 preferences.json 缺该字段时按 Default 取 true。
+    pub watch_clipboard: bool,
+    /// Windows 独有：文件粘贴是否走 virtual_files（不预下载）；默认 false =
+    /// 先下载再粘贴，与 mac/linux 物化路径一致。其余平台 supports 恒 false。
+    pub use_virtual_files: bool,
     /// 捕获文件/文件夹时按名称跳过的过滤模式（`*`/`?` 通配，如 `node_modules`）。
     #[serde(default = "default_exclude_patterns")]
     pub exclude_patterns: Vec<String>,
@@ -56,6 +62,8 @@ impl Default for AccountPreferences {
         Self {
             auto_upload_limit_mb: default_auto_upload_limit_mb(),
             auto_receive_clipboard: default_auto_receive_clipboard(),
+            watch_clipboard: default_watch_clipboard(),
+            use_virtual_files: false,
             exclude_patterns: default_exclude_patterns(),
             server_max_file_mb: default_server_max_file_mb(),
             max_capture_file_count: default_max_capture_file_count(),
@@ -74,6 +82,10 @@ fn default_auto_upload_limit_mb() -> u64 {
 }
 
 fn default_auto_receive_clipboard() -> bool {
+    true
+}
+
+fn default_watch_clipboard() -> bool {
     true
 }
 

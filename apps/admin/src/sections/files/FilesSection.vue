@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { confirm, toast, SButton, STag } from "@qingfeng346/ui-kit";
 import { deleteFile, fetchFiles, type AdminFile, type FileStats } from "../../shared/api.js";
 import { errorMessage } from "../../shared/errorMessage.js";
-
-const pageLimit = 500;
 
 const files = ref<AdminFile[]>([]);
 const total = ref(0);
@@ -11,9 +10,7 @@ const stats = ref<FileStats>();
 const loading = ref(true);
 const submitting = ref(false);
 const error = ref("");
-const notice = ref("");
 const search = ref("");
-const confirmingFile = ref<AdminFile>();
 
 const resultSummary = computed(() => {
   if (loading.value) return "正在加载文件列表…";
@@ -22,42 +19,6 @@ const resultSummary = computed(() => {
   }
   return `共 ${total.value} 项`;
 });
-
-// 客户端排序只作用于当前加载的列表页；不排序时保持服务端返回的最近注册顺序。
-type SortKey = "size" | "createdAt" | "stored";
-const sortState = ref<{ key: SortKey; dir: "desc" | "asc" }>();
-
-function compareFiles(a: AdminFile, b: AdminFile, key: SortKey): number {
-  if (key === "stored") return Number(a.stored) - Number(b.stored);
-  if (key === "createdAt") return a.createdAt.localeCompare(b.createdAt);
-  return a.size - b.size;
-}
-
-const sortedFiles = computed(() => {
-  const sort = sortState.value;
-  if (!sort) return files.value;
-  const factor = sort.dir === "desc" ? -1 : 1;
-  return [...files.value].sort((a, b) => compareFiles(a, b, sort.key) * factor);
-});
-
-function toggleSort(key: SortKey): void {
-  const current = sortState.value;
-  if (current?.key !== key) {
-    sortState.value = { key, dir: "desc" };
-  } else {
-    sortState.value = current.dir === "desc" ? { key, dir: "asc" } : undefined;
-  }
-}
-
-function sortArrow(key: SortKey): string {
-  if (sortState.value?.key !== key) return "";
-  return sortState.value.dir === "desc" ? " ↓" : " ↑";
-}
-
-function ariaSort(key: SortKey): "ascending" | "descending" | undefined {
-  if (sortState.value?.key !== key) return undefined;
-  return sortState.value.dir === "desc" ? "descending" : "ascending";
-}
 
 const searchDebounceMs = 250;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,22 +43,22 @@ async function load(): Promise<void> {
   }
 }
 
-function requestRemoval(file: AdminFile): void {
-  error.value = "";
-  notice.value = "";
-  confirmingFile.value = file;
-}
-
-async function removeFile(): Promise<void> {
-  const file = confirmingFile.value;
-  if (!file || submitting.value) return;
+async function removeFile(file: AdminFile): Promise<void> {
+  if (submitting.value) return;
+  const confirmed = await confirm.show({
+    title: "删除文件？",
+    content: `${file.fileId}\n将删除磁盘上的这份文件并移除注册记录${
+      file.stored ? "" : "（字节尚未落盘，仅移除注册记录）"
+    }。引用它的剪贴板条目会立即失去该内容。`,
+    confirmText: "确认删除",
+    error: true,
+  });
+  if (!confirmed) return;
   submitting.value = true;
   error.value = "";
-  notice.value = "";
   try {
     await deleteFile(file.fileId);
-    confirmingFile.value = undefined;
-    notice.value = "文件已删除。";
+    toast.show("success", "文件已删除。");
     await load();
   } catch (reason) {
     error.value = errorMessage(reason, "删除文件失败。");
@@ -122,6 +83,31 @@ function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+// 排序交给 SDataTable 的 column.sorter（组件内部管理方向与 aria-sort），
+// 替代原先手写的 sortState/toggleSort/sortArrow/ariaSort。
+const columns = [
+  {
+    title: "内容 ID",
+    key: "fileId",
+    render: (file: AdminFile) => h("span", { class: "mono file-id-cell", title: file.fileId }, file.fileId),
+  },
+  { title: "大小", key: "size", sorter: (left: AdminFile, right: AdminFile) => left.size - right.size, render: (file: AdminFile) => formatBytes(file.size) },
+  {
+    title: "状态",
+    key: "stored",
+    sorter: (left: AdminFile, right: AdminFile) => Number(left.stored) - Number(right.stored),
+    render: (file: AdminFile) => h(STag, { type: file.stored ? "success" : "default" }, () => (file.stored ? "已存储" : "待上传")),
+  },
+  { title: "注册时间", key: "createdAt", sorter: (left: AdminFile, right: AdminFile) => left.createdAt.localeCompare(right.createdAt), render: (file: AdminFile) => formatDateTime(file.createdAt) },
+  {
+    title: "操作",
+    key: "ops",
+    align: "right",
+    render: (file: AdminFile) =>
+      h(SButton, { type: "error", disabled: submitting.value, onClick: () => removeFile(file) }, () => "删除"),
+  },
+];
+
 onMounted(load);
 onUnmounted(() => clearTimeout(searchTimer));
 </script>
@@ -130,101 +116,56 @@ onUnmounted(() => clearTimeout(searchTimer));
   <section class="content-section" aria-labelledby="files-title">
     <header class="topbar">
       <h1 id="files-title">文件管理</h1>
-      <button class="secondary" type="button" :disabled="loading" @click="load">刷新</button>
+      <SButton :disabled="loading" @click="load">刷新</SButton>
     </header>
 
-    <div class="stats-row">
-      <section class="status-card">
-        <div class="status-copy">
-          <p class="label">内容池文件</p>
-          <strong>{{ stats ? `${stats.count} 项` : "—" }}</strong>
+    <SGrid :cols="3" :x-gap="16" :y-gap="16">
+      <SCard>
+        <div class="status-row">
+          <div class="status-copy">
+            <p class="label">内容池文件</p>
+            <strong>{{ stats ? `${stats.count} 项` : "—" }}</strong>
+          </div>
         </div>
-      </section>
-      <section class="status-card">
-        <div class="status-copy">
-          <p class="label">已落盘 / 待上传</p>
-          <strong>{{ stats ? `${stats.storedCount} / ${stats.count - stats.storedCount}` : "—" }}</strong>
+      </SCard>
+      <SCard>
+        <div class="status-row">
+          <div class="status-copy">
+            <p class="label">已落盘 / 待上传</p>
+            <strong>{{ stats ? `${stats.storedCount} / ${stats.count - stats.storedCount}` : "—" }}</strong>
+          </div>
         </div>
-      </section>
-      <section class="status-card">
-        <div class="status-copy">
-          <p class="label">占用空间</p>
-          <strong>{{ stats ? formatBytes(stats.storedBytes) : "—" }}</strong>
+      </SCard>
+      <SCard>
+        <div class="status-row">
+          <div class="status-copy">
+            <p class="label">占用空间</p>
+            <strong>{{ stats ? formatBytes(stats.storedBytes) : "—" }}</strong>
+          </div>
         </div>
-      </section>
-    </div>
+      </SCard>
+    </SGrid>
 
-    <section class="panel">
-      <div class="panel-heading">
-        <div>
-          <h2>内容池</h2>
-          <p>文件按内容哈希（sha256）寻址，与剪贴板条目独立存储；删除后引用它的条目将无法再读取该内容。</p>
-        </div>
-        <input
-          v-model="search"
+    <SCard title="内容池">
+      <template #header-extra>
+        <SInput
+          v-model:value="search"
           class="user-search"
           type="search"
           placeholder="按内容 ID 前缀搜索"
           aria-label="按内容 ID 前缀搜索"
-          @input="onSearchInput"
+          clearable
+          @update:value="onSearchInput"
         />
-      </div>
+      </template>
 
+      <p class="muted panel-desc">文件按内容哈希（sha256）寻址，与剪贴板条目独立存储；删除后引用它的条目将无法再读取该内容。</p>
       <p class="muted result-summary">{{ resultSummary }}</p>
-      <p v-if="!loading && files.length === 0 && search.trim()" class="muted">没有匹配的内容 ID。</p>
-      <p v-else-if="!loading && files.length === 0" class="muted">内容池还是空的。</p>
-      <table v-else-if="!loading" class="user-table file-table">
-        <thead>
-          <tr>
-            <th scope="col">内容 ID</th>
-            <th scope="col" :aria-sort="ariaSort('size')">
-              <button class="sort-toggle" type="button" @click="toggleSort('size')">
-                大小<span class="sort-arrow">{{ sortArrow("size") }}</span>
-              </button>
-            </th>
-            <th scope="col" :aria-sort="ariaSort('stored')">
-              <button class="sort-toggle" type="button" @click="toggleSort('stored')">
-                状态<span class="sort-arrow">{{ sortArrow("stored") }}</span>
-              </button>
-            </th>
-            <th scope="col" :aria-sort="ariaSort('createdAt')">
-              <button class="sort-toggle" type="button" @click="toggleSort('createdAt')">
-                注册时间<span class="sort-arrow">{{ sortArrow("createdAt") }}</span>
-              </button>
-            </th>
-            <th scope="col"><span class="visually-hidden">操作</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="file in sortedFiles" :key="file.fileId">
-            <td class="mono" :title="file.fileId">{{ file.fileId }}</td>
-            <td>{{ formatBytes(file.size) }}</td>
-            <td>
-              <span class="status-pill" :class="{ active: file.stored }">{{ file.stored ? "已存储" : "待上传" }}</span>
-            </td>
-            <td>{{ formatDateTime(file.createdAt) }}</td>
-            <td class="row-actions">
-              <button class="danger" type="button" :disabled="submitting" @click="requestRemoval(file)">删除</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <SEmpty v-if="!loading && files.length === 0 && search.trim()">没有匹配的内容 ID。</SEmpty>
+      <SEmpty v-else-if="!loading && files.length === 0">内容池还是空的。</SEmpty>
+      <SDataTable v-else-if="!loading" :columns="columns" :data="files" row-key="fileId" />
 
-      <p v-if="error" class="message error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
-    </section>
-
-    <div v-if="confirmingFile" class="modal-backdrop" role="presentation">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-file-title">
-        <h2 id="delete-file-title">删除文件？</h2>
-        <p class="mono break-all">{{ confirmingFile.fileId }}</p>
-        <p>将删除磁盘上的这份文件并移除注册记录{{ confirmingFile.stored ? "" : "（字节尚未落盘，仅移除注册记录）" }}。引用它的剪贴板条目会立即失去该内容。</p>
-        <p v-if="error" class="message error" role="alert">{{ error }}</p>
-        <div class="form-actions">
-          <button class="secondary" type="button" :disabled="submitting" @click="confirmingFile = undefined">取消</button>
-          <button class="danger" type="button" :disabled="submitting" @click="removeFile">{{ submitting ? "正在删除…" : "确认删除" }}</button>
-        </div>
-      </section>
-    </div>
+      <SAlert v-if="error" type="error">{{ error }}</SAlert>
+    </SCard>
   </section>
 </template>

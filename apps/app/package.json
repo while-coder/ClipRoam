@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@cliproam/protocol": "workspace:*",
+    "@qingfeng346/ui-kit": "link:../../../ui-kit/ui-kit",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-global-shortcut": "^2",
     "@tauri-apps/plugin-log": "^2",
@@ -25,7 +26,7 @@
     "@tauri-apps/plugin-updater": "^2",
     "@while-coder/tauri-updater-vue": "git+https://github.com/while-coder/tauri-updater-kit.git#main&path:packages/vue",
     "lucide-vue-next": "^0.468.0",
-    "vue": "^3.5.13"
+    "vue": "^3.5.43"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

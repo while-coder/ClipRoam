@@ -9,7 +9,7 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB } from "../sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_USE_VIRTUAL_FILES, DEFAULT_WATCH_CLIPBOARD } from "../sync/syncDefaults";
 import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
@@ -53,6 +53,10 @@ const settingsVisible = ref(false);
 const settingsPage = ref<SettingsPage>("general");
 const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
 const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
+/** 是否监听本机剪贴板；关闭后本机复制不再自动进历史，只收同步内容。 */
+const watchClipboard = ref(DEFAULT_WATCH_CLIPBOARD);
+/** Windows 独有：文件粘贴走 virtual_files（不预下载）；默认关闭。 */
+const useVirtualFiles = ref(DEFAULT_USE_VIRTUAL_FILES);
 /** 文本域里的过滤模式，一行一条；保存时拆成数组。 */
 const excludePatternsInput = ref("");
 /** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
@@ -77,6 +81,8 @@ function openSettings(): void {
   const preferences = requireBridge().getActivePreferences();
   autoUploadLimitMb.value = preferences.autoUploadLimitMb;
   autoReceiveClipboard.value = preferences.autoReceiveClipboard;
+  watchClipboard.value = preferences.watchClipboard;
+  useVirtualFiles.value = preferences.useVirtualFiles;
   excludePatternsInput.value = preferences.excludePatterns.join("\n");
   serverMaxFileMb.value = preferences.serverMaxFileMb;
   // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
@@ -206,6 +212,8 @@ async function saveSettings(): Promise<void> {
   const preferences: AccountPreferences = {
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
+    watchClipboard: watchClipboard.value,
+    useVirtualFiles: useVirtualFiles.value,
     excludePatterns: excludePatternsInput.value
       .split("\n")
       .map((pattern) => pattern.trim())
@@ -326,6 +334,8 @@ export {
   settingsPage,
   autoUploadLimitMb,
   autoReceiveClipboard,
+  watchClipboard,
+  useVirtualFiles,
   excludePatternsInput,
   serverMaxFileMb,
   deviceAliasInput,

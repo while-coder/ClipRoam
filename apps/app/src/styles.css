@@ -1,3 +1,21 @@
+@import "@qingfeng346/ui-kit/style.css";
+
+/* ── ui-kit 桥接：ClipRoam 恒深色。theme-dark 挂在 :root[data-theme="dark"]（0-2-0），
+   覆盖必须复写同一选择器；仅列与现有色值有差异的 token。 ── */
+:root[data-theme="dark"] {
+  --sui-bg: #10192e;                        /* = --color-surface */
+  --sui-bg-soft: #16213c;
+  --sui-bg-subtle: #0d1524;
+  --sui-bg-active: #183152;
+  --sui-bg-hover: rgba(255, 255, 255, 0.06);
+  --sui-border: rgba(148, 163, 184, 0.24);
+  --sui-border-strong: rgba(148, 163, 184, 0.38);
+  --sui-mask: rgba(2, 6, 23, 0.58);
+}
+/* CTA 保持 ClipRoam 绿主按钮；--sui-primary 维持 #60a5fa 供焦点环/选中态/tabs 蓝 */
+.s-button.type-primary { border-color: #4ade80; background: #22c55e; color: #052e16; }
+.s-button.type-primary:hover:not(:disabled) { background: #4ade80; border-color: #4ade80; }
+
 :root {
   --color-primary: #1e3a5f;
   --color-accent: #22c55e;
@@ -42,7 +60,12 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   border: 0;
 }
 .mobile-shell .titlebar { min-height: 52px; }
-.mobile-shell .icon-button { width: 44px; height: 44px; }
+/* SIconButton 尺寸是 inline style（:size 生成），设置引导页的 44px 触达规则同步迁移。 */
+.mobile-shell .s-icon-button { width: 44px !important; height: 44px !important; }
+/* Setup 表单换成 kit 按钮/输入后的 44px 触达与 iOS 防缩放。 */
+.mobile-shell .s-button { min-height: 44px !important; }
+.mobile-shell .s-input,
+.mobile-shell .s-select { min-height: 44px; font-size: 16px; }
 .setup-shell {
   position: relative;
   display: grid;
@@ -143,71 +166,14 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   grid-template-columns: minmax(0, 1fr) 132px;
   gap: 10px;
 }
-.server-address-field, .server-protocol-field {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
 .setup-form label {
   margin-top: 3px;
   color: #cbd5e1;
   font-size: 12px;
   font-weight: 600;
 }
-.setup-form input, .setup-form select {
-  width: 100%;
-  height: 42px;
-  padding: 0 12px;
-  color: var(--color-foreground);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  outline: 0;
-  transition: border-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
-}
-.setup-form select { cursor: pointer; }
-.setup-form input::placeholder { color: #64748b; }
-.setup-form input:focus, .setup-form select:focus {
-  border-color: #60a5fa;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
-}
 .field-hint { color: #64748b; font-size: 11px; line-height: 1.45; }
 .field-error { color: #fca5a5; font-size: 11px; line-height: 1.45; }
-.setup-error {
-  margin: 3px 0 0;
-  padding: 8px 10px;
-  color: #fecaca;
-  background: rgba(220, 38, 38, 0.12);
-  border: 1px solid rgba(248, 113, 113, 0.22);
-  border-radius: 7px;
-  font-size: 12px;
-  line-height: 1.45;
-}
-.primary-button, .secondary-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 44px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
-}
-.primary-button {
-  margin-top: 4px;
-  color: #052e16;
-  background: var(--color-accent);
-  border: 1px solid #4ade80;
-}
-.primary-button:hover:not(:disabled) { background: #4ade80; }
-.secondary-button {
-  color: #cbd5e1;
-  background: transparent;
-  border: 1px solid var(--color-border);
-}
-.secondary-button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
 .setup-footer {
   display: grid;
   place-items: center;
@@ -245,19 +211,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 /* 快捷粘贴窗口首行是整个标题行高度，拖拽条要填满整行，别留不可拖的空白 */
 .paste-drag-strip { height: 100%; min-height: 6px; cursor: grab; }
 .paste-drag-strip:active { cursor: grabbing; }
-.icon-button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.icon-button:hover { background: rgba(255, 255, 255, 0.08); }
-
 .toolbar { position: relative; padding-top: 12px; padding-bottom: 9px; }
 .search-field {
   display: grid;
@@ -309,20 +262,6 @@ kbd {
   scrollbar-width: none;
 }
 .filter-scroll::-webkit-scrollbar { display: none; }
-.filter-scroll > button {
-  flex: 0 0 auto;
-  height: 27px;
-  padding: 0 9px;
-  color: #94a3b8;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.filter-scroll > button:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.05); }
-.filter-scroll > button.active { color: #dbeafe; background: #1e3a5f; border-color: rgba(147, 197, 253, 0.18); }
 .filter-actions {
   display: flex;
   flex: 0 0 auto;
@@ -331,17 +270,6 @@ kbd {
   padding-left: 8px;
   border-left: 1px solid rgba(148, 163, 184, 0.14);
 }
-/* 下载页（侧边栏「下载」视图）的任务行样式 */
-.downloads-cancel-all {
-  padding: 2px 8px;
-  color: #fca5a5;
-  font-size: 11px;
-  background: transparent;
-  border: 1px solid rgba(252, 165, 165, 0.35);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.downloads-cancel-all:hover { border-color: rgba(252, 165, 165, 0.6); }
 .downloads-list .download-row { gap: 12px; }
 .download-row { display: flex; align-items: center; gap: 8px; }
 .download-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
@@ -354,16 +282,6 @@ kbd {
 .download-bar-fill { display: block; height: 100%; background: var(--color-accent); border-radius: 999px; transition: width 0.2s ease; }
 /* 历史行内的下载进度条：跟随 entry-body 栅格，宽度撑满文本区。 */
 .entry-download-bar { width: 100%; }
-.download-cancel {
-  display: inline-flex;
-  flex: 0 0 auto;
-  padding: 3px;
-  color: #64748b;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-.download-cancel:hover { color: #fca5a5; }
 .result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .result-summary.error { color: #fca5a5; }
 /* 下拉 trigger 里的选中文案可能很长（如设备名），收不住会撑爆筛选行 */
@@ -398,13 +316,9 @@ kbd {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.toast-card > svg { flex: 0 0 auto; margin-top: 1px; }
 .toast-success .toast-card { border-color: rgba(74, 222, 128, 0.38); }
-.toast-success .toast-card > svg { color: #4ade80; }
 .toast-error .toast-card { border-color: rgba(248, 113, 113, 0.42); }
-.toast-error .toast-card > svg { color: #fca5a5; }
 .toast-info .toast-card { border-color: rgba(96, 165, 250, 0.42); }
-.toast-info .toast-card > svg { color: #93c5fd; }
 .toast-enter-active { transition: opacity 180ms ease-out, transform 180ms ease-out; }
 .toast-leave-active { transition: opacity 140ms ease-in, transform 140ms ease-in; }
 .toast-enter-from,
@@ -751,101 +665,30 @@ button.image-thumbnail { cursor: zoom-in; }
 .history-content .history-list { padding: 2px 14px 8px; }
 .history-content .footer-hint { padding-inline: 20px; }
 
-.settings-backdrop {
-  position: absolute;
-  z-index: 10;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  overflow: auto;
-  background: rgba(2, 6, 23, 0.58);
-}
-.image-preview-backdrop {
-  position: absolute;
-  z-index: 20;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  background: rgba(2, 6, 23, 0.68);
-}
-.image-preview-dialog {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(100%, 980px);
-  max-height: min(100%, 760px);
-  overflow: hidden;
-  background: #0b1220;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 12px;
-  box-shadow: 0 24px 72px rgba(2, 6, 23, 0.68);
-  outline: 0;
-}
-.image-preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 56px;
-  padding: 0 14px 0 18px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-}
-.image-preview-header > div { display: grid; gap: 2px; min-width: 0; }
-.image-preview-header span { color: #94a3b8; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.image-preview-header strong { overflow: hidden; color: #f1f5f9; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .image-preview-stage {
   display: grid;
   place-items: center;
   min-height: 0;
+  /* 预览已是 SModal 内容：高度自算（视口 - 标题栏/内边距），img max-height:100% 才有约束。 */
+  height: min(640px, calc(100vh - 200px));
   padding: 20px;
   overflow: auto;
   background: radial-gradient(circle at center, #17233c, #050a14 74%);
 }
 .image-preview-stage img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-.settings-dialog {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(100%, 820px);
-  height: min(100%, 640px);
-  overflow: hidden;
-  background: #111c31;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 12px;
-  box-shadow: 0 18px 56px rgba(2, 6, 23, 0.52);
-}
-.settings-dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 62px;
-  padding: 0 18px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-}
-.settings-dialog-header > div { display: grid; gap: 2px; }
-.settings-dialog-header span { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
-.settings-dialog-header h2 { margin: 0; color: #f8fafc; font-size: 16px; }
-.settings-layout { display: grid; grid-template-columns: 158px minmax(0, 1fr); min-height: 0; }
-.settings-nav { display: grid; align-content: start; gap: 4px; padding: 16px 12px; border-right: 1px solid rgba(148, 163, 184, 0.14); }
-.settings-nav button { min-height: 38px; padding: 0 12px; color: #94a3b8; text-align: left; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
-.settings-nav button:hover { color: #e2e8f0; background: rgba(148, 163, 184, 0.08); }
-.settings-nav button.active { color: #dbeafe; background: #183152; box-shadow: inset 3px 0 #60a5fa; }
-.settings-form { display: grid; align-content: start; min-height: 0; gap: 16px; padding: 22px 24px; overflow-y: auto; }
+/* fill-height 只定 box 高，kit 没写 body 拉伸：补 flex:1 让 body 撑满，内部 form 才能拿到确定高度。 */
+.s-modal-box.fill-height .s-modal-body { flex: 1; }
+/* 设置页固定高度（参考 sterm）：body 不滚，form 纵向 flex —— STabs 吃满剩余并内部滚动（左 tabs 固定）。 */
+.settings-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 16px; padding: 22px 24px; overflow-y: auto; }
+.settings-form .s-tabs { flex: 1 1 auto; min-height: 0; }
 .settings-page { display: grid; align-content: start; gap: 14px; }
 .settings-page-header { padding-bottom: 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.2); }
 .settings-page-header h3 { margin: 0; color: #f8fafc; font-size: 20px; line-height: 1.25; }
 .settings-page-header p { margin: 5px 0 0; color: #94a3b8; font-size: 12px; }
-.settings-section {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 9px;
-}
-.settings-section-heading { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 3px; }
-.settings-icon { display: grid; flex: 0 0 auto; place-items: center; width: 32px; height: 32px; color: #93c5fd; background: #183152; border-radius: 7px; }
-.settings-section h4 { margin: 0; color: #e2e8f0; font-size: 13px; }
-.settings-section p { margin: 3px 0 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
+/* SCard 替换 .settings-section：卡片 body 内子元素沿用原来的纵排间距。 */
+.settings-form .s-card-body { display: grid; gap: 8px; }
+/* 原 .settings-section p 的副标题样式随降级迁到这个类上。 */
+.settings-section-desc { margin: 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
 .shortcut-setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -885,10 +728,10 @@ button.image-thumbnail { cursor: zoom-in; }
 }
 .shortcut-presets button:hover:not(:disabled),
 .shortcut-presets button.active { color: #dbeafe; background: rgba(37, 99, 235, 0.16); border-color: rgba(96, 165, 250, 0.42); }
-.settings-section .shortcut-status { margin: 2px 0 0; color: #94a3b8; }
-.settings-section .shortcut-status.ok { color: #86efac; }
-.settings-section .shortcut-status.error { color: #fca5a5; }
-.about-product { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.shortcut-status { margin: 2px 0 0; color: #94a3b8; }
+.shortcut-status.ok { color: #86efac; }
+.shortcut-status.error { color: #fca5a5; }
+.about-product .s-card-body { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .about-product-mark {
   width: 46px;
   height: 46px;
@@ -907,35 +750,10 @@ button.image-thumbnail { cursor: zoom-in; }
   font-size: 11px;
   font-weight: 650;
 }
-.about-update { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 14px; }
-.about-update .settings-section-heading { margin: 0; }
-.settings-section .about-update-status { grid-column: 1 / -1; margin: 2px 0 0; color: #cbd5e1; }
-.settings-section .about-update-status.update-error { color: #fca5a5; }
+.about-update-status { margin: 2px 0 0; color: #cbd5e1; }
+.about-update-status.update-error { color: #fca5a5; }
 .about-update-button { min-width: 126px; margin: 0; }
 .settings-form label { color: #cbd5e1; font-size: 12px; font-weight: 600; }
-.settings-form input, .settings-form select {
-  width: 100%;
-  height: 40px;
-  padding: 0 11px;
-  color: #f8fafc;
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 7px;
-  outline: 0;
-}
-.settings-form textarea {
-  width: 100%;
-  padding: 9px 11px;
-  color: #f8fafc;
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 7px;
-  outline: 0;
-  resize: vertical;
-  font-family: inherit;
-  line-height: 1.5;
-}
-.settings-form input:focus, .settings-form select:focus, .settings-form textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18); }
 .setting-switch {
   display: flex;
   align-items: center;
@@ -953,60 +771,12 @@ button.image-thumbnail { cursor: zoom-in; }
 .setting-switch-copy { display: grid; min-width: 0; gap: 3px; }
 .setting-switch-copy strong { color: #e2e8f0; font-size: 12px; }
 .setting-switch-copy small { color: #64748b; font-size: 11px; font-weight: 400; line-height: 1.45; }
-.settings-form .setting-switch input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-.setting-switch-track {
-  position: relative;
-  flex: 0 0 auto;
-  width: 38px;
-  height: 22px;
-  background: #334155;
-  border-radius: 999px;
-  transition: background 160ms ease;
-}
-.setting-switch-track::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
-  content: "";
-  background: #f8fafc;
-  border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(2, 6, 23, 0.45);
-  transition: transform 160ms ease;
-}
-.setting-switch input:checked + .setting-switch-track { background: #2563eb; }
-.setting-switch input:checked + .setting-switch-track::after { transform: translateX(16px); }
-.setting-switch input:focus-visible + .setting-switch-track { outline: 2px solid #60a5fa; outline-offset: 2px; }
-.setting-switch:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
-.setting-switch:has(input:disabled):hover { background: #0f172a; border-color: rgba(148, 163, 184, 0.2); }
 .password-change-fields { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 8px 10px; }
 .account-actions, .settings-actions { display: flex; gap: 8px; }
-.account-actions .secondary-button, .account-actions .danger-button { flex: 1; }
+.account-actions .s-button { flex: 1; }
 .settings-actions { justify-content: flex-end; }
 .settings-actions { padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.14); }
-.settings-actions .primary-button, .settings-actions .secondary-button { min-width: 100px; margin-top: 0; }
-.danger-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 40px;
-  color: #fecaca;
-  background: rgba(220, 38, 38, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.26);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.danger-button:hover:not(:disabled) { background: rgba(220, 38, 38, 0.2); }
+.settings-actions .s-button { min-width: 100px; }
 
 button:focus-visible, [role="button"]:focus-visible {
   outline: 2px solid #60a5fa;
@@ -1026,16 +796,12 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 @media (max-width: 560px) {
   .password-change-fields { grid-template-columns: 1fr; gap: 5px; }
-  .about-product { grid-template-columns: auto minmax(0, 1fr); }
+  .about-product .s-card-body { grid-template-columns: auto minmax(0, 1fr); }
   .about-version { grid-column: 2; justify-self: start; }
   .about-update { grid-template-columns: 1fr; }
   .about-update-button { width: 100%; }
 }
 @media (max-width: 640px) {
-  .settings-layout { grid-template-columns: 1fr; }
-  .settings-nav { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(96px, 1fr); padding: 10px; overflow-x: auto; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
-  .settings-nav button { padding-inline: 8px; text-align: center; }
-  .settings-nav button.active { box-shadow: inset 0 -3px #60a5fa; }
   .settings-form { padding: 18px; }
 }
 
@@ -1056,7 +822,6 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-connection { font-size: 11px; color: #94a3b8; }
 .mobile-connection.online { color: #4ade80; }
 .mobile-connection.disconnected { color: #fbbf24; }
-.mobile-app .icon-button { width: 44px; height: 44px; border-radius: 10px; }
 .mobile-app .toolbar { padding: 12px 12px 8px; }
 .mobile-app .search-field { min-height: 46px; }
 .mobile-app .search-field input { min-width: 0; font-size: 16px; }
@@ -1080,7 +845,8 @@ button:focus-visible, [role="button"]:focus-visible {
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: 44px;
+  /* kit .s-button 是 (0,2,0) scoped 规则，触达硬需求用 !important 压回 44px。 */
+  min-height: 44px !important;
   gap: 8px;
   margin-top: 8px;
   color: #dbeafe;
@@ -1096,7 +862,8 @@ button:focus-visible, [role="button"]:focus-visible {
   padding-bottom: 2px;
 }
 .mobile-app .filter-scroll { gap: 8px; }
-.mobile-app .filter-scroll > button { min-height: 44px; padding-inline: 14px; }
+/* 类型筛选换成 STagFilter 后 chips 不再是 .filter-scroll 的直接 button，44px 触达规则随之迁移。 */
+.mobile-app .filter-scroll .s-tag-filter-chip { min-height: 44px; padding-inline: 14px; font-size: 13px; }
 .mobile-app .filter-actions { gap: 8px; padding-left: 8px; }
 .mobile-app .result-summary { max-width: 92px; }
 .mobile-app .empty-filter-reset { min-height: 44px; padding-inline: 14px; font-size: 13px; }
@@ -1119,18 +886,18 @@ button:focus-visible, [role="button"]:focus-visible {
   opacity: 1;
 }
 .mobile-app .item-action { width: 44px; height: 44px; border-radius: 10px; }
+/* SIconButton 尺寸是 inline style（:size 生成），移动端 44px 触达规则必须 !important。 */
+.mobile-app .s-icon-button { width: 44px !important; height: 44px !important; border-radius: 10px !important; }
 .mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
 /* 窄屏放不下"共 N 条 · 第 x/y 页"整段文字，条数在筛选行已展示，只留翻页按钮 */
 .mobile-app .pagination-status { display: none; }
-.mobile-app .settings-backdrop { padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0); }
-.mobile-app .settings-dialog { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; }
-.mobile-app .settings-dialog-header { min-height: 60px; padding-inline: 16px; }
-.mobile-app .settings-layout { grid-template-rows: auto minmax(0, 1fr); }
-.mobile-app .settings-nav { overflow-x: auto; }
-.mobile-app .settings-nav button { min-height: 44px; white-space: nowrap; }
-.mobile-app .settings-form { padding: 16px; }
-.mobile-app .settings-form input,
-.mobile-app .settings-form select { min-height: 44px; font-size: 16px; }
+/* SModal teleport 到 body 后脱离 .mobile-app 祖先，表单触达规则改用媒体查询兜底。 */
+@media (max-width: 640px) {
+  .settings-form { padding: 16px; }
+  .settings-form .s-input,
+  .settings-form .s-select,
+  .settings-form .s-textarea { min-height: 44px; font-size: 16px; }
+}
 
 @media (orientation: landscape) and (max-height: 520px) {
   .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr); }

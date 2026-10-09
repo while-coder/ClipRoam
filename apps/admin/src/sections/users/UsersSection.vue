@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { confirm, toast } from "@qingfeng346/ui-kit";
 import {
   deleteUser,
   deleteUserDevice,
@@ -16,9 +17,7 @@ const users = ref<AdminUser[]>([]);
 const loading = ref(true);
 const submitting = ref(false);
 const error = ref("");
-const notice = ref("");
 const search = ref("");
-const confirmingUser = ref<AdminUser>();
 
 const resultSummary = computed(() => {
   if (loading.value) return "正在加载用户列表…";
@@ -46,22 +45,20 @@ async function load(): Promise<void> {
   }
 }
 
-function requestRemoval(user: AdminUser): void {
-  error.value = "";
-  notice.value = "";
-  confirmingUser.value = user;
-}
-
-async function removeUser(): Promise<void> {
-  const user = confirmingUser.value;
-  if (!user || submitting.value) return;
+async function removeUser(user: AdminUser): Promise<void> {
+  if (submitting.value) return;
+  const confirmed = await confirm.show({
+    title: `删除用户 ${user.username}？`,
+    content: "该用户的账号、会话与全部剪贴板数据都会被永久删除；已登录设备在下一次请求时会被拒绝。",
+    confirmText: "确认删除",
+    error: true,
+  });
+  if (!confirmed) return;
   submitting.value = true;
   error.value = "";
-  notice.value = "";
   try {
     await deleteUser(user.id);
-    confirmingUser.value = undefined;
-    notice.value = `用户 ${user.username} 已删除。`;
+    toast.show("success", `用户 ${user.username} 已删除。`);
     await load();
   } catch (reason) {
     error.value = errorMessage(reason, "删除用户失败。");
@@ -76,7 +73,6 @@ const passwordError = ref("");
 
 function requestPasswordReset(user: AdminUser): void {
   error.value = "";
-  notice.value = "";
   passwordError.value = "";
   newPassword.value = "";
   resettingUser.value = user;
@@ -102,7 +98,7 @@ async function confirmPasswordReset(): Promise<void> {
   try {
     await resetUserPassword(user.id, newPassword.value);
     resettingUser.value = undefined;
-    notice.value = `用户 ${user.username} 的密码已重置，该用户的所有会话已失效。`;
+    toast.show("success", `用户 ${user.username} 的密码已重置，该用户的所有会话已失效。`);
   } catch (reason) {
     passwordError.value = errorMessage(reason, "重置密码失败。");
   } finally {
@@ -115,10 +111,10 @@ const devices = ref<AdminDevice[]>([]);
 const devicesLoading = ref(false);
 const deviceError = ref("");
 const removingDeviceId = ref("");
+const signingOutDeviceId = ref("");
 
 function requestDeviceManagement(user: AdminUser): void {
   error.value = "";
-  notice.value = "";
   deviceError.value = "";
   managingDevicesUser.value = user;
   devices.value = [];
@@ -146,24 +142,13 @@ async function removeDevice(device: AdminDevice): Promise<void> {
   deviceError.value = "";
   try {
     await deleteUserDevice(user.id, device.id);
-    confirmingDeviceAction.value = undefined;
-    notice.value = `设备 ${device.name} 已删除，其同步条目一并清除。`;
+    toast.show("success", `设备 ${device.name} 已删除，其同步条目一并清除。`);
     await loadDevices();
   } catch (reason) {
     deviceError.value = errorMessage(reason, "删除设备失败。");
   } finally {
     removingDeviceId.value = "";
   }
-}
-
-const signingOutDeviceId = ref("");
-
-// 二次确认：记录待执行的设备操作，确认后才真正调用接口。
-const confirmingDeviceAction = ref<{ device: AdminDevice; action: "signOut" | "remove" }>();
-
-function requestDeviceAction(device: AdminDevice, action: "signOut" | "remove"): void {
-  deviceError.value = "";
-  confirmingDeviceAction.value = { device, action };
 }
 
 async function signOutDevice(device: AdminDevice): Promise<void> {
@@ -173,14 +158,36 @@ async function signOutDevice(device: AdminDevice): Promise<void> {
   deviceError.value = "";
   try {
     await revokeUserDeviceSession(user.id, device.id);
-    confirmingDeviceAction.value = undefined;
-    notice.value = `设备 ${device.name} 已下线，下次登录后恢复同步。`;
+    toast.show("success", `设备 ${device.name} 已下线，下次登录后恢复同步。`);
     await loadDevices();
   } catch (reason) {
     deviceError.value = errorMessage(reason, "强制下线失败。");
   } finally {
     signingOutDeviceId.value = "";
   }
+}
+
+// 二次确认：kit confirm 弹出嵌套确认（在设备管理 SModal 之上），确认后才真正调用接口。
+async function requestDeviceAction(device: AdminDevice, action: "signOut" | "remove"): Promise<void> {
+  deviceError.value = "";
+  const confirmed = await confirm.show(
+    action === "signOut"
+      ? {
+          title: `下线设备 ${device.name}？`,
+          content: "该设备的登录会话将立即失效，设备下次登录后恢复同步；设备信息与同步条目不受影响。",
+          confirmText: "确认下线",
+        }
+      : {
+          title: `删除设备 ${device.name}？`,
+          content:
+            "将清除该设备的登录会话与设备信息，并删除它同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。此操作不可恢复。",
+          confirmText: "确认删除",
+          error: true,
+        },
+  );
+  if (!confirmed) return;
+  if (action === "signOut") await signOutDevice(device);
+  else await removeDevice(device);
 }
 
 function formatDateTime(iso: string): string {
@@ -204,29 +211,27 @@ onUnmounted(() => clearTimeout(searchTimer));
   <section class="content-section" aria-labelledby="users-title">
     <header class="topbar">
       <h1 id="users-title">用户管理</h1>
-      <button class="secondary" type="button" :disabled="loading" @click="load">刷新</button>
+      <SButton :disabled="loading" @click="load">刷新</SButton>
     </header>
 
-    <section class="panel">
-      <div class="panel-heading">
-        <div>
-          <h2>注册用户</h2>
-          <p>删除用户会同时清除其账号、会话与剪贴板数据；其引用过的内容池文件会在下次回收时清理。</p>
-        </div>
-        <input
-          v-model="search"
+    <SCard title="注册用户">
+      <template #header-extra>
+        <SInput
+          v-model:value="search"
           class="user-search"
           type="search"
           placeholder="搜索用户名"
           aria-label="搜索用户名"
-          @input="onSearchInput"
+          clearable
+          @update:value="onSearchInput"
         />
-      </div>
+      </template>
 
+      <p class="muted panel-desc">删除用户会同时清除其账号、会话与剪贴板数据；其引用过的内容池文件会在下次回收时清理。</p>
       <p class="muted result-summary">{{ resultSummary }}</p>
-      <p v-if="!loading && users.length === 0 && search.trim()" class="muted">没有匹配「{{ search.trim() }}」的用户。</p>
-      <p v-else-if="!loading && users.length === 0" class="muted">还没有注册用户。</p>
-      <table v-else-if="!loading" class="user-table">
+      <SEmpty v-if="!loading && users.length === 0 && search.trim()">没有匹配「{{ search.trim() }}」的用户。</SEmpty>
+      <SEmpty v-else-if="!loading && users.length === 0">还没有注册用户。</SEmpty>
+      <STable v-else-if="!loading">
         <thead>
           <tr>
             <th scope="col">用户名</th>
@@ -241,99 +246,69 @@ onUnmounted(() => clearTimeout(searchTimer));
             <td>{{ formatDateTime(user.createdAt) }}</td>
             <td>{{ user.activeSessions }}</td>
             <td class="row-actions">
-              <button class="secondary" type="button" :disabled="submitting" @click="requestDeviceManagement(user)">设备</button>
-              <button class="secondary" type="button" :disabled="submitting" @click="requestPasswordReset(user)">重置密码</button>
-              <button class="danger" type="button" :disabled="submitting" @click="requestRemoval(user)">删除</button>
+              <SButton :disabled="submitting" @click="requestDeviceManagement(user)">设备</SButton>
+              <SButton :disabled="submitting" @click="requestPasswordReset(user)">重置密码</SButton>
+              <SButton type="error" :disabled="submitting" @click="removeUser(user)">删除</SButton>
             </td>
           </tr>
         </tbody>
-      </table>
+      </STable>
 
-      <p v-if="error" class="message error" role="alert">{{ error }}</p>
-      <p v-if="notice" class="message success" role="status">{{ notice }}</p>
-    </section>
+      <SAlert v-if="error" type="error">{{ error }}</SAlert>
+    </SCard>
 
-    <div v-if="confirmingUser" class="modal-backdrop" role="presentation">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
-        <h2 id="delete-user-title">删除用户 {{ confirmingUser.username }}？</h2>
-        <p>该用户的账号、会话与全部剪贴板数据都会被永久删除；已登录设备在下一次请求时会被拒绝。</p>
-        <p v-if="error" class="message error" role="alert">{{ error }}</p>
-        <div class="form-actions">
-          <button class="secondary" type="button" :disabled="submitting" @click="confirmingUser = undefined">取消</button>
-          <button class="danger" type="button" :disabled="submitting" @click="removeUser">{{ submitting ? "正在删除…" : "确认删除" }}</button>
+    <SModal
+      :show="!!resettingUser"
+      :title="resettingUser ? `重置 ${resettingUser.username} 的密码` : ''"
+      width="sm"
+      :closable="!submitting"
+      :mask-closable="!submitting"
+      :close-on-esc="!submitting"
+      @update:show="(value: boolean) => { if (!value) resettingUser = undefined }"
+    >
+      <p>重置后该用户的所有会话立即失效，需要用新密码重新登录。</p>
+      <form @submit.prevent="confirmPasswordReset">
+        <label for="new-password">新密码</label>
+        <div class="password-row">
+          <SInput id="new-password" v-model:value="newPassword" type="text" autocomplete="off" spellcheck="false" maxlength="128" required autofocus :disabled="submitting" />
+          <SButton :disabled="submitting" @click="generatePassword">随机生成</SButton>
         </div>
-      </section>
-    </div>
+        <SAlert v-if="passwordError" type="error">{{ passwordError }}</SAlert>
+      </form>
+      <template #footer>
+        <SButton :disabled="submitting" @click="resettingUser = undefined">取消</SButton>
+        <SButton type="primary" :loading="submitting" @click="confirmPasswordReset">确认重置</SButton>
+      </template>
+    </SModal>
 
-    <div v-if="resettingUser" class="modal-backdrop" role="presentation">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-password-title">
-        <h2 id="reset-password-title">重置 {{ resettingUser.username }} 的密码</h2>
-        <p>重置后该用户的所有会话立即失效，需要用新密码重新登录。</p>
-        <form @submit.prevent="confirmPasswordReset">
-          <label for="new-password">新密码</label>
-          <div class="password-row">
-            <input id="new-password" v-model="newPassword" type="text" autocomplete="off" spellcheck="false" maxlength="128" required autofocus />
-            <button class="secondary" type="button" :disabled="submitting" @click="generatePassword">随机生成</button>
+    <SModal
+      :show="!!managingDevicesUser"
+      :title="managingDevicesUser ? `${managingDevicesUser.username} 的设备` : ''"
+      width="640px"
+      @update:show="(value: boolean) => { if (!value) managingDevicesUser = undefined }"
+    >
+      <p>「下线」只清除该设备的登录会话，设备下次登录后恢复同步；「删除」清除登录会话、设备信息及其同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。</p>
+      <p v-if="devicesLoading" class="muted"><span class="s-spinner" aria-hidden="true" /> 正在加载设备列表…</p>
+      <SEmpty v-else-if="devices.length === 0">该用户还没有登录过任何设备。</SEmpty>
+      <SList v-else bordered>
+        <SListItem v-for="device in devices" :key="device.id">
+          <div class="device-info">
+            <strong :title="device.name">{{ device.name }}</strong>
+            <span class="muted" :title="deviceMeta(device)">{{ deviceMeta(device) }}</span>
+            <time class="muted" :datetime="device.lastSeenAt">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
           </div>
-          <p v-if="passwordError" class="message error" role="alert">{{ passwordError }}</p>
-          <div class="form-actions">
-            <button class="secondary" type="button" :disabled="submitting" @click="resettingUser = undefined">取消</button>
-            <button type="submit" :disabled="submitting">{{ submitting ? "正在重置…" : "确认重置" }}</button>
-          </div>
-        </form>
-      </section>
-    </div>
-
-    <div v-if="managingDevicesUser" class="modal-backdrop" role="presentation">
-      <section class="confirm-dialog devices-dialog" role="dialog" aria-modal="true" aria-labelledby="devices-title">
-        <h2 id="devices-title">{{ managingDevicesUser.username }} 的设备</h2>
-        <p>「下线」只清除该设备的登录会话，设备下次登录后恢复同步；「删除」清除登录会话、设备信息及其同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。</p>
-        <p v-if="devicesLoading" class="muted">正在加载设备列表…</p>
-        <p v-else-if="devices.length === 0" class="muted">该用户还没有登录过任何设备。</p>
-        <ul v-else class="device-list">
-          <li v-for="device in devices" :key="device.id" class="device-item">
-            <div class="device-info">
-              <strong :title="device.name">{{ device.name }}</strong>
-              <span class="muted" :title="deviceMeta(device)">{{ deviceMeta(device) }}</span>
-              <time class="muted" :datetime="device.lastSeenAt">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
-            </div>
+          <template #suffix>
             <div class="device-actions">
-              <button class="secondary" type="button" :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'signOut')">下线</button>
-              <button class="danger" type="button" :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'remove')">删除</button>
-            </div>
-          </li>
-        </ul>
-        <p v-if="deviceError" class="message error" role="alert">{{ deviceError }}</p>
-        <div class="form-actions">
-          <button class="secondary" type="button" @click="managingDevicesUser = undefined">关闭</button>
-        </div>
-      </section>
-
-      <div v-if="confirmingDeviceAction" class="modal-backdrop" role="presentation">
-        <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="device-action-title">
-          <template v-if="confirmingDeviceAction.action === 'signOut'">
-            <h2 id="device-action-title">下线设备 {{ confirmingDeviceAction.device.name }}？</h2>
-            <p>该设备的登录会话将立即失效，设备下次登录后恢复同步；设备信息与同步条目不受影响。</p>
-            <div class="form-actions">
-              <button class="secondary" type="button" :disabled="!!signingOutDeviceId" @click="confirmingDeviceAction = undefined">取消</button>
-              <button type="button" :disabled="!!signingOutDeviceId" @click="signOutDevice(confirmingDeviceAction.device)">
-                {{ signingOutDeviceId ? "正在下线…" : "确认下线" }}
-              </button>
+              <SButton :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'signOut')">下线</SButton>
+              <SButton type="error" :disabled="!!signingOutDeviceId || !!removingDeviceId" @click="requestDeviceAction(device, 'remove')">删除</SButton>
             </div>
           </template>
-          <template v-else>
-            <h2 id="device-action-title">删除设备 {{ confirmingDeviceAction.device.name }}？</h2>
-            <p>将清除该设备的登录会话与设备信息，并删除它同步到服务器的全部剪贴板条目，其他设备将同步移除这些条目。此操作不可恢复。</p>
-            <div class="form-actions">
-              <button class="secondary" type="button" :disabled="!!removingDeviceId" @click="confirmingDeviceAction = undefined">取消</button>
-              <button class="danger" type="button" :disabled="!!removingDeviceId" @click="removeDevice(confirmingDeviceAction.device)">
-                {{ removingDeviceId ? "正在删除…" : "确认删除" }}
-              </button>
-            </div>
-          </template>
-          <p v-if="deviceError" class="message error" role="alert">{{ deviceError }}</p>
-        </section>
-      </div>
-    </div>
+        </SListItem>
+      </SList>
+      <SAlert v-if="deviceError" type="error">{{ deviceError }}</SAlert>
+      <template #footer>
+        <SButton @click="managingDevicesUser = undefined">关闭</SButton>
+      </template>
+    </SModal>
   </section>
 </template>

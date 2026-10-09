@@ -6,11 +6,9 @@ import {
   FilePlus,
   FolderPlus,
   Image,
-  LoaderCircle,
   Monitor,
   Search,
   Settings2,
-  X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -88,9 +86,23 @@ const menuX = ref(0);
 const menuY = ref(0);
 const previewImage = ref<LocalClipboardEntry>();
 const previewLoading = ref(false);
-const previewDialog = ref<HTMLElement>();
-const searchInput = ref<HTMLInputElement>();
+// SInput 不 expose 内部 input：实例根节点上 querySelector 一次拿原生元素。
+const searchInput = ref<{ $el?: Element }>();
 const historyListElement = ref<HTMLElement>();
+
+function focusSearchInputEl(): void {
+  searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus();
+}
+
+// 类型筛选给 STagFilter 的中文标签（组件按标签字符串匹配，再映射回 EntryFilter）。
+const FILTER_LABELS: Record<EntryFilter, string> = { all: "全部", text: "文本", files: "文件", image: "图片" };
+const FILTER_OPTIONS = Object.values(FILTER_LABELS);
+
+function onFilterTagUpdate(value: string[]): void {
+  const label = value[0];
+  const match = (Object.entries(FILTER_LABELS) as [EntryFilter, string][]).find(([, text]) => text === label);
+  filter.value = match?.[0] ?? "all";
+}
 
 const timeRangeError = computed(() => (
   timeFilter.value === "custom" ? validateDateRange(startDate.value, endDate.value) : ""
@@ -130,6 +142,11 @@ function commitSearch(): void {
     return;
   }
   committedQuery.value = query.value.trim();
+}
+
+// SInput clearable 的 × 只发 update:value("")，空值即显式清空搜索并重查。
+function onQueryUpdate(value: string): void {
+  if (!value) commitSearch();
 }
 onBeforeUnmount(() => { cancelLongPress(); });
 
@@ -190,6 +207,14 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
 }
 
+/** upload-status 文案 → STag 色相：成功绿 / 上传蓝 / 进行中灰 / 待传警示黄。 */
+function uploadStatusTagType(status: string | undefined): string {
+  if (status === "已上传") return "success";
+  if (status?.startsWith("上传中")) return "info";
+  if (status?.startsWith("计算中") || status?.startsWith("下载中")) return "default";
+  return "warning";
+}
+
 /** 下载中的条目在行内显示进度条；排队中 receivedBytes 为 0，从 0% 起步。 */
 function entryDownloadProgress(entry: LocalClipboardEntry): DownloadProgress | undefined {
   return props.downloadProgressByEntryId[entry.id];
@@ -228,12 +253,12 @@ async function focusSearch(): Promise<void> {
   await fetchManifestPage(1, true);
   selectedEntryId.value = pageEntries.value[0]?.id ?? "";
   await nextTick();
-  searchInput.value?.focus();
+  focusSearchInputEl();
 }
 
 /** 只把焦点还给搜索框；不清搜索词、不重拉列表（关设置弹窗等场景用）。 */
 function focusSearchInput(): void {
-  searchInput.value?.focus();
+  focusSearchInputEl();
 }
 
 async function captureCurrentClipboard(): Promise<void> {
@@ -271,8 +296,6 @@ async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
     const localEntry = await props.ensureLocalFiles(entry);
     if (!imageSource(localEntry)) throw new Error("图片文件不可用");
     previewImage.value = localEntry;
-    await nextTick();
-    previewDialog.value?.focus();
   } catch (error) {
     showToast(`无法预览图片：${errorMessage(error)}`, "error");
   } finally {
@@ -282,7 +305,7 @@ async function openImagePreview(entry: LocalClipboardEntry): Promise<void> {
 
 function closeImagePreview(): void {
   previewImage.value = undefined;
-  void nextTick(() => searchInput.value?.focus());
+  void nextTick(focusSearchInputEl);
 }
 
 function selectOrActivate(entry: LocalClipboardEntry): void {
@@ -383,17 +406,11 @@ function resetTimeFilter(): void {
 
 /**
  * Shared document-keydown hook: the App-level handler delegates here after its
- * own dialogs (settings, setup) had a chance to consume the key. Returns true
- * when the key was handled and should not fall through to window hiding.
+ * own dialogs (settings, setup) and the ui-kit modal guard had their chance.
+ * Returns true when the key was handled and should not fall through to window
+ * hiding. Image preview is an SModal now — Esc/Tab/Enter stay with its stack.
  */
 function handleKeydown(event: KeyboardEvent): boolean {
-  if (previewImage.value) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeImagePreview();
-    }
-    return true;
-  }
   if (event.key === "Enter" && !event.shiftKey) {
     // 焦点在搜索框等输入控件里时，回车属于输入框，不再触发列表条目的
     // 复制/粘贴，避免一次按键同时执行两个操作。
@@ -419,49 +436,46 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       </div>
       <div class="titlebar-actions">
         <span v-if="isMobile" class="mobile-connection" :class="connectionStatus.tone">{{ connectionStatus.label }}</span>
-        <button class="icon-button" type="button" title="上传文件" aria-label="上传文件" :disabled="uploadingFiles" @click="captureFilesFromPicker('file')">
-          <LoaderCircle v-if="uploadingFiles" :size="18" class="spin" aria-hidden="true" />
+        <SIconButton title="上传文件" aria-label="上传文件" :size="30" :disabled="uploadingFiles" @click="captureFilesFromPicker('file')">
+          <span v-if="uploadingFiles" class="s-spinner" aria-hidden="true" />
           <FilePlus v-else :size="18" aria-hidden="true" />
-        </button>
-        <button v-if="!isMobile" class="icon-button" type="button" title="上传文件夹" aria-label="上传文件夹" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
+        </SIconButton>
+        <SIconButton v-if="!isMobile" title="上传文件夹" aria-label="上传文件夹" :size="30" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
           <FolderPlus :size="18" aria-hidden="true" />
-        </button>
-        <button v-if="isMobile" class="icon-button" type="button" title="设置" aria-label="打开设置" @click="emit('open-settings')">
-          <Settings2 :size="19" />
-        </button>
+        </SIconButton>
+        <SIconButton v-if="isMobile" title="设置" aria-label="打开设置" :size="30" @click="emit('open-settings')">
+          <Settings2 :size="19" aria-hidden="true" />
+        </SIconButton>
       </div>
     </header>
 
     <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
       <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
-        <LoaderCircle :size="18" class="spin" aria-hidden="true" />
+        <span class="s-spinner" aria-hidden="true" />
         <span>正在接收系统分享…</span>
       </div>
       <label class="search-field">
         <Search :size="17" aria-hidden="true" />
-        <input
+        <SInput
           ref="searchInput"
-          v-model="query"
-          type="search"
+          v-model:value="query"
+          type="text"
           placeholder="搜索剪贴板历史"
           aria-label="搜索剪贴板历史"
           enterkeyhint="search"
+          clearable
           @keydown.enter="!$event.isComposing && commitSearch()"
-          @search="commitSearch"
+          @update:value="onQueryUpdate"
         />
         <kbd>Enter</kbd>
       </label>
-      <button v-if="isMobile" class="mobile-capture-button" type="button" :disabled="capturingClipboard" @click="captureCurrentClipboard">
-        <LoaderCircle v-if="capturingClipboard" :size="18" class="spin" aria-hidden="true" />
-        <Clipboard v-else :size="18" aria-hidden="true" />
+      <SButton v-if="isMobile" class="mobile-capture-button" block :loading="capturingClipboard" @click="captureCurrentClipboard">
+        <Clipboard v-if="!capturingClipboard" :size="18" aria-hidden="true" />
         {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
-      </button>
+      </SButton>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
-          <button :class="{ active: filter === 'all' }" type="button" @click="filter = 'all'">全部</button>
-          <button :class="{ active: filter === 'text' }" type="button" @click="filter = 'text'">文本</button>
-          <button :class="{ active: filter === 'files' }" type="button" @click="filter = 'files'">文件</button>
-          <button :class="{ active: filter === 'image' }" type="button" @click="filter = 'image'">图片</button>
+          <STagFilter :value="[FILTER_LABELS[filter]]" :options="FILTER_OPTIONS" :multiple="false" @update:value="onFilterTagUpdate" />
           <TimeFilterControl
             v-model="timeFilter"
             v-model:start-date="startDate"
@@ -533,7 +547,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
             </template>
             <template v-if="entryUploadStatus(entry)">
               <span>·</span>
-              <span class="upload-status" :class="{ uploaded: entryUploadStatus(entry) === '已上传', uploading: entryUploadStatus(entry)?.startsWith('上传中') }">{{ entryUploadStatus(entry) }}</span>
+              <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
           </span>
           <span v-if="entryDownloadProgress(entry)" class="download-bar entry-download-bar" aria-hidden="true">
@@ -542,12 +556,12 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         </span>
       </div>
 
-      <div v-if="!manifestTotal" class="empty-state">
-        <Search :size="28" />
+      <SEmpty v-if="!manifestTotal" class="empty-state">
+        <Search :size="28" aria-hidden="true" />
         <strong>{{ timeRangeError ? "日期区间无效" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
         <span>{{ timeRangeError || (timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
-        <button v-if="timeFilter !== 'all'" class="empty-filter-reset" type="button" @click="resetTimeFilter">清除时间筛选</button>
-      </div>
+        <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
+      </SEmpty>
     </section>
 
     <footer class="footer-hint">
@@ -578,21 +592,15 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       @close="closeEntryMenu"
     />
 
-    <div v-if="previewImage" class="image-preview-backdrop" @mousedown.self="closeImagePreview">
-      <section ref="previewDialog" class="image-preview-dialog" role="dialog" aria-modal="true" :aria-label="previewImage.content" tabindex="-1">
-        <header class="image-preview-header">
-          <div>
-            <span>图片预览</span>
-            <strong>{{ previewImage.content }}</strong>
-          </div>
-          <button class="icon-button" type="button" title="关闭预览" aria-label="关闭图片预览" @click="closeImagePreview">
-            <X :size="17" />
-          </button>
-        </header>
-        <div class="image-preview-stage">
-          <img :src="imageSource(previewImage)" :alt="previewImage.content" />
-        </div>
-      </section>
-    </div>
+    <SModal
+      :show="!!previewImage"
+      :title="previewImage?.content ?? ''"
+      width="980px"
+      @update:show="(value: boolean) => { if (!value) closeImagePreview() }"
+    >
+      <div v-if="previewImage" class="image-preview-stage">
+        <img :src="imageSource(previewImage)" :alt="previewImage.content" />
+      </div>
+    </SModal>
   </section>
 </template>

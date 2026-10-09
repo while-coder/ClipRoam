@@ -7,6 +7,10 @@ export const DEFAULT_SERVER_PROTOCOL = "http";
 export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 50;
 export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
 export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
+// 是否监听本机剪贴板（与 Rust 侧 default_watch_clipboard 一致）。
+export const DEFAULT_WATCH_CLIPBOARD = true;
+// Windows 独有：文件粘贴是否走 virtual_files；默认关闭（先下载再粘贴，同 mac/linux）。
+export const DEFAULT_USE_VIRTUAL_FILES = false;
 // 捕获文件/文件夹时按名称跳过的默认过滤模式（与 Rust 侧 default_exclude_patterns 一致）。
 export const DEFAULT_EXCLUDE_PATTERNS = ["node_modules"];
 // 服务器单文件存储上限的兜底显示值；登录响应的 settings.maxStoredFileMb 才是权威值。
@@ -18,6 +22,8 @@ export function defaultAccountPreferences(): AccountPreferences {
   return {
     autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
     autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+    watchClipboard: DEFAULT_WATCH_CLIPBOARD,
+    useVirtualFiles: DEFAULT_USE_VIRTUAL_FILES,
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS],
     serverMaxFileMb: DEFAULT_SERVER_MAX_FILE_MB,
     maxCaptureFileCount: DEFAULT_MAX_CAPTURE_FILE_COUNT,

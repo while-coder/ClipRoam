@@ -31,16 +31,16 @@ async function login(): Promise<void> {
 </script>
 
 <template>
-  <section class="login-card" aria-labelledby="login-title">
+  <SCard class="login-card" aria-labelledby="login-title">
     <p class="eyebrow">CLIPROAM ADMIN</p>
     <h1 id="login-title">管理后台</h1>
     <p class="muted">使用服务端配置的管理员密码登录。</p>
     <form @submit.prevent="login">
       <label for="admin-password">管理员密码</label>
-      <input id="admin-password" v-model="password" type="password" autocomplete="current-password" :disabled="submitting" required autofocus />
-      <p v-if="error" class="message error" role="alert">{{ error }}</p>
-      <button type="submit" :disabled="submitting">{{ submitting ? "正在验证…" : "登录" }}</button>
+      <SInput id="admin-password" v-model:value="password" type="password" autocomplete="current-password" :disabled="submitting" required autofocus />
+      <SAlert v-if="error" type="error">{{ error }}</SAlert>
+      <SButton type="primary" :loading="submitting" @click="login">登录</SButton>
     </form>
     <p class="footnote">正式服务需设置非空的 <code>CLIPROAM_ADMIN_PASSWORD</code>。</p>
-  </section>
+  </SCard>
 </template>

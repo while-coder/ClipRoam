@@ -60,26 +60,18 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
             <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
             <template v-if="entryUploadStatus(entry)">
               <span>·</span>
-              <span class="upload-status uploading">{{ entryUploadStatus(entry) }}</span>
+              <STag type="info" size="small">{{ entryUploadStatus(entry) }}</STag>
             </template>
           </span>
         </span>
         <span class="entry-actions">
-          <span
-            class="item-action danger"
-            role="button"
-            tabindex="0"
-            title="删除"
-            aria-label="删除"
-            @click.stop="emit('remove', entry)"
-            @keydown.enter.stop="emit('remove', entry)"
-          ><Trash2 :size="15" /></span>
+          <SIconButton type="error" :size="28" title="删除" aria-label="删除" @click.stop="emit('remove', entry)">
+            <Trash2 :size="15" aria-hidden="true" />
+          </SIconButton>
         </span>
       </div>
 
-      <div v-if="!entries.length" class="empty-state">
-        <span>没有待同步的内容，所有内容都已同步到服务器</span>
-      </div>
+      <SEmpty v-if="!entries.length">没有待同步的内容，所有内容都已同步到服务器</SEmpty>
     </section>
   </section>
 </template>

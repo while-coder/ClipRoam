@@ -80,6 +80,15 @@ impl AppState {
             .ok_or("同步账号未登录，历史档案不可用")?;
         Ok(cache_dir_for(&self.histories_dir, key))
     }
+
+    /// 设置页「虚拟文件粘贴」开关（Windows 粘贴策略每次调用时读取）；
+    /// 锁中毒时按默认关闭——物化路径在所有平台都可用。
+    pub(crate) fn use_virtual_files(&self) -> bool {
+        self.account_preferences
+            .lock()
+            .map(|preferences| preferences.use_virtual_files)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

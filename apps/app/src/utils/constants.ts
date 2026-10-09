@@ -14,4 +14,7 @@ export const DESKTOP_CAPABILITIES: PlatformCapabilities = {
   nativeFileExport: true,
   openDataDirectory: true,
   shareReceiver: false,
+  // capabilities invoke 下发前的保守初值：不显示虚拟文件开关，Windows 上
+  // get_platform_capabilities 返回后立即置 true。
+  virtualFilePaste: false,
 };

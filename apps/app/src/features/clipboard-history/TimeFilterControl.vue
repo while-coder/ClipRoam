@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-vue-next";
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-vue-next";
 import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange } from "../../utils/format";
 import { usePopoverMenu } from "./usePopoverMenu";
 import type { TimeFilter } from "../../types";
@@ -31,7 +31,6 @@ const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
 
 const trigger = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
-const calendarDialog = ref<HTMLElement>();
 const calendarOpen = ref(false);
 const { menuOpen, menuStyle, toggleMenu, openMenuFromKeyboard, handleMenuKeydown } = usePopoverMenu({
   trigger,
@@ -91,7 +90,7 @@ function selectOption(value: TimeFilter): void {
   trigger.value?.focus();
 }
 
-async function openCalendar(): Promise<void> {
+function openCalendar(): void {
   const today = new Date();
   const defaultStart = new Date(today);
   defaultStart.setDate(defaultStart.getDate() - 6);
@@ -100,8 +99,6 @@ async function openCalendar(): Promise<void> {
   selectingBoundary.value = "start";
   displayMonth.value = startOfMonth(parseLocalDate(draftEndDate.value) ?? today);
   calendarOpen.value = true;
-  await nextTick();
-  calendarDialog.value?.focus();
 }
 
 function closeCalendar(): void {
@@ -193,64 +190,52 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
         <span>{{ option.label }}</span>
       </button>
     </div>
-
-    <div v-if="calendarOpen" class="time-calendar-backdrop" @mousedown.self="closeCalendar">
-      <section
-        ref="calendarDialog"
-        class="time-calendar-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="time-calendar-heading"
-        tabindex="-1"
-        @keydown.stop.escape.prevent="closeCalendar"
-      >
-        <header class="time-calendar-header">
-          <div>
-            <span>时间筛选</span>
-            <h2 id="time-calendar-heading">选择日期区间</h2>
-          </div>
-          <button type="button" title="关闭日期选择" aria-label="关闭日期选择" @click="closeCalendar"><X :size="18" /></button>
-        </header>
-
-        <div class="time-calendar-boundaries">
-          <button type="button" :class="{ active: selectingBoundary === 'start' }" @click="selectingBoundary = 'start'">
-            <span>开始日期</span><strong>{{ displayDate(draftStartDate) }}</strong>
-          </button>
-          <span aria-hidden="true">至</span>
-          <button type="button" :class="{ active: selectingBoundary === 'end' }" @click="selectingBoundary = 'end'">
-            <span>结束日期</span><strong>{{ displayDate(draftEndDate) }}</strong>
-          </button>
-        </div>
-
-        <div class="time-calendar-month-header">
-          <button type="button" title="上个月" aria-label="上个月" @click="changeMonth(-1)"><ChevronLeft :size="18" /></button>
-          <strong>{{ displayMonthLabel }}</strong>
-          <button type="button" title="下个月" aria-label="下个月" @click="changeMonth(1)"><ChevronRight :size="18" /></button>
-        </div>
-        <div class="time-calendar-weekdays" aria-hidden="true"><span v-for="weekday in weekdays" :key="weekday">{{ weekday }}</span></div>
-        <div class="time-calendar-grid" role="grid" aria-label="日期">
-          <button
-            v-for="day in calendarDays"
-            :key="day.key"
-            type="button"
-            role="gridcell"
-            :class="dayClass(day)"
-            :aria-label="day.key"
-            :aria-selected="day.key === draftStartDate || day.key === draftEndDate"
-            @click="selectDay(day.key)"
-          >{{ day.label }}</button>
-        </div>
-
-        <p v-if="draftError" class="time-calendar-error" role="alert">{{ draftError }}</p>
-        <footer class="time-calendar-actions">
-          <button class="calendar-secondary" type="button" @click="closeCalendar">取消</button>
-          <button class="calendar-primary" type="button" :disabled="Boolean(draftError)" @click="applyCalendar">
-            <CalendarDays :size="16" aria-hidden="true" />应用区间
-          </button>
-        </footer>
-      </section>
-    </div>
   </Teleport>
+
+  <!-- 日历弹窗外壳交给 SModal（自带遮罩/Esc/焦点圈围），日期网格与区间逻辑原样。 -->
+  <SModal
+    :show="calendarOpen"
+    title="选择日期区间"
+    width="360px"
+    @update:show="(value: boolean) => { if (!value) closeCalendar() }"
+  >
+    <div class="time-calendar-boundaries">
+      <button type="button" :class="{ active: selectingBoundary === 'start' }" @click="selectingBoundary = 'start'">
+        <span>开始日期</span><strong>{{ displayDate(draftStartDate) }}</strong>
+      </button>
+      <span aria-hidden="true">至</span>
+      <button type="button" :class="{ active: selectingBoundary === 'end' }" @click="selectingBoundary = 'end'">
+        <span>结束日期</span><strong>{{ displayDate(draftEndDate) }}</strong>
+      </button>
+    </div>
+
+    <div class="time-calendar-month-header">
+      <button type="button" title="上个月" aria-label="上个月" @click="changeMonth(-1)"><ChevronLeft :size="18" /></button>
+      <strong>{{ displayMonthLabel }}</strong>
+      <button type="button" title="下个月" aria-label="下个月" @click="changeMonth(1)"><ChevronRight :size="18" /></button>
+    </div>
+    <div class="time-calendar-weekdays" aria-hidden="true"><span v-for="weekday in weekdays" :key="weekday">{{ weekday }}</span></div>
+    <div class="time-calendar-grid" role="grid" aria-label="日期">
+      <button
+        v-for="day in calendarDays"
+        :key="day.key"
+        type="button"
+        role="gridcell"
+        :class="dayClass(day)"
+        :aria-label="day.key"
+        :aria-selected="day.key === draftStartDate || day.key === draftEndDate"
+        @click="selectDay(day.key)"
+      >{{ day.label }}</button>
+    </div>
+
+    <p v-if="draftError" class="time-calendar-error" role="alert">{{ draftError }}</p>
+    <template #footer>
+      <SButton @click="closeCalendar">取消</SButton>
+      <SButton type="primary" :disabled="Boolean(draftError)" @click="applyCalendar">
+        <CalendarDays :size="16" aria-hidden="true" />应用区间
+      </SButton>
+    </template>
+  </SModal>
 </template>
 
 <style scoped>
@@ -265,15 +250,9 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 .time-filter-menu button:hover, .time-filter-menu button:focus-visible { color: #f8fafc; background: rgba(96, 165, 250, 0.13); outline: 0; }
 .time-filter-menu button.active { color: #dbeafe; background: #1e3a5f; }
 .hidden { visibility: hidden; }
-.time-calendar-backdrop { position: fixed; z-index: 70; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, 0.7); }
-.time-calendar-dialog { width: min(100%, 360px); padding: 16px; background: #111c31; border: 1px solid rgba(96, 165, 250, 0.28); border-radius: 12px; box-shadow: 0 22px 64px rgba(2, 6, 23, 0.7); outline: 0; }
-.time-calendar-header { display: flex; align-items: center; justify-content: space-between; }
-.time-calendar-header > div { display: grid; gap: 2px; }
-.time-calendar-header span { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.time-calendar-header h2 { margin: 0; color: #f8fafc; font-size: 16px; }
-.time-calendar-header button, .time-calendar-month-header button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #94a3b8; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
-.time-calendar-header button:hover, .time-calendar-month-header button:hover { color: #f8fafc; background: rgba(255, 255, 255, 0.07); }
-.time-calendar-boundaries { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin-top: 15px; }
+.time-calendar-month-header button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #94a3b8; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
+.time-calendar-month-header button:hover { color: #f8fafc; background: rgba(255, 255, 255, 0.07); }
+.time-calendar-boundaries { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
 .time-calendar-boundaries > span { color: #64748b; font-size: 11px; }
 .time-calendar-boundaries button { display: grid; gap: 2px; min-width: 0; min-height: 48px; padding: 6px 9px; color: #94a3b8; text-align: left; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 7px; cursor: pointer; }
 .time-calendar-boundaries button.active { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14); }
@@ -292,19 +271,11 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 .time-calendar-grid button.in-range { color: #dbeafe; background: rgba(37, 99, 235, 0.18); border-radius: 0; }
 .time-calendar-grid button.range-start, .time-calendar-grid button.range-end { color: #eff6ff; background: #2563eb; }
 .time-calendar-error { margin: 9px 0 0; color: #fca5a5; font-size: 11px; }
-.time-calendar-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(148, 163, 184, 0.14); }
-.time-calendar-actions button { display: flex; align-items: center; justify-content: center; min-width: 96px; min-height: 38px; gap: 6px; padding: 0 12px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.calendar-secondary { color: #cbd5e1; background: transparent; border: 1px solid rgba(148, 163, 184, 0.22); }
-.calendar-primary { color: #dbeafe; background: #1e3a5f; border: 1px solid rgba(96, 165, 250, 0.34); }
-.calendar-primary:disabled { cursor: not-allowed; opacity: 0.5; }
 @media (max-width: 640px) {
   .time-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .time-filter-label { font-size: 13px; }
   .time-filter-trigger { min-width: 126px; height: 44px; padding-inline: 12px 9px; font-size: 13px; }
   .time-filter-menu button { min-height: 44px; font-size: 14px; }
-  .time-calendar-backdrop { padding: 12px; }
-  .time-calendar-dialog { padding: 14px; }
   .time-calendar-grid button { height: 40px; font-size: 13px; }
-  .time-calendar-actions button { min-height: 44px; }
 }
 </style>

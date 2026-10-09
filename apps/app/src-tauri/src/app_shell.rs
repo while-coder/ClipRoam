@@ -20,6 +20,8 @@ pub(crate) struct PlatformCapabilities {
     native_file_export: bool,
     open_data_directory: bool,
     share_receiver: bool,
+    /// 本平台支持 virtual_files 粘贴（当前仅 Windows 桌面），控制设置开关显隐。
+    virtual_file_paste: bool,
 }
 
 #[tauri::command]
@@ -35,6 +37,7 @@ pub(crate) fn get_platform_capabilities() -> PlatformCapabilities {
         native_file_export: !mobile,
         open_data_directory: !mobile,
         share_receiver: cfg!(target_os = "android"),
+        virtual_file_paste: !mobile && cfg!(windows),
     }
 }
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, LoaderCircle, Trash2 } from "lucide-vue-next";
+import { Copy, Download, Trash2 } from "lucide-vue-next";
 import { canSaveEntry, saveEntryLabel } from "../../utils/entry";
 import type { LocalClipboardEntry } from "../../types";
 
@@ -145,39 +145,35 @@ onBeforeUnmount(() => {
       :style="menuStyle"
       @keydown="handleMenuKeydown"
     >
-      <button type="button" role="menuitem" :disabled="activating" @click="onActivate(entry)">
-        <LoaderCircle v-if="activating" :size="15" class="spin" aria-hidden="true" />
+      <SButton type="text" block role="menuitem" :disabled="activating" @click="onActivate(entry)">
+        <span v-if="activating" class="s-spinner" aria-hidden="true" />
         <Copy v-else :size="15" aria-hidden="true" />
         <span>复制</span>
-      </button>
-      <button
-        v-if="canSaveEntry(entry)"
-        type="button"
-        role="menuitem"
-        :disabled="saving"
-        @click="onSave(entry)"
-      >
-        <LoaderCircle v-if="saving" :size="15" class="spin" aria-hidden="true" />
+      </SButton>
+      <SButton v-if="canSaveEntry(entry)" type="text" block role="menuitem" :disabled="saving" @click="onSave(entry)">
+        <span v-if="saving" class="s-spinner" aria-hidden="true" />
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
-      </button>
-      <button type="button" role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
+      </SButton>
+      <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
         <span>{{ confirmingRemove ? "确认删除？" : "删除" }}</span>
-      </button>
+      </SButton>
     </div>
   </Teleport>
 </template>
 
 <style scoped>
 .entry-context-menu { position: fixed; z-index: 60; display: grid; gap: 2px; padding: 5px; background: #111c31; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 8px; box-shadow: 0 14px 36px rgba(2, 6, 23, 0.62); }
-.entry-context-menu button { display: grid; grid-template-columns: 18px 1fr; align-items: center; min-height: 36px; padding: 0 9px; color: #cbd5e1; text-align: left; background: transparent; border: 0; border-radius: 5px; font-size: 12px; cursor: pointer; }
-.entry-context-menu button:hover:not(:disabled), .entry-context-menu button:focus-visible:not(:disabled) { color: #f8fafc; background: rgba(96, 165, 250, 0.13); outline: 0; }
-.entry-context-menu button:disabled { color: #64748b; cursor: default; }
-.entry-context-menu button.danger { color: #fca5a5; }
-.entry-context-menu button.danger:hover:not(:disabled), .entry-context-menu button.danger:focus-visible:not(:disabled) { color: #fecaca; background: rgba(248, 113, 113, 0.14); }
-.entry-context-menu button.danger.confirming { color: #fff; background: rgba(220, 38, 38, 0.85); }
+/* 菜单项都是 SButton text：选择器带 .text 保证压过 kit 的 (0,3,0) 变体规则，
+   恢复原菜单的左对齐格子布局与色相；block 由 kit 提供（width 100%）。 */
+.entry-context-menu .s-button.text { display: grid; grid-template-columns: 18px 1fr; gap: 0; align-items: center; justify-content: flex-start; min-height: 36px; padding: 0 9px; color: #cbd5e1; text-align: left; background: transparent; border: 0; border-radius: 5px; font-size: 12px; }
+.entry-context-menu .s-button.text:hover:not(:disabled), .entry-context-menu .s-button.text:focus-visible:not(:disabled) { color: #f8fafc; background: rgba(96, 165, 250, 0.13); outline: 0; }
+.entry-context-menu .s-button.text:disabled { color: #64748b; cursor: default; }
+.entry-context-menu .s-button.text.danger { color: #fca5a5; }
+.entry-context-menu .s-button.text.danger:hover:not(:disabled), .entry-context-menu .s-button.text.danger:focus-visible:not(:disabled) { color: #fecaca; background: rgba(248, 113, 113, 0.14); }
+.entry-context-menu .s-button.text.danger.confirming { color: #fff; background: rgba(220, 38, 38, 0.85); }
 @media (max-width: 640px) {
-  .entry-context-menu button { min-height: 44px; font-size: 14px; }
+  .entry-context-menu .s-button.text { min-height: 44px; font-size: 14px; }
 }
 </style>

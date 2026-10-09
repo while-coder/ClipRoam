@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LoaderCircle, X } from "lucide-vue-next";
+import { X } from "lucide-vue-next";
 import type { Component } from "vue";
 import { formatFileSize } from "../utils/format";
 
@@ -54,14 +54,7 @@ function inProgress(task: TaskRow): boolean {
         <h1>{{ title }}</h1>
       </div>
       <div class="titlebar-actions">
-        <button
-          v-if="cancellable && activeCount"
-          class="downloads-cancel-all"
-          type="button"
-          @click="emit('cancel-all')"
-        >
-          全部取消
-        </button>
+        <SButton v-if="cancellable && activeCount" type="error" @click="emit('cancel-all')">全部取消</SButton>
         <span class="pending-total" role="status">
           {{ activeCount ? `${activeCount} 个进行中` : `共 ${tasks.length} 个任务` }}
         </span>
@@ -71,7 +64,7 @@ function inProgress(task: TaskRow): boolean {
     <section class="history-list downloads-list" :aria-label="listLabel">
       <div v-for="task in tasks" :key="task.id" class="history-item download-row">
         <span class="kind-icon">
-          <LoaderCircle v-if="task.status === spinningStatus" :size="18" class="spin" aria-hidden="true" />
+          <span v-if="task.status === spinningStatus" class="s-spinner" aria-hidden="true" />
           <component :is="icon" v-else :size="18" aria-hidden="true" />
         </span>
         <span class="download-info">
@@ -86,22 +79,20 @@ function inProgress(task: TaskRow): boolean {
           </span>
         </span>
         <span v-if="cancellable" class="entry-actions">
-          <button
+          <SIconButton
             v-if="inProgress(task)"
-            class="item-action danger download-cancel"
-            type="button"
+            type="error"
+            :size="28"
             :title="`取消${title}`"
             :aria-label="`取消${title}`"
             @click="emit('cancel-task', task.id)"
           >
-            <X :size="15" />
-          </button>
+            <X :size="15" aria-hidden="true" />
+          </SIconButton>
         </span>
       </div>
 
-      <div v-if="!tasks.length" class="empty-state">
-        <span>{{ emptyText }}</span>
-      </div>
+      <SEmpty v-if="!tasks.length">{{ emptyText }}</SEmpty>
     </section>
   </section>
 </template>

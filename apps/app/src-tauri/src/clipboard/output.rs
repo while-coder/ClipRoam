@@ -24,8 +24,13 @@ pub(crate) enum FilePasteStrategy {
 }
 
 impl FilePasteStrategy {
-    pub(crate) fn for_entry(entry: &ClipboardEntry) -> Self {
-        if entry.kind == "files" && crate::platforms::supports_virtual_file_paste(entry) {
+    /// `use_virtual_files` 来自设置页开关：关闭（默认）时 Windows 也走
+    /// 物化路径——先下载再粘贴，与 mac/linux 一致。
+    pub(crate) fn for_entry(entry: &ClipboardEntry, use_virtual_files: bool) -> Self {
+        if entry.kind == "files"
+            && use_virtual_files
+            && crate::platforms::supports_virtual_file_paste(entry)
+        {
             return Self::VirtualStream;
         }
         Self::MaterializedPaths
@@ -230,7 +235,7 @@ pub(crate) fn apply_clipboard_entry(
             if intact {
                 ClipboardPayload::Files(roots.clone())
             } else {
-                match FilePasteStrategy::for_entry(&snapshot.entry) {
+                match FilePasteStrategy::for_entry(&snapshot.entry, state.use_virtual_files()) {
                     FilePasteStrategy::VirtualStream => {
                         ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
                     }

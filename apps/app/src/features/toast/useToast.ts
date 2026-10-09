@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { toast } from "@qingfeng346/ui-kit";
 import { isToastWindow } from "../../composables/usePlatform";
 import type { ToastPayload, ToastTone } from "../../types";
 
@@ -25,13 +26,19 @@ function scheduleToastWindowHide(): void {
 }
 
 function displayToast(payload: ToastPayload): void {
-  clearTimers();
-  toastPayload.value = payload;
-  toastTimer = window.setTimeout(() => {
-    toastPayload.value = undefined;
-    toastTimer = undefined;
-    scheduleToastWindowHide();
-  }, payload.tone === "error" ? 5_000 : 3_200);
+  // 托盘通知窗口：维持原逻辑，自己计时消失后再隐藏窗口。
+  if (isToastWindow) {
+    clearTimers();
+    toastPayload.value = payload;
+    toastTimer = window.setTimeout(() => {
+      toastPayload.value = undefined;
+      toastTimer = undefined;
+      scheduleToastWindowHide();
+    }, payload.tone === "error" ? 5_000 : 3_200);
+    return;
+  }
+  // 主窗口 / paste 窗口：走 ui-kit toast（3.5s 自动消失，无需手动计时）。
+  toast.show(payload.tone, payload.message);
 }
 
 /** 立即关闭 toast（托盘通知的关闭按钮）。 */

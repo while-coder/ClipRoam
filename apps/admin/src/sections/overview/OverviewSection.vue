@@ -27,22 +27,26 @@ onMounted(async () => {
       <h1 id="overview-title">概览</h1>
     </header>
 
-    <p v-if="error" class="message error" role="alert">{{ error }}</p>
+    <SAlert v-if="error" type="error">{{ error }}</SAlert>
 
-    <section class="status-card" aria-labelledby="tls-status-title">
-      <div class="status-copy">
-        <p id="tls-status-title" class="label">TLS 状态</p>
-        <strong>{{ tlsSummary }}</strong>
+    <SCard aria-labelledby="tls-status-title">
+      <div class="status-row">
+        <div class="status-copy">
+          <p id="tls-status-title" class="label">TLS 状态</p>
+          <strong><span v-if="tlsSummary === '加载中…'" class="s-spinner" aria-hidden="true" />{{ tlsSummary }}</strong>
+        </div>
+        <STag :type="tls?.enabled ? 'success' : 'default'">{{ tls?.enabled ? "已启用" : "未启用" }}</STag>
       </div>
-      <span class="status-pill" :class="{ active: tls?.enabled }">{{ tls?.enabled ? "已启用" : "未启用" }}</span>
-    </section>
+    </SCard>
 
-    <section class="status-card" aria-labelledby="user-count-title">
-      <div class="status-copy">
-        <p id="user-count-title" class="label">注册用户</p>
-        <strong>{{ userCount }} 位用户</strong>
+    <SCard aria-labelledby="user-count-title">
+      <div class="status-row">
+        <div class="status-copy">
+          <p id="user-count-title" class="label">注册用户</p>
+          <strong>{{ userCount }} 位用户</strong>
+        </div>
+        <STag type="default">{{ userCount > 0 ? "使用中" : "暂无" }}</STag>
       </div>
-      <span class="status-pill">{{ userCount > 0 ? "使用中" : "暂无" }}</span>
-    </section>
+    </SCard>
   </section>
 </template>

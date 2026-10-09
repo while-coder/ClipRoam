@@ -570,6 +570,18 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
         // even opening it.
         let mut last_clipboard_sequence = 0u32;
         loop {
+            // 监听开关（设置页「监听剪贴板」）关闭时只空转等待：本机复制不再
+            // 捕获，远程同步的接收与激活不受影响。锁中毒时保持默认监听。
+            let watching = app
+                .state::<AppState>()
+                .account_preferences
+                .lock()
+                .map(|preferences| preferences.watch_clipboard)
+                .unwrap_or(true);
+            if !watching {
+                thread::sleep(Duration::from_millis(350));
+                continue;
+            }
             if crate::platforms::should_skip_clipboard_poll(&mut last_clipboard_sequence) {
                 continue;
             }

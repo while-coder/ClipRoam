@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clipboard, File, FileText, FolderOpen, Image, LoaderCircle } from "lucide-vue-next";
+import { Clipboard, File, FileText, FolderOpen, Image } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 
 /**
@@ -15,7 +15,7 @@ defineProps<{
 
 <template>
   <span class="kind-icon">
-    <LoaderCircle v-if="loading" :size="18" class="spin" />
+    <span v-if="loading" class="s-spinner" aria-hidden="true" />
     <FileText v-else-if="kind === 'text'" :size="18" />
     <File v-else-if="kind === 'files' && rootKind === 'file'" :size="18" />
     <FolderOpen v-else-if="kind === 'files'" :size="18" />

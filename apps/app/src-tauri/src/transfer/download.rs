@@ -330,7 +330,8 @@ pub(crate) fn list_entry_files(
 fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<Vec<MissingFile>, String> {
     let snapshot = snapshot_entry(state, entry_id)?;
     if paste_only
-        && !FilePasteStrategy::for_entry(&snapshot.entry).requires_complete_content(&snapshot.entry.kind)
+        && !FilePasteStrategy::for_entry(&snapshot.entry, state.use_virtual_files())
+            .requires_complete_content(&snapshot.entry.kind)
     {
         return Ok(Vec::new());
     }

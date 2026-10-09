@@ -4,7 +4,7 @@ import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS } from "./features/sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_USE_VIRTUAL_FILES, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
 import {
   Clipboard,
   Cloud,
@@ -15,6 +15,7 @@ import {
   Settings2,
   Upload,
 } from "lucide-vue-next";
+import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount } from "./features/sync/syncSetup";
 import { startPasteBridge, startSyncBridgeService } from "./features/sync/bridge";
 import type { DownloadTaskSnapshot } from "./features/sync/fileTransfer";
@@ -26,7 +27,7 @@ import {
 import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { initSettings } from "./features/settings/useSettings";
-import { closeSettings, openSettings, settingsVisible } from "./features/settings/useSettings";
+import { openSettings, settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import HistoryView from "./features/clipboard-history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
@@ -251,6 +252,12 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       autoReceiveClipboard: sameArchive
         ? getActivePreferences().autoReceiveClipboard
         : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+      watchClipboard: sameArchive
+        ? getActivePreferences().watchClipboard
+        : DEFAULT_WATCH_CLIPBOARD,
+      useVirtualFiles: sameArchive
+        ? getActivePreferences().useVirtualFiles
+        : DEFAULT_USE_VIRTUAL_FILES,
       excludePatterns: sameArchive
         ? getActivePreferences().excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
@@ -283,13 +290,9 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
 }
 
 function handleKeys(event: KeyboardEvent): void {
-  if (!isPasteWindow && settingsVisible.value) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeSettings();
-    }
-    return;
-  }
+  // SModal（图片预览、嵌套 confirm 等）开着时键盘归模态栈：Esc 只关栈顶弹窗，
+  // Tab 在弹窗内循环，不再落到下面触发 hideWindow。
+  if (openModalCount.value > 0) return;
   if (setupVisible.value) {
     if (event.key === "Escape" && hasSavedSyncConfig.value) {
       event.preventDefault();
@@ -297,8 +300,8 @@ function handleKeys(event: KeyboardEvent): void {
     }
     return;
   }
-  // The history view handles its own dialogs (image preview) plus selection
-  // keys; a true return means the key was consumed.
+  // The history view handles selection keys; a true return means the key was
+  // consumed. Its dialogs are SModals now — the guard above already returned.
   if (historyView.value?.handleKeydown(event)) return;
   if (event.key === "Escape") {
     event.preventDefault();
@@ -615,4 +618,5 @@ onBeforeUnmount(() => {
   <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />
 
   <ToastLayer />
+  <SMessageHost />
 </template>

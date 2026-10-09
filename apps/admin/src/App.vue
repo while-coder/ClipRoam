@@ -51,22 +51,24 @@ async function signOut(): Promise<void> {
           <span class="menu-label">{{ item.label }}</span>
         </RouterLink>
       </nav>
-      <button class="menu-item signout" type="button" @click="signOut">
+      <SButton class="menu-item signout" type="text" @click="signOut">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="d in signOutPaths" :key="d" :d="d" /></svg>
         <span class="menu-label">退出登录</span>
-      </button>
-      <button
+      </SButton>
+      <SIconButton
         class="collapse-button"
-        type="button"
+        :size="26"
         :aria-label="collapsed ? '展开菜单' : '收起菜单'"
         @click="collapsed = !collapsed"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
-      </button>
+      </SIconButton>
     </aside>
 
     <div class="content">
       <RouterView />
     </div>
   </div>
+
+  <SMessageHost />
 </template>
