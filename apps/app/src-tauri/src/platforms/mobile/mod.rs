@@ -133,8 +133,8 @@ pub(crate) fn supports_native_file_export() -> bool {
     false
 }
 
-pub(crate) async fn prompt_save_destination(_single_file: bool, _file_name: &str) -> Option<PathBuf> {
-    None
+pub(crate) async fn prompt_save_destination(_app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::transfer::save::SaveDestination>, String> {
+    Ok(None)
 }
 
 pub(crate) fn consume_pending_shares(_app: &AppHandle) -> Result<ShareImportSummary, String> {

@@ -34,7 +34,7 @@ pub(crate) fn get_platform_capabilities() -> PlatformCapabilities {
         automatic_paste: !mobile,
         file_clipboard: !mobile,
         image_clipboard: !mobile,
-        native_file_export: !mobile,
+        native_file_export: crate::platforms::supports_native_file_export(),
         open_data_directory: !mobile,
         share_receiver: cfg!(target_os = "android"),
         virtual_file_paste: !mobile && cfg!(windows),

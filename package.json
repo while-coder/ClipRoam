@@ -10,6 +10,7 @@
     "docker": "node scripts/docker.js",
     "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",
+    "sync:icons": "node scripts/sync-icons.js",
     "check": "pnpm --filter @cliproam/protocol build && pnpm -r check"
   }
 }

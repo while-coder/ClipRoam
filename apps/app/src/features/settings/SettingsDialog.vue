@@ -117,7 +117,9 @@ const {
                 <span class="field-hint">留空使用系统机器名；保存后立即上报新名称。</span>
               </SCard>
               <SCard title="剪贴板漫游">
-                <p class="settings-section-desc">本机复制的内容自动记入历史并同步；其他设备复制的内容可直接更新本机剪贴板。</p>
+                <p class="settings-section-desc">{{ isMobile
+                  ? "点击“读取当前剪贴板”导入文本；其他设备的内容同步到历史，点按文本即可复制。"
+                  : "本机复制的内容自动记入历史并同步；其他设备复制的内容可直接更新本机剪贴板。" }}</p>
                 <label v-if="platformCapabilities.clipboardMonitoring" class="setting-switch" for="watch-clipboard">
                   <span class="setting-switch-copy">
                     <strong>监听剪贴板</strong>
@@ -129,12 +131,10 @@ const {
                     :disabled="savingSettings"
                   />
                 </label>
-                <label class="setting-switch" for="auto-receive-clipboard">
+                <label v-if="!isMobile" class="setting-switch" for="auto-receive-clipboard">
                   <span class="setting-switch-copy">
                     <strong>自动接收剪贴板</strong>
-                    <small>{{ isMobile
-                      ? "移动端前台支持文本；图片和文件同步到历史后可手动下载。"
-                      : "支持文本、富文本和图片；文件与文件夹只同步到历史，需手动选择粘贴。" }}</small>
+                    <small>支持文本、富文本和图片；文件与文件夹只同步到历史，需手动选择粘贴。</small>
                   </span>
                   <SSwitch
                     id="auto-receive-clipboard"

@@ -12,12 +12,28 @@ use crate::AppState;
 
 pub(crate) use super::{
     begin_window_drag, create_windows, deliver_paste, manage_platform_state, on_paste_window_focus,
-    on_window_event, open_data_directory, prompt_save_destination, read_clipboard_files,
+    on_window_event, open_data_directory, read_clipboard_files,
     read_clipboard_image, read_clipboard_text, requires_paste_window, setup_desktop_shell,
     set_virtual_file_clipboard, should_ignore_paste_focus_loss, should_skip_clipboard_poll,
-    show_detached_toast, supports_native_file_export, supports_virtual_file_paste,
+    show_detached_toast, supports_virtual_file_paste,
     synthesize_paste, write_clipboard_files, write_clipboard_image, write_clipboard_text,
 };
+
+pub(crate) fn supports_native_file_export() -> bool {
+    true
+}
+
+pub(crate) async fn prompt_save_destination(app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::transfer::save::SaveDestination>, String> {
+    app.share_receiver().pick_directory()
+        .map(|selection| selection.uri.map(crate::transfer::save::SaveDestination::DocumentTree))
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn export_saved_directory(app: &AppHandle, source: &Path, uri: &str) -> Result<usize, String> {
+    app.share_receiver().export_directory(&source.to_string_lossy(), uri)
+        .map(|result| result.files)
+        .map_err(|error| error.to_string())
+}
 
 pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.plugin(tauri_plugin_cliproam_share_receiver::init())

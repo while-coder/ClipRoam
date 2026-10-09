@@ -7,18 +7,26 @@ use std::{
     fs,
     path::PathBuf,
 };
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::clipboard::output::{missing_files, snapshot_entry};
 use crate::content::{rebuild_tree, sanitize_root_name, MissingFile, TreeNode};
 use crate::entry::entry_contents_of;
 use crate::AppState;
 
+// Each platform constructs only the destination kind it supports.
+#[allow(dead_code)]
+pub(crate) enum SaveDestination {
+    Path(PathBuf),
+    DocumentTree(String),
+}
+
 pub(crate) struct SaveSession {
     entry_id: String,
     destination: PathBuf,
     pub(crate) staging_dir: PathBuf,
     single_file: bool,
+    document_tree: Option<String>,
     pub(crate) expected: HashMap<String, u64>,
     pub(crate) in_progress: HashSet<String>,
     pub(crate) downloaded: HashSet<String>,
@@ -33,6 +41,7 @@ pub(crate) struct SavePreparation {
 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) async fn prepare_save_entry(
+    app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
 ) -> Result<Option<SavePreparation>, String> {
@@ -55,11 +64,21 @@ pub(crate) async fn prepare_save_entry(
         ),
         _ => return Err("该记录不包含可另存的文件".to_string()),
     };
-    let Some(destination) = crate::platforms::prompt_save_destination(single_file, &name).await else {
+    let Some(target) = crate::platforms::prompt_save_destination(&app, single_file, &name).await? else {
         return Ok(None);
     };
 
     let save_id = uuid::Uuid::new_v4().to_string();
+    let (destination, document_tree) = match target {
+        SaveDestination::Path(path) => (path, None),
+        SaveDestination::DocumentTree(uri) => {
+            // SAF URIs are not filesystem paths. Reconstruct the export in the
+            // sandbox, then let ContentResolver write it into the chosen tree.
+            let directory = snapshot.cache_dir.join(format!(".cliproam-export-{save_id}"));
+            let path = if single_file { directory.join(&name) } else { directory };
+            (path, Some(uri))
+        }
+    };
     let staging_parent = if single_file {
         destination
             .parent()
@@ -87,6 +106,7 @@ pub(crate) async fn prepare_save_entry(
                 destination,
                 staging_dir,
                 single_file,
+                document_tree,
                 expected,
                 in_progress: HashSet::new(),
                 downloaded: HashSet::new(),
@@ -107,19 +127,27 @@ pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> 
         .remove(&save_id);
     if let Some(session) = session {
         let _ = fs::remove_dir_all(session.staging_dir);
+        if session.document_tree.is_some() {
+            let root = if session.single_file {
+                session.destination.parent().expect("single-file destination has a parent")
+            } else {
+                session.destination.as_path()
+            };
+            let _ = fs::remove_dir_all(root);
+        }
     }
     Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> Result<usize, String> {
+pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save_id: String) -> Result<usize, String> {
     let session = state
         .save_sessions
         .lock()
         .map_err(|error| error.to_string())?
         .remove(&save_id)
         .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
-    let result = (|| {
+    let mut result = (|| {
         if !session.in_progress.is_empty() || session.downloaded.len() != session.expected.len() {
             return Err("另存为所需文件尚未下载完成".to_string());
         }
@@ -182,6 +210,19 @@ pub(crate) fn finish_save_entry(state: State<'_, AppState>, save_id: String) -> 
             rebuild_tree(&session.destination, file_info, &|file_id| resolved.get(file_id).cloned(), false)
         }
     })();
+    if let Some(uri) = &session.document_tree {
+        let export_root = if session.single_file {
+            session.destination.parent().expect("single-file destination has a parent")
+        } else {
+            session.destination.as_path()
+        };
+        // Staging contains content-id blobs, which must never be exported.
+        let _ = fs::remove_dir_all(&session.staging_dir);
+        if result.is_ok() {
+            result = crate::platforms::export_saved_directory(&app, export_root, uri);
+        }
+        let _ = fs::remove_dir_all(export_root);
+    }
     let _ = fs::remove_dir_all(&session.staging_dir);
     result
 }

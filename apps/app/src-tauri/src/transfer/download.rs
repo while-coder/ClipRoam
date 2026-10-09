@@ -892,7 +892,14 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
         if Instant::now() >= deadline {
             return TaskOutcome::Failed("文件下载超时，没有设备能够提供该文件".to_string());
         }
-        match pull_once(app, spec, &mut received).await {
+        // Bound waiting for both response headers and stream data. Checking
+        // only between pulls cannot stop a server that never sends anything.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let pull = match tokio::time::timeout(remaining, pull_once(app, spec, &mut received)).await {
+            Ok(result) => result,
+            Err(_) => return TaskOutcome::Failed("文件下载超时，没有设备能够提供该文件".to_string()),
+        };
+        match pull {
             Ok(()) => continue,
             Err(PullEnd::Cancelled(reason)) => return TaskOutcome::Cancelled(reason),
             Err(PullEnd::Failed(error)) => {

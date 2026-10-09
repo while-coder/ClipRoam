@@ -17,7 +17,6 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) mod arboard_clipboard;
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size, Window, WindowEvent};
@@ -379,13 +378,13 @@ pub(crate) fn supports_native_file_export() -> bool {
 
 /// 命令在 tokio 工作线程上执行，而阻塞版 `FileDialog` 的 macOS 面板要求
 /// 主线程——异步版由 rfd 负责派发，两端都能安全等待。
-pub(crate) async fn prompt_save_destination(single_file: bool, file_name: &str) -> Option<PathBuf> {
+pub(crate) async fn prompt_save_destination(_app: &AppHandle, single_file: bool, file_name: &str) -> Result<Option<crate::transfer::save::SaveDestination>, String> {
     let handle = if single_file {
         rfd::AsyncFileDialog::new().set_file_name(file_name).save_file().await
     } else {
         rfd::AsyncFileDialog::new().pick_folder().await
-    }?;
-    Some(handle.path().to_path_buf())
+    };
+    Ok(handle.map(|handle| crate::transfer::save::SaveDestination::Path(handle.path().to_path_buf())))
 }
 
 pub(crate) fn consume_pending_shares(_app: &AppHandle) -> Result<ShareImportSummary, String> {

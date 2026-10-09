@@ -25,6 +25,14 @@
       "preLaunchTask": "tauri:before:dev"
     },
     {
+      "name": "Launch App · Android",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm --filter @cliproam/app android:dev",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "ui:kill"
+    },
+    {
       "name": "Launch App · macOS",
       "type": "lldb",
       "request": "launch",

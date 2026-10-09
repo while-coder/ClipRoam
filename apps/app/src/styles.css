@@ -846,13 +846,32 @@ button:focus-visible, [role="button"]:focus-visible {
   font-weight: 600;
 }
 .mobile-capture-button:active:not(:disabled) { background: #1e3a5f; }
+.mobile-history-hint {
+  margin: 8px 0 0;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
 .mobile-app .filter-row {
   gap: 8px;
   padding-bottom: 2px;
 }
 .mobile-app .filter-scroll { gap: 8px; }
 /* 类型筛选换成 STagFilter 后 chips 不再是 .filter-scroll 的直接 button，44px 触达规则随之迁移。 */
-.mobile-app .filter-scroll .s-tag-filter-chip { min-height: 44px; padding-inline: 14px; font-size: 13px; }
+.mobile-app .filter-scroll .s-tag-filter-chip {
+  min-height: 44px;
+  padding-inline: 14px;
+  border-radius: var(--sui-radius-pill);
+  overflow: hidden;
+  font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-app .filter-scroll .s-tag-filter-chip:active {
+  background: var(--sui-bg-active);
+  border-color: var(--sui-border-strong);
+  color: var(--sui-fg);
+}
 .mobile-app .filter-actions { gap: 8px; padding-left: 8px; }
 .mobile-app .result-summary { max-width: 92px; }
 .mobile-app .empty-filter-reset { min-height: 44px; padding-inline: 14px; font-size: 13px; }
@@ -878,8 +897,7 @@ button:focus-visible, [role="button"]:focus-visible {
 /* SIconButton 尺寸是 inline style（:size 生成），移动端 44px 触达规则必须 !important。 */
 .mobile-app .s-icon-button { width: 44px !important; height: 44px !important; border-radius: 10px !important; }
 .mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
-/* 窄屏放不下"共 N 条 · 第 x/y 页"整段文字，条数在筛选行已展示，只留翻页按钮 */
-.mobile-app .pagination-status { display: none; }
+.mobile-app .pagination-control { width: 100%; justify-content: space-between; }
 /* SModal teleport 到 body 后脱离 .mobile-app 祖先，表单触达规则改用媒体查询兜底。 */
 @media (max-width: 640px) {
   .settings-form { padding: 16px; }
@@ -889,7 +907,6 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
-  .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr); }
-  .mobile-app .footer-hint { display: none; }
+  .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr) 48px; }
   .mobile-app .workspace-titlebar { min-height: 52px; }
 }

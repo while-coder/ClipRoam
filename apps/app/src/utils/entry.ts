@@ -77,5 +77,5 @@ export function canSaveEntry(entry: LocalClipboardEntry): boolean {
 
 export function saveEntryLabel(entry: LocalClipboardEntry, savingEntryId: string, isMobile: boolean): string {
   if (savingEntryId === entry.id) return isMobile ? "正在下载…" : "正在另存为…";
-  return isMobile ? "下载到本机缓存" : "另存为…";
+  return isMobile ? "下载并保存…" : "另存为…";
 }

@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isPasteWindow } from "../../composables/usePlatform";
+import { isMobile, isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
@@ -17,6 +17,7 @@ import type { LocalClipboardEntry, SavePreparation } from "../../types";
  */
 export const activatingEntryIds = ref(new Set<string>());
 export const savingEntryId = ref("");
+const { platformCapabilities } = usePlatform();
 /** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
 let clipboardWriteChain: Promise<unknown> = Promise.resolve();
 
@@ -72,7 +73,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   savingEntryId.value = entry.id;
   let saveId: string | undefined;
   try {
-    if (isMobile.value) {
+    if (!platformCapabilities.value.nativeFileExport) {
       await ensureLocalFiles(entry);
       showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
@@ -92,7 +93,8 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 
       const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
       saveId = undefined;
-      if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
+      if (isMobile.value) showToast("已保存到所选目录", "success");
+      else if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
     if (error instanceof DownloadCancelledError) return;

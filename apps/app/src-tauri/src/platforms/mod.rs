@@ -40,3 +40,8 @@ pub(crate) fn start_clipboard_monitor(app: tauri::AppHandle) {
         let _ = app;
     }
 }
+
+#[cfg(not(target_os = "android"))]
+pub(crate) fn export_saved_directory(_app: &tauri::AppHandle, _source: &std::path::Path, _uri: &str) -> Result<usize, String> {
+    Err("当前平台不支持系统目录导出".to_string())
+}

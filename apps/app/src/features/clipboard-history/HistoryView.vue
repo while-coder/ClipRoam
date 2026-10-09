@@ -479,6 +479,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
+      <p v-if="isMobile" class="mobile-history-hint">点按文本复制，点按文件下载，长按打开菜单</p>
     </section>
 
     <section ref="historyListElement" class="history-list" aria-label="剪贴板历史" @scroll="closeEntryMenu">
@@ -567,9 +568,8 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
     </section>
 
     <footer class="footer-hint">
-      <span v-if="isMobile">点按文本复制，点按文件下载到缓存，长按打开菜单</span>
-      <span v-else-if="isPasteWindow">单击记录立即粘贴</span>
-      <span v-else>单击选择，双击预览图片或文件，右键打开菜单</span>
+      <span v-if="!isMobile && isPasteWindow">单击记录立即粘贴</span>
+      <span v-else-if="!isMobile">双击预览图片或文件，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <PaginationControl

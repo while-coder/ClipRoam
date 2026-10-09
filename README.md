@@ -57,6 +57,14 @@ pnpm --filter @cliproam/app android:init
 pnpm --filter @cliproam/app android:build
 ```
 
+Android 页面调试（无需独立 Web 版本）：
+
+1. 启动模拟器，或在真机开启 USB 调试；运行 `adb devices` 确认设备状态为 `device`。MuMu 需要在模拟器设置中开启 ADB，再使用 `adb connect 127.0.0.1:<模拟器显示的 ADB 端口>` 连接。
+2. VS Code 选择 `Launch App · Android` 并按 F5，或运行 `pnpm --filter @cliproam/app android:dev`。终端中按提示选择设备；Tauri 会安装并启动开发版，Vite 提供前端热更新。
+3. 电脑 Chrome 打开 `chrome://inspect/#devices`，启用 `Discover USB devices`，在 ClipRoam 的 WebView 下点击 `inspect`，即可检查 DOM/CSS、Console、Network 和 JavaScript 断点。F5 入口负责启动 Android 开发进程，页面断点在 Chrome DevTools 中调试。
+
+Vite 会读取 Tauri 设置的 `TAURI_DEV_HOST`，设备需要能访问电脑的开发地址和 `1430` 端口。页面运行在 Android WebView 内，具有真实的 Tauri 接口和移动端平台能力；仅用桌面浏览器的窄屏模式不会切换到移动端逻辑。
+
 iOS 必须在安装了 Xcode 的 macOS 上执行：
 
 ```bash

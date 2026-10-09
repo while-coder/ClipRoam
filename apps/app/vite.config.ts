@@ -13,7 +13,8 @@ export default defineConfig(async () => ({
   server: {
     port: 1430,
     strictPort: true,
-    host: false,
+    // Android dev sets this to an address the device can reach.
+    host: process.env.TAURI_DEV_HOST || false,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

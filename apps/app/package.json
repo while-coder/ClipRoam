@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "android:init": "tauri android init --ci",
+    "android:dev": "tauri android dev",
     "android:build": "tauri android build --apk --ci",
     "ios:init": "tauri ios init --ci",
     "ios:build": "tauri ios build --ci"

@@ -6,9 +6,12 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import app.tauri.annotation.Command
+import app.tauri.annotation.ActivityCallback
+import androidx.activity.result.ActivityResult
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
@@ -28,6 +31,12 @@ class AcknowledgeArgs {
     lateinit var id: String
 }
 
+@InvokeArg
+class ExportDirectoryArgs {
+    lateinit var source: String
+    lateinit var uri: String
+}
+
 @TauriPlugin
 class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -43,6 +52,73 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onDestroy() {
         scope.cancel()
+    }
+
+    @Command
+    fun pickDirectory(invoke: Invoke) {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            startActivityForResult(invoke, intent, "directoryPickerResult")
+        } catch (error: Exception) {
+            invoke.reject(error.message ?: "无法打开目录选择框")
+        }
+    }
+
+    @ActivityCallback
+    fun directoryPickerResult(invoke: Invoke, result: ActivityResult) {
+        val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+        if (result.resultCode == Activity.RESULT_OK && uri == null) {
+            invoke.reject("目录选择结果为空")
+        } else {
+            invoke.resolveObject(mapOf("uri" to uri?.toString()))
+        }
+    }
+
+    @Command
+    fun exportDirectory(invoke: Invoke) {
+        val args = invoke.parseArgs(ExportDirectoryArgs::class.java)
+        scope.launch {
+            val createdRoots = mutableListOf<Uri>()
+            try {
+                val source = File(args.source)
+                require(source.isDirectory) { "导出文件尚未准备完成" }
+                val tree = Uri.parse(args.uri)
+                val destination = DocumentsContract.buildDocumentUriUsingTree(
+                    tree, DocumentsContract.getTreeDocumentId(tree)
+                )
+                val files = source.listFiles()?.sumOf { file ->
+                    copyDocument(file, destination, createdRoots)
+                } ?: throw IllegalStateException("无法读取导出目录")
+                invoke.resolveObject(mapOf("files" to files))
+            } catch (error: Exception) {
+                // Only newly created documents are rolled back; pre-existing
+                // documents in the user's directory are never overwritten.
+                createdRoots.forEach { uri ->
+                    try { DocumentsContract.deleteDocument(activity.contentResolver, uri) } catch (_: Exception) {}
+                }
+                invoke.reject(error.message ?: "无法保存到所选目录")
+            }
+        }
+    }
+
+    private fun copyDocument(source: File, parent: Uri, createdRoots: MutableList<Uri>? = null): Int {
+        val mime = if (source.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase())
+                ?: "application/octet-stream"
+        val target = DocumentsContract.createDocument(activity.contentResolver, parent, mime, source.name)
+            ?: throw IllegalStateException("无法创建文件：${source.name}")
+        createdRoots?.add(target)
+        if (source.isDirectory) {
+            return source.listFiles()?.sumOf { copyDocument(it, target) }
+                ?: throw IllegalStateException("无法读取目录：${source.name}")
+        }
+        activity.contentResolver.openOutputStream(target, "w").use { output ->
+            if (output == null) throw IllegalStateException("无法写入文件：${source.name}")
+            source.inputStream().use { input -> input.copyTo(output) }
+        }
+        return 1
     }
 
     @Command

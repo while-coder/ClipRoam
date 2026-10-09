@@ -106,9 +106,9 @@ export function setSyncAutoUploadLimit(limitMb: number): void {
 async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
   const config = getActiveConfig();
   if (
-    !getActivePreferences().autoReceiveClipboard
+    isMobile.value
+    || !getActivePreferences().autoReceiveClipboard
     || entry.kind === "files"
-    || (isMobile.value && entry.kind !== "text")
   ) return;
 
   const activationRevision = ++remoteActivationRevision;

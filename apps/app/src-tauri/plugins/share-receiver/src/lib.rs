@@ -39,6 +39,22 @@ struct AcknowledgeRequest<'a> {
     id: &'a str,
 }
 
+#[derive(Deserialize)]
+pub struct DirectorySelection {
+    pub uri: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ExportDirectoryRequest<'a> {
+    source: &'a str,
+    uri: &'a str,
+}
+
+#[derive(Deserialize)]
+pub struct ExportResult {
+    pub files: usize,
+}
+
 const PLUGIN_IDENTIFIER: &str = "com.whilecode.cliproam.share";
 
 fn mobile_init<R: Runtime, C: DeserializeOwned>(
@@ -52,6 +68,14 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
+    pub fn pick_directory(&self) -> Result<DirectorySelection> {
+        self.0.run_mobile_plugin("pickDirectory", ()).map_err(Into::into)
+    }
+
+    pub fn export_directory(&self, source: &str, uri: &str) -> Result<ExportResult> {
+        self.0.run_mobile_plugin("exportDirectory", ExportDirectoryRequest { source, uri }).map_err(Into::into)
+    }
+
     pub fn pending(&self) -> Result<Vec<PendingShare>> {
         self.0.run_mobile_plugin("pending", ()).map_err(Into::into)
     }
