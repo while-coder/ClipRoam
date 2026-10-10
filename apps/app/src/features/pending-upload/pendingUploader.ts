@@ -1,5 +1,4 @@
 import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
-import { invoke } from "@tauri-apps/api/core";
 import { isTransientNetworkError, type SyncRequester } from "../sync/syncHttp";
 import { errorMessage } from "../../utils/error";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
@@ -26,7 +25,9 @@ export class PendingUploader {
   constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly deps: PendingUploaderDeps, private autoUploadLimit: number) {
     this.#files = new FileUploader(http, deps);
   }
-  start(): void { void this.#drainLoop(); }
+  start(): void {
+    void this.deps.session.start(() => this.#drainLoop()).catch(() => undefined);
+  }
   retrySkipped(): void { this.#skippedRows.clear(); }
   setAutoUploadLimit(limitBytes: number): void { this.autoUploadLimit = limitBytes; }
   // The resident drain loop: the durable capture queue is the single replay
@@ -36,13 +37,11 @@ export class PendingUploader {
   // later pulse; a row that failed three times is skipped for this session so
   // it cannot block the rows behind it — reconnecting gives it another chance.
   async #drainLoop(): Promise<void> {
-    while (!this.deps.isStopped()) {
-      await new Promise((resolve) => window.setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
-      if (this.deps.isStopped()) return;
-      const row = await invoke<PendingQueueRow | null>("peek_pending_entry", {
+    while (!this.deps.session.signal.aborted) {
+      await this.deps.session.delay(DRAIN_POLL_INTERVAL_MS);
+      const row = await this.deps.session.invoke<PendingQueueRow | null>("peek_pending_entry", {
         skipSeqs: this.#skippedRows.size ? [...this.#skippedRows] : null,
       }).catch(() => null);
-      if (this.deps.isStopped()) return;
       if (!row) continue;
       const failure = this.#queueFailures.get(row.seq);
       if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) continue;
@@ -50,7 +49,7 @@ export class PendingUploader {
         await this.#publishQueueRow(row);
         this.#queueFailures.delete(row.seq);
       } catch (error) {
-        if (this.deps.isStopped()) return;
+        if (this.deps.session.signal.aborted) return;
         // Transient failures wait out the backoff without counting against
         // the skip limit — HTTP coming back is expected, not the row's fault.
         if (isTransientNetworkError(error)) {
@@ -89,15 +88,12 @@ export class PendingUploader {
       sourceDeviceId: this.device.id,
     };
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
-    if (this.deps.isStopped()) return;
     const stored = await this.#publishEntry(payload);
-    if (this.deps.isStopped()) return;
     this.deps.onPublished();
     if (stored.kind !== "files") {
       await this.deps.activate(stored.id).catch(() => undefined);
     }
-    if (this.deps.isStopped()) return;
-    await invoke("dequeue_pending_entry", { seq: row.seq });
+    await this.deps.session.invoke("dequeue_pending_entry", { seq: row.seq });
   }
 
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {

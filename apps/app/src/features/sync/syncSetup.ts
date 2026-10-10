@@ -39,18 +39,27 @@ export function getServerUrls(
   };
 }
 
-async function postJson(httpUrl: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<unknown> {
+async function postJson(httpUrl: string, path: string, body: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<unknown> {
+  const timeoutSignal = AbortSignal.timeout(30_000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   let response: Response;
+  let responseBody: unknown;
   try {
     response = await fetch(`${httpUrl}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
+      signal: requestSignal,
+    });
+    responseBody = await response.json().catch((error) => {
+      if (requestSignal.aborted) throw error;
+      return undefined;
     });
   } catch {
+    if (signal?.aborted) throw new Error("请求已取消");
+    if (timeoutSignal.aborted) throw new Error("服务器响应超时，请稍后重试");
     throw new Error("无法连接服务器，请检查 IP、端口和网络");
   }
-  const responseBody = await response.json().catch(() => undefined) as unknown;
   if (!response.ok) throw new Error(errorMessageFromBody(responseBody, response.status));
   return responseBody;
 }
@@ -62,10 +71,11 @@ export async function authenticateAccount(
   mode: AuthMode,
   protocol: ServerProtocol,
   device: Device,
+  signal?: AbortSignal,
 ): Promise<AuthResponse> {
   const { httpUrl } = getServerUrls(address, protocol);
   // 设备信息随登录上报：登录即注册设备行，不依赖推送通道连得上。
-  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, device });
+  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, device }, {}, signal);
   const result = AuthResponseSchema.safeParse(body);
   if (!result.success) throw new Error("服务器返回了不兼容的登录响应");
   return result.data;
@@ -77,9 +87,10 @@ export async function pushDeviceInfo(
   protocol: ServerProtocol,
   sessionToken: string,
   device: Device,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { httpUrl } = getServerUrls(address, protocol);
-  await postJson(httpUrl, "/devices/current", device, { Authorization: `Bearer ${sessionToken}` });
+  await postJson(httpUrl, "/devices/current", device, { Authorization: `Bearer ${sessionToken}` }, signal);
 }
 
 export async function changeAccountPassword(
@@ -88,6 +99,7 @@ export async function changeAccountPassword(
   sessionToken: string,
   currentPassword: string,
   newPassword: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { httpUrl } = getServerUrls(address, protocol);
   await postJson(
@@ -95,5 +107,6 @@ export async function changeAccountPassword(
     "/auth/password",
     { currentPassword, newPassword },
     { Authorization: `Bearer ${sessionToken}` },
+    signal,
   );
 }

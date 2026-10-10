@@ -1,5 +1,5 @@
 import { FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
-import { invoke } from "@tauri-apps/api/core";
+import type { AccountSession } from "../sync/accountSession";
 import type { SyncRequester } from "../sync/syncHttp";
 import { base64ToBytes } from "../../utils/bytes";
 
@@ -8,7 +8,7 @@ const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const TRANSFER_CONCURRENCY = 4;
 type FileReference = { fileId: string; size: number };
 export type FileUploaderDeps = {
-  isStopped(): boolean;
+  session: AccountSession;
   onUploadProgress(entryId: string, uploadedBytes: number, totalBytes: number): void;
   onUploadFinished(entryId: string): void;
   onFileAvailable(fileId: string): void;
@@ -26,9 +26,12 @@ export class FileUploader {
    * The candidates derive from the entry payload itself, so this works for a
    * published row and for a queue row that has no local entry yet alike.
    */
-  async uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
+  uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
+    return this.deps.session.start(() => this.#uploadEntry(entry, sizeLimit));
+  }
+
+  async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
-    this.#checkStopped();
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
 
@@ -51,7 +54,6 @@ export class FileUploader {
           return file.fileId;
         },
       );
-      this.#checkStopped();
       const uploaded = results.flatMap((result) => (
         result.status === "fulfilled" ? [result.value] : []
       ));
@@ -85,9 +87,7 @@ export class FileUploader {
     // not a failure: re-beginning hands back the current ledger and the
     // upload continues from it.
     for (let restart = 0; ; restart++) {
-      this.#checkStopped();
       const begin = await this.#uploadBegin(file);
-      this.#checkStopped();
       // The server already had these bytes, so the transfer is over before it
       // began — this is what makes copying a folder twice nearly free.
       if (begin.status === "stored") {
@@ -102,20 +102,17 @@ export class FileUploader {
       onProgress(begin.receivedBytes);
       let retired = false;
       while (missing.length > 0) {
-        this.#checkStopped();
         // Spread simultaneous devices across the server's currently missing chunks.
         const index = missing[Math.floor(Math.random() * missing.length)]!;
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-        const data = await invoke<string>("read_upload_chunk", {
+        const data = await this.deps.session.invoke<string>("read_upload_chunk", {
           fileId: file.fileId, offset, length,
         });
-        this.#checkStopped();
         if (!data) throw new Error("本机文件内容不可用");
         // A concurrent upload may store the same content mid-transfer; the
         // chunk response then reports `stored` and the remaining bytes are done.
         const chunk = await this.#uploadChunk(file.fileId, index, base64ToBytes(data));
-        this.#checkStopped();
         if (chunk === undefined) {
           retired = true;
           break;
@@ -139,10 +136,6 @@ export class FileUploader {
       // from spinning this loop forever.
       if (restart >= 3) throw new Error("服务器上传进度反复失效");
     }
-  }
-
-  #checkStopped(): void {
-    if (this.deps.isStopped()) throw new Error("同步已停止");
   }
 
   async #uploadBegin(file: FileReference): Promise<UploadBeginResponse> {

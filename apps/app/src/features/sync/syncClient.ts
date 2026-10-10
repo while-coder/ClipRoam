@@ -2,6 +2,7 @@ import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { activateClipboardEntry, createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
+import type { AccountSession } from "./accountSession";
 import { HistoryClient } from "../history/historyClient";
 import { PendingUploader } from "../pending-upload/pendingUploader";
 import { RelayUploader } from "../uploads/relayUploader";
@@ -33,18 +34,15 @@ export class SyncClient {
   #reconnectTimer?: number;
   #pingTimer?: number;
   #awaitingPong = false;
-  #stopped = false;
   #http: SyncRequester;
-  #abortController = new AbortController();
   readonly history: HistoryClient;
   readonly pendingUploads: PendingUploader;
   readonly uploads: RelayUploader;
-  constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT) {
-    this.#http = createSyncRequester(httpUrl, token, this.#abortController.signal);
-    const isStopped = () => this.#stopped;
-    this.history = new HistoryClient(this.#http, isStopped);
+  constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT, readonly session: AccountSession) {
+    this.#http = createSyncRequester(httpUrl, token, this.session);
+    this.history = new HistoryClient(this.#http, this.session);
     this.pendingUploads = new PendingUploader(this.#http, device, {
-      isStopped,
+      session: this.session,
       onPublished: handlers.onPublished,
       onUploadProgress: handlers.onUploadProgress,
       onUploadFinished: handlers.onUploadFinished,
@@ -52,20 +50,18 @@ export class SyncClient {
       onError: handlers.onError,
       activate: (entryId) => activateClipboardEntry(this.#http, entryId),
     }, autoUploadLimit);
+    this.session.own(() => this.stop());
     this.uploads = new RelayUploader(this.#http, {
-      isStopped,
+      session: this.session,
       onServeTasksChanged: handlers.onServeTasksChanged,
       resolveEntryLabel: handlers.resolveEntryLabel,
     });
   }
   connect(): void {
-    this.#stopped = false;
     this.#open();
     this.pendingUploads.start();
   }
   stop(): void {
-    this.#stopped = true;
-    this.#abortController.abort();
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
     this.#socket?.close();
@@ -126,7 +122,7 @@ export class SyncClient {
   }
 
   #open(): void {
-    if (this.#stopped) return;
+    if (this.session.signal.aborted) return;
     const socket = new WebSocket(this.webSocketUrl);
     this.#socket = socket;
 
@@ -146,7 +142,7 @@ export class SyncClient {
       if (this.#socket !== socket) return;
       this.#stopHeartbeat();
       this.handlers.onConnected(false);
-      if (!this.#stopped) {
+      if (!this.session.signal.aborted) {
         this.#reconnectTimer = window.setTimeout(() => this.#open(), 2500);
       }
     });
@@ -155,6 +151,7 @@ export class SyncClient {
   }
 
   async #handleMessage(data: unknown): Promise<void> {
+    if (this.session.signal.aborted) return;
     const result = ServerMessageSchema.safeParse(JSON.parse(String(data)));
     if (!result.success) return;
     const message = result.data;

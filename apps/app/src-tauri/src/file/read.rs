@@ -16,16 +16,15 @@ pub(crate) fn read_upload_chunk(
     file_id: String,
     offset: u64,
     length: usize,
+    session_id: String,
 ) -> Result<String, String> {
+    let account = state.account(&session_id)?;
     let path = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = state.active_cache_dir(&history)?;
-        let history_path = state.active_history_path(&history)?;
+        let cache_dir = account.cache_dir.clone();
         // `cached_file_path` stats the candidates itself, so a hit is always
         // a file that exists right now.
         cached_file_path(&cache_dir, &file_id).or_else(|| {
-            state
-                .with_database(&history_path, |connection| {
+            account.with_database(|connection| {
                     Ok(cached_source_for(connection, &file_id))
                 })
                 .ok()

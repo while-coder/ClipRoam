@@ -15,7 +15,6 @@ pub(crate) mod read;
 pub(crate) mod store;
 
 pub use cache::{blob_ids_on_disk, cached_file_hash, cached_source_for, collect_local_garbage, remember_file_hash};
-pub(crate) use store::history_stored_ids;
 
 use std::path::{Path, PathBuf};
 

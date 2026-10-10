@@ -66,14 +66,17 @@ pub(crate) struct EntrySnapshot {
 }
 
 pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let cache_dir = state.active_cache_dir(&history)?;
-    let hash_database = state.active_history_path(&history)?;
-    let entry = state
-        .with_database(&hash_database, |connection| select_entry(connection, entry_id))?
+    let config = state.sync_config.lock().map_err(|error| error.to_string())?
+        .clone().ok_or("同步账号未登录")?;
+    let account = crate::account::AccountContext::new(state, config)?;
+    snapshot_entry_for(entry_id, &account)
+}
+
+pub(crate) fn snapshot_entry_for(entry_id: &str, account: &crate::account::AccountContext) -> Result<EntrySnapshot, String> {
+    let cache_dir = account.cache_dir.clone();
+    let entry = account.with_database(|connection| select_entry(connection, entry_id))?
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
-    let hash_sources = state
-        .with_database(&hash_database, |connection| {
+    let hash_sources = account.with_database(|connection| {
             Ok(entry_contents_of(&entry)
                 .into_iter()
                 .filter(|(file_id, _)| readable_path(&cache_dir, &entry, file_id).is_none())
@@ -166,9 +169,13 @@ fn record_activation_signature(history: &mut crate::store::HistoryData, signatur
 fn activate_with_signature(
     state: &AppState,
     signature: (String, String, String),
+    account: &crate::account::AccountContext,
     write: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.active_history.as_deref() != Some(account.key.as_str()) {
+        return Err("账号会话已结束，取消写入系统剪贴板".to_string());
+    }
     let previous = (
         history.last_clipboard.clone(),
         history.last_file_signature.clone(),
@@ -182,8 +189,7 @@ fn activate_with_signature(
         return Err(error);
     }
     // Only the activation signatures changed — persist the metadata rows.
-    let path = state.active_history_path(&history)?;
-    state.with_database(&path, |connection| save_metadata(connection, &history))
+    account.with_database(|connection| save_metadata(connection, &history))
 }
 
 /// Writes a live clipboard activation received from another device without
@@ -194,8 +200,10 @@ pub(crate) fn activate_remote_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
+    session_id: String,
 ) -> Result<(), String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let account = state.account(&session_id)?;
+    let snapshot = snapshot_entry_for(&entry_id, &account)?;
     let payload = match snapshot.entry.kind.as_str() {
         "files" => return Err("文件和文件夹不会自动写入漫游剪贴板".to_string()),
         "image" => image_payload(&snapshot)?,
@@ -203,7 +211,7 @@ pub(crate) fn activate_remote_entry(
     };
     let signature = activation_signature(&payload);
 
-    activate_with_signature(&state, signature, || match payload {
+    activate_with_signature(&state, signature, &account, || match payload {
         ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
         ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
         _ => unreachable!("file activations are rejected above"),
@@ -217,8 +225,10 @@ pub(crate) fn apply_clipboard_entry(
     state: State<'_, AppState>,
     entry_id: String,
     synthesize: bool,
+    session_id: String,
 ) -> Result<(), String> {
-    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let account = state.account(&session_id)?;
+    let snapshot = snapshot_entry_for(&entry_id, &account)?;
     let payload = match snapshot.entry.kind.as_str() {
         "files" => {
             let file_info = snapshot
@@ -266,7 +276,7 @@ pub(crate) fn apply_clipboard_entry(
 
     let signature = activation_signature(&payload);
 
-    activate_with_signature(&state, signature, || match payload {
+    activate_with_signature(&state, signature, &account, || match payload {
         ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
         ClipboardPayload::Files(paths) => crate::platforms::write_clipboard_files(&app, &paths),
         ClipboardPayload::VirtualFiles(entry) => {
@@ -284,8 +294,9 @@ pub(crate) fn copy_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
+    session_id: String,
 ) -> Result<(), String> {
-    apply_clipboard_entry(window, app, state, entry_id, false)
+    apply_clipboard_entry(window, app, state, entry_id, false, session_id)
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
@@ -294,10 +305,11 @@ pub(crate) fn paste_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
+    session_id: String,
 ) -> Result<(), String> {
     if crate::platforms::requires_paste_window() && window.label() != "paste" {
         return Err("只有快捷粘贴窗口可以执行自动粘贴".to_string());
     }
 
-    apply_clipboard_entry(window, app, state, entry_id, true)
+    apply_clipboard_entry(window, app, state, entry_id, true, session_id)
 }

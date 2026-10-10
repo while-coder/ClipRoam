@@ -1,5 +1,5 @@
-import { nextTick, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { nextTick } from "vue";
+import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { usePlatform } from "../../composables/usePlatform";
 import { errorMessage } from "../../utils/error";
 import {
@@ -9,7 +9,6 @@ import {
   saveQuickPasteShortcut,
 } from "../quick-paste/quickPasteShortcut";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_SERVER_MAX_FILE_MB, DEFAULT_USE_VIRTUAL_FILES, DEFAULT_WATCH_CLIPBOARD } from "../sync/syncDefaults";
 import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
@@ -22,7 +21,6 @@ export type SettingsBridge = {
   getActiveConfig(): SyncConfig | undefined;
   setActiveConfig(config: SyncConfig | undefined): void;
   getActivePreferences(): AccountPreferences;
-  getUsername(): string;
   setUsername(name: string): void;
   /** 保存会话配置；退出账号传空 token：Rust 侧视为未登录（没有活动档案）。 */
   persistSyncConfig(config: SyncConfig | null): Promise<void>;
@@ -49,31 +47,28 @@ function requireBridge(): SettingsBridge {
   return bridge;
 }
 
-const settingsVisible = ref(false);
-const settingsPage = ref<SettingsPage>("general");
-const autoUploadLimitMb = ref(DEFAULT_AUTO_UPLOAD_LIMIT_MB);
-const autoReceiveClipboard = ref(DEFAULT_AUTO_RECEIVE_CLIPBOARD);
-/** 是否监听本机剪贴板；关闭后本机复制不再自动进历史，只收同步内容。 */
-const watchClipboard = ref(DEFAULT_WATCH_CLIPBOARD);
-/** Windows 独有：文件粘贴走 virtual_files（不预下载）；默认关闭。 */
-const useVirtualFiles = ref(DEFAULT_USE_VIRTUAL_FILES);
-/** 文本域里的过滤模式，一行一条；保存时拆成数组。 */
-const excludePatternsInput = ref("");
-/** 服务器单文件存储上限（MB），登录时下发；自动上传档位不能超过它。 */
-const serverMaxFileMb = ref(DEFAULT_SERVER_MAX_FILE_MB);
-/** 设备别名草稿；空串表示未设置，展示回退到系统机器名。 */
-const deviceAliasInput = ref("");
-const savedDeviceAlias = ref("");
-/** 系统机器名，作别名输入框的 placeholder。 */
-const systemDeviceName = ref("");
-const savingSettings = ref(false);
-const recordingQuickPasteShortcut = ref(false);
-const changingPassword = ref(false);
-const settingsError = ref("");
-const passwordChangeError = ref("");
-const currentPassword = ref("");
-const newPassword = ref("");
-const confirmNewPassword = ref("");
+const settingsVisible = accountStateRef("settingsVisible");
+const settingsPage = accountStateRef("settingsPage");
+const autoUploadLimitMb = accountStateRef("autoUploadLimitMb");
+const autoReceiveClipboard = accountStateRef("autoReceiveClipboard");
+const watchClipboard = accountStateRef("watchClipboard");
+const useVirtualFiles = accountStateRef("useVirtualFiles");
+const excludePatternsInput = accountStateRef("excludePatternsInput");
+const serverMaxFileMb = accountStateRef("serverMaxFileMb");
+const deviceAliasInput = accountStateRef("deviceAliasInput");
+const systemDeviceName = accountStateRef("systemDeviceName");
+const savingSettings = accountStateRef("savingSettings");
+const recordingQuickPasteShortcut = accountStateRef("recordingQuickPasteShortcut");
+const changingPassword = accountStateRef("changingPassword");
+const settingsError = accountStateRef("settingsError");
+const passwordChangeError = accountStateRef("passwordChangeError");
+const currentPassword = accountStateRef("currentPassword");
+const newPassword = accountStateRef("newPassword");
+const confirmNewPassword = accountStateRef("confirmNewPassword");
+
+function cancelSettingsRequests(): void {
+  getAccountSession()?.state.settingsRequestController?.abort();
+}
 
 function openSettings(): void {
   const activeConfig = requireBridge().getActiveConfig();
@@ -183,8 +178,12 @@ function validatePasswordConfirmation(): boolean {
 }
 
 async function loadDeviceIdentity(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { deviceAliasInput, savedDeviceAlias, systemDeviceName } = session.state;
+
   try {
-    const identity = await getDeviceIdentity();
+    const identity = await session.start(() => getDeviceIdentity());
     savedDeviceAlias.value = identity.deviceAlias;
     deviceAliasInput.value = identity.deviceAlias;
     systemDeviceName.value = identity.systemDeviceName;
@@ -194,19 +193,30 @@ async function loadDeviceIdentity(): Promise<void> {
 }
 
 async function openAppDataDirectory(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { settingsError } = session.state;
+
   settingsError.value = "";
   try {
-    await invoke("open_app_data_dir");
+    await session.invoke("open_app_data_dir");
   } catch (error) {
     settingsError.value = `无法打开应用数据目录：${errorMessage(error)}`;
   }
 }
 
 async function saveSettings(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { settingsVisible, settingsPage, autoUploadLimitMb, autoReceiveClipboard, watchClipboard, useVirtualFiles, excludePatternsInput, deviceAliasInput, savedDeviceAlias, savingSettings, changingPassword, settingsError } = session.state;
+
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
   const { platformCapabilities } = usePlatform();
   savingSettings.value = true;
+  const controller = new AbortController();
+  session.state.settingsRequestController = controller;
+  session.own(() => controller.abort());
   settingsError.value = "";
   const activePreferences = requireBridge().getActivePreferences();
   const preferences: AccountPreferences = {
@@ -226,10 +236,10 @@ async function saveSettings(): Promise<void> {
     // 端点时忽略，随后的 startSync 重连仍会带着新名字兜底。
     const deviceAlias = deviceAliasInput.value.trim();
     if (deviceAlias !== savedDeviceAlias.value) {
-      await invoke("save_device_alias", { alias: deviceAlias });
+      await session.invoke("save_device_alias", { alias: deviceAlias });
       savedDeviceAlias.value = deviceAlias;
       try {
-        await pushDeviceInfo(activeConfig.serverAddress, activeConfig.serverProtocol, activeConfig.sessionToken, await getDevice());
+        await pushDeviceInfo(activeConfig.serverAddress, activeConfig.serverProtocol, activeConfig.sessionToken, await session.start(() => getDevice()), controller.signal);
       } catch {
         // 上报失败不阻塞保存：重连时的 WS auth 消息仍会携带设备信息。
       }
@@ -245,7 +255,7 @@ async function saveSettings(): Promise<void> {
     // 偏好落当前活动档案。Rust 侧 save_account_preferences 即时更新内存，
     // 捕获路径（过滤规则、复制上限）无需重连即生效；自动上传档位经 setter
     // 下发给运行中的 SyncClient。均不需要断开重连 WS。
-    await requireBridge().persistAccountPreferences(preferences);
+    await session.start(() => requireBridge().persistAccountPreferences(preferences));
     requireBridge().applyAutoUploadLimit(preferences.autoUploadLimitMb);
     settingsVisible.value = false;
     await nextTick();
@@ -254,12 +264,17 @@ async function saveSettings(): Promise<void> {
     settingsError.value = `无法保存设置：${errorMessage(error)}`;
   } finally {
     savingSettings.value = false;
+    if (session.state.settingsRequestController === controller) session.state.settingsRequestController = undefined;
   }
 }
 
 async function changePassword(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { settingsVisible, savingSettings, changingPassword, settingsError, passwordChangeError, currentPassword, newPassword } = session.state;
+
   const activeConfig = requireBridge().getActiveConfig();
-  if (!activeConfig || !requireBridge().getUsername() || changingPassword.value || savingSettings.value) return;
+  if (!activeConfig?.username || changingPassword.value || savingSettings.value) return;
   if (currentPassword.value.length < 6 || currentPassword.value.length > 128) {
     passwordChangeError.value = "请输入当前密码";
     return;
@@ -273,6 +288,9 @@ async function changePassword(): Promise<void> {
   }
 
   changingPassword.value = true;
+  const controller = new AbortController();
+  session.state.settingsRequestController = controller;
+  session.own(() => controller.abort());
   settingsError.value = "";
   try {
     await changeAccountPassword(
@@ -281,12 +299,13 @@ async function changePassword(): Promise<void> {
       activeConfig.sessionToken,
       currentPassword.value,
       newPassword.value,
+      controller.signal,
     );
     const config: SyncConfig = {
       ...activeConfig,
       sessionToken: "",
     };
-    await requireBridge().persistSyncConfig(config);
+    await session.start(() => requireBridge().persistSyncConfig(config));
     requireBridge().setActiveConfig(config);
     requireBridge().setUsername(config.username);
     requireBridge().disconnect();
@@ -301,10 +320,15 @@ async function changePassword(): Promise<void> {
     settingsError.value = `修改密码失败：${errorMessage(error)}`;
   } finally {
     changingPassword.value = false;
+    if (session.state.settingsRequestController === controller) session.state.settingsRequestController = undefined;
   }
 }
 
-async function signOut(): Promise<void> {
+async function signOut(switchingServer = false): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { settingsVisible, savingSettings, changingPassword, settingsError } = session.state;
+
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
   savingSettings.value = true;
@@ -313,7 +337,7 @@ async function signOut(): Promise<void> {
   // Rust 侧把空 token 视为未登录——没有活动档案，捕获与查询一并停用。
   const signedOutConfig: SyncConfig = { ...activeConfig, sessionToken: "" };
   try {
-    await requireBridge().persistSyncConfig(signedOutConfig);
+    await session.start(() => requireBridge().persistSyncConfig(signedOutConfig));
     requireBridge().setActiveConfig(undefined);
     requireBridge().setUsername("");
     requireBridge().disconnect();
@@ -321,12 +345,20 @@ async function signOut(): Promise<void> {
     // 返回主界面的入口。
     requireBridge().markSignedOut();
     settingsVisible.value = false;
-    requireBridge().openSetup({ config: signedOutConfig, focus: "server" });
+    requireBridge().openSetup({
+      config: switchingServer ? { ...signedOutConfig, serverAddress: "", username: "" } : signedOutConfig,
+      message: switchingServer ? "请输入新的服务器地址并登录" : "",
+      focus: "server",
+    });
   } catch (error) {
     settingsError.value = `无法退出账号：${errorMessage(error)}`;
   } finally {
     savingSettings.value = false;
   }
+}
+
+function switchServer(): Promise<void> {
+  return signOut(true);
 }
 
 export {
@@ -359,4 +391,6 @@ export {
   saveSettings,
   changePassword,
   signOut,
+  switchServer,
+  cancelSettingsRequests,
 };

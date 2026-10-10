@@ -1,5 +1,5 @@
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as nativeInvoke } from "@tauri-apps/api/core";
+import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { isMobile, isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
@@ -13,17 +13,17 @@ import type { LocalClipboardEntry, SavePreparation } from "../../types";
 /**
  * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块与 Rust 命令，历史失效走 refreshHistory。
  */
-export const activatingEntryIds = ref(new Set<string>());
-export const savingEntryId = ref("");
+export const activatingEntryIds = accountStateRef("activatingEntryIds");
+export const savingEntryId = accountStateRef("savingEntryId");
 const { platformCapabilities } = usePlatform();
-/** 剪贴板写入串行化：下载请求可同时发起，落剪贴板同一时刻只允许一个 invoke。 */
-let clipboardWriteChain: Promise<unknown> = Promise.resolve();
-
+const cancelSave = (saveId: string) => nativeInvoke("cancel_save_entry", { saveId }).catch(() => undefined);
 async function activateEntry(
   entry: LocalClipboardEntry | undefined,
   command: "copy_entry" | "paste_entry",
 ): Promise<void> {
-  if (!entry) return;
+  const session = getAccountSession();
+  if (!entry || !session) return;
+  const { activatingEntryIds } = session.state;
   if (isMobile.value && entry.kind !== "text") {
     await saveEntry(entry);
     return;
@@ -37,17 +37,17 @@ async function activateEntry(
   try {
     // Rust selects the native strategy. This downloads only what the current
     // platform must materialize before it can copy or paste the entry.
-    await ensurePasteReady(entry);
+    await ensurePasteReady(entry, session);
     // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
-    const write = clipboardWriteChain.then(() => invoke(command, { entryId: entry.id }));
-    clipboardWriteChain = write.catch(() => undefined);
+    const write = session.state.clipboardWriteChain.then(() => session.invoke(command, { entryId: entry.id }));
+    session.state.clipboardWriteChain = write.catch(() => undefined);
     await write;
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
     // 看不见，保留确认提示。
     if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
   } catch (error) {
     // 取消的提示已由取消方给出，原激活方静默收尾。
-    if (error instanceof DownloadCancelledError) return;
+    if (session.signal.aborted || error instanceof DownloadCancelledError) return;
     if (String(error).includes("clipboard entry was not found")) {
       refreshHistory();
       return;
@@ -67,6 +67,9 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
 }
 
 export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const { savingEntryId } = session.state;
   if (savingEntryId.value === entry.id) {
     if (await cancelEntryDownloads(entry.id) > 0) showToast("已取消下载", "info");
     return;
@@ -76,12 +79,14 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   let saveId: string | undefined;
   try {
     if (!platformCapabilities.value.nativeFileExport) {
-      await ensureLocalFiles(entry);
+      await ensureLocalFiles(entry, session);
       showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
-      const preparation = await invoke<SavePreparation | null>("prepare_save_entry", {
+      await session.start(() => session.ready);
+      const preparation = await session.acquire(nativeInvoke<SavePreparation | null>("prepare_save_entry", {
         entryId: entry.id,
-      });
+        sessionId: session.sessionId,
+      }), (value) => { if (value) void cancelSave(value.saveId); });
       if (!preparation) return;
       saveId = preparation.saveId;
 
@@ -90,17 +95,18 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
         await downloadFiles(entry.id, preparation.missing, {
           saveId: preparation.saveId,
           entryLabel: entry.content,
+          session,
         });
       }
 
-      const saved = await invoke<number>("finish_save_entry", { saveId: preparation.saveId });
+      const saved = await session.invoke<number>("finish_save_entry", { saveId: preparation.saveId });
       saveId = undefined;
       if (isMobile.value) showToast("已保存到所选目录", "success");
       else if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
-    if (saveId) await invoke("cancel_save_entry", { saveId }).catch(() => undefined);
-    if (error instanceof DownloadCancelledError) return;
+    if (saveId) await cancelSave(saveId);
+    if (session.signal.aborted || error instanceof DownloadCancelledError) return;
     showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
     savingEntryId.value = "";
@@ -126,9 +132,7 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
 }
 
-// Deletion is server-authoritative: the request goes out, and the local entry
-// is only cleaned up when the `clipboard.deleted` echo arrives (the server
-// broadcasts to every device, including the initiator).
+// Clean the originating archive immediately after the server confirms deletion.
 export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   const client = getSyncClient();
   if (!client) {
@@ -138,14 +142,7 @@ export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   try {
     await client.history.delete(entry.id);
   } catch (error) {
-    showToast(`删除失败：${errorMessage(error)}`, "error");
+    if (!client.session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error");
     return;
   }
-  // Idempotent fallback in case the echo is lost (e.g. disconnect right after
-  // the response); cleanup stays a no-op if the echo already handled it.
-  setTimeout(() => {
-    // The command emits `cliproam://history-changed`, which refreshes the
-    // views; no explicit invalidation needed here.
-    void invoke("remove_server_entry", { entryId: entry.id });
-  }, 5000);
 }

@@ -123,23 +123,23 @@ pub(crate) struct PendingRowView {
 pub(crate) fn peek_pending_entry(
     app: tauri::AppHandle,
     skip_seqs: Option<Vec<i64>>,
+    session_id: String,
 ) -> Result<Option<PendingRowView>, String> {
-    let skip = skip_seqs.unwrap_or_default();
     let state = app.state::<AppState>();
+    let account = state.account(&session_id)?;
+    let skip = skip_seqs.unwrap_or_default();
     // files 行解析前后各读一次队列，读时只短暂持锁。
-    let read = |state: &tauri::State<'_, AppState>| -> Result<Vec<PendingRow>, String> {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = state.active_history_path(&history)?;
-        state.with_database(&path, |connection| list_rows(connection))
+    let read = || -> Result<Vec<PendingRow>, String> {
+        account.with_database(|connection| list_rows(connection))
     };
-    for row in read(&state)? {
+    for row in read()? {
         if skip.contains(&row.seq) {
             continue;
         }
         if row.kind == "files" {
             // 解析大目录耗时，期间不持锁；结果写回本行，所以要重读。
-            resolve_entry_files(&app, row.seq)?;
-            let Some(resolved) = read(&state)?.into_iter().find(|resolved| resolved.seq == row.seq)
+            resolve_entry_files(&app, row.seq, &account)?;
+            let Some(resolved) = read()?.into_iter().find(|resolved| resolved.seq == row.seq)
             else {
                 continue;
             };
@@ -173,11 +173,10 @@ fn publish_extra(extra: &str) -> serde_json::Value {
 
 /// 删除一行队列。payload 只在本行，删即全部删除。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64) -> Result<(), String> {
+pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64, session_id: String) -> Result<(), String> {
+    let account = state.account(&session_id)?;
     {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = state.active_history_path(&history)?;
-        state.with_database(&path, |connection| {
+        account.with_database(|connection| {
             connection
                 .execute("DELETE FROM pending_entries WHERE seq = ?", params![seq])
                 .map_err(|error| error.to_string())
@@ -193,10 +192,9 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 
 /// 队列行数——侧边栏角标的数据，O(1)；进「待同步」视图才拉明细。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = state.active_history_path(&history)?;
-    state.with_database(&path, |connection| {
+pub(crate) fn count_pending_entries(state: State<'_, AppState>, session_id: String) -> Result<usize, String> {
+    let account = state.account(&session_id)?;
+    account.with_database(|connection| {
         connection
             .query_row("SELECT COUNT(*) FROM pending_entries", [], |row| {
                 row.get::<_, i64>(0)
@@ -208,14 +206,13 @@ pub(crate) fn count_pending_entries(state: State<'_, AppState>) -> Result<usize,
 
 /// 全部队列行，条目形态——待同步视图的数据。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn list_pending_entries(state: State<'_, AppState>) -> Result<Vec<ClipboardEntry>, String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let stored = crate::file::history_stored_ids(&state, &mut history)?;
-    let cache_dir = state.active_cache_dir(&history)?;
+pub(crate) fn list_pending_entries(state: State<'_, AppState>, session_id: String) -> Result<Vec<ClipboardEntry>, String> {
+    let account = state.account(&session_id)?;
+    let stored = account.with_database(|connection| crate::file::store::stored_file_ids(connection))?;
+    let cache_dir = account.cache_dir.clone();
     let blobs = crate::file::blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let path = state.active_history_path(&history)?;
-    let rows = state.with_database(&path, |connection| list_rows(connection))?;
+    let rows = account.with_database(|connection| list_rows(connection))?;
     let mut entries: Vec<ClipboardEntry> = rows.iter().map(row_entry).collect();
     for entry in &mut entries {
         refresh_summary(entry, &context);

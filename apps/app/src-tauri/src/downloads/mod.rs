@@ -21,18 +21,19 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     io::Write,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 
-use crate::history::clipboard::{missing_files, snapshot_entry, FilePasteStrategy};
+use crate::history::clipboard::{missing_files, snapshot_entry_for, FilePasteStrategy};
 use crate::content::MissingFile;
 use crate::content::entry_contents_of;
 use crate::file::{download_path, partial_download_path};
 use crate::store::select_entry;
 use crate::sync::server_http_url;
+use crate::account::AccountContext;
 use crate::utils::ensure_parent_dir;
 use crate::AppState;
 
@@ -114,6 +115,7 @@ pub(crate) enum DownloadTarget {
     Cache {
         /// The content-addressed name the verified `.part` is renamed to.
         final_path: std::path::PathBuf,
+        partial_path: std::path::PathBuf,
     },
     Save {
         save_id: String,
@@ -130,6 +132,8 @@ pub(crate) fn begin_transfer(
     file_id: &str,
     expected_size: u64,
     save_id: Option<&str>,
+    account: &AccountContext,
+    owner_id: Option<&str>,
 ) -> Result<(), String> {
     let (path, target) = if let Some(save_id) = save_id {
         let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
@@ -157,14 +161,15 @@ pub(crate) fn begin_transfer(
     } else {
         state.virtual_downloads.begin(file_id);
         let final_path = {
-            let history = state.history.lock().map_err(|error| error.to_string())?;
-            let cache_dir = state.active_cache_dir(&history)?;
+            let cache_dir = account.cache_dir.clone();
             download_path(&cache_dir, file_id).ok_or_else(|| "内容标识不合法".to_string())?
         };
         // Cache downloads stage at `.part` exactly like direct saves; the
         // digest-verified rename in `finish_transfer` is the promotion.
-        let path = partial_download_path(&final_path);
-        (path, DownloadTarget::Cache { final_path })
+        let path = if owner_id.is_some() {
+            final_path.with_extension(format!("{transfer_id}.part"))
+        } else { partial_download_path(&final_path) };
+        (path.clone(), DownloadTarget::Cache { final_path, partial_path: path })
     };
     let prepared = (|| {
         ensure_parent_dir(&path)?;
@@ -237,7 +242,7 @@ pub(crate) fn finish_transfer(state: &AppState, transfer_id: &str) -> Result<(),
     }
 
     match &download.target {
-        DownloadTarget::Cache { final_path } => {
+        DownloadTarget::Cache { final_path, .. } => {
             // Promote only now, after the size and digest checks above: a
             // truncated download must never enter the cache, where the blob
             // scan accepts any file whose name is a content id.
@@ -279,9 +284,9 @@ pub(crate) fn fail_download_target(state: &AppState, download: &DownloadState, m
 
 pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, message: &str) {
     match target {
-        DownloadTarget::Cache { final_path } => {
+        DownloadTarget::Cache { partial_path, .. } => {
             // Drop the staging file a cancelled or failed transfer leaves behind.
-            let _ = fs::remove_file(partial_download_path(final_path));
+            let _ = fs::remove_file(partial_path);
             state.virtual_downloads.fail(file_id, message.to_string());
         }
         DownloadTarget::Save { save_id, .. } => {
@@ -325,8 +330,8 @@ pub(crate) fn list_entry_files(
 /// each one into a download. With `paste_only` only the contents that must
 /// exist before this platform can start a paste are returned, so the frontend
 /// does not need to know which operating system it runs on.
-fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<Vec<MissingFile>, String> {
-    let snapshot = snapshot_entry(state, entry_id)?;
+fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool, account: &crate::account::AccountContext) -> Result<Vec<MissingFile>, String> {
+    let snapshot = snapshot_entry_for(entry_id, account)?;
     if paste_only
         && !FilePasteStrategy::for_entry(&snapshot.entry, state.use_virtual_files())
             .requires_complete_content(&snapshot.entry.kind)
@@ -337,13 +342,15 @@ fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool) -> Result<V
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
-    prepare_entry(&state, &entry_id, false)
+pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
+    let account = state.account(&session_id)?;
+    prepare_entry(&state, &entry_id, false, &account)
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) -> Result<Vec<MissingFile>, String> {
-    prepare_entry(&state, &entry_id, true)
+pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
+    let account = state.account(&session_id)?;
+    prepare_entry(&state, &entry_id, true, &account)
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +398,7 @@ pub(crate) enum DownloadStatus {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TaskSnapshot {
+    account_key: String,
     id: String,
     batch_id: u64,
     entry_id: String,
@@ -412,6 +420,8 @@ pub(crate) enum TaskOutcome {
 }
 
 struct DownloadTask {
+    account: Arc<AccountContext>,
+    owner_id: Option<String>,
     id: String,
     batch_id: u64,
     entry_id: String,
@@ -432,7 +442,7 @@ struct DownloaderInner {
     tasks: HashMap<String, DownloadTask>,
     queue: VecDeque<String>,
     /// `(saveId, fileId) -> taskId`，只含非终态任务。
-    inflight: HashMap<(Option<String>, String), String>,
+    inflight: HashMap<(String, Option<String>, Option<String>, String), String>,
     active: usize,
     next_batch_id: u64,
     last_progress_emit: Option<Instant>,
@@ -447,6 +457,8 @@ pub(crate) struct Downloader {
 
 /// worker 需要的任务参数；入队时一次性 clone 出去。
 struct TaskSpec {
+    account: Arc<AccountContext>,
+    owner_id: Option<String>,
     task_id: String,
     entry_id: String,
     file_id: String,
@@ -486,18 +498,22 @@ impl Downloader {
     /// 入队一批文件，返回每个任务的终态接收端（去重命中的返回共享任务）。
     pub(crate) fn enqueue_batch(
         &self,
+        account: &Arc<AccountContext>,
+        owner_id: Option<&str>,
         entry_id: &str,
         files: &[DownloadRequest],
         save_id: Option<String>,
         entry_label: Option<&str>,
-    ) -> Vec<(String, watch::Receiver<Option<TaskOutcome>>)> {
+    ) -> Result<Vec<(String, watch::Receiver<Option<TaskOutcome>>)>, String> {
         let mut watchers = Vec::with_capacity(files.len());
         {
             let mut inner = self.inner.lock().expect("downloader lock");
+            // Closing marks the context before taking this same queue lock.
+            if account.is_closed() { return Err("账号会话已结束".to_string()); }
             let batch_id = inner.next_batch_id;
             inner.next_batch_id += 1;
             for (index, file) in files.iter().enumerate() {
-                let key = (save_id.clone(), file.file_id.clone());
+                let key = (account.key.clone(), owner_id.map(str::to_string), save_id.clone(), file.file_id.clone());
                 if let Some(existing) = inner
                     .inflight
                     .get(&key)
@@ -513,6 +529,8 @@ impl Downloader {
                 inner.tasks.insert(
                     task_id.clone(),
                     DownloadTask {
+                        account: account.clone(),
+                        owner_id: owner_id.map(str::to_string),
                         id: task_id.clone(),
                         batch_id,
                         entry_id: entry_id.to_string(),
@@ -535,12 +553,18 @@ impl Downloader {
             self.pump_locked(&mut inner);
         }
         self.emit_snapshot();
-        watchers
+        Ok(watchers)
     }
 
     /// Windows 虚拟文件入口（virtual_files.rs 调用）；内部已去重，重复调用安全。
     pub(crate) fn enqueue_virtual(&self, entry_id: &str, file_id: &str, size: u64) {
-        self.enqueue_batch(
+        let state = self.app.state::<AppState>();
+        let Some(config) = state.sync_config.lock().ok().and_then(|config| config.clone()) else { return };
+        let Ok(account) = AccountContext::new(&state, config) else { return };
+        let account = Arc::new(account);
+        let _ = self.enqueue_batch(
+            &account,
+            None,
             entry_id,
             &[DownloadRequest { file_id: file_id.to_string(), size }],
             None,
@@ -555,13 +579,18 @@ impl Downloader {
     }
 
     /// 取消该条目所有非终态任务；返回取消数（0 = 没有下载在跑）。
-    pub(crate) fn cancel_entry(&self, entry_id: &str) -> usize {
-        self.cancel_matching(|task| task.entry_id == entry_id, "已取消")
+    pub(crate) fn cancel_entry(&self, entry_id: &str, account: &AccountContext) -> usize {
+        self.cancel_matching(|task| task.entry_id == entry_id && task.account.key == account.key, "已取消")
     }
 
     /// 中止全部活动任务并清空队列（断开同步 / 面板「全部取消」共用）。
     pub(crate) fn stop_all(&self, reason: &str) {
         self.cancel_matching(|_| true, reason);
+    }
+
+    pub(crate) fn stop_account(&self, account: &AccountContext, owner_id: Option<&str>, reason: &str) {
+        self.cancel_matching(|task| task.account.key == account.key
+            && owner_id.map_or(true, |owner| task.owner_id.as_deref() == Some(owner)), reason);
     }
 
     /// 另存会话被取消时（cancel_save_entry）停掉属于它的任务。
@@ -612,6 +641,8 @@ impl Downloader {
             task.started = true;
             task.status = DownloadStatus::Downloading;
             let spec = TaskSpec {
+                account: task.account.clone(),
+                owner_id: task.owner_id.clone(),
                 task_id: task_id.clone(),
                 entry_id: task.entry_id.clone(),
                 file_id: task.file_id.clone(),
@@ -634,7 +665,7 @@ impl Downloader {
             task.status = DownloadStatus::Cancelled;
             task.error = Some(reason.to_string());
             task.received_bytes = 0;
-            let key = (task.save_id.clone(), task.file_id.clone());
+            let key = (task.account.key.clone(), task.owner_id.clone(), task.save_id.clone(), task.file_id.clone());
             let _ = task.cancel_tx.send(true);
             // 终态立即 resolve 等待方；downloading 任务的传输清理由 worker 的
             // 取消路径异步完成（run_task 里 cancel_transfer）。
@@ -672,7 +703,7 @@ impl Downloader {
                     task.received_bytes = 0;
                 }
                 let started = task.started;
-                let key = (task.save_id.clone(), task.file_id.clone());
+                let key = (task.account.key.clone(), task.owner_id.clone(), task.save_id.clone(), task.file_id.clone());
                 let _ = task.outcome_tx.send(Some(outcome));
                 (started, key)
             };
@@ -747,6 +778,7 @@ impl Downloader {
         tasks
             .into_iter()
             .map(|task| TaskSnapshot {
+                account_key: task.account.key.clone(),
                 id: task.id.clone(),
                 batch_id: task.batch_id,
                 entry_id: task.entry_id.clone(),
@@ -837,7 +869,7 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
         return TaskOutcome::Cancelled("已取消".to_string());
     }
     if let Err(error) =
-        begin_transfer(&state, &spec.task_id, &spec.file_id, spec.size, spec.save_id.as_deref())
+        begin_transfer(&state, &spec.task_id, &spec.file_id, spec.size, spec.save_id.as_deref(), &spec.account, spec.owner_id.as_deref())
     {
         return TaskOutcome::Failed(error);
     }
@@ -876,6 +908,8 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
                     &spec.file_id,
                     spec.size,
                     spec.save_id.as_deref(),
+                    &spec.account,
+                    spec.owner_id.as_deref(),
                 ) {
                     return TaskOutcome::Failed(error);
                 }
@@ -890,20 +924,9 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
 /// 设备回填。流正常结束（可能不完整）返回 Ok，由外层判断是否重试。
 async fn pull_once(app: &AppHandle, spec: &TaskSpec, received: &mut u64) -> Result<(), PullEnd> {
     let state = app.state::<AppState>();
-    // 凭据现读：保证拿到最新 token；未登录直接失败。
-    let (http_url, token) = {
-        let config = state
-            .sync_config
-            .lock()
-            .map_err(|error| PullEnd::Failed(error.to_string()))?
-            .clone();
-        match config.filter(|config| !config.session_token.trim().is_empty()) {
-            Some(config) => (server_http_url(&config).map_err(PullEnd::Failed)?, config.session_token),
-            None => {
-                return Err(PullEnd::Failed("同步未登录，无法获取其他设备的文件".to_string()))
-            }
-        }
-    };
+    // Credentials are fixed when the account session enqueues this task.
+    let http_url = server_http_url(&spec.account.config).map_err(PullEnd::Failed)?;
+    let token = &spec.account.config.session_token;
     let client = state.downloader.client();
     let mut cancel_rx = spec.cancel_rx.clone();
     let response = tokio::select! {
@@ -990,9 +1013,11 @@ pub(crate) async fn download_files(
     files: Vec<DownloadRequest>,
     save_id: Option<String>,
     entry_label: Option<String>,
+    session_id: String,
 ) -> Result<BatchOutcome, String> {
+    let account = state.account(&session_id)?;
     let total = files.len();
-    let watchers = state.downloader.enqueue_batch(&entry_id, &files, save_id, entry_label.as_deref());
+    let watchers = state.downloader.enqueue_batch(&account, Some(&session_id), &entry_id, &files, save_id, entry_label.as_deref())?;
     let mut cancelled = false;
     let mut failed_count = 0usize;
     for (_, mut rx) in watchers {
@@ -1018,15 +1043,17 @@ pub(crate) fn cancel_download(state: State<'_, AppState>, task_id: String) -> Re
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn cancel_entry_downloads(state: State<'_, AppState>, entry_id: String) -> Result<usize, String> {
-    Ok(state.downloader.cancel_entry(&entry_id))
+pub(crate) fn cancel_entry_downloads(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<usize, String> {
+    let account = state.account(&session_id)?;
+    Ok(state.downloader.cancel_entry(&entry_id, &account))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn stop_all_downloads(state: State<'_, AppState>, reason: Option<String>) -> Result<(), String> {
+pub(crate) fn stop_all_downloads(state: State<'_, AppState>, reason: Option<String>, session_id: String) -> Result<(), String> {
+    let account = state.account(&session_id)?;
     state
         .downloader
-        .stop_all(reason.as_deref().unwrap_or("已取消"));
+        .stop_account(&account, None, reason.as_deref().unwrap_or("已取消"));
     Ok(())
 }
 

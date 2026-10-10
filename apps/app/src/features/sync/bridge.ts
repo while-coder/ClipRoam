@@ -1,4 +1,5 @@
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getAccountSession } from "./accountSession";
 import type { Device } from "@cliproam/protocol";
 
 /**
@@ -24,19 +25,29 @@ export function requestProxyDevices(): void {
 /** paste 窗口：监听设备广播；返回 unlisten 交给 unlisteners。 */
 export async function startPasteBridge(handlers: {
   onDevices: (devices: Device[]) => void;
+  onSessionChanged: () => void;
 }): Promise<UnlistenFn> {
-  return listen<{ devices: Device[] }>(SYNC_BRIDGE_DEVICES_EVENT, ({ payload }) => {
-    handlers.onDevices(payload.devices);
-  });
+  const sessionUnlisten = await listen("cliproam://sync-config-changed", handlers.onSessionChanged);
+  try {
+    const devicesUnlisten = await listen<{ devices: Device[]; accountKey: string }>(SYNC_BRIDGE_DEVICES_EVENT, ({ payload }) => {
+      if (payload.accountKey === getAccountSession()?.accountKey) handlers.onDevices(payload.devices);
+    });
+    return () => { sessionUnlisten(); devicesUnlisten(); };
+  } catch (error) {
+    sessionUnlisten();
+    throw error;
+  }
 }
 
 /** 主窗口：应答 paste 的设备请求，并借机把当前设备表推过去。 */
 export async function startSyncBridgeService(deps: {
   getDevices: () => Device[];
+  accountKey: string;
 }): Promise<UnlistenFn> {
   return listen<DevicesRequest>(SYNC_BRIDGE_DEVICES_REQUEST_EVENT, () => {
     void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, {
       devices: deps.getDevices(),
+      accountKey: deps.accountKey,
     }).catch(() => undefined);
   });
 }

@@ -41,6 +41,19 @@ pub(crate) fn start_clipboard_monitor(app: tauri::AppHandle) {
     }
 }
 
+pub(crate) fn resolve_picker_paths(
+    app: &tauri::AppHandle,
+    paths: Vec<tauri_plugin_dialog::FilePath>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    #[cfg(target_os = "android")]
+    { mobile::android::resolve_picker_paths(app, paths) }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        paths.into_iter().map(|path| path.into_path().map_err(|error| error.to_string())).collect()
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 pub(crate) fn export_saved_directory(_app: &tauri::AppHandle, _source: &std::path::Path, _uri: &str) -> Result<usize, String> {
     Err("当前平台不支持系统目录导出".to_string())

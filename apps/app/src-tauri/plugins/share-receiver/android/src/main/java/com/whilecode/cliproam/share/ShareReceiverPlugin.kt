@@ -37,6 +37,12 @@ class ExportDirectoryArgs {
     lateinit var uri: String
 }
 
+@InvokeArg
+class CopyDocumentsArgs {
+    lateinit var uris: List<String>
+    lateinit var directory: String
+}
+
 @TauriPlugin
 class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -63,6 +69,38 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
             startActivityForResult(invoke, intent, "directoryPickerResult")
         } catch (error: Exception) {
             invoke.reject(error.message ?: "无法打开目录选择框")
+        }
+    }
+
+    @Command
+    fun copyDocuments(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyDocumentsArgs::class.java)
+        scope.launch {
+            var directory: File? = null
+            try {
+                val targetDirectory = File(args.directory).canonicalFile
+                require(targetDirectory.path.startsWith(activity.filesDir.canonicalPath + File.separator)) {
+                    "文件导入目录必须位于应用数据目录中"
+                }
+                require(!targetDirectory.exists() && targetDirectory.mkdirs()) { "无法创建文件导入目录" }
+                directory = targetDirectory
+                val paths = args.uris.mapIndexed { index, value ->
+                    val uri = Uri.parse(value)
+                    require(uri.scheme == "content") { "不支持的文件地址" }
+                    val mime = activity.contentResolver.getType(uri) ?: "application/octet-stream"
+                    val name = uniqueName(targetDirectory, displayName(uri, mime, index))
+                    val target = File(targetDirectory, name)
+                    activity.contentResolver.openInputStream(uri).use { input ->
+                        requireNotNull(input) { "无法读取文件：$name" }
+                        target.outputStream().use(input::copyTo)
+                    }
+                    target.absolutePath
+                }
+                invoke.resolveObject(mapOf("paths" to paths))
+            } catch (error: Exception) {
+                directory?.deleteRecursively()
+                invoke.reject(error.message ?: "无法导入所选文件")
+            }
         }
     }
 

@@ -427,13 +427,7 @@ pub(crate) fn capture_files_from_picker(app: AppHandle, mode: String) -> Result<
         other => return Err(format!("未知的选择模式：{other}")),
     }
     let picked = receiver.recv().map_err(|error| error.to_string())?;
-    let paths: Vec<PathBuf> = picked
-        .unwrap_or_default()
-        .into_iter()
-        // content:// 这类 URI 转不成真实路径（Android SAF 可能返回），而
-        // collect_tree/哈希/分块读取都要求文件系统路径，只能丢弃。
-        .filter_map(|path| path.into_path().ok())
-        .collect();
+    let paths = crate::platforms::resolve_picker_paths(&app, picked.unwrap_or_default())?;
     if paths.is_empty() {
         return Ok(false);
     }

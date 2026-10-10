@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::content::entry_contents_of;
-use crate::store::{HistoryData, select_entries};
+use crate::store::select_entries;
 use crate::{utils::placeholders, AppState};
 
 /// One `/files/query` answer, straight off the wire (`FileStatus` in the
@@ -93,37 +93,18 @@ fn upsert_status_rows(connection: &Connection, statuses: &[FileStatusInput]) -> 
     Ok(())
 }
 
-/// The cached view of [`stored_file_ids`], loaded from the table on first
-/// use. All callers hold the history lock, so `&mut HistoryData` is free to
-/// fill in.
-pub(crate) fn history_stored_ids(
-    state: &AppState,
-    history: &mut HistoryData,
-) -> Result<HashSet<String>, String> {
-    if history.stored_file_ids.is_none() {
-        let path = state.active_history_path(history)?;
-        let ids = state.with_database(&path, |connection| stored_file_ids(connection))?;
-        history.stored_file_ids = Some(ids);
-    }
-    Ok(history
-        .stored_file_ids
-        .as_ref()
-        .expect("the set was loaded above when absent")
-        .clone())
-}
-
 /// From this page's cached entry details, query files that are unknown or
 /// still marked unstored. Confirmed stored files need no repeat HTTP request.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn find_unknown_file_ids(
     state: State<'_, AppState>,
     entry_ids: Vec<String>,
+    session_id: String,
 ) -> Result<Vec<String>, String> {
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let referenced = entry_file_ids(&state, &history, &entry_ids)?;
+    let account = state.account(&session_id)?;
+    let referenced = entry_file_ids(&account, &entry_ids)?;
     let referenced: Vec<String> = referenced.into_iter().collect();
-    let path = state.active_history_path(&history)?;
-    let rows = state.with_database(&path, |connection| file_rows(connection, &referenced))?;
+    let rows = account.with_database(|connection| file_rows(connection, &referenced))?;
     let mut stored = HashSet::new();
     for (file_id, is_stored) in rows {
         if is_stored {
@@ -140,31 +121,21 @@ pub(crate) fn find_unknown_file_ids(
 pub(crate) fn upsert_server_files(
     state: State<'_, AppState>,
     statuses: Vec<FileStatusInput>,
+    session_id: String,
 ) -> Result<(), String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = state.active_history_path(&history)?;
-    state.with_database(&path, |connection| upsert_status_rows(connection, &statuses))?;
-    if let Some(stored) = &mut history.stored_file_ids {
-        for status in &statuses {
-            if status.stored {
-                stored.insert(status.file_id.clone());
-            }
-        }
-    }
-    Ok(())
+    let account = state.account(&session_id)?;
+    account.with_database(|connection| upsert_status_rows(connection, &statuses))
 }
 
 /// Read full cached details only for this page; file trees stay Rust-side.
 fn entry_file_ids(
-    state: &AppState,
-    history: &crate::store::HistoryData,
+    account: &crate::account::AccountContext,
     entry_ids: &[String],
 ) -> Result<HashSet<String>, String> {
     if entry_ids.is_empty() { return Ok(HashSet::new()); }
-    let path = state.active_history_path(history)?;
     let where_sql = format!("WHERE id IN ({})", placeholders(entry_ids.len()));
     let values = entry_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
-    state.with_database(&path, |connection| {
+    account.with_database(|connection| {
         let entries = select_entries(connection, &where_sql, "", &values)?;
         Ok(entries.iter().flat_map(entry_contents_of).map(|(id, _)| id).collect())
     })

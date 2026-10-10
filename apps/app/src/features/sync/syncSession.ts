@@ -1,4 +1,6 @@
 import { ref } from "vue";
+import { AccountSession, getAccountSession, replaceAccountSession } from "./accountSession";
+export { archiveKeyFor } from "./accountSession";
 import { invoke } from "@tauri-apps/api/core";
 import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
@@ -14,27 +16,22 @@ let activePreferences: AccountPreferences = defaultAccountPreferences();
 
 // 引用恒等是 stale check 的依据（activateRemoteClipboard），访问器不做任何拷贝。
 export function getActiveConfig(): SyncConfig | undefined {
-  return activeSyncConfig;
+  return getAccountSession()?.config ?? activeSyncConfig;
 }
 
 export function setActiveConfig(config: SyncConfig | undefined): void {
+  if (getAccountSession()?.config !== config) replaceAccountSession();
   activeSyncConfig = config;
 }
 
 export function getActivePreferences(): AccountPreferences {
-  return activePreferences;
+  return getAccountSession()?.preferences ?? activePreferences;
 }
 
 export function setActivePreferences(preferences: AccountPreferences): void {
   activePreferences = preferences;
-}
-
-/** 与 Rust 侧 history_key_for_config 对齐的档案键，仅用于判断是否重登同一账号。 */
-export function archiveKeyFor(config: SyncConfig | undefined): string {
-  const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";
-  const username = config?.username.trim().toLowerCase() ?? "";
-  if (!username) return "";
-  return `account:${serverAddress}:${username}`;
+  const session = getAccountSession();
+  if (session) session.preferences = preferences;
 }
 
 export async function loadSyncConfig(): Promise<SyncConfig | null> {
@@ -66,6 +63,14 @@ export async function loadAccountPreferences(): Promise<AccountPreferences> {
 }
 
 export async function persistAccountPreferences(preferences: AccountPreferences): Promise<void> {
-  await invoke("save_account_preferences", { preferences });
-  activePreferences = preferences;
+  const session = getAccountSession();
+  if (session) await session.invoke("save_account_preferences", { preferences });
+  else {
+    if (!activeSyncConfig) throw new Error("同步账号未登录");
+    const temporarySession = new AccountSession(activeSyncConfig, preferences);
+    try { await temporarySession.invoke("save_account_preferences", { preferences }); }
+    finally { temporarySession.dispose(); }
+  }
+  if (session) session.preferences = preferences;
+  if (!session || getAccountSession() === session) activePreferences = preferences;
 }

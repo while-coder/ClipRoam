@@ -1,4 +1,4 @@
-import { computed, nextTick, ref, watch, type Ref, type WatchSource } from "vue";
+import { computed, nextTick, onScopeDispose, ref, watch, type Ref, type WatchSource } from "vue";
 import { PAGE_SIZE } from "../../utils/constants";
 import { errorMessage } from "../../utils/error";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
@@ -76,6 +76,8 @@ export function useHistoryManifest(options: ManifestOptions) {
     total.value = 0;
     entries.value = [];
   }
+
+  onScopeDispose(() => { fetchToken += 1; });
 
   watch(options.filterSources, () => { void fetch(1, true); });
   // `immediate` covers the first mount and re-mounts of the view; later bumps

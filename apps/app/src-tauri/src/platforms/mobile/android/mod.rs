@@ -39,6 +39,28 @@ pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
     builder.plugin(tauri_plugin_cliproam_share_receiver::init())
 }
 
+pub(crate) fn resolve_picker_paths(app: &AppHandle, selected: Vec<tauri_plugin_dialog::FilePath>) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    let mut uris = Vec::new();
+    for path in selected {
+        match path {
+            tauri_plugin_dialog::FilePath::Url(uri) if uri.scheme() == "content" => uris.push(uri.to_string()),
+            other => paths.push(other.into_path().map_err(|error| error.to_string())?),
+        }
+    }
+    if !uris.is_empty() {
+        let state = app.state::<AppState>();
+        let directory = {
+            let history = state.history.lock().map_err(|error| error.to_string())?;
+            state.active_cache_dir(&history)?.join("picked").join(uuid::Uuid::new_v4().to_string())
+        };
+        let imported = app.share_receiver().copy_documents(&uris, &directory.to_string_lossy())
+            .map_err(|error| error.to_string())?;
+        paths.extend(imported.paths.into_iter().map(PathBuf::from));
+    }
+    Ok(paths)
+}
+
 /// 分享项先复制到应用缓存，再按本地捕获一样导入历史；分享源文件可能
 /// 随时被系统回收，不能直接引用。
 fn persist_shared_files(app: &AppHandle, share: &PendingShare) -> Result<Vec<PathBuf>, String> {

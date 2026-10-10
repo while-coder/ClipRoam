@@ -1,11 +1,11 @@
 import { FILE_CHUNK_SIZE, type FileRelayRequest } from "@cliproam/protocol";
-import { invoke } from "@tauri-apps/api/core";
+import type { AccountSession } from "../sync/accountSession";
 import { errorMessageFromBody, type SyncRequester } from "../sync/syncHttp";
 import { base64ToBytes } from "../../utils/bytes";
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const SERVE_RETRY_BACKOFF_MS = 60_000;
 type RelayUploaderDeps = {
-  isStopped(): boolean;
+  session: AccountSession;
   onServeTasksChanged?: () => void;
   resolveEntryLabel?: (entryId: string) => Promise<string | undefined>;
 };
@@ -38,8 +38,11 @@ export class RelayUploader {
   // requester's parked relay pipe. Devices without the bytes stay quiet; the
   // sender's own failure backoff is keyed by content so a file we cannot
   // provide is not re-probed per session.
-  async serveRelayRequest(request: FileRelayRequest): Promise<void> {
-    if (this.deps.isStopped()) return;
+  serveRelayRequest(request: FileRelayRequest): Promise<void> {
+    return this.deps.session.start(() => this.#serveRelayRequest(request));
+  }
+
+  async #serveRelayRequest(request: FileRelayRequest): Promise<void> {
     if (this.#servingFiles.has(request.sessionId)) return;
     const failedAt = this.#failedServes.get(request.fileId);
     if (failedAt !== undefined && Date.now() - failedAt < SERVE_RETRY_BACKOFF_MS) return;
@@ -47,7 +50,7 @@ export class RelayUploader {
     // content stays quiet instead of poisoning the session for another holder.
     // 探测失败不记任务——「上传」页只收本机真正待发送的请求。
     if (request.size > 0) {
-      const probe = await invoke<string>("read_upload_chunk", {
+      const probe = await this.deps.session.invoke<string>("read_upload_chunk", {
         fileId: request.fileId,
         offset: 0,
         length: 1,
@@ -63,9 +66,8 @@ export class RelayUploader {
       this.#updateServeTask(task, { status: "serving" });
       let offset = 0;
       for (;;) {
-        if (this.deps.isStopped()) throw new Error("同步已断开");
         const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
-        const data = await invoke<string>("read_upload_chunk", {
+        const data = await this.deps.session.invoke<string>("read_upload_chunk", {
           fileId: request.fileId,
           offset,
           length,

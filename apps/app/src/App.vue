@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,8 +17,7 @@ import {
 } from "lucide-vue-next";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount } from "./features/sync/syncSetup";
-import { startPasteBridge, startSyncBridgeService } from "./features/sync/bridge";
-import type { DownloadTaskSnapshot } from "./features/downloads/useDownloads";
+import { startPasteBridge } from "./features/sync/bridge";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
@@ -26,7 +25,7 @@ import {
 } from "./features/quick-paste/quickPasteShortcut";
 import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
-import { initSettings } from "./features/settings/useSettings";
+import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { openSettings as openDesktopSettings, settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
@@ -49,7 +48,7 @@ import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
 import { isToastWindow, isPasteWindow, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
-import { bumpLocalClipboardRevision } from "./features/history/remoteClipboard";
+import { activeAccountSession } from "./features/sync/accountSession";
 import {
   archiveKeyFor,
   currentUsername,
@@ -80,7 +79,6 @@ import {
   focusSearchInput,
   historyRevision,
   initHistorySync,
-  refreshHistory,
 } from "./features/history/useHistorySync";
 import {
   cancelPendingRefresh,
@@ -90,14 +88,12 @@ import {
   pendingEntries,
   refreshPending,
   refreshPendingCount,
-  refreshPendingEntries,
   removePendingEntry,
 } from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
   downloadProgressByEntryId,
   downloadTasks,
-  applyDownloadSnapshot,
   refreshDownloadTasks,
   cancelDownload,
   stopAllDownloads,
@@ -116,11 +112,8 @@ import type {
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
-const mobileSettingsVisible = ref(false);
-
 function openSettings(): void {
-  if (isMobile.value) mobileSettingsVisible.value = true;
-  else openDesktopSettings();
+  openDesktopSettings();
 }
 
 const mobilePages = computed(() => [
@@ -133,17 +126,39 @@ const mobilePages = computed(() => [
 const { initUpdaterVersion } = useUpdater();
 
 const historyView = ref<InstanceType<typeof HistoryView>>();
+let pasteSessionReloadRevision = 0;
+
+async function reloadPasteSession(): Promise<void> {
+  const revision = ++pasteSessionReloadRevision;
+  stopSyncClient({ activeOnly: true });
+  setActiveConfig(undefined);
+  currentUsername.value = "";
+  hasSavedSyncConfig.value = false;
+  setupVisible.value = false;
+  const config = await loadSyncConfig();
+  if (revision !== pasteSessionReloadRevision) return;
+  const preferences = await loadAccountPreferences();
+  if (revision !== pasteSessionReloadRevision) return;
+  setActiveConfig(config ?? undefined);
+  setActivePreferences(preferences);
+  currentUsername.value = config?.username ?? "";
+  hasSavedSyncConfig.value = Boolean(config?.sessionToken);
+  if (config?.sessionToken) await startSync(config);
+}
+
+function reloadPasteSessionFromEvent(): void {
+  void reloadPasteSession().catch((error) => showToast(`同步会话读取失败：${errorMessage(error)}`, "error"));
+}
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
 const currentTime = ref(Date.now());
 const initializing = ref(true);
 const setupVisible = ref(false);
 const setupError = ref("");
 const testingConnection = ref(false);
+let authenticationController: AbortController | undefined;
 const importingShare = ref(false);
 let unlisteners: UnlistenFn[] = [];
 let ageRefreshTimer: number | undefined;
-/** 「下载」页可见时的快照轮询兜底；事件流丢包时列表最多滞后一个周期。 */
-let downloadPollTimer: number | undefined;
 let shareReceiverListener: PluginListener | undefined;
 let shareConsumeRequested = false;
 
@@ -176,7 +191,6 @@ initSettings({
   getActiveConfig,
   setActiveConfig,
   getActivePreferences,
-  getUsername: () => currentUsername.value,
   setUsername: (name) => { currentUsername.value = name; },
   persistSyncConfig,
   persistAccountPreferences,
@@ -197,10 +211,6 @@ initSettings({
     });
   },
   focusSearchInput,
-});
-
-watch(activeView, (view) => {
-  if (view === "pending-upload") void refreshPendingEntries();
 });
 
 function shareImportMessage(summary: ShareImportSummary): string {
@@ -244,6 +254,8 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
   const { serverAddress, username, password, serverProtocol } = draft;
 
   testingConnection.value = true;
+  const controller = new AbortController();
+  authenticationController = controller;
   let accountCreated = false;
   try {
     const device = await getDevice();
@@ -254,6 +266,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       draft.authMode,
       serverProtocol,
       device,
+      controller.signal,
     );
     accountCreated = draft.authMode === "register";
     // 推送通道不设登录门槛：连不上只影响实时推送，登录后的常驻连接会自行
@@ -311,6 +324,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     }
   } finally {
     testingConnection.value = false;
+    if (authenticationController === controller) authenticationController = undefined;
   }
 }
 
@@ -361,25 +375,16 @@ function readableStartupError(error: unknown): string {
 async function initializeTauriServices(): Promise<void> {
   const listenerResults = await Promise.allSettled([
     startToastWindowListener(),
-    listen("cliproam://entry-created", () => {
-      bumpLocalClipboardRevision();
-      refreshPending();
-    }),
-    listen("cliproam://pending-changed", refreshPending),
-    listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
     isPasteWindow
-      ? startPasteBridge({ onDevices: rememberDevices })
-      : startSyncBridgeService({ getDevices: () => Object.values(devicesById.value) }),
-    // 下载任务快照由 Rust 全局 Downloader 推送（main / paste 共享同一实例）；
-    // Windows 虚拟文件的按需拉取也已在 Rust 侧直接入队，前端不再经手。
-    listen<DownloadTaskSnapshot[]>("cliproam://download-changed", ({ payload }) => {
-      applyDownloadSnapshot(payload);
-    }),
+      ? startPasteBridge({ onDevices: rememberDevices, onSessionChanged: reloadPasteSessionFromEvent })
+      : Promise.resolve(() => undefined),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
     // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused) void refreshDownloadTasks().catch(() => undefined);
+      if (focused) {
+        void refreshDownloadTasks().catch(() => undefined);
+      }
     }),
   ]);
   unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -387,14 +392,11 @@ async function initializeTauriServices(): Promise<void> {
   if (listenerError?.status === "rejected") {
     showToast(`部分后台事件监听初始化失败：${String(listenerError.reason)}`, "error");
   }
+  // Read after subscribing so a login during startup cannot be missed.
+  if (isPasteWindow) await reloadPasteSession();
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
   await refreshDownloadTasks().catch(() => undefined);
-  // 「下载」页可见时的轮询兜底：隐藏窗口期间丢过事件也能在两个周期内追平。
-  downloadPollTimer = window.setInterval(() => {
-    if (activeView.value === "downloads") void refreshDownloadTasks().catch(() => undefined);
-  }, 2000);
-
   if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
     const registered = await initializeQuickPasteShortcut();
     if (!registered) showToast(quickPasteShortcutStatus.value.message, "error");
@@ -459,7 +461,7 @@ onMounted(async () => {
     currentUsername.value = config.username;
     // 登录态完整才允许从登录页返回主界面；token 过期重登时保留返回入口。
     hasSavedSyncConfig.value = Boolean(config.username && config.sessionToken);
-    if (!config.username || !config.sessionToken) setupVisible.value = true;
+    if (!config.username || !config.sessionToken) setupVisible.value = !isPasteWindow;
   }
   initializing.value = false;
 
@@ -476,7 +478,7 @@ onMounted(async () => {
     setupWizard.value?.focusServerInput();
   } else if (config?.username && config.sessionToken) {
     try {
-      await startSync(config);
+      if (!isPasteWindow) await startSync(config);
     } catch (error) {
       showToast(`同步初始化失败：${errorMessage(error)}`, "error");
     }
@@ -485,8 +487,10 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  authenticationController?.abort();
+  cancelSettingsRequests();
+  pasteSessionReloadRevision += 1;
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
-  if (downloadPollTimer !== undefined) window.clearInterval(downloadPollTimer);
   disposeToast();
   cancelRefreshBurst();
   cancelPendingRefresh();
@@ -522,7 +526,7 @@ onBeforeUnmount(() => {
     />
   </main>
 
-  <main v-else class="app-shell" :class="{ 'paste-app': isPasteWindow, 'mobile-app': isMobile }">
+  <main v-else :key="activeAccountSession?.id ?? 'signed-out'" class="app-shell" :class="{ 'paste-app': isPasteWindow, 'mobile-app': isMobile }">
     <aside v-if="!isPasteWindow && !isMobile" class="sidebar" aria-label="主导航">
       <header class="sidebar-brand">
         <span class="brand-mark"><Clipboard :size="17" /></span>
@@ -655,8 +659,8 @@ onBeforeUnmount(() => {
       :current-username="currentUsername"
     />
     <MobileSettingsDialog
-      v-if="!isPasteWindow && isMobile && mobileSettingsVisible"
-      @close="mobileSettingsVisible = false"
+      v-if="!isPasteWindow && isMobile && settingsVisible"
+      :current-username="currentUsername"
     />
 
   </main>

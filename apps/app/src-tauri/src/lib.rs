@@ -1,4 +1,5 @@
 mod app_shell;
+mod account;
 mod content;
 mod history;
 mod file;
@@ -13,7 +14,7 @@ mod utils;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread,
 };
 use rusqlite::Connection;
@@ -29,6 +30,7 @@ use downloads::{DownloadState, Downloader, VirtualDownloads};
 use downloads::save::SaveSession;
 
 struct AppState {
+    account_sessions: Mutex<HashMap<String, std::sync::Arc<account::AccountContext>>>,
     history: Mutex<HistoryData>,
     /// Machine-level device identity file (`device.json`), shared by every
     /// history profile; resolved lazily by `get_device_id`.
@@ -51,15 +53,20 @@ struct AppState {
 }
 
 impl AppState {
-    /// Runs `write` with the pooled connection of a history database. Lock
-    /// order: take this only while already holding `history`, never before it.
+    fn database_connection(&self, path: &Path) -> Result<Arc<Mutex<Connection>>, String> {
+        self.database_pool.lock().map_err(|error| error.to_string())?.connection(path)
+    }
+
+    /// Resolve the pool briefly, then lock only this account's connection.
+    /// When both locks are needed, take `history` before the connection.
     fn with_database<T>(
         &self,
         path: &Path,
         write: impl FnOnce(&mut Connection) -> Result<T, String>,
     ) -> Result<T, String> {
-        let mut pool = self.database_pool.lock().map_err(|error| error.to_string())?;
-        write(pool.connection(path)?)
+        let database = self.database_connection(path)?;
+        let mut connection = database.lock().map_err(|error| error.to_string())?;
+        write(&mut connection)
     }
 
     /// 活动档案的数据库路径；未登录时没有档案可用。
@@ -138,6 +145,7 @@ pub fn run() {
                 None => (HistoryData::default(), sync::AccountPreferences::default()),
             };
             app.manage(AppState {
+                account_sessions: Mutex::new(HashMap::new()),
                 history: Mutex::new(history),
                 device_config_path,
                 histories_dir,
@@ -185,6 +193,8 @@ pub fn run() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            account::open_account_session,
+            account::close_account_session,
             app_shell::get_platform_capabilities,
             pending_upload::capture::capture_current_clipboard_text,
             pending_upload::capture::capture_files_from_picker,

@@ -4,21 +4,14 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use super::{list_rows, row_entry};
 use crate::content::{
     describe_roots, tree_parent_at_path, ClipboardEntry, ClipboardEntryExtra, TreeNode,
 };
 use crate::file::{cached_file_hash, remember_file_hash};
-use crate::store::history_path_for_key;
 use crate::utils::hash_file;
-use crate::AppState;
-
-/// 档案切换守卫的统一判定：锁内的活动键必须仍是捕获时记下的键。
-fn still_active(history: &crate::store::HistoryData, history_key: &str) -> bool {
-    history.active_history.as_deref() == Some(history_key)
-}
 
 /// How many freshly hashed paths are folded into the row before the UI is
 /// told about the progress.
@@ -34,12 +27,9 @@ struct PendingHash {
 /// Resolves every still-unresolved content id of a `files` queue row, folding
 /// the results back into the row itself. Runs when the upload queue's drain
 /// reaches the row. Idempotent: already-resolved sources are skipped.
-pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let (history_key, mut entry) = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = state.active_history_path(&history)?;
-        let Some(row) = state.with_database(&path, |connection| {
+pub fn resolve_entry_files(app: &AppHandle, seq: i64, account: &crate::account::AccountContext) -> Result<(), String> {
+    let mut entry = {
+        let Some(row) = account.with_database(|connection| {
             Ok(list_rows(connection)?
                 .into_iter()
                 .find(|row| row.seq == seq))
@@ -47,7 +37,7 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
         else {
             return Ok(());
         };
-        (history.active_history.clone(), row_entry(&row))
+        row_entry(&row)
     };
     let pending = entry
         .sources
@@ -65,18 +55,15 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
         return Ok(());
     }
 
-    // The hash cache shares the pooled database connection; each lookup only
+    // The hash cache shares the account database connection; each lookup only
     // holds it briefly, so hashing a large file never blocks a history write.
-    let history_key = history_key.ok_or("同步账号未登录，历史档案不可用")?;
-    let hash_database = history_path_for_key(&state.histories_dir, &history_key);
     let mut batch = Vec::new();
     for item in pending {
         let modified_at = item.modified_at.map(|value| value as i64).unwrap_or(-1);
-        // The pool lock only covers the two quick cache reads/writes; the hash
+        // The connection lock only covers the two quick cache reads/writes; the hash
         // itself runs unlocked — hashing a large file takes a while and every
-        // database command queues behind the pool.
-        let cached = state
-            .with_database(&hash_database, |connection| {
+        // command for this account queues behind the connection.
+        let cached = account.with_database(|connection| {
                 Ok(cached_file_hash(connection, &item.source, item.size, modified_at))
             })
             .ok()
@@ -87,7 +74,7 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
                 // A file that vanished between copy and hash hashes to None
                 // and drops out of the tree.
                 hash_file(Path::new(&item.source)).ok().map(|hashed| {
-                    let _ = state.with_database(&hash_database, |connection| {
+                    let _ = account.with_database(|connection| {
                         remember_file_hash(connection, &item.source, item.size, modified_at, &hashed);
                         Ok(())
                     });
@@ -97,12 +84,12 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
         };
         batch.push((item.path, file_id));
         if batch.len() >= HASH_PROGRESS_BATCH {
-            apply_hashes(app, seq, &history_key, &mut entry, &batch)?;
+            apply_hashes(app, seq, account, &mut entry, &batch)?;
             batch.clear();
         }
     }
     if !batch.is_empty() {
-        apply_hashes(app, seq, &history_key, &mut entry, &batch)?;
+        apply_hashes(app, seq, account, &mut entry, &batch)?;
     }
     Ok(())
 }
@@ -113,11 +100,10 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64) -> Result<(), String> {
 fn apply_hashes(
     app: &AppHandle,
     seq: i64,
-    history_key: &str,
+    account: &crate::account::AccountContext,
     entry: &mut ClipboardEntry,
     resolved: &[(String, Option<String>)],
 ) -> Result<(), String> {
-    let state = app.state::<AppState>();
     let hashes = resolved
         .iter()
         .map(|(path, file_id)| (path.as_str(), file_id.as_deref()))
@@ -156,15 +142,7 @@ fn apply_hashes(
     // sources 已并入 extra（localSources），随 extra 一起写回。
     let extra = ClipboardEntryExtra::of(entry).json()?;
     {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        // Hashing a large tree takes seconds, and the profile can switch in
-        // that window: the UPDATE must not land on the new profile's queue
-        // (same seq, unrelated row). Same guard capture paths use.
-        if !still_active(&history, &history_key) {
-            return Err("活动档案已切换，放弃写回解析结果".to_string());
-        }
-        let path = state.active_history_path(&history)?;
-        state.with_database(&path, |connection| {
+        account.with_database(|connection| {
             connection
                 .execute(
                     "UPDATE pending_entries SET content = ?, extra = ? WHERE seq = ?",

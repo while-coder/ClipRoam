@@ -8,25 +8,25 @@ use crate::store::{delete_entries_by_ids, upsert_entry_row, with_transaction};
 use crate::AppState;
 
 /// Reconciling a fresh install can deliver hundreds of server entries at once;
-/// a single lock, save and event keeps that from locking up the windows.
+/// one archive-bound transaction and event avoid repeated window refreshes.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn upsert_server_entries(
     app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<ClipboardEntry>,
+    session_id: String,
 ) -> Result<(), String> {
+    let account = state.account(&session_id)?;
     if entries.is_empty() {
         return Ok(());
     }
     {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let history_path = state.active_history_path(&history)?;
         // The rows go in ascending created_at order, so within one millisecond
         // the newest insert gets the highest rowid and the created_ms DESC,
         // rowid DESC index yields a stable newest-first order.
         let mut upserts = entries;
         upserts.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-        state.with_database(&history_path, |connection| {
+        account.with_database(|connection| {
             with_transaction(connection, |transaction| {
                 for entry in &upserts {
                     upsert_entry_row(transaction, entry)?;
@@ -42,19 +42,21 @@ pub(crate) fn upsert_server_entries(
 /// Applies a server-confirmed deletion: drops the entry, then frees the blobs
 /// it referenced.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
+pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<(), String> {
+    let account = state.account(&session_id)?;
     {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let path = state.active_history_path(&history)?;
-        state.with_database(&path, |connection| {
+        // Serialize garbage collection with local captures; the target archive
+        // still comes exclusively from the caller's context, never the active one.
+        let _history = state.history.lock().map_err(|error| error.to_string())?;
+        account.with_database(|connection| {
             with_transaction(connection, |transaction| {
                 delete_entries_by_ids(transaction, std::slice::from_ref(&entry_id))?;
                 Ok(())
             })
         })?;
         // Dropping references is what frees disk space, so the sweep runs here.
-        let cache_dir = state.active_cache_dir(&history)?;
-        let _ = state.with_database(&path, |connection| {
+        let cache_dir = account.cache_dir.clone();
+        let _ = account.with_database(|connection| {
             collect_local_garbage(connection, &cache_dir)
         });
     }

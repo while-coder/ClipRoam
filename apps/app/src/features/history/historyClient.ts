@@ -1,5 +1,5 @@
 import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type ClipboardManifestEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
-import { invoke } from "@tauri-apps/api/core";
+import type { AccountSession } from "../sync/accountSession";
 import type { SyncRequester } from "../sync/syncHttp";
 import { PAGE_SIZE } from "../../utils/constants";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
@@ -7,7 +7,7 @@ const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
 /** Server paging and versioned detail backfill; never reads the pending queue. */
 export class HistoryClient {
-  constructor(private readonly http: SyncRequester, private readonly isStopped: () => boolean) {}
+  constructor(private readonly http: SyncRequester, private readonly session: AccountSession) {}
   // Splits a long id list into fixed-size batches, collecting per-batch results.
   async #queryBatched<T>(ids: readonly string[], run: (batch: string[]) => Promise<T[]>): Promise<T[]> {
     const results: T[] = [];
@@ -40,9 +40,8 @@ export class HistoryClient {
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
       EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
     );
-    if (this.isStopped()) return { total: 0, entries: [] };
     const entries = await this.fetchHistoryInfo(result!.manifest);
-    if (this.isStopped()) return { total: 0, entries: [] };
+    if (this.session.signal.aborted) return { total: 0, entries: [] };
     return { total: result!.total, entries };
   }
 
@@ -51,26 +50,25 @@ export class HistoryClient {
     manifest: ClipboardManifestEntry[],
   ): Promise<LocalClipboardEntry[]> {
     const entryIds = manifest.map((entry) => entry.id);
-    if (!entryIds.length || this.isStopped()) return [];
-    const missing = await invoke<string[]>("find_stale_entry_ids", { manifest });
-    if (this.isStopped()) return [];
-    if (missing.length) {
-      const entries = await this.#fetchEntries(missing);
-      if (this.isStopped()) return [];
-      await invoke("upsert_server_entries", { entries });
+    if (!entryIds.length) return [];
+    try {
+      const missing = await this.session.invoke<string[]>("find_stale_entry_ids", { manifest });
+      if (missing.length) {
+        const entries = await this.#fetchEntries(missing);
+        await this.session.invoke("upsert_server_entries", { entries });
+      }
+      // Only this page's details supply file identities; unknown/unstored files
+      // are re-queried before computing the list's cached summaries.
+      const fileIds = await this.session.invoke<string[]>("find_unknown_file_ids", { entryIds });
+      if (fileIds.length) {
+        const statuses = await this.#fetchFiles(fileIds);
+        await this.session.invoke("upsert_server_files", { statuses });
+      }
+      return await this.session.invoke<LocalClipboardEntry[]>("get_cached_entries_for_display", { entryIds });
+    } catch (error) {
+      if (this.session.signal.aborted) return [];
+      throw error;
     }
-    if (this.isStopped()) return [];
-    // Only this page's details supply file identities; unknown/unstored files
-    // are re-queried before computing the list's cached summaries.
-    const fileIds = await invoke<string[]>("find_unknown_file_ids", { entryIds });
-    if (this.isStopped()) return [];
-    if (fileIds.length) {
-      const statuses = await this.#fetchFiles(fileIds);
-      if (this.isStopped()) return [];
-      await invoke("upsert_server_files", { statuses });
-    }
-    if (this.isStopped()) return [];
-    return invoke<LocalClipboardEntry[]>("get_cached_entries_for_display", { entryIds });
   }
 
   async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
@@ -104,6 +102,10 @@ export class HistoryClient {
     return queried!.files;
   }
 
+  async getEntry(entryId: string): Promise<ClipboardEntry> {
+    return this.session.invoke<ClipboardEntry>("get_entry", { entryId });
+  }
+
   // A 404 is not a failure: another device may have deleted the entry first,
   // and the outcome every device converges on is the same.
   async delete(entryId: string): Promise<void> {
@@ -115,6 +117,7 @@ export class HistoryClient {
       "",
       true,
     );
+    await this.session.invoke("remove_server_entry", { entryId });
   }
 
 }

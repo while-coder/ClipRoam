@@ -5,8 +5,8 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::content::{lightweight_entry, refresh_summary, ClipboardEntry, SummaryContext};
-use crate::file::{blob_ids_on_disk, history_stored_ids};
-use crate::store::select_entries;
+use crate::file::{blob_ids_on_disk, store::stored_file_ids};
+use crate::store::{select_entries};
 use crate::utils::placeholders;
 use crate::AppState;
 
@@ -15,16 +15,16 @@ use crate::AppState;
 pub(crate) fn get_cached_entries_for_display(
     state: State<'_, AppState>,
     entry_ids: Vec<String>,
+    session_id: String,
 ) -> Result<Vec<ClipboardEntry>, String> {
+    let account = state.account(&session_id)?;
     if entry_ids.is_empty() { return Ok(Vec::new()); }
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let stored = history_stored_ids(&state, &mut history)?;
-    let cache_dir = state.active_cache_dir(&history)?;
+    let stored = account.with_database(|connection| stored_file_ids(connection))?;
+    let cache_dir = account.cache_dir.clone();
     let blobs = blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let path = state.active_history_path(&history)?;
     let values = entry_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
-    let entries = state.with_database(&path, |connection| {
+    let entries = account.with_database(|connection| {
         select_entries(connection, &format!("WHERE id IN ({})", placeholders(entry_ids.len())), "", &values)
     })?;
     let mut by_id = entries.into_iter().map(|entry| (entry.id.clone(), entry)).collect::<HashMap<_, _>>();
@@ -46,13 +46,13 @@ pub(crate) struct ClipboardManifestEntry {
 pub(crate) fn find_stale_entry_ids(
     state: State<'_, AppState>,
     manifest: Vec<ClipboardManifestEntry>,
+    session_id: String,
 ) -> Result<Vec<String>, String> {
+    let account = state.account(&session_id)?;
     if manifest.is_empty() {
         return Ok(Vec::new());
     }
-    let history = state.history.lock().map_err(|error| error.to_string())?;
-    let path = state.active_history_path(&history)?;
-    state.with_database(&path, |connection| stale_entry_ids(connection, manifest))
+    account.with_database(|connection| stale_entry_ids(connection, manifest))
 }
 
 fn stale_entry_ids(connection: &Connection, manifest: Vec<ClipboardManifestEntry>) -> Result<Vec<String>, String> {
@@ -73,15 +73,13 @@ fn stale_entry_ids(connection: &Connection, manifest: Vec<ClipboardManifestEntry
 
 /// Full cached details for previews and clipboard actions.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let stored = history_stored_ids(&state, &mut history)?;
-    let cache_dir = state.active_cache_dir(&history)?;
+pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<ClipboardEntry, String> {
+    let account = state.account(&session_id)?;
+    let stored = account.with_database(|connection| stored_file_ids(connection))?;
+    let cache_dir = account.cache_dir.clone();
     let blobs = blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let path = state.active_history_path(&history)?;
-    let mut entry = state
-        .with_database(&path, |connection| {
+    let mut entry = account.with_database(|connection| {
             select_entries(connection, "WHERE id = ?", "", &[Value::Text(entry_id.clone())])
         })?
         .into_iter()

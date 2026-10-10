@@ -1,6 +1,6 @@
-import { computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { fullEntry, refreshHistory } from "../history/useHistorySync";
+import { computed } from "vue";
+import { accountStateRef, getAccountSession, type AccountSession } from "../sync/accountSession";
+import { refreshHistory } from "../history/useHistorySync";
 import type { DownloadProgress, LocalClipboardEntry, MissingFile } from "../../types";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
@@ -11,6 +11,7 @@ type DownloadTaskStatus = "queued" | "downloading" | "succeeded" | "failed" | "c
 /** Rust `cliproam://download-changed` 事件推送的任务快照，字段一一对应。 */
 export type DownloadTaskSnapshot = {
   id: string;
+  accountKey: string;
   /** 每次 downloadFiles() 自增；同 entry 重复批次按此归代，派生进度只看最新批。 */
   batchId: number;
   entryId: string;
@@ -36,36 +37,42 @@ type BatchOutcome = {
 };
 
 /** All windows share the Rust download queue; this is the current window's snapshot. */
-export const downloadTasks = ref<DownloadTaskSnapshot[]>([]);
+export const downloadTasks = accountStateRef("downloadTasks");
 
 export async function downloadFiles(
   entryId: string,
   files: readonly DownloadRequest[],
-  options: { saveId?: string; entryLabel?: string } = {},
+  options: { saveId?: string; entryLabel?: string; session?: AccountSession } = {},
 ): Promise<void> {
-  const outcome = await invoke<BatchOutcome>("download_files", { entryId, files, ...options });
+  const { session = getAccountSession(), ...request } = options;
+  if (!session) throw new DownloadCancelledError("账号会话已结束");
+  const outcome = await session.invoke<BatchOutcome>("download_files", { entryId, files, ...request });
   if (outcome.cancelled) throw new DownloadCancelledError("已取消");
   if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
 }
 
 export function cancelDownload(taskId: string): void {
-  void invoke("cancel_download", { taskId }).catch(() => undefined);
+  void getAccountSession()?.invoke("cancel_download", { taskId }).catch(() => undefined);
 }
 
 export async function cancelEntryDownloads(entryId: string): Promise<number> {
-  return invoke<number>("cancel_entry_downloads", { entryId });
+  return getAccountSession()?.invoke<number>("cancel_entry_downloads", { entryId }) ?? 0;
 }
 
 export function stopAllDownloads(reason?: string): void {
-  void invoke("stop_all_downloads", { reason }).catch(() => undefined);
+  void getAccountSession()?.invoke("stop_all_downloads", { reason }).catch(() => undefined);
 }
 
 export async function refreshDownloadTasks(): Promise<void> {
-  applyDownloadSnapshot(await invoke<DownloadTaskSnapshot[]>("download_tasks"));
+  const session = getAccountSession();
+  if (!session) return;
+  const tasks = await session.invoke<DownloadTaskSnapshot[]>("download_tasks");
+  session.state.downloadTasks.value = tasks.filter((task) => task.accountKey === session.accountKey);
 }
 
 export function applyDownloadSnapshot(payload: DownloadTaskSnapshot[]): void {
-  downloadTasks.value = payload;
+  const session = getAccountSession();
+  if (session) session.state.downloadTasks.value = payload.filter((task) => task.accountKey === session.accountKey);
 }
 
 /** 派生的逐条目下载进度：按 (entryId, batchId) 一次分组聚合——同批全部任务
@@ -103,23 +110,25 @@ export const activeDownloadCount = computed(() =>
 export async function downloadRequiredFiles(
   entry: LocalClipboardEntry,
   prepareCommand: "prepare_entry_files" | "prepare_paste_entry",
+  session = getAccountSession(),
 ): Promise<LocalClipboardEntry> {
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
-  const missing = await invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
+  if (!session) throw new DownloadCancelledError("账号会话已结束");
+  const missing = await session.invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
   if (!missing.length) return entry;
   try {
-    await downloadFiles(entry.id, missing, { entryLabel: entry.content });
+    await downloadFiles(entry.id, missing, { entryLabel: entry.content, session });
   } finally {
-    refreshHistory();
+    if (!session.signal.aborted) refreshHistory();
   }
   // Re-read the persisted entry: its availability summary changed on disk.
-  return (await fullEntry(entry)) as LocalClipboardEntry;
+  return (await session.client!.history.getEntry(entry.id)) as LocalClipboardEntry;
 }
 
-export async function ensureLocalFiles(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_entry_files");
+export async function ensureLocalFiles(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {
+  return downloadRequiredFiles(entry, "prepare_entry_files", session);
 }
 
-export async function ensurePasteReady(entry: LocalClipboardEntry): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_paste_entry");
+export async function ensurePasteReady(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {
+  return downloadRequiredFiles(entry, "prepare_paste_entry", session);
 }

@@ -1,6 +1,6 @@
-import { nextTick, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { nextTick } from "vue";
 import type { ClipboardEntry } from "@cliproam/protocol";
+import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
 import type {
@@ -26,7 +26,7 @@ export function initHistorySync(next: HistorySyncDeps): void {
 }
 
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
-export const historyRevision = ref(0);
+export const historyRevision = accountStateRef("historyRevision");
 
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
@@ -41,24 +41,12 @@ export async function fetchHistoryPage(
   return client.history.fetchHistoryPage(filter);
 }
 
-let refreshTimer: number | undefined;
-
-/**
- * Server entry and file-availability changes can arrive in bursts. Coalesce
- * them into one revision bump so the history view refetches its current page.
- */
+/** Coalesce refreshes inside the account lifetime. */
 export function refreshHistory(): void {
-  if (refreshTimer !== undefined) return;
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = undefined;
-    historyRevision.value += 1;
-  }, 200);
+  const session = getAccountSession();
+  session?.schedule("history-refresh", () => { session.state.historyRevision.value += 1; }, 200);
 }
-
-export function cancelRefreshBurst(): void {
-  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-  refreshTimer = undefined;
-}
+export function cancelRefreshBurst(): void { getAccountSession()?.cancelScheduled("history-refresh"); }
 
 export function focusSearch(): void {
   void nextTick(() => deps.getHistoryView()?.focusSearch());
@@ -73,5 +61,7 @@ export function focusSearchInput(): void {
  * Read full details already cached by backfill; rendered lists omit directory trees.
  */
 export async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEntry> {
-  return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
+  const client = deps.getSyncClient();
+  if (!client) throw new Error("同步账号未登录");
+  return client.history.getEntry(entry.id);
 }

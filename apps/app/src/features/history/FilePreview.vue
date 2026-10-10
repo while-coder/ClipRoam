@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { fullEntry } from "./useHistorySync";
 import { isFileNode, type FileInfo, type TreeNode } from "@cliproam/protocol";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-vue-next";
 import { errorMessage } from "../../utils/error";
@@ -19,7 +19,7 @@ let disposed = false;
 onMounted(async () => {
   try {
     // 列表只有摘要；按需读取完整树，不下载文件内容。
-    const entry = await invoke<LocalClipboardEntry>("get_entry", { entryId: props.entry.id });
+    const entry = await fullEntry(props.entry);
     if (disposed) return;
     if (!entry.fileInfo) throw new Error("文件目录信息不可用");
     fileInfo.value = entry.fileInfo;

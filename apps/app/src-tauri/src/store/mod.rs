@@ -9,8 +9,9 @@
 
 use rusqlite::{params, params_from_iter, Connection, Transaction};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 use chrono::DateTime;
 
@@ -31,7 +32,7 @@ pub fn with_transaction<T>(
 }
 
 /// History-level state that is not per-entry: the active profile key, the
-/// activation signatures and the local-cache set. Entry rows live in SQLite
+/// activation signatures. Entry rows and file availability live in SQLite
 /// alone; the device identity lives in machine-level `device.json`.
 #[derive(Debug, Default)]
 pub struct HistoryData {
@@ -41,11 +42,6 @@ pub struct HistoryData {
     pub last_clipboard: String,
     pub last_file_signature: String,
     pub last_image_signature: String,
-    /// Content ids the server pool holds (`files` table, `stored = 1`), kept in
-    /// memory so refreshing a summary never queries SQLite. `None` means not
-    /// loaded yet; placeholder rows (`stored = 0`) never change the set, so
-    /// only `mark`/`save` extend it and a profile switch rebuilds it.
-    pub stored_file_ids: Option<HashSet<String>>,
 }
 
 pub fn history_path_for_key(histories_dir: &Path, key: &str) -> PathBuf {
@@ -86,19 +82,19 @@ fn safe_history_directory_name(key: &str) -> String {
 /// connection instead of reopening on every statement.
 #[derive(Default)]
 pub struct DatabasePool {
-    connections: HashMap<PathBuf, Connection>,
+    connections: HashMap<PathBuf, Arc<Mutex<Connection>>>,
 }
 
 impl DatabasePool {
-    pub fn connection(&mut self, path: &Path) -> Result<&mut Connection, String> {
+    pub fn connection(&mut self, path: &Path) -> Result<Arc<Mutex<Connection>>, String> {
         if !self.connections.contains_key(path) {
             let connection = open_history_database(path)?;
-            self.connections.insert(path.to_path_buf(), connection);
+            self.connections.insert(path.to_path_buf(), Arc::new(Mutex::new(connection)));
         }
         Ok(self
             .connections
-            .get_mut(path)
-            .expect("connection was inserted above"))
+            .get(path)
+            .expect("connection was inserted above").clone())
     }
 }
 

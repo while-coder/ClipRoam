@@ -55,6 +55,17 @@ pub struct ExportResult {
     pub files: usize,
 }
 
+#[derive(Serialize)]
+struct CopyDocumentsRequest<'a> {
+    uris: &'a [String],
+    directory: &'a str,
+}
+
+#[derive(Deserialize)]
+pub struct ImportedDocuments {
+    pub paths: Vec<String>,
+}
+
 const PLUGIN_IDENTIFIER: &str = "com.whilecode.cliproam.share";
 
 fn mobile_init<R: Runtime, C: DeserializeOwned>(
@@ -68,6 +79,9 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
+    pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
+        self.0.run_mobile_plugin("copyDocuments", CopyDocumentsRequest { uris, directory }).map_err(Into::into)
+    }
     pub fn pick_directory(&self) -> Result<DirectorySelection> {
         self.0.run_mobile_plugin("pickDirectory", ()).map_err(Into::into)
     }

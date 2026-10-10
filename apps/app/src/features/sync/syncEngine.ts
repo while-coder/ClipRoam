@@ -1,158 +1,124 @@
-import { computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { emitTo } from "@tauri-apps/api/event";
-import type { ClipboardEntry } from "@cliproam/protocol";
+import { computed, watch } from "vue";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { isPasteWindow } from "../../composables/usePlatform";
+import { activeView } from "../../composables/useActiveView";
 import { showToast } from "../toast/useToast";
 import { getDevice } from "../../utils/device";
-import { SYNC_BRIDGE_DEVICES_EVENT } from "./bridge";
+import { SYNC_BRIDGE_DEVICES_EVENT, startSyncBridgeService } from "./bridge";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
-import { activateRemoteClipboard } from "../history/remoteClipboard";
-import {
-  getActivePreferences,
-} from "./syncSession";
-import {
-  refreshHistory,
-} from "../history/useHistorySync";
-import { uploadTasks } from "../uploads/useUploads";
-import { cancelUploadProgressFlush, finishUploadProgress, queueUploadProgress } from "../pending-upload/usePendingUploads";
-import { stopAllDownloads } from "../downloads/useDownloads";
+import { AccountSession, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
+import { activateRemoteClipboard, bumpLocalClipboardRevision } from "../history/remoteClipboard";
+import { getActivePreferences } from "./syncSession";
+import { refreshHistory } from "../history/useHistorySync";
+import { finishUploadProgress, queueUploadProgress, refreshPending, refreshPendingEntries } from "../pending-upload/usePendingUploads";
+import { applyDownloadSnapshot, refreshDownloadTasks, type DownloadTaskSnapshot } from "../downloads/useDownloads";
 import type { Device, SyncConfig } from "../../types";
 
-/**
- * 同步引擎的模块级单例（从 App.vue 下沉）：SyncClient 生命周期、连接状态、
- * 设备表、远端激活。登录页 UI 态（setupVisible/setupError/setupWizard）留在
- * App.vue，token 失效后的处理经 initSyncEngine 注入回调触达。
- */
 export interface SyncEngineDeps {
   onAuthenticationFailed(message: string, config: SyncConfig): void;
 }
-
 let engineDeps: SyncEngineDeps;
+export function initSyncEngine(deps: SyncEngineDeps): void { engineDeps = deps; }
+export const connected = accountStateRef("connected");
+export const devicesById = accountStateRef("devicesById");
+export function getSyncClient(): SyncClient | undefined { return getAccountSession()?.client; }
 
-export function initSyncEngine(deps: SyncEngineDeps): void {
-  engineDeps = deps;
-}
-
-export const connected = ref(false);
-/** 设备列表完全来自服务器（manifest/presence），不做任何本地预设。 */
-export const devicesById = ref<Record<string, Device>>({});
-
-let syncClient: SyncClient | undefined;
-
-export function getSyncClient(): SyncClient | undefined {
-  return syncClient;
-}
-
-/** 连接状态唯一切换点：只在真实变化时更新，并恰好提示一次（断开→成功、成功→断开各一次）。 */
-function setConnectionState(value: boolean): void {
-  if (connected.value === value) return;
-  connected.value = value;
+function setConnectionState(session: AccountSession, value: boolean): void {
+  if (session.state.connected.value === value) return;
+  session.state.connected.value = value;
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
 }
 
-/**
- * Tears the sync client down. `activeOnly` 是卸载兜底：只停 socket；断开
- * 提示与下载中止是运行期断开（设置退出、token 失效）的语义。
- */
 export function stopSyncClient(options: { activeOnly?: boolean } = {}): void {
-  syncClient?.stop();
-  cancelUploadProgressFlush();
-  syncClient = undefined;
-  if (options.activeOnly) return;
-  // 凭据失效时中止下载；窗口卸载不影响 Rust 下载任务。
-  stopAllDownloads("同步已断开");
-  uploadTasks.value = [];
-  setConnectionState(false);
+  const session = getAccountSession();
+  if (!options.activeOnly && session?.state.connected.value) showToast("同步连接已断开", "error");
+  session?.dispose({ stopNativeTasks: !options.activeOnly });
+  replaceAccountSession();
 }
 
-export const connectionStatus = computed(() =>
-  connected.value
-    ? { label: "已连接", title: "已连接到同步服务器", tone: "online" }
-    : { label: "与服务器断开连接", title: "正在等待同步服务器重新连接", tone: "disconnected" },
-);
+export const connectionStatus = computed(() => connected.value
+  ? { label: "已连接", title: "已连接到同步服务器", tone: "online" }
+  : { label: "与服务器断开连接", title: "正在等待同步服务器重新连接", tone: "disconnected" });
 
-export function rememberDevices(devices: Device[]): void {
-  devicesById.value = {
-    ...devicesById.value,
+function rememberSessionDevices(session: AccountSession, devices: Device[]): void {
+  session.state.devicesById.value = {
+    ...session.state.devicesById.value,
     ...Object.fromEntries(devices.map((device) => [device.id, device])),
   };
-  // paste 窗口不持有 sync 客户端，设备名靠主窗口广播补充。
   if (!isPasteWindow) {
-    void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, { devices }).catch(() => undefined);
+    void emitTo("paste", SYNC_BRIDGE_DEVICES_EVENT, { devices, accountKey: session.accountKey }).catch(() => undefined);
   }
 }
-
-/** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。 */
+export function rememberDevices(devices: Device[]): void {
+  const session = getAccountSession();
+  if (session) rememberSessionDevices(session, devices);
+}
 export function setSyncAutoUploadLimit(limitMb: number): void {
-  syncClient?.pendingUploads.setAutoUploadLimit(limitMb * 1024 * 1024);
+  getSyncClient()?.pendingUploads.setAutoUploadLimit(limitMb * 1024 * 1024);
+}
+
+async function registerAccountEvents(session: AccountSession): Promise<void> {
+  const registrations = [
+    session.ownAsync(listen("cliproam://entry-created", session.guard(() => {
+      bumpLocalClipboardRevision(); refreshPending();
+    }))),
+    session.ownAsync(listen("cliproam://pending-changed", session.guard(refreshPending))),
+    session.ownAsync(listen("cliproam://history-changed", session.guard(refreshHistory))),
+    session.ownAsync(listen<DownloadTaskSnapshot[]>("cliproam://download-changed", session.guard(({ payload }) => {
+      applyDownloadSnapshot(payload);
+    }))),
+  ];
+  if (!isPasteWindow) registrations.push(session.ownAsync(startSyncBridgeService({
+    getDevices: () => Object.values(session.state.devicesById.value),
+    accountKey: session.accountKey,
+  })));
+  const results = await Promise.allSettled(registrations);
+  if (session.signal.aborted) return;
+  if (results.some((result) => result.status === "rejected")) showToast("部分账号事件监听初始化失败", "error");
+  session.scope.run(() => watch(activeView, (view) => {
+    if (view === "pending-upload") void refreshPendingEntries();
+  }));
+  session.interval(() => {
+    if (session.state.activeView.value === "downloads") void refreshDownloadTasks().catch(() => undefined);
+  }, 2000);
+  void refreshDownloadTasks().catch(() => undefined);
 }
 
 export async function startSync(config: SyncConfig): Promise<void> {
-  syncClient?.stop();
-  cancelUploadProgressFlush();
-  setConnectionState(false);
-  const device = await getDevice();
-  const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
-  let client: SyncClient;
-  client = new SyncClient(
-    httpUrl,
-    webSocketUrl,
-    config.sessionToken,
-    device,
-    {
-      onConnected: (value) => { if (syncClient === client) setConnectionState(value); },
-      onDevices: (devices) => { rememberDevices(devices); },
-      onDevicePresence: (device) => { rememberDevices([device]); },
-      onEntry: () => {
-        if (syncClient === client) refreshHistory();
-      },
-      onPublished: () => {
-        if (syncClient === client) refreshHistory();
-      },
-      onActivation: (entry) => {
-        if (syncClient === client) void activateRemoteClipboard(entry);
-      },
-      onDelete: (entryId) => {
-        void invoke("remove_server_entry", { entryId });
-      },
-      onFileAvailable: () => {
-        if (syncClient !== client) return;
-        // Refresh the current page; its details determine the file statuses to query.
-        refreshHistory();
-      },
-      onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
-        if (syncClient === client) queueUploadProgress(entryId, uploadedBytes, totalBytes);
-      },
-      onUploadFinished: (entryId) => {
-        if (syncClient === client) finishUploadProgress(entryId);
-      },
-      onError: (message) => { showToast(message, "error"); },
-      onServeTasksChanged: () => {
-        if (syncClient !== client) return;
-        uploadTasks.value = [...client.uploads.serveTasksSnapshot()];
-      },
-      resolveEntryLabel: (entryId) =>
-        invoke<ClipboardEntry>("get_entry", { entryId })
-          .then((entry) => entry.content)
-          .catch(() => undefined),
-      onAuthenticationFailed: (message) => {
-        if (syncClient !== client) return;
-        stopSyncClient();
-        engineDeps.onAuthenticationFailed(message, config);
-      },
-    },
-    getActivePreferences().autoUploadLimitMb * 1024 * 1024,
-  );
-  syncClient = client;
-  // 会话客户端就绪即刷新首页/当前页，不以 WebSocket 认证作为 HTTP 查询门槛。
-  refreshHistory();
-  // 快捷粘贴窗口只使用 HTTP 查询历史；不启动 socket、捕获队列或上传循环。
-  if (isPasteWindow) {
-    return;
+  const session = new AccountSession(config, getActivePreferences());
+  replaceAccountSession(session);
+  try {
+    await session.start(() => session.ready);
+    const device = await session.start(() => getDevice());
+    const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
+    const guard = session.guard.bind(session);
+    const client: SyncClient = new SyncClient(httpUrl, webSocketUrl, config.sessionToken, device, {
+      onConnected: guard((value) => setConnectionState(session, value)),
+      onDevices: guard((devices) => rememberSessionDevices(session, devices)),
+      onDevicePresence: guard((device) => rememberSessionDevices(session, [device])),
+      onEntry: guard(refreshHistory),
+      onPublished: guard(refreshHistory),
+      onActivation: guard((entry) => { void activateRemoteClipboard(entry); }),
+      onDelete: guard((entryId) => { void session.invoke("remove_server_entry", { entryId }).catch(() => undefined); }),
+      onFileAvailable: guard(refreshHistory),
+      onUploadProgress: guard(queueUploadProgress),
+      onUploadFinished: guard(finishUploadProgress),
+      onError: guard((message) => showToast(message, "error")),
+      onServeTasksChanged: guard(() => { session.state.uploadTasks.value = [...client.uploads.serveTasksSnapshot()]; }),
+      resolveEntryLabel: (entryId) => client.history.getEntry(entryId).then((entry) => entry.content).catch(() => undefined),
+      onAuthenticationFailed: guard((message) => {
+        stopSyncClient(); engineDeps.onAuthenticationFailed(message, config);
+      }),
+    }, session.preferences.autoUploadLimitMb * 1024 * 1024, session);
+    session.client = client;
+    await session.start(() => registerAccountEvents(session));
+    session.signal.throwIfAborted();
+    refreshHistory(); refreshPending();
+    if (!isPasteWindow) { void client.pullDevices(); client.connect(); }
+  } catch (error) {
+    if (session.signal.aborted) return;
+    stopSyncClient();
+    throw error;
   }
-  // 设备表和历史查询走 HTTP，推送通道独立建立并自行重连。
-  void client.pullDevices();
-  client.connect();
 }

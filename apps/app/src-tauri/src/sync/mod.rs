@@ -1,11 +1,11 @@
 //! 同步账号配置与它选定的历史档案。
 //!
-//! 保存配置只更新 Rust 侧状态，不向前端发事件：前端每个保存点都显式
-//! 决定连接/断开，避免「显式 startSync + 事件回调 startSync」的竞态双连。
+//! Main applies explicit connection changes; Rust notifies paste to reload the
+//! authoritative session after persistence, avoiding a second main connection.
 
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::store::{
     history_path_for_key, load_history, preferences_path_for, save_metadata, HistoryData,
@@ -209,20 +209,16 @@ pub(crate) fn get_account_preferences(
 pub(crate) fn save_account_preferences(
     state: State<'_, AppState>,
     preferences: AccountPreferences,
+    session_id: String,
 ) -> Result<(), String> {
-    let path = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let key = history
-            .active_history
-            .as_deref()
-            .ok_or("同步账号未登录，历史档案不可用")?;
-        preferences_path_for(&state.histories_dir, key)
-    };
+    let account = state.account(&session_id)?;
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let path = account.preferences_path.clone();
     write_preferences(&path, &preferences)?;
-    *state
-        .account_preferences
-        .lock()
-        .map_err(|error| error.to_string())? = preferences;
+    // The runtime capture settings cache belongs only to the active archive.
+    if history.active_history.as_deref() == Some(account.key.as_str()) {
+        *state.account_preferences.lock().map_err(|error| error.to_string())? = preferences;
+    }
     Ok(())
 }
 
@@ -235,6 +231,7 @@ pub(crate) fn save_account_preferences(
 /// 账号档案、磁盘配置还是旧档案」的分裂状态。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn save_sync_config(
+    app: AppHandle,
     state: State<'_, AppState>,
     config: Option<SyncConfig>,
 ) -> Result<(), String> {
@@ -277,6 +274,10 @@ pub(crate) fn save_sync_config(
         let active_path = history_path_for_key(&state.histories_dir, &key);
         state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
     }
+    state.downloader.stop_all("同步账号已变更");
     *state.sync_config.lock().map_err(|error| error.to_string())? = config;
+    drop(history);
+    // Main applies its explicit login/logout flow; paste reloads Rust state.
+    let _ = app.emit_to("paste", "cliproam://sync-config-changed", ());
     Ok(())
 }

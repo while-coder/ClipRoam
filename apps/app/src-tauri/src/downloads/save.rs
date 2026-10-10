@@ -9,7 +9,7 @@ use std::{
 };
 use tauri::{AppHandle, State};
 
-use crate::history::clipboard::{missing_files, snapshot_entry};
+use crate::history::clipboard::{missing_files, snapshot_entry_for};
 use crate::content::{rebuild_tree, sanitize_root_name, MissingFile, TreeNode};
 use crate::content::entry_contents_of;
 use crate::AppState;
@@ -22,6 +22,7 @@ pub(crate) enum SaveDestination {
 }
 
 pub(crate) struct SaveSession {
+    account: std::sync::Arc<crate::account::AccountContext>,
     entry_id: String,
     destination: PathBuf,
     pub(crate) staging_dir: PathBuf,
@@ -44,11 +45,13 @@ pub(crate) async fn prepare_save_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     entry_id: String,
+    session_id: String,
 ) -> Result<Option<SavePreparation>, String> {
+    let account = state.account(&session_id)?;
     if !crate::platforms::supports_native_file_export() {
         return Err("移动端文件已保存在应用缓存中，请使用系统分享或文件导出入口".to_string());
     }
-    let snapshot = snapshot_entry(&state, &entry_id)?;
+    let snapshot = snapshot_entry_for(&entry_id, &account)?;
     // 图片条目没有 file_info，按单文件另存：内容是编码后的 WebP，
     // 名字取条目标题（如「截图（367 × 109）.webp」）。
     let (single_file, name) = match snapshot.entry.file_info.as_ref() {
@@ -102,6 +105,7 @@ pub(crate) async fn prepare_save_entry(
         .insert(
             save_id.clone(),
             SaveSession {
+                account,
                 entry_id,
                 destination,
                 staging_dir,
@@ -151,7 +155,7 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
         if !session.in_progress.is_empty() || session.downloaded.len() != session.expected.len() {
             return Err("另存为所需文件尚未下载完成".to_string());
         }
-        let snapshot = snapshot_entry(&state, &session.entry_id)?;
+        let snapshot = snapshot_entry_for(&session.entry_id, &session.account)?;
 
         let mut resolved = HashMap::<String, PathBuf>::new();
         // entry_contents_of 同时覆盖文件树与图片条目，比 tree_contents 多兜住图片。

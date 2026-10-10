@@ -1,4 +1,5 @@
 import { EntryActivateResponseSchema } from "@cliproam/protocol";
+import type { AccountSession } from "./accountSession";
 import { errorMessage } from "../../utils/error";
 
 /** Structural stand-in for the protocol's zod schemas, keeping zod out of call sites' imports. */
@@ -39,11 +40,10 @@ export type SyncRequester = {
 
 // One requester per client session: everything rides the login session's
 // Bearer token over plain HTTP.
-export function createSyncRequester(httpUrl: string, token: string, sessionSignal?: AbortSignal): SyncRequester {
+export function createSyncRequester(httpUrl: string, token: string, session: AccountSession): SyncRequester {
+  const sessionSignal = session.signal;
   const httpFetch = async (method: string, path: string, init: RequestInit): Promise<Response> => {
-    const signal = sessionSignal
-      ? (init.signal ? AbortSignal.any([sessionSignal, init.signal]) : sessionSignal)
-      : init.signal;
+    const signal = init.signal ? AbortSignal.any([sessionSignal, init.signal]) : sessionSignal;
     try {
       return await fetch(`${httpUrl}${path}`, {
         ...init,
@@ -55,7 +55,7 @@ export function createSyncRequester(httpUrl: string, token: string, sessionSigna
         },
       });
     } catch (error) {
-      if (sessionSignal?.aborted) throw sessionSignal.reason;
+      if (sessionSignal.aborted) throw sessionSignal.reason;
       // A timeout means the server is reachable but too slow — the retry
       // loops treat only the transient message as retryable, so a timeout
       // surfaces as its own error instead of a disconnect.
@@ -85,7 +85,11 @@ export function createSyncRequester(httpUrl: string, token: string, sessionSigna
     return parsed.data;
   };
 
-  return { fetch: httpFetch, request };
+  return {
+    fetch: (method, path, init) => session.start(() => httpFetch(method, path, init)),
+    request: (method, path, init, schema, incompatible, tolerate404) =>
+      session.start(() => request(method, path, init, schema, incompatible, tolerate404)),
+  };
 }
 
 /** Broadcast clipboard activation after publication; no history-cache dependency. */
