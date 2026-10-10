@@ -22,7 +22,7 @@ use crate::utils::{ensure_parent_dir, fnv1a, hash_bytes, write_file_atomic};
 use crate::file::upload_image_path;
 use crate::pending::enqueue_pending_entry;
 use crate::store::{
-    save_metadata, select_entries, upsert_entry_row, with_transaction, HistoryData,
+    save_metadata, select_entries, with_transaction, HistoryData,
 };
 use crate::AppState;
 
@@ -305,8 +305,8 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
             history.active_history.clone(),
         )
     };
-    // A re-copy of the same roots refreshes the published entry's timestamp
-    // instead of queueing the tree a second time.
+    // Reuse resolved content information, but publish through the queue;
+    // only server detail backfill writes the history cache.
     let reusable = find_reusable_files_entry(&state, &history_path, &paths, &signature)?;
     let captured = {
         let mut history = state.history.lock().map_err(|error| error.to_string())?;
@@ -319,16 +319,22 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                 return Err("活动档案已切换，放弃本次捕获".to_string());
             }
             match reusable {
-                Some(mut existing) => {
-                    existing.created_at = created_at;
-                    let outcome = state.with_database(&history_path, |connection| {
+                Some(existing) => {
+                    let extra = ClipboardEntryExtra {
+                        html: existing.html,
+                        rtf: existing.rtf,
+                        file_info: existing.file_info,
+                        image_info: existing.image_info,
+                        local_sources: existing.sources,
+                    };
+                    let payload = extra.json()?;
+                    state.with_database(&history_path, |connection| {
                         with_transaction(connection, |transaction| {
-                            upsert_entry_row(transaction, &existing)?;
+                            enqueue_pending_entry(transaction, "files", &existing.content, &payload, &created_at)?;
                             save_metadata(transaction, &history)?;
                             Ok(())
                         })
-                    });
-                    outcome
+                    })
                 }
                 None => {
                     // The tree goes into the queue with unresolved content ids

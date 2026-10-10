@@ -23,7 +23,7 @@ import { FileTransfer } from "./fileTransfer";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import { PAGE_SIZE } from "../../utils/constants";
-import type { EntriesManifestFilter, EntriesManifestPage } from "../../types";
+import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const QUEUE_FAILURE_BACKOFF_MS = 60_000;
@@ -37,10 +37,10 @@ type SyncHandlers = {
   /** 登录后拉取的一次性设备表；此后设备增减走 device.presence 推送。 */
   onDevices: (devices: Device[]) => void;
   onDevicePresence: (device: Device) => void;
-  onEntry: (entry: ClipboardEntry) => void;
-  /** Persist and refresh our own published row from the HTTP confirmation. */
-  onPublished: (entry: ClipboardEntry) => Promise<void>;
-  onActivation: (entry: ClipboardEntry) => void;
+  onEntry: () => void;
+  /** HTTP confirmation only invalidates the list; details come from cache backfill. */
+  onPublished: () => void;
+  onActivation: (entryId: string) => void;
   onDelete: (entryId: string) => void;
   onFileAvailable: (fileId: string) => void;
   onUploadProgress: (entryId: string, uploadedBytes: number, totalBytes: number) => void;
@@ -175,8 +175,8 @@ export class SyncClient {
   // Publishes one queue row: the metadata goes first (other devices can start
   // pulling while the contents upload), then the contents — the upload HTTP is
   // content-addressed and needs no entry id — then the broadcast activation,
-  // and the row leaves the queue. Adopt the HTTP confirmation immediately,
-  // before uploading contents; a socket echo is only an idempotent update.
+  // and the row leaves the queue. Refresh on HTTP confirmation immediately;
+  // only detail queries populate the local history cache.
   async #publishQueueRow(row: PendingQueueRow): Promise<void> {
     const payload: EntryPublishInput = {
       kind: row.kind,
@@ -188,7 +188,7 @@ export class SyncClient {
       sourceDeviceId: this.device.id,
     };
     const stored = await this.#publishEntry(payload);
-    await this.handlers.onPublished(stored);
+    this.handlers.onPublished();
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
     if (stored.kind !== "files") {
       await this.activate(stored.id).catch(() => undefined);
@@ -292,31 +292,39 @@ export class SyncClient {
     if (this.#stopped) return { total: 0, entries: [] };
     const entryIds = result!.manifest.map((entry) => entry.id);
     if (!entryIds.length) return { total: result!.total, entries: [] };
-    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+    const entries = await this.fetchHistoryInfo(entryIds, deviceNames);
     if (this.#stopped) return { total: 0, entries: [] };
+    return { total: result!.total, entries };
+  }
+
+  /** Only detail backfill writes server entry/file information into the cache. */
+  async fetchHistoryInfo(
+    entryIds: string[],
+    deviceNames: Record<string, string> = {},
+  ): Promise<LocalClipboardEntry[]> {
+    if (!entryIds.length || this.#stopped) return [];
+    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+    if (this.#stopped) return [];
     if (missing.length) {
       const entries = await this.#fetchEntries(missing);
-      if (this.#stopped) return { total: 0, entries: [] };
+      if (this.#stopped) return [];
       await invoke("upsert_server_entries", { entries });
     }
-    if (this.#stopped) return { total: 0, entries: [] };
+    if (this.#stopped) return [];
     // Only this page's details supply file identities; unknown/unstored files
     // are re-queried before computing the list's cached summaries.
     const fileIds = await invoke<string[]>("find_unknown_file_ids", { entryIds });
-    if (this.#stopped) return { total: 0, entries: [] };
+    if (this.#stopped) return [];
     if (fileIds.length) {
-      const statuses = await this.fetchFiles(fileIds);
-      if (this.#stopped) return { total: 0, entries: [] };
+      const statuses = await this.#fetchFiles(fileIds);
+      if (this.#stopped) return [];
       await invoke("upsert_server_files", { statuses });
     }
     const cached = await invoke<EntriesManifestPage>("list_entries_manifest", {
       filter: { kind: "all", entryIds }, deviceNames,
     });
     const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
-    return {
-      total: result!.total,
-      entries: entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; }),
-    };
+    return entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; });
   }
 
   async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
@@ -334,7 +342,7 @@ export class SyncClient {
   // `missing` list the protocol dropped: the client asks once per upsert batch
   // which contents the server already holds, so locally stored availability
   // marks stay truthful without the server restamping every entry read.
-  async fetchFiles(fileIds: readonly string[]): Promise<FileStatus[]> {
+  async #fetchFiles(fileIds: readonly string[]): Promise<FileStatus[]> {
     return this.#queryBatched(fileIds, (batch) => this.#fetchFileStatusBatch(batch));
   }
 
@@ -445,10 +453,10 @@ export class SyncClient {
         this.#awaitingPong = false;
         return;
       case "clipboard.created":
-        this.handlers.onEntry(message.entry);
+        this.handlers.onEntry();
         return;
       case "clipboard.activated":
-        this.handlers.onActivation(message.entry);
+        this.handlers.onActivation(message.entry.id);
         return;
       case "clipboard.deleted":
         this.handlers.onDelete(message.entryId);

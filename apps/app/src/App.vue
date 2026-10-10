@@ -78,7 +78,6 @@ import {
   cancelRefreshBurst,
   fetchHistoryPage,
   fetchManifest,
-  flushPendingRemoteUpserts,
   focusSearchInput,
   historyRevision,
   initHistorySync,
@@ -478,7 +477,6 @@ onBeforeUnmount(() => {
   disposeToast();
   cancelRefreshBurst();
   cancelUploadProgressFlush();
-  flushPendingRemoteUpserts();
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();

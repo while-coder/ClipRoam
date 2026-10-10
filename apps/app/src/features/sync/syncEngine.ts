@@ -14,14 +14,11 @@ import {
   getActivePreferences,
 } from "./syncSession";
 import {
-  applyRemoteUpserts,
-  queueRemoteUpsert,
   refreshHistory,
-  syncedEntryIds,
 } from "../clipboard-history/useHistorySync";
 import { finishUploadProgress, queueUploadProgress, uploadTasks } from "../uploads/useUploads";
 import { downloader, ensurePasteReady } from "../downloads/useDownloads";
-import type { Device, LocalClipboardEntry, SyncConfig } from "../../types";
+import type { Device, SyncConfig } from "../../types";
 
 /**
  * 同步引擎的模块级单例（从 App.vue 下沉）：SyncClient 生命周期、连接状态、
@@ -99,22 +96,22 @@ export function setSyncAutoUploadLimit(limitMb: number): void {
   syncClient?.setAutoUploadLimit(limitMb * 1024 * 1024);
 }
 
-async function activateRemoteClipboard(entry: ClipboardEntry): Promise<void> {
+async function activateRemoteClipboard(entryId: string): Promise<void> {
   const config = getActiveConfig();
+  const client = syncClient;
   if (
     isMobile.value
     || !getActivePreferences().autoReceiveClipboard
-    || entry.kind === "files"
+    || !client
   ) return;
 
   const activationRevision = ++remoteActivationRevision;
   const startingLocalRevision = localClipboardRevision;
   try {
-    // The activation carries the complete entry so it remains safe even when
-    // its history update and activation messages are handled concurrently —
-    // once `applyRemoteUpserts` resolves it is durable, no re-read needed.
-    await applyRemoteUpserts([entry]);
-    let localEntry = entry as LocalClipboardEntry;
+    // Push carries an identity only; the same detail backfill supplies the cache.
+    const [entry] = await client.fetchHistoryInfo([entryId]);
+    if (!entry || entry.kind === "files") return;
+    let localEntry = entry;
     if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;
     if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
 
@@ -153,19 +150,16 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onConnected: setConnectionState,
       onDevices: (devices) => { rememberDevices(devices); },
       onDevicePresence: (device) => { rememberDevices([device]); },
-      onEntry: (entry) => {
-        void queueRemoteUpsert(entry);
+      onEntry: () => {
+        if (syncClient === client) refreshHistory();
       },
-      onPublished: async (entry) => {
-        if (syncClient === client) await applyRemoteUpserts([entry]);
+      onPublished: () => {
+        if (syncClient === client) refreshHistory();
       },
       onActivation: (entry) => {
         if (syncClient === client) void activateRemoteClipboard(entry);
       },
       onDelete: (entryId) => {
-        const remaining = new Set(syncedEntryIds.value);
-        remaining.delete(entryId);
-        syncedEntryIds.value = remaining;
         void invoke("remove_server_entry", { entryId });
       },
       onFileAvailable: () => {

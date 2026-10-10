@@ -2,8 +2,6 @@ import { nextTick, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { activeView } from "../../composables/useActiveView";
-import { showToast } from "../toast/useToast";
-import { errorMessage } from "../../utils/error";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
 import type {
@@ -18,7 +16,6 @@ import type {
  */
 /** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage })）。 */
 interface HistorySyncViewRef {
-  currentPage?: number;
   focusSearch(): Promise<void>;
   focusSearchInput(): void;
 }
@@ -38,7 +35,6 @@ export function initHistorySync(next: HistorySyncDeps): void {
 
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 export const historyRevision = ref(0);
-export const syncedEntryIds = ref(new Set<string>());
 
 /** First-page convenience entry; filtering and caching use the same page flow. */
 export function fetchManifest(
@@ -65,7 +61,7 @@ export async function fetchHistoryPage(
 let refreshTimer: number | undefined;
 
 /**
- * Background events (captures, remote upserts, file availability) arrive in
+ * Background events (captures, remote notifications, file availability) arrive in
  * bursts; each one only invalidates views. A burst coalesces into one pass:
  * the history view refetches its current page on the revision bump, while the
  * pending badge (and, when its view is open, the queue details) re-query
@@ -85,63 +81,6 @@ export function cancelRefreshBurst(): void {
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
 }
 
-const pendingRemoteUpserts = new Map<string, ClipboardEntry>();
-let remoteUpsertFlush: Promise<void> | undefined;
-
-/**
- * Whether the history view needs a visible refresh for a newly arrived entry.
- * The entry lands on page 1, so only a view sitting there must refetch; deeper
- * pages keep their scroll (their slice shifts by one and the next page change
- * or revision bump catches up), and an unmounted view refetches page 1 on
- * remount anyway.
- */
-function historyOnFirstPage(): boolean {
-  return deps.getHistoryView()?.currentPage === 1;
-}
-
-/**
- * Remote entry echoes arrive one per published entry, but each write rewrites
- * the durable history. Queue them so a burst becomes a single batch command.
- */
-export function queueRemoteUpsert(entry: ClipboardEntry): Promise<void> {
-  pendingRemoteUpserts.set(entry.id, entry);
-  if (remoteUpsertFlush) return remoteUpsertFlush;
-  remoteUpsertFlush = new Promise<void>((resolve) => {
-    window.setTimeout(() => {
-      const batch = [...pendingRemoteUpserts.values()];
-      pendingRemoteUpserts.clear();
-      remoteUpsertFlush = undefined;
-      void applyRemoteUpserts(batch, historyOnFirstPage()).finally(resolve);
-    }, 200);
-  });
-  return remoteUpsertFlush;
-}
-
-export async function applyRemoteUpserts(batch: ClipboardEntry[], refresh = true): Promise<void> {
-  markEntriesSynced(batch);
-  try {
-    await invoke("upsert_server_entries", { entries: batch });
-  } catch (error) {
-    showToast(`写入同步记录失败：${errorMessage(error)}`, "error");
-    return;
-  }
-  if (refresh) refreshHistory();
-}
-
-/** 批量标记已同步：一次构建新 Set，避免逐条 clone 整个集合（burst 推送时是 O(n²)）。 */
-function markEntriesSynced(entries: readonly ClipboardEntry[]): void {
-  if (!entries.length) return;
-  const known = new Set(syncedEntryIds.value);
-  let changed = false;
-  for (const entry of entries) {
-    if (!known.has(entry.id)) {
-      known.add(entry.id);
-      changed = true;
-    }
-  }
-  if (changed) syncedEntryIds.value = known;
-}
-
 export function focusSearch(): void {
   void nextTick(() => deps.getHistoryView()?.focusSearch());
 }
@@ -152,17 +91,8 @@ export function focusSearchInput(): void {
 }
 
 /**
- * The rendered list carries only aggregates. Publishing needs the directory tree,
- * so it is fetched per entry instead of for the whole history.
+ * Read full details already cached by backfill; rendered lists omit directory trees.
  */
 export async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEntry> {
   return invoke<ClipboardEntry>("get_entry", { entryId: entry.id });
-}
-
-/** 卸载兜底：未落盘的远端 upsert 立即写掉（fire-and-forget，不 await）。 */
-export function flushPendingRemoteUpserts(): void {
-  if (pendingRemoteUpserts.size) {
-    void applyRemoteUpserts([...pendingRemoteUpserts.values()]);
-    pendingRemoteUpserts.clear();
-  }
 }
