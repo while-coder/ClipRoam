@@ -49,6 +49,7 @@ export class PendingUploader {
         this.#queueFailures.delete(row.seq);
       } catch (error) {
         if (this.deps.session.signal.aborted) return;
+        console.warn(`Pending upload failed: seq=${row.seq} kind=${row.kind}`, error);
         // Transient failures wait out the backoff without counting against
         // the skip limit — HTTP coming back is expected, not the row's fault.
         if (isTransientNetworkError(error)) {
