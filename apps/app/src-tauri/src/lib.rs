@@ -190,7 +190,7 @@ pub fn run() {
             clipboard::capture::capture_current_clipboard_text,
             clipboard::capture::capture_files_from_picker,
             clipboard::capture::consume_mobile_shares,
-            entry::query::list_entries_manifest,
+            entry::query::get_cached_entries_for_display,
             entry::query::find_unknown_entry_ids,
             entry::query::get_entry,
             file::store::find_unknown_file_ids,

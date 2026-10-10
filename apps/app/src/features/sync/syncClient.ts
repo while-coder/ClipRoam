@@ -320,7 +320,7 @@ export class SyncClient {
       if (this.#stopped) return [];
       await invoke("upsert_server_files", { statuses });
     }
-    const cached = await invoke<EntriesManifestPage>("list_entries_manifest", {
+    const cached = await invoke<EntriesManifestPage>("get_cached_entries_for_display", {
       filter: { kind: "all", entryIds }, deviceNames,
     });
     const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));

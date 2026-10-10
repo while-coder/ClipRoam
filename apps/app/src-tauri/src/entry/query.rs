@@ -15,10 +15,10 @@ use crate::AppState;
 
 use super::lightweight_entry;
 
-/// Page size for `list_entries_manifest`; mirrors `PAGE_SIZE` in the frontend.
+/// Page size for `get_cached_entries_for_display`; mirrors `PAGE_SIZE` in the frontend.
 const MANIFEST_PAGE_SIZE: usize = 50;
 
-/// Filters for `list_entries_manifest`, mirroring `GET /entries/manifest` on
+/// Filters for `get_cached_entries_for_display`, mirroring `GET /entries/manifest` on
 /// the server: keyword, kind, time range and source devices, then a page of
 /// the matches. An absent `page` returns every match — used where the whole
 /// history is needed.
@@ -120,7 +120,7 @@ fn manifest_query(
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn list_entries_manifest(
+pub(crate) fn get_cached_entries_for_display(
     state: State<'_, AppState>,
     filter: EntriesManifestFilter,
     device_names: HashMap<String, String>,
