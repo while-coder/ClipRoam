@@ -114,7 +114,6 @@ export class PendingUploader {
   // belong to the server, which dedupes by content either way.
   async #publishEntry(entry: EntryPublishInput): Promise<ClipboardEntry> {
     const request: EntryPublishRequest = {
-      deviceId: this.device.id,
       entry,
     };
     const stored = await this.http.request(

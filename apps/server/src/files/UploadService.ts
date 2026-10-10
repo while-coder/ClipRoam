@@ -68,7 +68,7 @@ export class UploadService {
     return {
       status: "ready",
       missingChunks: missingFromBitmap(ledger.bitmap, chunkCount),
-      receivedBytes: countWrittenChunks(ledger.bitmap) * FILE_CHUNK_SIZE,
+      receivedBytes: receivedBytes(ledger.bitmap, size, chunkCount),
     };
   }
 
@@ -91,21 +91,26 @@ export class UploadService {
     if (chunk.length !== length) throw new UploadHttpError(400, "文件分块大小不匹配");
     // Resending a chunk already on disk is a no-op: the final hash remains the
     // authority on what the bytes actually are.
-    if (ledger.bitmap[index >> 3] & (1 << (index & 7))) return this.#accept(fileId, ledger.bitmap, ledger.chunkCount);
+    if (ledger.bitmap[index >> 3] & (1 << (index & 7))) return this.#accept(ledger.bitmap, ledger.size, ledger.chunkCount);
 
     let descriptor: number;
     try {
       descriptor = openSync(this.files.partialPath(fileId), "r+");
     } catch {
       // The bytes are gone but the ledger row is not — possible only through
-      // outside tampering, since reclamation removes both together. The next
+      // outside changes to the upload buffer. The next
       // `begin` finds the mismatch and starts over.
       throw new UploadHttpError(404, "上传不存在或已被清理");
     }
     try {
       // Positioned write into the preallocated file keeps the bytes at exactly
       // the offset the chunk index promises.
-      writeSync(descriptor, chunk, 0, length, index * FILE_CHUNK_SIZE);
+      let written = 0;
+      while (written < length) {
+        const bytes = writeSync(descriptor, chunk, written, length - written, index * FILE_CHUNK_SIZE + written);
+        if (!bytes) throw new Error("文件分块写入失败");
+        written += bytes;
+      }
       // The bytes must survive a power loss before the ledger claims them, or a
       // crash would leave a set bit over a hole in the file.
       fdatasyncSync(descriptor);
@@ -118,14 +123,14 @@ export class UploadService {
       this.#promote(fileId, ledger.size);
       return { status: "stored", fileId };
     }
-    return this.#accept(fileId, marked.bitmap, ledger.chunkCount);
+    return this.#accept(marked.bitmap, ledger.size, ledger.chunkCount);
   }
 
-  #accept(fileId: string, bitmap: Buffer, chunkCount: number): UploadChunkResponse {
+  #accept(bitmap: Buffer, size: number, chunkCount: number): UploadChunkResponse {
     return {
       status: "accepted",
       missingChunks: missingFromBitmap(bitmap, chunkCount),
-      receivedBytes: countWrittenChunks(bitmap) * FILE_CHUNK_SIZE,
+      receivedBytes: receivedBytes(bitmap, size, chunkCount),
     };
   }
 
@@ -152,7 +157,8 @@ export class UploadService {
     if (!ledger || ledger.size !== size || ledger.chunkCount !== chunkCount) return undefined;
     if (this.config.resumableUploadTtlHours === 0) return undefined;
     try {
-      if (Date.now() - statSync(this.files.partialPath(fileId)).mtimeMs > this.config.resumableUploadTtlHours * HOUR) return undefined;
+      const stats = statSync(this.files.partialPath(fileId));
+      if (stats.size !== size || Date.now() - stats.mtimeMs > this.config.resumableUploadTtlHours * HOUR) return undefined;
     } catch {
       return undefined;
     }
@@ -209,4 +215,11 @@ function missingFromBitmap(bitmap: Buffer, chunkCount: number): string {
   const tailBits = chunkCount & 7;
   if (tailBits !== 0) missing[fullBytes] = ~bitmap[fullBytes] & ((1 << tailBits) - 1);
   return missing.toString("base64");
+}
+
+function receivedBytes(bitmap: Buffer, size: number, chunkCount: number): number {
+  let bytes = countWrittenChunks(bitmap) * FILE_CHUNK_SIZE;
+  const last = chunkCount - 1;
+  if (last >= 0 && bitmap[last >> 3] & (1 << (last & 7))) bytes -= chunkCount * FILE_CHUNK_SIZE - size;
+  return bytes;
 }

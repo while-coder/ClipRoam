@@ -25,13 +25,14 @@ export type AdminRouteDeps = {
   config: ServerConfig;
   store: ClipRoamStore;
   broadcast: (userId: string, message: ServerMessage) => void;
+  disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
   // The running HTTP(S) server, so a new TLS certificate can be applied
   // without a restart when the runtime supports it.
   liveServer: { setSecureContext?: (context: TlsOptions) => void };
 };
 
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
-  const { admin, tls, config, store, liveServer, broadcast } = deps;
+  const { admin, tls, config, store, liveServer, broadcast, disconnectUser } = deps;
 
   const requireAdmin = (
     request: { headers: { cookie?: string } },
@@ -58,12 +59,11 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     const password = request.body && typeof request.body === "object" && "password" in request.body
       ? (request.body as { password?: unknown }).password
       : undefined;
-    const result = admin.login(request.ip, password);
+    const result = admin.login(password);
     if ("error" in result) {
       const responses = {
         NOT_CONFIGURED: [503, "管理员密码未配置。请设置 CLIPROAM_ADMIN_PASSWORD 后重启服务。"],
         INVALID_CREDENTIALS: [401, "管理员密码错误。"],
-        TOO_MANY_ATTEMPTS: [429, "登录尝试过多，请稍后再试。"],
       } as const;
       const [statusCode, message] = responses[result.error];
       return reply.code(statusCode).send({ code: result.error, message });
@@ -138,6 +138,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     if (!store.deleteUser(userId)) {
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
+    disconnectUser(userId, "Account deleted");
     return { ok: true };
   });
 
@@ -152,6 +153,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     if (!(await store.resetPassword(userId, password))) {
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
+    disconnectUser(userId, "Password reset");
     return { ok: true };
   });
 
@@ -171,6 +173,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
     const deletedEntryIds = store.deleteUserDevice(userId, deviceId);
+    disconnectUser(userId, "Device deleted", deviceId);
     if (deletedEntryIds === null) {
       return reply.code(404).send({ code: "DEVICE_NOT_FOUND", message: "设备不存在或已被删除。" });
     }
@@ -191,6 +194,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
     const revoked = store.revokeUserDeviceSession(userId, deviceId);
+    disconnectUser(userId, "Session revoked", deviceId);
     return { ok: true, revoked };
   });
 

@@ -61,6 +61,7 @@ export class ClipRoamStore {
     return this.#userStore(userId).listByIds(entryIds);
   }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
+  touchDevice(userId: string, deviceId: string): void { this.#userStore(userId).touchDevice(deviceId); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
   getDevice(userId: string, deviceId: string): Device | undefined { return this.#userStore(userId).getDevice(deviceId); }
   upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
@@ -96,8 +97,7 @@ export class ClipRoamStore {
   }
 
   // The account row cascades its sessions; the per-user database and directory
-  // are removed with it, while pool files it referenced are reclaimed by the
-  // next garbage-collection sweep.
+  // are removed with it, while pool files remain until an administrator deletes them.
   deleteUser(userId: string): boolean {
     this.#userStores.get(userId)?.store.close();
     this.#userStores.delete(userId);
@@ -110,13 +110,6 @@ export class ClipRoamStore {
   }
   canReadFile(userId: string, entryId: string, fileId: string): boolean {
     return this.#userStore(userId).hasFileReference(entryId, fileId);
-  }
-  async collectGarbage(partialTtlMs: number): Promise<{ removedFiles: number; removedBytes: number }> {
-    const referenced = new Set<string>();
-    for (const userId of this.#accounts.listUserIds()) {
-      for (const fileId of this.#userStore(userId).referencedFileIds()) referenced.add(fileId);
-    }
-    return await this.#files.reclaimUnreferenced(referenced, partialTtlMs);
   }
   close(): void {
     clearInterval(this.#sweepTimer);

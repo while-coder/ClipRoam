@@ -32,7 +32,7 @@ async function failServer(source: string, error: unknown): Promise<void> {
 try {
   await server.start();
   logger.info(`Server listening on ${server.port}; Admin: ${server.adminUrl}`);
-  logger.info(`Admin password: ${server.adminPassword || "(未设置，管理后台将不可登录)"}`);
+  if (!server.adminConfigured) logger.warn("管理员密码未配置，管理后台不可登录。请设置 CLIPROAM_ADMIN_PASSWORD。");
   logger.info(`Data directory: ${dataDirectory}`);
   logger.info(`Users directory: ${usersDirectory}`);
   logger.info(`Logs directory: ${logsDirectory}`);

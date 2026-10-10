@@ -39,7 +39,7 @@ export class SyncClient {
   readonly history: HistoryClient;
   readonly pendingUploads: PendingUploader;
   readonly uploads: RelayUploader;
-  constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, private readonly device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT) {
+  constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT) {
     this.#http = createSyncRequester(httpUrl, token, this.#abortController.signal);
     const isStopped = () => this.#stopped;
     this.history = new HistoryClient(this.#http, isStopped);
@@ -50,7 +50,7 @@ export class SyncClient {
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
-      activate: (entryId) => activateClipboardEntry(this.#http, device.id, entryId),
+      activate: (entryId) => activateClipboardEntry(this.#http, entryId),
     }, autoUploadLimit);
     this.uploads = new RelayUploader(this.#http, {
       isStopped,
@@ -131,7 +131,7 @@ export class SyncClient {
     this.#socket = socket;
 
     socket.addEventListener("open", () => {
-      this.#send({ type: "auth", token: this.token, device: this.device });
+      this.#send({ type: "auth", token: this.token });
     });
 
     socket.addEventListener("message", (event) => {

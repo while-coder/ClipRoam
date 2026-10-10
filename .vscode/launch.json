@@ -8,9 +8,6 @@
       "program": "${workspaceFolder}/apps/server/debug/index.js",
       "cwd": "${workspaceFolder}/apps/server",
       "preLaunchTask": "launch:server",
-      "env": {
-        "CLIPROAM_ADMIN_PASSWORD": "admin"
-      },
       "console": "integratedTerminal",
       "sourceMaps": true,
       "outFiles": ["${workspaceFolder}/apps/server/debug/**/*.js"],

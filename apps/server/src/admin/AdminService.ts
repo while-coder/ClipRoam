@@ -1,36 +1,27 @@
 import { randomBytes } from "node:crypto";
-import { AttemptThrottle } from "../common/AttemptThrottle.js";
 import { secretsEqual } from "../common/secretsEqual.js";
-import { ADMIN_SESSION_LIFETIME_MS, LOGIN_ATTEMPT_WINDOW_MS, LOGIN_BLOCKED_FOR_MS, LOGIN_MAX_ATTEMPTS } from "../app/ServerConfig.js";
+import { ADMIN_SESSION_LIFETIME_MS } from "../app/ServerConfig.js";
 
 export class AdminService {
   #sessions = new Map<string, number>();
-  #throttle = new AttemptThrottle({ maxAttempts: LOGIN_MAX_ATTEMPTS, windowMs: LOGIN_ATTEMPT_WINDOW_MS, blockedForMs: LOGIN_BLOCKED_FOR_MS });
   readonly #password: string;
 
   constructor(password = process.env.CLIPROAM_ADMIN_PASSWORD ?? "") {
     this.#password = password;
   }
 
-  get password(): string {
-    return this.#password;
-  }
-
   get isConfigured(): boolean {
     return this.#password.length > 0;
   }
 
-  login(ip: string, password: unknown): { token: string } | { error: "NOT_CONFIGURED" | "INVALID_CREDENTIALS" | "TOO_MANY_ATTEMPTS" } {
+  login(password: unknown): { token: string } | { error: "NOT_CONFIGURED" | "INVALID_CREDENTIALS" } {
     if (!this.isConfigured) return { error: "NOT_CONFIGURED" };
     const now = Date.now();
-    if (this.#throttle.isBlocked(ip, now)) return { error: "TOO_MANY_ATTEMPTS" };
 
-    if (!secretsEqual(this.password, password)) {
-      this.#throttle.recordFailure(ip, now);
+    if (!secretsEqual(this.#password, password)) {
       return { error: "INVALID_CREDENTIALS" };
     }
 
-    this.#throttle.reset(ip);
     this.#removeExpiredSessions(now);
     const token = randomBytes(32).toString("base64url");
     this.#sessions.set(token, now + ADMIN_SESSION_LIFETIME_MS);

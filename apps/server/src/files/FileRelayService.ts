@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { PassThrough } from "node:stream";
 
 // A relay session lives exactly as long as the requester's held GET. If no
@@ -16,11 +15,7 @@ const MAX_SESSIONS_PER_USER = 20;
 export type RelaySession = {
   id: string;
   userId: string;
-  entryId: string;
-  fileId: string;
-  size: number;
   stream: PassThrough;
-  claimed: boolean;
   // Device id of the sender that won the claim: `file.requested` reaches every
   // online device holding the content, so without this binding a second sender
   // would interleave its chunks into the same pipe and corrupt the stream.
@@ -43,6 +38,7 @@ export type RelaySession = {
  */
 export class FileRelayService {
   readonly #sessions = new Map<string, RelaySession>();
+  readonly #timer: NodeJS.Timeout;
 
   constructor() {
     // Session lifecycle is driven by the requester's GET and the sender's
@@ -50,13 +46,18 @@ export class FileRelayService {
     // sweep runs on its own (unref'd, purely advisory) timer as well. The
     // interval is well under the unclaimed window so expiry stays close to
     // the intended timeout.
-    const timer = setInterval(() => this.#prune(), UNCLAIMED_TIMEOUT_MS / 3);
-    timer.unref?.();
+    this.#timer = setInterval(() => this.#prune(), UNCLAIMED_TIMEOUT_MS / 3);
+    this.#timer.unref();
+  }
+
+  close(): void {
+    clearInterval(this.#timer);
+    for (const id of this.#sessions.keys()) this.abandon(id);
   }
 
   // Returns undefined when the user already pins the session cap: a misbehaving
   // client must not be able to hold unbounded streams. The route answers 429.
-  create(userId: string, entryId: string, fileId: string, size: number, stream: PassThrough): RelaySession | undefined {
+  create(userId: string, stream: PassThrough): RelaySession | undefined {
     this.#prune();
     let held = 0;
     for (const session of this.#sessions.values()) {
@@ -66,11 +67,7 @@ export class FileRelayService {
     const session: RelaySession = {
       id: randomUUID(),
       userId,
-      entryId,
-      fileId,
-      size,
       stream,
-      claimed: false,
       createdAt: Date.now(),
       lastActivity: Date.now(),
       queue: Promise.resolve(),
@@ -90,8 +87,7 @@ export class FileRelayService {
   admit(sessionId: string, senderDeviceId: string): boolean {
     const session = this.#sessions.get(sessionId);
     if (!session || session.stream.destroyed) return false;
-    if (session.claimed) return session.claimedBy === senderDeviceId;
-    session.claimed = true;
+    if (session.claimedBy !== undefined) return session.claimedBy === senderDeviceId;
     session.claimedBy = senderDeviceId;
     return true;
   }
@@ -116,11 +112,18 @@ export class FileRelayService {
     if (stream.destroyed) return false;
     session.lastActivity = Date.now();
     if (!stream.write(chunk)) {
-      await Promise.race([
-        once(stream, "drain"),
-        once(stream, "close"),
-        once(stream, "error"),
-      ]);
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          stream.off("drain", finished);
+          stream.off("close", finished);
+          stream.off("error", failed);
+        };
+        const finished = () => { cleanup(); resolve(); };
+        const failed = (error: Error) => { cleanup(); reject(error); };
+        stream.once("drain", finished);
+        stream.once("close", finished);
+        stream.once("error", failed);
+      });
     }
     return !stream.destroyed;
   }
@@ -145,7 +148,7 @@ export class FileRelayService {
   #prune(): void {
     const now = Date.now();
     for (const [id, session] of this.#sessions) {
-      const expired = session.claimed
+      const expired = session.claimedBy !== undefined
         ? now - session.lastActivity > CLAIMED_IDLE_MS
         : now - session.createdAt > UNCLAIMED_TIMEOUT_MS;
       if (expired) {

@@ -99,9 +99,9 @@ onMounted(load);
         <SAlert v-if="error" type="error">{{ error }}</SAlert>
         <SSpace>
           <SButton type="primary" :loading="submitting" @click="save">
-            {{ status?.source === "managed" ? "替换证书" : "保存证书" }}
+            {{ status?.enabled ? "替换证书" : "保存证书" }}
           </SButton>
-          <SButton v-if="status?.source === 'managed'" type="error" :disabled="submitting" @click="requestTlsRemoval">删除证书</SButton>
+          <SButton v-if="status?.enabled" type="error" :disabled="submitting" @click="requestTlsRemoval">删除证书</SButton>
         </SSpace>
       </SForm>
     </SCard>

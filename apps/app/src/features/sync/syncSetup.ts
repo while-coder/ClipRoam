@@ -65,14 +65,13 @@ export async function authenticateAccount(
 ): Promise<AuthResponse> {
   const { httpUrl } = getServerUrls(address, protocol);
   // 设备信息随登录上报：登录即注册设备行，不依赖推送通道连得上。
-  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, deviceId: device.id, device });
+  const body = await postJson(httpUrl, `/auth/${mode}`, { username, password, device });
   const result = AuthResponseSchema.safeParse(body);
   if (!result.success) throw new Error("服务器返回了不兼容的登录响应");
   return result.data;
 }
 
-// 设备信息（别名等）变化后主动上报。旧服务器没有该端点会失败，由调用方
-// 忽略——重连时的 WS auth 消息仍会携带 device 兜底。
+// 设备信息（别名等）变化后主动上报。
 export async function pushDeviceInfo(
   address: string,
   protocol: ServerProtocol,

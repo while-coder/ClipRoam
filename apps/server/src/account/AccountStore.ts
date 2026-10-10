@@ -5,7 +5,7 @@ import type { AuthResponse } from "@cliproam/protocol";
 // `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
 type AuthSession = Omit<AuthResponse, "settings">;
 import type Database from "better-sqlite3";
-import { escapeLike, openDatabase } from "../sqlite.js";
+import { escapeLike, openDatabase, withTransaction } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
 import { ACCOUNT_SESSION_LIFETIME_MS, PASSWORD_KEY_LENGTH } from "../app/ServerConfig.js";
 
@@ -90,6 +90,8 @@ export class AccountStore {
     if (!secretsEqual(actualHash.toString("hex"), Buffer.from(row.password_hash).toString("hex"))) {
       throw new InvalidCredentialsError();
     }
+    const current = this.#database.prepare("SELECT password_hash FROM users WHERE id = ?").get(row.id) as { password_hash: Uint8Array } | undefined;
+    if (!current || !Buffer.from(current.password_hash).equals(Buffer.from(row.password_hash))) throw new InvalidCredentialsError();
     return this.#issueSession({ id: row.id, username: row.username }, deviceId);
   }
 
@@ -107,9 +109,12 @@ export class AccountStore {
 
     const salt = randomBytes(16);
     const passwordHash = await derivePassword(newPassword, salt);
-    this.#database.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
-      .run(passwordHash, salt, row.id);
-    this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id);
+    withTransaction(this.#database, () => {
+      const updated = this.#database.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ? AND password_hash = ?")
+        .run(passwordHash, salt, row.id, row.password_hash);
+      if (!updated.changes) throw new InvalidCredentialsError();
+      this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id);
+    });
   }
 
   authenticateSession(token: string): AuthenticatedUser | undefined {
@@ -119,10 +124,6 @@ export class AccountStore {
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `).get(hashSessionToken(token), new Date().toISOString()) as AuthenticatedUser | undefined;
-  }
-
-  listUserIds(): string[] {
-    return (this.#database.prepare("SELECT id FROM users").all() as Array<{ id: string }>).map(({ id }) => id);
   }
 
   listUsers(search?: string): AdminUserSummary[] {
@@ -156,10 +157,12 @@ export class AccountStore {
     if (!this.hasUser(userId)) return false;
     const salt = randomBytes(16);
     const passwordHash = await derivePassword(newPassword, salt);
-    this.#database.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
-      .run(passwordHash, salt, userId);
-    this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
-    return true;
+    return withTransaction(this.#database, () => {
+      const updated = this.#database.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+        .run(passwordHash, salt, userId);
+      this.#database.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+      return updated.changes > 0;
+    });
   }
 
   deleteSession(userId: string, deviceId: string): boolean {

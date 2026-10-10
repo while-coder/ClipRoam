@@ -1,7 +1,6 @@
 import type { WebSocket } from "@fastify/websocket";
 import {
   ClientMessageSchema,
-  type ClientMessage,
   type Device,
   type ServerMessage,
 } from "@cliproam/protocol";
@@ -11,6 +10,7 @@ type ClientConnection = {
   socket: WebSocket;
   device: Device;
   userId: string;
+  token: string;
 };
 
 type ConnectionTarget = Pick<ClientConnection, "socket">;
@@ -20,11 +20,11 @@ const logger = getLogger("SocketHub");
 // Everything the hub needs from the rest of the server, expressed as plain
 // functions so the hub stays ignorant of stores and sessions. Device info
 // rides the HTTP login; `authenticateSession` already carries the device id,
-// so the hub can resolve the device itself when `auth.device` is absent.
+// so the hub resolves device info from the store.
 export type SocketHubDeps = {
   authenticateSession: (token: string) => { id: string; deviceId: string } | undefined;
   getDevice: (userId: string, deviceId: string) => Device | undefined;
-  registerDevice: (userId: string, device: Device) => void;
+  touchDevice: (userId: string, deviceId: string) => void;
 };
 
 // Authenticated sockets only ever send auth and ping: every other
@@ -37,6 +37,8 @@ export class SocketHub {
 
   handleSocket(socket: WebSocket): void {
     let client: ClientConnection | undefined;
+    const authTimer = setTimeout(() => socket.terminate(), 15_000);
+    authTimer.unref();
 
     socket.on("message", (data: Buffer) => {
       try {
@@ -56,7 +58,8 @@ export class SocketHub {
             this.#send(client, { type: "error", code: "ALREADY_AUTHENTICATED", message: "Connection is already authenticated." });
             return;
           }
-          client = this.#authenticateClient(socket, parsed.data.token, parsed.data.device);
+          client = this.#authenticateClient(socket, parsed.data.token);
+          if (client) clearTimeout(authTimer);
           return;
         }
         if (!client) {
@@ -67,17 +70,15 @@ export class SocketHub {
           });
           return;
         }
-        const authenticatedClient = client;
-        void this.#handleMessage(authenticatedClient, parsed.data).catch((error: unknown) => {
-          logger.error(`Failed to handle ${parsed.data.type} from device ${authenticatedClient.device.id}:`, error);
-          this.#send(authenticatedClient, { type: "error", code: "INTERNAL_ERROR", message: "服务器处理消息失败。" });
-        });
+        if (!this.#isAuthenticated(client)) return;
+        this.#send(client, { type: "pong" });
       } catch (error) {
         logger.warn("Rejected invalid WebSocket JSON:", error);
         this.#send({ socket }, { type: "error", code: "INVALID_JSON", message: "Messages must be valid JSON." });
       }
     });
     socket.on("close", () => {
+      clearTimeout(authTimer);
       if (client) this.#handleClientClose(client);
     });
     // A socket-level error (TLS failure, connection reset, fatal frame error)
@@ -97,62 +98,46 @@ export class SocketHub {
   // is excluded there, by device id rather than by connection object.
   broadcast(userId: string, message: ServerMessage, exceptDeviceId?: string): void {
     for (const client of this.#clients) {
-      if (client.device.id !== exceptDeviceId && client.userId === userId) this.#send(client, message);
+      if (client.device.id !== exceptDeviceId && client.userId === userId && this.#isAuthenticated(client)) this.#send(client, message);
     }
   }
 
-  // Not scoped to an account on purpose — used for content-pool events that
-  // any signed-in device may care about (see `file.available`).
-  broadcastAll(message: ServerMessage): void {
-    for (const client of this.#clients) this.#send(client, message);
-  }
-
-  disconnectUser(userId: string, reason: string): void {
+  disconnectUser(userId: string, reason: string, deviceId?: string): void {
     for (const client of this.#clients) {
-      if (client.userId === userId) client.socket.close(1008, reason);
+      if (client.userId === userId && (!deviceId || client.device.id === deviceId)) client.socket.close(1008, reason);
     }
   }
 
-  #authenticateClient(socket: WebSocket, token: string, messageDevice: Device | undefined): ClientConnection | undefined {
+  broadcastAll(message: ServerMessage): void {
+    for (const client of this.#clients) {
+      if (this.#isAuthenticated(client)) this.#send(client, message);
+    }
+  }
+
+  #authenticateClient(socket: WebSocket, token: string): ClientConnection | undefined {
     const user = this.deps.authenticateSession(token);
     if (!user) {
-      logger.warn(`Rejected WebSocket authentication for device ${messageDevice?.id ?? "unknown"}`);
+      logger.warn("Rejected WebSocket authentication");
       this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
       socket.close(1008, "Authentication failed");
       return undefined;
     }
-    // Session 设备号是权威标识：消息里带的 device（旧客户端/兼容字段）id 不
-    // 一致说明客户端本机身份已被重置，拒绝并让其重新登录以重新上报。
-    if (messageDevice && messageDevice.id !== user.deviceId) {
-      logger.warn(`Device id mismatch on WebSocket authentication: session=${user.deviceId} message=${messageDevice.id}`);
-      this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
-      socket.close(1008, "Authentication failed");
-      return undefined;
-    }
-    const device = messageDevice ?? this.deps.getDevice(user.id, user.deviceId);
+    const device = this.deps.getDevice(user.id, user.deviceId);
     if (!device) {
       logger.warn(`No device info available for user ${user.id} device ${user.deviceId}`);
       this.#send({ socket }, { type: "error", code: "AUTH_FAILED", message: "登录已失效，请重新登录" });
       socket.close(1008, "Authentication failed");
       return undefined;
     }
-    const client: ClientConnection = { socket, userId: user.id, device };
+    const client: ClientConnection = { socket, userId: user.id, device, token };
     this.#clients.add(client);
-    this.deps.registerDevice(user.id, device);
+    this.deps.touchDevice(user.id, device.id);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
     // A bare confirmation; the client pulls the manifest and device list over
     // HTTP (`GET /entries/manifest`) once it sees this.
     this.#send(client, { type: "auth.ack" });
     this.broadcast(user.id, { type: "device.presence", device, online: true });
     return client;
-  }
-
-  async #handleMessage(client: ClientConnection, message: ClientMessage): Promise<void> {
-    switch (message.type) {
-      case "ping":
-        this.#send(client, { type: "pong" });
-        return;
-    }
   }
 
   #handleClientClose(client: ClientConnection): void {
@@ -162,6 +147,18 @@ export class SocketHub {
   }
 
   #send(client: ConnectionTarget, message: ServerMessage): void {
-    if (client.socket.readyState === 1) client.socket.send(JSON.stringify(message));
+    if (client.socket.readyState !== 1) return;
+    if (client.socket.bufferedAmount > 32 * 1024 * 1024) {
+      client.socket.terminate();
+      return;
+    }
+    client.socket.send(JSON.stringify(message));
+  }
+
+  #isAuthenticated(client: ClientConnection): boolean {
+    const user = this.deps.authenticateSession(client.token);
+    if (user?.id === client.userId && user.deviceId === client.device.id) return true;
+    client.socket.close(1008, "Session expired or revoked");
+    return false;
   }
 }

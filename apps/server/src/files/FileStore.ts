@@ -1,15 +1,10 @@
-import { mkdirSync, readdirSync, rmSync, statSync, type Stats } from "node:fs";
+import { mkdirSync, rmSync, statSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import { filesDatabasePath, filesDirectory } from "../DataPaths.js";
 import { chunk, escapeLike, openDatabase, placeholders, QUERY_BATCH, withTransaction } from "../sqlite.js";
 
 const FILE_ID_PATTERN = /^[0-9a-f]{64}$/;
-const PARTIAL_SUFFIX = ".part";
-// Disk removals between event-loop yields during reclaim: keeps one GC sweep
-// from monopolising the loop while still finishing a large pool quickly.
-const GC_YIELD_BATCH = 200;
-
 type FileRow = { file_id: string; size: number; stored: number };
 
 // A pool answer for one content id: the size the first registering entry
@@ -22,7 +17,7 @@ export type FileRecord = { fileId: string; size: number; stored: boolean; create
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
 // bytes are stored once no matter how many entries or paths point at them.
-// Reclaiming is therefore driven from the outside — see `reclaimUnreferenced`.
+// Files remain stored until an administrator explicitly deletes them.
 export class FileStore {
   private readonly database: Database.Database;
   private readonly directory: string;
@@ -48,10 +43,14 @@ export class FileStore {
         file_id TEXT PRIMARY KEY,
         size INTEGER NOT NULL,
         chunk_count INTEGER NOT NULL,
-        bitmap BLOB NOT NULL,
-        updated_at TEXT NOT NULL
+        bitmap BLOB NOT NULL
       );
     `);
+    // Old ledgers keep their bitmap; only the unused GC timestamp is removed.
+    const columns = this.database.pragma("table_info(upload_parts)") as Array<{ name: string }>;
+    if (columns.some(({ name }) => name === "updated_at")) {
+      this.database.exec("ALTER TABLE upload_parts DROP COLUMN updated_at");
+    }
   }
 
   close(): void { this.database.close(); }
@@ -84,7 +83,10 @@ export class FileStore {
     const file = this.database
       .prepare("SELECT size FROM files WHERE file_id = ? AND stored = 1")
       .get(fileId) as { size: number } | undefined;
-    return file && { path: this.path(fileId), size: file.size };
+    if (!file) return undefined;
+    const path = this.path(fileId);
+    const stats = statsOf(path);
+    return stats?.isFile() && stats.size === file.size ? { path, size: file.size } : undefined;
   }
 
   // Locates the preallocated upload buffer beside its eventual resting place so
@@ -104,16 +106,16 @@ export class FileStore {
 
   beginUploadLedger(fileId: string, size: number, chunkCount: number): void {
     this.database.prepare(`
-      INSERT INTO upload_parts (file_id, size, chunk_count, bitmap, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO upload_parts (file_id, size, chunk_count, bitmap)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(file_id) DO UPDATE SET
         size = excluded.size, chunk_count = excluded.chunk_count,
-        bitmap = excluded.bitmap, updated_at = excluded.updated_at
-    `).run(fileId, size, chunkCount, zeroBitmap(chunkCount), new Date().toISOString());
+        bitmap = excluded.bitmap
+    `).run(fileId, size, chunkCount, zeroBitmap(chunkCount));
   }
 
   // Marks one chunk written and reports whether the ledger is now full. Returns
-  // undefined when reclamation removed the row while the request was in flight.
+  // undefined when the ledger no longer exists.
   markChunkWritten(fileId: string, index: number): { bitmap: Buffer; full: boolean } | undefined {
     return withTransaction(this.database, () => {
       const ledger = this.uploadLedger(fileId);
@@ -121,8 +123,8 @@ export class FileStore {
       const bitmap = Buffer.from(ledger.bitmap);
       bitmap[index >> 3] |= 1 << (index & 7);
       this.database
-        .prepare("UPDATE upload_parts SET bitmap = ?, updated_at = ? WHERE file_id = ?")
-        .run(bitmap, new Date().toISOString(), fileId);
+        .prepare("UPDATE upload_parts SET bitmap = ? WHERE file_id = ?")
+        .run(bitmap, fileId);
       return { bitmap, full: isBitmapFull(bitmap, ledger.chunkCount) };
     });
   }
@@ -211,71 +213,6 @@ export class FileStore {
     return removed;
   }
 
-  // Deletes every content the caller does not claim as still reachable from a
-  // clipboard entry, plus .part uploads idle past `partialTtlMs`. The caller
-  // supplies the reachable set because only the entries know it. Async and
-  // yielding: a pool of a few thousand files would otherwise block the event
-  // loop — every request, WebSocket push and heartbeat — for the whole walk.
-  async reclaimUnreferenced(referenced: ReadonlySet<string>, partialTtlMs: number): Promise<{ removedFiles: number; removedBytes: number }> {
-    withTransaction(this.database, () => {
-      const known = this.database.prepare("SELECT file_id FROM files").all() as Array<{ file_id: string }>;
-      const remove = this.database.prepare("DELETE FROM files WHERE file_id = ?");
-      for (const { file_id } of known) {
-        if (!referenced.has(file_id)) remove.run(file_id);
-      }
-    });
-
-    // Disk removal stays outside the transaction: it is slow, and a crash
-    // halfway through only leaves unreferenced bytes for the next run.
-    let removedFiles = 0;
-    let removedBytes = 0;
-    const removeLedger = this.database.prepare("DELETE FROM upload_parts WHERE file_id = ?");
-    // The `referenced` snapshot was taken before this walk started: content
-    // promoted in between has a registration row but no snapshot entry, so
-    // final files are kept on a live table check, not the stale snapshot.
-    const isRegistered = this.database.prepare("SELECT 1 FROM files WHERE file_id = ?");
-    let processed = 0;
-    for (const bucket of readDirectorySafely(this.directory)) {
-      const bucketPath = join(this.directory, bucket);
-      const names = readDirectorySafely(bucketPath);
-      let remaining = names.length;
-      for (const name of names) {
-        const path = join(bucketPath, name);
-        const partial = name.endsWith(PARTIAL_SUFFIX);
-        const fileId = partial ? name.slice(0, -PARTIAL_SUFFIX.length) : name;
-        // One stat answers both questions — whether a .part has aged out and
-        // how many bytes retiring it reclaims. A stat failure keeps the file
-        // for the next run to look at.
-        const stats = statsOf(path);
-        if (!stats) continue;
-        const keep = partial
-          ? !isExpired(stats.mtimeMs, partialTtlMs)
-          : referenced.has(fileId) || isRegistered.get(fileId) !== undefined;
-        if (keep) continue;
-        removedBytes += stats.size;
-        rmSync(path, { force: true });
-        // The ledger must not outlive the bytes it describes, or a later `begin`
-        // would report chunks that no longer exist.
-        if (partial) removeLedger.run(fileId);
-        removedFiles += 1;
-        remaining -= 1;
-        processed += 1;
-        if (processed % GC_YIELD_BATCH === 0) {
-          await new Promise((resolve) => setImmediate(resolve));
-        }
-      }
-      if (remaining === 0) rmSync(bucketPath, { recursive: true, force: true });
-    }
-    return { removedFiles, removedBytes };
-  }
-}
-
-function readDirectorySafely(path: string): string[] {
-  try {
-    return readdirSync(path);
-  } catch {
-    return [];
-  }
 }
 
 // Bit `i` of a bitmap lives in byte `i >> 3`, counting from the least
@@ -313,9 +250,4 @@ function statsOf(path: string): Stats | undefined {
   } catch {
     return undefined;
   }
-}
-
-function isExpired(mtimeMs: number, ttlMs: number): boolean {
-  if (ttlMs === 0) return true;
-  return Date.now() - mtimeMs > ttlMs;
 }

@@ -91,7 +91,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     // the headers flush immediately and Fastify stays out of the byte path —
     // this connection may stay open for minutes.
     const stream = new PassThrough();
-    const session = relays.create(user.id, entryId, fileId, size, stream);
+    const session = relays.create(user.id, stream);
     if (!session) {
       return reply.code(429).send({ message: "中转会话数已达上限" });
     }
@@ -119,11 +119,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   });
 
 
-  // Batch availability for content ids — the pool-level state the per-entry
-  // `missing` list used to inline. The pool is content-addressed and the
-  // download route already answers "do you hold sha256(x)?" for any published
-  // entry, so a bare availability read leaks nothing new; ids still validate
-  // against the content-hash shape.
+  // Availability is global: content hashes are trusted for deduplication.
   app.post("/files/query", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;

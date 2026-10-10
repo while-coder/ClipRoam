@@ -59,6 +59,14 @@ export class UserDataStore {
         updated_at TEXT NOT NULL
       );
     `);
+    if (this.#database.pragma("user_version", { simple: true }) === 0) {
+      this.#transaction(() => {
+        const rows = this.#database.prepare("SELECT id, kind, content, extra FROM entries WHERE kind = 'files'").all() as EntryRow[];
+        const update = this.#database.prepare("UPDATE entries SET hash = ? WHERE id = ?");
+        for (const row of rows) update.run(entryHash({ kind: row.kind, content: row.content, ...parseExtra(row.extra) }), row.id);
+        this.#database.pragma("user_version = 1");
+      });
+    }
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
@@ -143,6 +151,11 @@ export class UserDataStore {
     `).run(device.id, JSON.stringify(deviceInfo), new Date().toISOString());
   }
 
+  touchDevice(deviceId: string): void {
+    this.#database.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
+      .run(new Date().toISOString(), deviceId);
+  }
+
   listDevices(): Device[] {
     return this.#listDeviceRows().map(({ device }) => device);
   }
@@ -178,8 +191,7 @@ export class UserDataStore {
 
   // A removed device takes the entries it contributed with it, so no fresh
   // "unknown device" orphans are left behind. Returns the deleted entry ids
-  // for the route layer to broadcast (content bytes are reclaimed later by
-  // collectGarbage(), exactly like delete()), or null when the device row
+  // for the route layer to broadcast (pool bytes remain stored), or null when the device row
   // does not exist.
   deleteDevice(deviceId: string): string[] | null {
     const exists = this.#database.prepare("SELECT 1 FROM devices WHERE device_id = ?").get(deviceId);
@@ -196,9 +208,8 @@ export class UserDataStore {
 
   // The server owns identity: it dedupes by content hash, assigns the rowid
   // and stamps arrival time. The client's id and clock are ignored, so a
-  // retried publish cannot mint a second row. A hash conflict means the same
-  // content was re-copied: only `created_at` is refreshed so the entry moves
-  // back to the top, and no other stored field is ever rewritten.
+  // retried publish cannot mint a second row. A hash conflict refreshes time;
+  // both the HTTP response and the push must use the actual persisted row.
   upsert(entry: EntryPublishInput): ClipboardEntry {
     const createdAt = new Date().toISOString();
     const extra = JSON.stringify({
@@ -207,13 +218,13 @@ export class UserDataStore {
       fileInfo: entry.fileInfo,
       imageInfo: entry.imageInfo,
     });
-    const row = this.#transaction(() => {
+    return this.#transaction(() => {
       const row = this.#database.prepare(`
         INSERT INTO entries (
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at
-        RETURNING id, created_at
+        RETURNING id, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -221,21 +232,17 @@ export class UserDataStore {
         extra,
         entry.sourceDeviceId,
         createdAt,
-      ) as { id: number; created_at: string };
-      this.files.register(entryContents(entry));
-      return row;
+      ) as EntryRow;
+      const storedEntry = this.#toEntry(row)!;
+      this.files.register(entryContents(storedEntry));
+      return storedEntry;
     });
-    return {
-      ...entry,
-      id: String(row.id),
-      createdAt: row.created_at,
-    };
   }
 
   // Enforces the account-wide history cap: entries beyond the newest
   // `maxEntries` are dropped and their ids returned so the route layer can
   // broadcast clipboard.deleted. Like delete(), only references go away —
-  // collectGarbage() reclaims the bytes later.
+  // Stored bytes remain until an administrator removes them.
   prune(maxEntries: number): string[] {
     if (maxEntries <= 0) return [];
     const rows = this.#database.prepare(`
@@ -247,20 +254,9 @@ export class UserDataStore {
   }
 
   // Content is shared across entries, so deletion only drops the reference.
-  // Unreferenced bytes are reclaimed by collectGarbage().
+  // Stored bytes remain until an administrator removes them.
   delete(entryId: string): void {
     this.#database.prepare("DELETE FROM entries WHERE id = ?").run(entryId);
-  }
-
-  // The server-wide pool owns collection. This returns this account's mark set
-  // so ClipRoamStore can union it with every other account before reclaiming.
-  referencedFileIds(): Set<string> {
-    const referenced = new Set<string>();
-    const rows = this.#database.prepare("SELECT kind, extra FROM entries").all() as Array<{ kind: string; extra: string }>;
-    for (const row of rows) {
-      for (const { fileId } of entryContents({ kind: row.kind, ...parseExtra(row.extra) })) referenced.add(fileId);
-    }
-    return referenced;
   }
 
   hasFileReference(entryId: string, downloadId: string): boolean {
@@ -273,12 +269,10 @@ export class UserDataStore {
   close(): void { this.#database.close(); }
 
   #toEntry(row: EntryRow): ClipboardEntry | undefined {
-    const extra = parseExtra(row.extra);
+    let extra: unknown;
+    try { extra = JSON.parse(row.extra); } catch { extra = {}; }
     const result = ClipboardEntrySchema.safeParse({
-      html: extra.html,
-      rtf: extra.rtf,
-      fileInfo: extra.fileInfo,
-      imageInfo: extra.imageInfo,
+      ...(typeof extra === "object" && extra !== null ? extra : {}),
       id: String(row.id),
       kind: row.kind,
       content: row.content,
@@ -308,9 +302,8 @@ function normalizeDateBound(value: string, bound: "start" | "end"): string {
 
 // Content fingerprint for dedup, deliberately free of device identity: the
 // same clipboard text captured anywhere collapses into one entry. Kind
-// prefixes keep the three payload spaces disjoint. File entries hash their
-// whole sorted content-id set — tree order must not matter — falling back to
-// the summary text while background hashing is still in flight.
+// prefixes keep the payload spaces disjoint. File identity includes paths,
+// empty directories and repeated leaves; key insertion order is irrelevant.
 function entryHash(entry: {
   kind: string;
   content: string;
@@ -319,8 +312,16 @@ function entryHash(entry: {
 }): string {
   const payload = entry.kind === "text"
     ? entry.content
+    : entry.kind === "files"
+      ? JSON.stringify([entry.content, canonicalTree(entry.fileInfo ?? {})])
     : entryContents(entry).map(({ fileId }) => fileId).sort().join("\n") || entry.content;
   return createHash("sha256").update(`${entry.kind}\0${payload}`).digest("hex");
+}
+
+function canonicalTree(node: unknown): unknown {
+  if (!node || typeof node !== "object") return node;
+  return Object.fromEntries(Object.entries(node).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([key, value]) => [key, canonicalTree(value)]));
 }
 
 function parseExtra(extra: string): { html?: string; rtf?: string; fileInfo?: FileInfo; imageInfo?: ImageInfo } {

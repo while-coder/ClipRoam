@@ -1,4 +1,4 @@
-export type TlsStatus = { enabled: boolean; source: "managed" | "none" };
+export type TlsStatus = { enabled: boolean };
 export type TransferSettings = {
   maxStoredFileMb: number;
   resumableUploadTtlHours: number;

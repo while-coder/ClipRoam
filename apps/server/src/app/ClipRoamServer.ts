@@ -13,7 +13,7 @@ import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
-import { loadServerConfig, GARBAGE_COLLECTION_INTERVAL_MS, HOUR, SERVER_PORT, SMALL_JSON_BODY_LIMIT, type ServerConfig } from "./ServerConfig.js";
+import { loadServerConfig, SERVER_PORT, SMALL_JSON_BODY_LIMIT, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
 import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
@@ -28,13 +28,12 @@ export class ClipRoamServer {
   readonly #sockets: SocketHub;
   readonly #relays: FileRelayService;
   readonly #uploads: UploadService;
-  #collectionTimer?: NodeJS.Timeout;
 
   constructor(private readonly config: ServerConfig = loadServerConfig()) {
     this.#sockets = new SocketHub({
       authenticateSession: (token) => this.#auth.authenticateSession(token),
       getDevice: (userId, deviceId) => this.#store.getDevice(userId, deviceId),
-      registerDevice: (userId, device) => this.#store.upsertDevice(userId, device),
+      touchDevice: (userId, deviceId) => this.#store.touchDevice(userId, deviceId),
     });
     this.#relays = new FileRelayService();
     this.#uploads = new UploadService(
@@ -46,7 +45,7 @@ export class ClipRoamServer {
 
   get port(): number { return SERVER_PORT; }
 
-  get adminPassword(): string { return this.#admin.password; }
+  get adminConfigured(): boolean { return this.#admin.isConfigured; }
 
   get adminUrl(): string {
     const protocol = this.#tls.status.enabled ? "https" : "http";
@@ -58,15 +57,11 @@ export class ClipRoamServer {
     // not the publish-body limit that used to double as this value.
     await this.#app.register(websocket, { options: { maxPayload: SMALL_JSON_BODY_LIMIT } });
     this.#registerRoutes();
-    this.#collectionTimer = setInterval(() => {
-      this.#collectGarbage();
-    }, GARBAGE_COLLECTION_INTERVAL_MS);
-    this.#collectionTimer.unref();
     await this.#app.listen({ port: SERVER_PORT, host: "0.0.0.0" });
   }
 
   async stop(): Promise<void> {
-    if (this.#collectionTimer) clearInterval(this.#collectionTimer);
+    this.#relays.close();
     await this.#app.close();
   }
 
@@ -102,6 +97,7 @@ export class ClipRoamServer {
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       maxHistoryEntries: () => this.config.maxHistoryEntries,
+      maxCaptureFileCount: () => this.config.maxCaptureFileCount,
     });
     registerDeviceRoutes(this.#app, {
       store: this.#store,
@@ -120,30 +116,17 @@ export class ClipRoamServer {
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },
+      disconnectUser: this.#sockets.disconnectUser.bind(this.#sockets),
     });
-    this.#app.addHook("onClose", async () => this.#store.close());
+    this.#app.addHook("onClose", async () => {
+      this.#store.close();
+    });
   }
 
   #publishFileAvailability(fileId: string): void {
-    // The content pool is global, so availability is not scoped to the
-    // uploader: any signed-in device that references the content wants this.
     this.#sockets.broadcastAll({ type: "file.available", fileId });
   }
 
-  // Sweeping walks the whole content pool, so it is deferred off the caller
-  // rather than run inline with the upload that triggered it.
-  #collectGarbage(): void {
-    void (async () => {
-      try {
-        const { removedFiles, removedBytes } = await this.#store.collectGarbage(this.config.resumableUploadTtlHours * HOUR);
-        if (removedFiles > 0) {
-          logger.info(`Reclaimed ${removedFiles} globally unreferenced files (${removedBytes} bytes)`);
-        }
-      } catch (error) {
-        logger.error("Failed to collect globally unreferenced files:", error);
-      }
-    })();
-  }
 }
 
 function createApp(tls: TlsOptions | undefined): FastifyInstance {

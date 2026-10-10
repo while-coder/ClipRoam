@@ -3,7 +3,7 @@ import type { ServerSettings } from "@cliproam/protocol";
 import type { AuthService } from "../../account/AuthService.js";
 
 export type AuthRouteDeps = {
-  auth: Pick<AuthService, "register" | "login" | "changePassword" | "authenticateSession">;
+  auth: Pick<AuthService, "register" | "login" | "changePassword">;
   // Changing the password invalidates every live session, so the socket for
   // each of the user's devices is closed and the clients re-login.
   onPasswordChanged: (userId: string) => void;
@@ -26,14 +26,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   });
 
   app.post("/auth/login", async (request, reply) => {
-    const result = await auth.login(request.ip, request.body);
+    const result = await auth.login(request.body);
     return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
   });
 
   app.post("/auth/password", async (request, reply) => {
-    const token = readBearerToken(request.headers.authorization);
-    const user = token ? auth.authenticateSession(token) : undefined;
-    const result = await auth.changePassword(request.ip, token, request.body);
+    const user = request.sessionUser;
+    const result = await auth.changePassword(user, request.body);
     if (result.statusCode === 204 && user) onPasswordChanged(user.id);
     return reply.code(result.statusCode).send(result.payload);
   });

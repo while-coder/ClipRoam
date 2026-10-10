@@ -89,10 +89,8 @@ export function createSyncRequester(httpUrl: string, token: string, sessionSigna
 }
 
 /** Broadcast clipboard activation after publication; no history-cache dependency. */
-export async function activateClipboardEntry(http: SyncRequester, deviceId: string, entryId: string): Promise<void> {
+export async function activateClipboardEntry(http: SyncRequester, entryId: string): Promise<void> {
   await http.request("POST", `/entries/${encodeURIComponent(entryId)}/activate`, {
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId }),
     signal: AbortSignal.timeout(30_000),
   }, EntryActivateResponseSchema, "服务器返回了不兼容的激活响应");
 }

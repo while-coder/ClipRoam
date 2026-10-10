@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   MAX_PUBLISH_BYTES,
-  EntryActivateRequestSchema,
+  ENTRY_PAGE_DEFAULT_LIMIT,
   EntryManifestQuerySchema,
   EntryPublishRequestSchema,
   EntryQueryRequestSchema,
@@ -12,7 +12,7 @@ import {
   type ServerMessage,
 } from "@cliproam/protocol";
 import { getLogger } from "../Logger.js";
-import { MANIFEST_PAGE_SIZE, SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
+import { SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 import { parseOr400 } from "./parseRequest.js";
@@ -24,6 +24,7 @@ export type EntryRouteDeps = {
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
   maxHistoryEntries: () => number;
+  maxCaptureFileCount: () => number;
 };
 
 // Entries are pure request/response over HTTP; the WebSocket only carries
@@ -32,7 +33,7 @@ export type EntryRouteDeps = {
 // publisher: its local write is an idempotent upsert, and the push clears
 // any pending metadata-update mark from the same event.
 export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps): void {
-  const { store, broadcast, maxHistoryEntries } = deps;
+  const { store, broadcast, maxHistoryEntries, maxCaptureFileCount } = deps;
 
   // Paginated identity listing with optional keyword, UTC date-range, kind and
   // source-device filters. Ids only, so a page stays small; details arrive through
@@ -46,7 +47,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!query) return reply;
     // The page size is the client's choice within the schema's bounds;
     // absent, the server default applies.
-    const pageSize = query.pageSize ?? MANIFEST_PAGE_SIZE.default;
+    const pageSize = query.pageSize ?? ENTRY_PAGE_DEFAULT_LIMIT;
     return store.listManifestPage(user.id, query, pageSize) satisfies EntryManifestResponse;
   });
 
@@ -63,13 +64,16 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
   app.post("/entries", { bodyLimit: MAX_PUBLISH_BYTES }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
+    if (!fileTreeWithinLimits(request.body, maxCaptureFileCount())) {
+      return reply.code(413).send({ message: "文件数量、目录深度或目录节点数超过服务器上限" });
+    }
     const body = parseOr400(reply, EntryPublishRequestSchema, request.body, "剪贴板参数无效");
     if (!body) return reply;
     const storedEntry = store.upsert(user.id, {
       ...body.entry,
-      sourceDeviceId: body.deviceId,
+      sourceDeviceId: user.deviceId,
     });
-    logger.info(`Clipboard entry stored: user=${user.id} entry=${storedEntry.id} device=${body.deviceId}`);
+    logger.info(`Clipboard entry stored: user=${user.id} entry=${storedEntry.id} device=${user.deviceId}`);
     // The response is the publisher's confirmation; the push below still
     // reaches the publisher, whose local write is an idempotent upsert.
     broadcast(user.id, { type: "clipboard.created", entry: storedEntry });
@@ -87,8 +91,6 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const { id } = request.params as { id: string };
     const [entry] = store.listByIds(user.id, [id]);
     if (!entry) return reply.code(404).send({ message: "剪贴板记录不存在" });
-    const body = parseOr400(reply, EntryActivateRequestSchema, request.body ?? {}, "激活参数无效");
-    if (!body) return reply;
     // File-list clipboards are intentionally history-only. Broadcasting them
     // would make receivers materialize unused directory views and temporary
     // files before the user has chosen to paste anything. The 200 response
@@ -97,8 +99,8 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (entry.kind !== "files") {
       // Self-excluded on purpose: a delayed self-echo would overwrite a
       // newer local clipboard captured moments after this one.
-      broadcast(user.id, { type: "clipboard.activated", entry }, body.deviceId);
-      logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${body.deviceId}`);
+      broadcast(user.id, { type: "clipboard.activated", entry }, user.deviceId);
+      logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${user.deviceId}`);
     }
     return { entry } satisfies EntryActivateResponse;
   });
@@ -114,4 +116,23 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     broadcast(user.id, { type: "clipboard.deleted", entryId: id });
     return reply.code(204).send();
   });
+}
+
+function fileTreeWithinLimits(body: unknown, maxFiles: number): boolean {
+  const tree = (body as { entry?: { fileInfo?: unknown } } | null)?.entry?.fileInfo;
+  if (!tree || typeof tree !== "object") return true;
+  const pending = [{ node: tree, depth: 0 }];
+  let files = 0;
+  let nodes = 0;
+  while (pending.length) {
+    const { node, depth } = pending.pop()!;
+    if (++nodes > 100_000 || depth > 64) return false;
+    if (!node || typeof node !== "object") continue;
+    if (typeof (node as { f?: unknown }).f === "string") {
+      if (++files > maxFiles) return false;
+    } else {
+      for (const child of Object.values(node)) pending.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return true;
 }

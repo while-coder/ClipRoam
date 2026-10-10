@@ -1,7 +1,6 @@
 FROM node:24
 
 ENV NODE_ENV=production
-ENV CLIPROAM_ADMIN_PASSWORD=admin
 
 WORKDIR /app
 

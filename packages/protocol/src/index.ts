@@ -107,10 +107,8 @@ export const DeviceIdSchema = z.string().min(1).max(100);
 export const AuthCredentialsSchema = z.object({
   username: z.string().trim().min(3).max(32).regex(/^[a-zA-Z0-9_.-]+$/),
   password: z.string().min(6).max(128),
-  deviceId: DeviceIdSchema,
-  // 登录/注册即注册设备行，设备注册不再依赖 WS 连接成功。缺省兼容旧客户端
-  // （它们仍通过 WS auth 上报）；带 device 时以 device.id 为准。
-  device: DeviceSchema.optional(),
+  // 登录/注册上报设备信息，会话绑定 device.id。
+  device: DeviceSchema.extend({ id: DeviceIdSchema }),
 });
 
 export const ChangePasswordSchema = z.object({
@@ -153,7 +151,6 @@ export const EntryPublishInputSchema = ClipboardEntrySchema.extend({
 });
 
 export const EntryPublishRequestSchema = z.object({
-  deviceId: DeviceIdSchema,
   entry: EntryPublishInputSchema,
 });
 
@@ -216,21 +213,17 @@ export const EntryManifestResponseSchema = z.object({
 
 export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema) });
 
-export const EntryActivateRequestSchema = z.object({ deviceId: DeviceIdSchema });
-
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
 
 // The socket only authenticates the connection and carries server-push
 // notifications. Every request/response exchange — listing, querying,
 // publishing, activating, deleting entries, plus all file bytes and the file
 // download orchestration — runs over HTTP. Device info rides the HTTP login /
-// `POST /devices/current` now; `auth.device` is optional and kept for older
-// clients — the server otherwise resolves the device from the session.
+// `POST /devices/current`; the server resolves the device from the session.
 export const ClientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("auth"),
     token: z.string().min(1),
-    device: DeviceSchema.optional(),
   }),
   z.object({ type: z.literal("ping") }),
 ]);
@@ -342,7 +335,6 @@ export type EntryActivateResponse = z.infer<typeof EntryActivateResponseSchema>;
 export type EntryManifestQuery = z.infer<typeof EntryManifestQuerySchema>;
 export type EntryManifestResponse = z.infer<typeof EntryManifestResponseSchema>;
 export type DeviceListResponse = z.infer<typeof DeviceListResponseSchema>;
-export type EntryActivateRequest = z.infer<typeof EntryActivateRequestSchema>;
 export type UploadBeginRequest = z.infer<typeof UploadBeginRequestSchema>;
 export type UploadBeginResponse = z.infer<typeof UploadBeginResponseSchema>;
 export type UploadChunkResponse = z.infer<typeof UploadChunkResponseSchema>;
