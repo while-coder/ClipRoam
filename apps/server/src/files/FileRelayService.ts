@@ -8,10 +8,6 @@ import { PassThrough } from "node:stream";
 const UNCLAIMED_TIMEOUT_MS = 15_000;
 const CLAIMED_IDLE_MS = 60_000;
 
-// One session per waiting download, but a misbehaving client must not be able
-// to pin unbounded streams to the server.
-const MAX_SESSIONS_PER_USER = 20;
-
 export type RelaySession = {
   id: string;
   userId: string;
@@ -55,15 +51,9 @@ export class FileRelayService {
     for (const id of this.#sessions.keys()) this.abandon(id);
   }
 
-  // Returns undefined when the user already pins the session cap: a misbehaving
-  // client must not be able to hold unbounded streams. The route answers 429.
-  create(userId: string, stream: PassThrough): RelaySession | undefined {
+  // Independent downloads start immediately; idle sessions are reclaimed by the timer.
+  create(userId: string, stream: PassThrough): RelaySession {
     this.#prune();
-    let held = 0;
-    for (const session of this.#sessions.values()) {
-      if (session.userId === userId) held += 1;
-    }
-    if (held >= MAX_SESSIONS_PER_USER) return undefined;
     const session: RelaySession = {
       id: randomUUID(),
       userId,

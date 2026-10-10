@@ -2,8 +2,6 @@ import { FILE_CHUNK_SIZE, type FileRelayRequest } from "@cliproam/protocol";
 import type { AccountSession } from "../sync/accountSession";
 import { errorMessageFromBody, type SyncRequester } from "../sync/syncHttp";
 import { base64ToBytes } from "../../utils/bytes";
-const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
-const SERVE_RETRY_BACKOFF_MS = 60_000;
 type RelayUploaderDeps = {
   session: AccountSession;
   onServeTasksChanged?: () => void;
@@ -29,42 +27,38 @@ const SERVE_TASK_LIMIT = 100;
 
 /** Each relay request starts immediately; independent sessions run concurrently. */
 export class RelayUploader {
-  #servingFiles = new Set<string>();
-  #failedServes = new Map<string, number>();
+  #servingSessions = new Set<string>();
   #serveTasks = new Map<string, ServeTaskSnapshot>();
   constructor(private readonly http: SyncRequester, private readonly deps: RelayUploaderDeps) {}
   // This device may hold the content a `file.requested` push is asking for.
   // Serving it is a loop of local reads streamed as chunked PUTs into the
   // requester's parked relay pipe. Devices without the bytes stay quiet; the
-  // sender's own failure backoff is keyed by content so a file we cannot
-  // provide is not re-probed per session.
+  // server owns relay timeouts; every new request is handled independently.
   serveRelayRequest(request: FileRelayRequest): Promise<void> {
     return this.deps.session.start(() => this.#serveRelayRequest(request));
   }
 
   async #serveRelayRequest(request: FileRelayRequest): Promise<void> {
-    if (this.#servingFiles.has(request.sessionId)) return;
-    const failedAt = this.#failedServes.get(request.fileId);
-    if (failedAt !== undefined && Date.now() - failedAt < SERVE_RETRY_BACKOFF_MS) return;
-    // Probing the first byte first: a device that cannot actually provide the
-    // content stays quiet instead of poisoning the session for another holder.
-    // 探测失败不记任务——「上传」页只收本机真正待发送的请求。
-    if (request.size > 0) {
+    if (this.#servingSessions.has(request.sessionId)) return;
+    this.#servingSessions.add(request.sessionId);
+    let task: ServeTaskSnapshot | undefined;
+    try {
+      const startOffset = request.offset ?? 0;
+      if (!Number.isSafeInteger(startOffset) || startOffset < 0 || startOffset > request.size) {
+        throw new Error("文件起始位置无效");
+      }
+      // Probe before claiming: a device without the bytes stays quiet so another
+      // holder can serve the request. Empty files still need a local existence check.
+      const remaining = request.size - startOffset;
       const probe = await this.deps.session.invoke<string>("read_upload_chunk", {
         fileId: request.fileId,
-        offset: 0,
-        length: 1,
+        offset: startOffset,
+        length: remaining > 0 ? 1 : 0,
       });
-      if (!probe) {
-        this.#rememberFailedServe(request.fileId);
-        return;
-      }
-    }
-    const task = this.#recordServeTask(request);
-    this.#servingFiles.add(request.sessionId);
-    try {
+      if (remaining > 0 && !probe) return;
+      task = this.#recordServeTask(request);
       this.#updateServeTask(task, { status: "serving" });
-      let offset = 0;
+      let offset = startOffset;
       for (;;) {
         const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
         const data = await this.deps.session.invoke<string>("read_upload_chunk", {
@@ -72,7 +66,7 @@ export class RelayUploader {
           offset,
           length,
         });
-        if (!data) throw new Error("本机文件内容不可用");
+        if (length > 0 && !data) throw new Error("本机文件内容不可用");
         const bytes = base64ToBytes(data);
         const last = offset + bytes.byteLength >= request.size;
         const put = await this.http.fetch(
@@ -81,7 +75,6 @@ export class RelayUploader {
           {
             headers: { "Content-Type": "application/octet-stream" },
             body: bytes,
-            signal: AbortSignal.timeout(UPLOAD_CHUNK_TIMEOUT_MS),
           },
         );
         // 410: the requester hung up or the session expired — nothing to serve.
@@ -89,7 +82,7 @@ export class RelayUploader {
           // 409: another device claimed the session first; 410: requester left.
           this.#updateServeTask(task, {
             status: "skipped",
-            error: put.status === 409 ? "其他设备已发送" : "请求方已取消",
+            error: put.status === 409 ? "其他设备已接管" : "中转会话已结束",
           });
           return;
         }
@@ -99,20 +92,21 @@ export class RelayUploader {
           throw new Error(errorMessageFromBody(body, put.status));
         }
         offset += bytes.byteLength;
-        this.#updateServeTask(task, { sentBytes: offset });
+        this.#updateServeTask(task, { sentBytes: offset - startOffset });
         if (last) {
-          this.#updateServeTask(task, { status: "succeeded", sentBytes: request.size });
+          this.#updateServeTask(task, { status: "succeeded", sentBytes: remaining });
           return;
         }
       }
     } catch (error) {
-      this.#updateServeTask(task, {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.#rememberFailedServe(request.fileId);
+      if (task) {
+        this.#updateServeTask(task, {
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
-      this.#servingFiles.delete(request.sessionId);
+      this.#servingSessions.delete(request.sessionId);
     }
   }
 
@@ -127,7 +121,7 @@ export class RelayUploader {
       entryId: request.entryId,
       fileId: request.fileId,
       label: request.fileId.slice(0, 8),
-      size: request.size,
+      size: request.size - (request.offset ?? 0),
       status: "pending",
       sentBytes: 0,
       startedAt: Date.now(),
@@ -168,16 +162,6 @@ export class RelayUploader {
 
   #notifyServeTasks(): void {
     this.deps.onServeTasksChanged?.();
-  }
-
-  #rememberFailedServe(fileId: string): void {
-    this.#failedServes.set(fileId, Date.now());
-    if (this.#failedServes.size > 100) {
-      const cutoff = Date.now() - SERVE_RETRY_BACKOFF_MS;
-      for (const [id, at] of this.#failedServes) {
-        if (at < cutoff) this.#failedServes.delete(id);
-      }
-    }
   }
 }
 

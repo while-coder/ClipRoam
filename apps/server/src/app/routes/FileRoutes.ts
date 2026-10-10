@@ -80,25 +80,31 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
       return reply.code(404).send({ message: "文件不存在或无权访问" });
     }
     const stored = store.files().get(fileId);
-    if (stored) {
-      return reply.header("Content-Type", "application/octet-stream")
-        .header("Content-Length", String(stored.size))
-        .send(createReadStream(stored.path));
+    const size = stored?.size ?? store.files().describe([fileId])[0]?.size ?? 0;
+    const rawOffset = (request.query as { offset?: string }).offset;
+    const offset = rawOffset === undefined ? 0 : Number(rawOffset);
+    if ((rawOffset !== undefined && !/^\d+$/.test(rawOffset)) || !Number.isSafeInteger(offset) || offset < 0 || offset > size) {
+      return reply.code(400).send({ message: "文件起始位置无效" });
     }
-    const size = store.files().describe([fileId])[0]?.size ?? 0;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(size - offset),
+    };
+    if (offset > 0 && offset < size) headers["Content-Range"] = `bytes ${offset}-${size - 1}/${size}`;
+    const status = offset > 0 && offset < size ? 206 : 200;
+    if (offset === size) return reply.headers(headers).send(Buffer.alloc(0));
+    if (stored) {
+      return reply.code(status).headers(headers).send(createReadStream(stored.path, { start: offset }));
+    }
     // Park the requester: the response body is a live pipe fed by whichever
     // device streams the bytes into the session. The response is hijacked so
     // the headers flush immediately and Fastify stays out of the byte path —
     // this connection may stay open for minutes.
     const stream = new PassThrough();
     const session = relays.create(user.id, stream);
-    if (!session) {
-      return reply.code(429).send({ message: "中转会话数已达上限" });
-    }
     reply.hijack();
-    reply.raw.writeHead(200, { "Content-Type": "application/octet-stream" });
-    // Without a Content-Length the headers would otherwise only flush with
-    // the first piped byte; flush now so the client sees the parked GET.
+    reply.raw.writeHead(status, headers);
+    // Flush now so the client sees the parked GET before the first piped byte.
     reply.raw.flushHeaders();
     stream.pipe(reply.raw);
     // A session torn down server-side (idle prune, abandoned pipe) destroys the
@@ -115,6 +121,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
       fileId,
       entryId,
       size,
+      offset,
     });
   });
 

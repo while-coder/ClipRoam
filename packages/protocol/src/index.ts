@@ -268,6 +268,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     fileId: FileIdSchema,
     entryId: z.string(),
     size: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal("pong") }),
   z.object({
