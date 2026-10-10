@@ -1,6 +1,6 @@
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
-import { activateClipboardEntry, createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
+import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import type { AccountSession } from "./accountSession";
 import { HistoryClient } from "../history/historyClient";
@@ -48,7 +48,6 @@ export class SyncClient {
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
-      activate: (entryId) => activateClipboardEntry(this.#http, entryId),
     }, autoUploadLimit);
     this.session.own(() => this.stop());
     this.uploads = new RelayUploader(this.#http, {

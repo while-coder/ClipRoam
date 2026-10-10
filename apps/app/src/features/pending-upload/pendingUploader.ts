@@ -1,4 +1,4 @@
-import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
+import type { ClipboardEntry, Device, EntryPublishInput, EntryPublishRequest } from "@cliproam/protocol";
 import { isTransientNetworkError, type SyncRequester } from "../sync/syncHttp";
 import { errorMessage } from "../../utils/error";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
@@ -8,7 +8,6 @@ const QUEUE_FAILURE_LIMIT = 3;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
 type PendingUploaderDeps = FileUploaderDeps & {
   onPublished(): void;
-  activate(entryId: string): Promise<void>;
 };
 type PendingQueueRow = {
   seq: number;
@@ -88,11 +87,8 @@ export class PendingUploader {
       sourceDeviceId: this.device.id,
     };
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
-    const stored = await this.#publishEntry(payload);
+    await this.#publishEntry(payload);
     this.deps.onPublished();
-    if (stored.kind !== "files") {
-      await this.deps.activate(stored.id).catch(() => undefined);
-    }
     await this.deps.session.invoke("dequeue_pending_entry", { seq: row.seq });
   }
 
@@ -107,18 +103,17 @@ export class PendingUploader {
   // The HTTP response is the confirmation the socket echo used to be. The
   // queue-row payload carries no id and no createdAt: identity and timestamp
   // belong to the server, which dedupes by content either way.
-  async #publishEntry(entry: EntryPublishInput): Promise<ClipboardEntry> {
+  async #publishEntry(entry: EntryPublishInput): Promise<void> {
     const request: EntryPublishRequest = {
       entry,
     };
-    const stored = await this.http.request(
+    await this.http.request(
       "POST",
       "/entries",
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      EntryPublishResponseSchema,
-      "服务器返回了不兼容的发布响应",
+      null,
+      "",
     );
-    return stored!.entry;
   }
 
 }

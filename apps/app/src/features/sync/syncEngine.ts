@@ -100,7 +100,10 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onEntry: guard(refreshHistory),
       onPublished: guard(refreshHistory),
       onActivation: guard((entry) => { void activateRemoteClipboard(entry); }),
-      onDelete: guard((entryId) => { void session.invoke("remove_server_entry", { entryId }).catch(() => undefined); }),
+      onDelete: guard((entryId) => {
+        refreshHistory();
+        void session.invoke("remove_server_entry", { entryId }).catch(() => undefined);
+      }),
       onFileAvailable: guard(refreshHistory),
       onUploadProgress: guard(queueUploadProgress),
       onUploadFinished: guard(finishUploadProgress),

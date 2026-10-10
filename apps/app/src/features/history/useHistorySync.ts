@@ -41,12 +41,11 @@ export async function fetchHistoryPage(
   return client.history.fetchHistoryPage(filter);
 }
 
-/** Coalesce refreshes inside the account lifetime. */
+/** Mark history changed immediately; only a mounted history view fetches it. */
 export function refreshHistory(): void {
   const session = getAccountSession();
-  session?.schedule("history-refresh", () => { session.state.historyRevision.value += 1; }, 200);
+  if (session) session.state.historyRevision.value += 1;
 }
-export function cancelRefreshBurst(): void { getAccountSession()?.cancelScheduled("history-refresh"); }
 
 export function focusSearch(): void {
   void nextTick(() => deps.getHistoryView()?.focusSearch());

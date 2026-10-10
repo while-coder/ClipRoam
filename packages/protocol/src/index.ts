@@ -155,7 +155,9 @@ export const EntryPublishRequestSchema = z.object({
   entry: EntryPublishInputSchema,
 });
 
-export const EntryPublishResponseSchema = z.object({ entry: ClipboardEntrySchema });
+// Publication only acknowledges the stored identity. History queries validate
+// full details and revisions independently; they must not block queue draining.
+export const EntryPublishResponseSchema = z.object({ entry: ClipboardEntrySchema.pick({ id: true }) });
 
 export const EntryQueryRequestSchema = z.object({
   entryIds: z.array(z.string()).min(1).max(ENTRY_QUERY_BATCH),
@@ -235,7 +237,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("auth.ack") }),
   z.object({
     type: z.literal("clipboard.created"),
-    entry: ClipboardEntrySchema,
+    // A change notification only invalidates history; details are queried later.
+    entry: ClipboardEntrySchema.pick({ id: true }),
   }),
   z.object({
     type: z.literal("clipboard.activated"),

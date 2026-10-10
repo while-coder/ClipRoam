@@ -1,4 +1,3 @@
-import { EntryActivateResponseSchema } from "@cliproam/protocol";
 import type { AccountSession } from "./accountSession";
 import { errorMessage } from "../../utils/error";
 
@@ -90,11 +89,4 @@ export function createSyncRequester(httpUrl: string, token: string, session: Acc
     request: (method, path, init, schema, incompatible, tolerate404) =>
       session.start(() => request(method, path, init, schema, incompatible, tolerate404)),
   };
-}
-
-/** Broadcast clipboard activation after publication; no history-cache dependency. */
-export async function activateClipboardEntry(http: SyncRequester, entryId: string): Promise<void> {
-  await http.request("POST", `/entries/${encodeURIComponent(entryId)}/activate`, {
-    signal: AbortSignal.timeout(30_000),
-  }, EntryActivateResponseSchema, "服务器返回了不兼容的激活响应");
 }

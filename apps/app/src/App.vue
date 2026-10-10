@@ -74,7 +74,6 @@ import {
   stopSyncClient,
 } from "./features/sync/syncEngine";
 import {
-  cancelRefreshBurst,
   fetchHistoryPage,
   focusSearchInput,
   historyRevision,
@@ -492,7 +491,6 @@ onBeforeUnmount(() => {
   pasteSessionReloadRevision += 1;
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
   disposeToast();
-  cancelRefreshBurst();
   cancelPendingRefresh();
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
