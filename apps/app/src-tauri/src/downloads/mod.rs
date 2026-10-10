@@ -1,7 +1,7 @@
 //! 下载域：全局下载管理器（Downloader）+ 它的磁盘侧原语 + 为前端提供条目
 //! 内容的命令。
 //!
-//! Downloader 拥有任务表 / FIFO 队列 / 跨条目并发上限 / 按 `(saveId, fileId)`
+//! Downloader 拥有文件任务表 / FIFO 队列 / 全局并发上限 / 按账号和 fileId
 //! 在途去重 / reqwest 直连拉流写盘。main 与 paste 两个 webview 的下载都进
 //! 这同一个实例，跨窗口同文件天然合并——旧前端方案「两个窗口各写各的
 //! `.part` 互踩」的问题在此根除。拉流重试策略对齐旧前端管线：断流/401 等
@@ -18,7 +18,7 @@ use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::Write,
     sync::{Arc, Mutex, OnceLock},
@@ -27,10 +27,9 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 
-use crate::history::clipboard::{missing_files, snapshot_entry_for};
-use crate::content::MissingFile;
+use crate::history::clipboard::snapshot_entry_for;
 use crate::content::entry_contents_of;
-use crate::file::{download_path, partial_download_path};
+use crate::file::{download_path};
 use crate::store::select_entry;
 use crate::sync::server_http_url;
 use crate::account::AccountContext;
@@ -43,92 +42,28 @@ pub(crate) struct DownloadState {
     pub(crate) expected_size: u64,
     pub(crate) received_size: u64,
     pub(crate) hasher: Sha256,
-    pub(crate) target: DownloadTarget,
+    pub(crate) final_path: std::path::PathBuf,
 }
 
-pub(crate) enum DownloadTarget {
-    Cache {
-        /// The content-addressed name the verified `.part` is renamed to.
-        final_path: std::path::PathBuf,
-        partial_path: std::path::PathBuf,
-    },
-    Save {
-        save_id: String,
-        completed_path: std::path::PathBuf,
-    },
-}
-
-/// 开启一个下载传输：确定落盘目标（内容缓存或另存 staging）并创建 `.part`。
-/// 传输状态记录在 `state.downloads`，由 `append_chunk`/`finish_transfer`/
-/// `cancel_transfer` 接力。
+/// 创建账号缓存中的临时文件；完成校验后才晋级为完整缓存。
 pub(crate) fn begin_transfer(
     state: &AppState,
     transfer_id: &str,
     file_id: &str,
     expected_size: u64,
-    save_id: Option<&str>,
     account: &AccountContext,
-    owner_id: Option<&str>,
 ) -> Result<(), String> {
-    let (path, target) = if let Some(save_id) = save_id {
-        let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
-        let session = sessions
-            .get_mut(save_id)
-            .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
-        let expected = session
-            .expected
-            .get(file_id)
-            .ok_or_else(|| "文件不属于当前另存为任务".to_string())?;
-        if *expected != expected_size {
-            return Err("文件大小与另存为任务不一致".to_string());
-        }
-        if session.downloaded.contains(file_id) || !session.in_progress.insert(file_id.to_string()) {
-            return Err("文件正在下载或已经下载".to_string());
-        }
-        let completed_path = session.staging_dir.join(file_id);
-        (
-            session.staging_dir.join(format!("{file_id}.part")),
-            DownloadTarget::Save {
-                save_id: save_id.to_string(),
-                completed_path,
-            },
-        )
-    } else {
-        let final_path = {
-            let cache_dir = account.cache_dir.clone();
-            download_path(&cache_dir, file_id).ok_or_else(|| "内容标识不合法".to_string())?
-        };
-        // Cache downloads stage at `.part` exactly like direct saves; the
-        // digest-verified rename in `finish_transfer` is the promotion.
-        let path = if owner_id.is_some() {
-            final_path.with_extension(format!("{transfer_id}.part"))
-        } else { partial_download_path(&final_path) };
-        (path.clone(), DownloadTarget::Cache { final_path, partial_path: path })
-    };
-    let prepared = (|| {
-        ensure_parent_dir(&path)?;
-        fs::File::create(&path).map_err(|error| error.to_string())?;
-        Ok::<(), String>(())
-    })();
-    if let Err(error) = prepared {
-        clear_download_target(state, &target, file_id, &error);
-        return Err(error);
-    }
-    state
-        .downloads
-        .lock()
-        .map_err(|error| error.to_string())?
-        .insert(
-            transfer_id.to_string(),
-            DownloadState {
-                path,
-                file_id: file_id.to_string(),
-                expected_size,
-                received_size: 0,
-                hasher: Sha256::new(),
-                target,
-            },
-        );
+    let final_path = download_path(&account.cache_dir, file_id).ok_or("内容标识不合法")?;
+    let path = final_path.with_extension(format!("{transfer_id}.part"));
+    ensure_parent_dir(&path)?;
+    fs::File::create(&path).map_err(|error| error.to_string())?;
+    state.downloads.lock().map_err(|error| error.to_string())?.insert(
+        transfer_id.to_string(),
+        DownloadState {
+            path, final_path, file_id: file_id.to_string(), expected_size,
+            received_size: 0, hasher: Sha256::new(),
+        },
+    );
     Ok(())
 }
 
@@ -151,8 +86,7 @@ pub(crate) fn append_chunk(state: &AppState, transfer_id: &str, bytes: &[u8]) ->
     Ok(())
 }
 
-/// 完成一个传输：size + Sha256 校验通过后才把 `.part` 晋级（进缓存或另存
-/// staging 的最终文件），并更新另存会话簿记。
+/// 校验大小和 SHA256 后，将临时文件晋级为完整缓存。
 pub(crate) fn finish_transfer(state: &AppState, transfer_id: &str) -> Result<(), String> {
     let download = state
         .downloads
@@ -162,67 +96,25 @@ pub(crate) fn finish_transfer(state: &AppState, transfer_id: &str) -> Result<(),
         .ok_or_else(|| "文件下载任务不存在".to_string())?;
     if download.received_size != download.expected_size {
         let _ = fs::remove_file(&download.path);
-        fail_download_target(state, &download, "文件下载不完整");
         return Err("文件下载不完整".to_string());
     }
     if crate::utils::to_hex(&download.hasher.clone().finalize()) != download.file_id {
         let _ = fs::remove_file(&download.path);
-        fail_download_target(state, &download, "文件内容校验失败");
         return Err("文件内容校验失败".to_string());
     }
 
-    match &download.target {
-        DownloadTarget::Cache { final_path, .. } => {
-            // Promote only now, after the size and digest checks above: a
-            // truncated download must never enter the cache, where the blob
-            // scan accepts any file whose name is a content id.
-            fs::rename(&download.path, final_path).map_err(|error| error.to_string())?;
-        }
-        DownloadTarget::Save {
-            save_id,
-            completed_path,
-        } => {
-            if completed_path.exists() {
-                fs::remove_file(completed_path).map_err(|error| error.to_string())?;
-            }
-            fs::rename(&download.path, completed_path).map_err(|error| error.to_string())?;
-            let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
-            let session = sessions
-                .get_mut(save_id)
-                .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
-            session.in_progress.remove(&download.file_id);
-            session.downloaded.insert(download.file_id.clone());
-        }
+    if let Err(error) = fs::rename(&download.path, &download.final_path) {
+        let _ = fs::remove_file(&download.path);
+        return Err(error.to_string());
     }
     Ok(())
 }
 
-/// 取消/失败一个传输：删 `.part` 并回滚另存会话的 in_progress。
-pub(crate) fn cancel_transfer(state: &AppState, transfer_id: &str, reason: &str) {
+/// 取消或失败时清理临时文件。
+pub(crate) fn cancel_transfer(state: &AppState, transfer_id: &str, _reason: &str) {
     let download = state.downloads.lock().ok().and_then(|mut downloads| downloads.remove(transfer_id));
     if let Some(download) = download {
         let _ = fs::remove_file(&download.path);
-        fail_download_target(state, &download, reason);
-    }
-}
-
-pub(crate) fn fail_download_target(state: &AppState, download: &DownloadState, message: &str) {
-    clear_download_target(state, &download.target, &download.file_id, message);
-}
-
-pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, _message: &str) {
-    match target {
-        DownloadTarget::Cache { partial_path, .. } => {
-            // Drop the staging file a cancelled or failed transfer leaves behind.
-            let _ = fs::remove_file(partial_path);
-        }
-        DownloadTarget::Save { save_id, .. } => {
-            if let Ok(mut sessions) = state.save_sessions.lock() {
-                if let Some(session) = sessions.get_mut(save_id) {
-                    session.in_progress.remove(file_id);
-                }
-            }
-        }
     }
 }
 
@@ -251,24 +143,6 @@ pub(crate) fn list_entry_files(
         .into_iter()
         .map(|(file_id, size)| EntryFileCandidate { file_id, size })
         .collect())
-}
-
-/// 尚不可本地读取的内容：复制、粘贴和下载统一等待这些文件就绪。
-fn prepare_entry(entry_id: &str, account: &crate::account::AccountContext) -> Result<Vec<MissingFile>, String> {
-    let snapshot = snapshot_entry_for(entry_id, account)?;
-    Ok(missing_files(&snapshot))
-}
-
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
-    let account = state.account(&session_id)?;
-    prepare_entry(&entry_id, &account)
-}
-
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
-    let account = state.account(&session_id)?;
-    prepare_entry(&entry_id, &account)
 }
 
 // ---------------------------------------------------------------------------
@@ -320,8 +194,8 @@ pub(crate) struct TaskSnapshot {
     id: String,
     batch_id: u64,
     entry_id: String,
+    entry_ids: Vec<String>,
     file_id: String,
-    save_id: Option<String>,
     label: String,
     size: u64,
     status: DownloadStatus,
@@ -338,13 +212,12 @@ pub(crate) enum TaskOutcome {
 }
 
 struct DownloadTask {
+    requesters: HashSet<(String, String)>,
     account: Arc<AccountContext>,
-    owner_id: Option<String>,
     id: String,
     batch_id: u64,
     entry_id: String,
     file_id: String,
-    save_id: Option<String>,
     label: String,
     size: u64,
     status: DownloadStatus,
@@ -359,8 +232,8 @@ struct DownloadTask {
 struct DownloaderInner {
     tasks: HashMap<String, DownloadTask>,
     queue: VecDeque<String>,
-    /// `(saveId, fileId) -> taskId`，只含非终态任务。
-    inflight: HashMap<(String, Option<String>, Option<String>, String), String>,
+    /// (accountKey, fileId) -> taskId，只含非终态任务。
+    inflight: HashMap<(String, String), String>,
     active: usize,
     next_batch_id: u64,
     last_progress_emit: Option<Instant>,
@@ -376,11 +249,9 @@ pub(crate) struct Downloader {
 /// worker 需要的任务参数；入队时一次性 clone 出去。
 struct TaskSpec {
     account: Arc<AccountContext>,
-    owner_id: Option<String>,
     task_id: String,
     entry_id: String,
     file_id: String,
-    save_id: Option<String>,
     size: u64,
     cancel_rx: watch::Receiver<bool>,
 }
@@ -417,10 +288,9 @@ impl Downloader {
     pub(crate) fn enqueue_batch(
         &self,
         account: &Arc<AccountContext>,
-        owner_id: Option<&str>,
+        owner_id: &str,
         entry_id: &str,
         files: &[DownloadRequest],
-        save_id: Option<String>,
         entry_label: Option<&str>,
     ) -> Result<Vec<(String, watch::Receiver<Option<TaskOutcome>>)>, String> {
         let mut watchers = Vec::with_capacity(files.len());
@@ -431,13 +301,15 @@ impl Downloader {
             let batch_id = inner.next_batch_id;
             inner.next_batch_id += 1;
             for (index, file) in files.iter().enumerate() {
-                let key = (account.key.clone(), owner_id.map(str::to_string), save_id.clone(), file.file_id.clone());
+                let key = (account.key.clone(), file.file_id.clone());
                 if let Some(existing) = inner
                     .inflight
                     .get(&key)
-                    .and_then(|task_id| inner.tasks.get(task_id))
+                    .cloned()
+                    .and_then(|task_id| inner.tasks.get_mut(&task_id))
                 {
-                    // 去重合并：同 key 在途任务直接共享（取消会连带所有合并方）。
+                    existing.requesters.insert((owner_id.to_string(), entry_id.to_string()));
+                    // 同账号同文件共享任务及完成通知。
                     watchers.push((existing.id.clone(), existing.outcome_tx.subscribe()));
                     continue;
                 }
@@ -448,12 +320,11 @@ impl Downloader {
                     task_id.clone(),
                     DownloadTask {
                         account: account.clone(),
-                        owner_id: owner_id.map(str::to_string),
+                        requesters: HashSet::from([(owner_id.to_string(), entry_id.to_string())]),
                         id: task_id.clone(),
                         batch_id,
                         entry_id: entry_id.to_string(),
                         file_id: file.file_id.clone(),
-                        save_id: save_id.clone(),
                         label: task_label(entry_label, index, files.len(), &file.file_id),
                         size: file.size,
                         status: DownloadStatus::Queued,
@@ -482,7 +353,7 @@ impl Downloader {
 
     /// 取消该条目所有非终态任务；返回取消数（0 = 没有下载在跑）。
     pub(crate) fn cancel_entry(&self, entry_id: &str, account: &AccountContext) -> usize {
-        self.cancel_matching(|task| task.entry_id == entry_id && task.account.key == account.key, "已取消")
+        self.cancel_matching(|task| task.requesters.iter().any(|(_, entry)| entry == entry_id) && task.account.key == account.key, "已取消")
     }
 
     /// 中止全部活动任务并清空队列（断开同步 / 面板「全部取消」共用）。
@@ -491,13 +362,14 @@ impl Downloader {
     }
 
     pub(crate) fn stop_account(&self, account: &AccountContext, owner_id: Option<&str>, reason: &str) {
+        if let Some(owner) = owner_id {
+            let mut inner = self.inner.lock().expect("downloader lock");
+            for task in inner.tasks.values_mut().filter(|task| task.account.key == account.key) {
+                task.requesters.retain(|(session, _)| session != owner);
+            }
+        }
         self.cancel_matching(|task| task.account.key == account.key
-            && owner_id.map_or(true, |owner| task.owner_id.as_deref() == Some(owner)), reason);
-    }
-
-    /// 另存会话被取消时（cancel_save_entry）停掉属于它的任务。
-    pub(crate) fn cancel_by_save_id(&self, save_id: &str) {
-        self.cancel_matching(|task| task.save_id.as_deref() == Some(save_id), "另存为已取消");
+            && (owner_id.is_none() || task.requesters.is_empty()), reason);
     }
 
     pub(crate) fn snapshot(&self) -> Vec<TaskSnapshot> {
@@ -544,11 +416,9 @@ impl Downloader {
             task.status = DownloadStatus::Downloading;
             let spec = TaskSpec {
                 account: task.account.clone(),
-                owner_id: task.owner_id.clone(),
                 task_id: task_id.clone(),
                 entry_id: task.entry_id.clone(),
                 file_id: task.file_id.clone(),
-                save_id: task.save_id.clone(),
                 size: task.size,
                 cancel_rx: task.cancel_tx.subscribe(),
             };
@@ -567,7 +437,7 @@ impl Downloader {
             task.status = DownloadStatus::Cancelled;
             task.error = Some(reason.to_string());
             task.received_bytes = 0;
-            let key = (task.account.key.clone(), task.owner_id.clone(), task.save_id.clone(), task.file_id.clone());
+            let key = (task.account.key.clone(), task.file_id.clone());
             let _ = task.cancel_tx.send(true);
             // 终态立即 resolve 等待方；downloading 任务的传输清理由 worker 的
             // 取消路径异步完成（run_task 里 cancel_transfer）。
@@ -582,7 +452,7 @@ impl Downloader {
     }
 
     /// worker 终态回写：先落盘后 resolve 的顺序由 run_task 保证（finish_transfer
-    /// 完成后才可能拿到 Succeeded），另存会话的簿记因此先于批次返回。
+    /// 完成后才可能拿到 Succeeded）。
     fn complete(&self, task_id: &str, outcome: TaskOutcome) {
         {
             let mut inner = self.inner.lock().expect("downloader lock");
@@ -605,7 +475,7 @@ impl Downloader {
                     task.received_bytes = 0;
                 }
                 let started = task.started;
-                let key = (task.account.key.clone(), task.owner_id.clone(), task.save_id.clone(), task.file_id.clone());
+                let key = (task.account.key.clone(), task.file_id.clone());
                 let _ = task.outcome_tx.send(Some(outcome));
                 (started, key)
             };
@@ -684,8 +554,8 @@ impl Downloader {
                 id: task.id.clone(),
                 batch_id: task.batch_id,
                 entry_id: task.entry_id.clone(),
+                entry_ids: task.requesters.iter().map(|(_, entry)| entry.clone()).collect::<HashSet<_>>().into_iter().collect(),
                 file_id: task.file_id.clone(),
-                save_id: task.save_id.clone(),
                 label: task.label.clone(),
                 size: task.size,
                 status: task.status,
@@ -756,8 +626,7 @@ fn task_label(entry_label: Option<&str>, index: usize, total: usize, file_id: &s
 async fn run_task(app: AppHandle, spec: TaskSpec) {
     let outcome = download_with_retries(&app, &spec).await;
     if let TaskOutcome::Cancelled(reason) | TaskOutcome::Failed(reason) = &outcome {
-        // Terminal errors and cancellation both release partial files and
-        // save-session bookkeeping before resolving the waiting batch.
+        // Clean up partial files before resolving the waiting batch.
         let state = app.state::<AppState>();
         cancel_transfer(&state, &spec.task_id, reason);
     }
@@ -770,8 +639,17 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
     if *spec.cancel_rx.borrow() {
         return TaskOutcome::Cancelled("已取消".to_string());
     }
+    match snapshot_entry_for(&spec.entry_id, &spec.account) {
+        Ok(snapshot) => {
+            if snapshot.resolve(&spec.file_id).and_then(|path| fs::metadata(path).ok())
+                .is_some_and(|metadata| metadata.is_file() && metadata.len() == spec.size) {
+                return TaskOutcome::Succeeded;
+            }
+        }
+        Err(error) => return TaskOutcome::Failed(error),
+    }
     if let Err(error) =
-        begin_transfer(&state, &spec.task_id, &spec.file_id, spec.size, spec.save_id.as_deref(), &spec.account, spec.owner_id.as_deref())
+        begin_transfer(&state, &spec.task_id, &spec.file_id, spec.size, &spec.account)
     {
         return TaskOutcome::Failed(error);
     }
@@ -809,9 +687,7 @@ async fn download_with_retries(app: &AppHandle, spec: &TaskSpec) -> TaskOutcome 
                     &spec.task_id,
                     &spec.file_id,
                     spec.size,
-                    spec.save_id.as_deref(),
                     &spec.account,
-                    spec.owner_id.as_deref(),
                 ) {
                     return TaskOutcome::Failed(error);
                 }
@@ -909,17 +785,17 @@ async fn cancellable_sleep(delay: Duration, cancel_rx: &watch::Receiver<bool>) -
 /// 入队一批文件并等待全部终态。webview 中途销毁只影响本次调用方，任务
 /// 本身继续在 Rust 侧跑完。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) async fn download_files(
+pub(crate) async fn download_entry(
     state: State<'_, AppState>,
     entry_id: String,
-    files: Vec<DownloadRequest>,
-    save_id: Option<String>,
-    entry_label: Option<String>,
     session_id: String,
 ) -> Result<BatchOutcome, String> {
     let account = state.account(&session_id)?;
+    let snapshot = snapshot_entry_for(&entry_id, &account)?;
+    let files: Vec<DownloadRequest> = entry_contents_of(&snapshot.entry).into_iter()
+        .map(|(file_id, size)| DownloadRequest { file_id, size }).collect();
     let total = files.len();
-    let watchers = state.downloader.enqueue_batch(&account, Some(&session_id), &entry_id, &files, save_id, entry_label.as_deref())?;
+    let watchers = state.downloader.enqueue_batch(&account, &session_id, &entry_id, &files, Some(&snapshot.entry.content))?;
     let mut cancelled = false;
     let mut failed_count = 0usize;
     for (_, mut rx) in watchers {

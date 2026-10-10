@@ -1,16 +1,15 @@
-//! Save-to-disk sessions: staging directories that collect the entry's
-//! contents before they are materialized at the user-chosen destination.
+//! 另存会话：下载到账号缓存完成后，将内容复制到用户选择的目标目录。
 
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::PathBuf,
 };
 use tauri::{AppHandle, State};
 
-use crate::history::clipboard::{missing_files, snapshot_entry_for};
-use crate::content::{rebuild_tree, sanitize_root_name, MissingFile, TreeNode};
+use crate::history::clipboard::snapshot_entry_for;
+use crate::content::{rebuild_tree, sanitize_root_name, TreeNode};
 use crate::content::entry_contents_of;
 use crate::AppState;
 
@@ -25,19 +24,14 @@ pub(crate) struct SaveSession {
     account: std::sync::Arc<crate::account::AccountContext>,
     entry_id: String,
     destination: PathBuf,
-    pub(crate) staging_dir: PathBuf,
     single_file: bool,
     document_tree: Option<String>,
-    pub(crate) expected: HashMap<String, u64>,
-    pub(crate) in_progress: HashSet<String>,
-    pub(crate) downloaded: HashSet<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavePreparation {
     save_id: String,
-    missing: Vec<MissingFile>,
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
@@ -82,22 +76,6 @@ pub(crate) async fn prepare_save_entry(
             (path, Some(uri))
         }
     };
-    let staging_parent = if single_file {
-        destination
-            .parent()
-            .ok_or_else(|| "无法确定目标目录".to_string())?
-            .to_path_buf()
-    } else {
-        destination.clone()
-    };
-    let staging_dir = staging_parent.join(format!(".cliproam-save-{save_id}"));
-    fs::create_dir_all(&staging_dir).map_err(|error| format!("无法准备目标目录：{error}"))?;
-
-    let missing = missing_files(&snapshot);
-    let expected = missing
-        .iter()
-        .map(|file| (file.file_id.clone(), file.size))
-        .collect();
     state
         .save_sessions
         .lock()
@@ -108,29 +86,21 @@ pub(crate) async fn prepare_save_entry(
                 account,
                 entry_id,
                 destination,
-                staging_dir,
                 single_file,
                 document_tree,
-                expected,
-                in_progress: HashSet::new(),
-                downloaded: HashSet::new(),
             },
         );
-    Ok(Some(SavePreparation { save_id, missing }))
+    Ok(Some(SavePreparation { save_id }))
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> Result<(), String> {
-    // 先停掉属于该会话的下载任务（downloader 会删 `.part` 并回滚 in_progress），
-    // 再删会话与 staging 目录：worker 的异步清理对已消失的会话是容错的。
-    state.downloader.cancel_by_save_id(&save_id);
     let session = state
         .save_sessions
         .lock()
         .map_err(|error| error.to_string())?
         .remove(&save_id);
     if let Some(session) = session {
-        let _ = fs::remove_dir_all(session.staging_dir);
         if session.document_tree.is_some() {
             let root = if session.single_file {
                 session.destination.parent().expect("single-file destination has a parent")
@@ -152,9 +122,6 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
         .remove(&save_id)
         .ok_or_else(|| "另存为任务不存在或已结束".to_string())?;
     let mut result = (|| {
-        if !session.in_progress.is_empty() || session.downloaded.len() != session.expected.len() {
-            return Err("另存为所需文件尚未下载完成".to_string());
-        }
         let snapshot = snapshot_entry_for(&session.entry_id, &session.account)?;
 
         let mut resolved = HashMap::<String, PathBuf>::new();
@@ -163,14 +130,9 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
             if resolved.contains_key(&file_id) {
                 continue;
             }
-            if session.downloaded.contains(&file_id) {
-                resolved.insert(file_id.clone(), session.staging_dir.join(&file_id));
-            } else {
-                let source = snapshot
-                    .resolve(&file_id)
-                    .ok_or_else(|| format!("文件内容不可用：{file_id}"))?;
-                resolved.insert(file_id.clone(), source);
-            }
+            let source = snapshot.resolve(&file_id)
+                .ok_or_else(|| format!("文件内容不可用：{file_id}"))?;
+            resolved.insert(file_id, source);
         }
 
         if session.single_file {
@@ -201,6 +163,7 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
             if fs::canonicalize(source).ok() == fs::canonicalize(&session.destination).ok() {
                 return Ok(0);
             }
+            crate::utils::ensure_parent_dir(&session.destination)?;
             fs::copy(source, &session.destination).map_err(|error| format!("无法保存文件：{error}"))?;
             Ok(1)
         } else {
@@ -220,17 +183,10 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
         } else {
             session.destination.as_path()
         };
-        // Staging contains content-id blobs, which must never be exported.
-        if let Err(error) = fs::remove_dir_all(&session.staging_dir) {
-            if error.kind() != std::io::ErrorKind::NotFound && result.is_ok() {
-                result = Err(format!("无法清理下载暂存目录：{error}"));
-            }
-        }
         if result.is_ok() {
             result = crate::platforms::export_saved_directory(&app, export_root, uri);
         }
         let _ = fs::remove_dir_all(export_root);
     }
-    let _ = fs::remove_dir_all(&session.staging_dir);
     result
 }

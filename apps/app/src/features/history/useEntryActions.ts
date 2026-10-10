@@ -6,7 +6,7 @@ import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
 import { getSyncClient } from "../sync/syncEngine";
-import { DownloadCancelledError, cancelEntryDownloads, downloadFiles, ensureLocalFiles, ensurePasteReady } from "../downloads/useDownloads";
+import { DownloadCancelledError, cancelEntryDownloads, downloadEntry } from "../downloads/useDownloads";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry, SavePreparation } from "../../types";
 
@@ -35,9 +35,8 @@ async function activateEntry(
   }
   activatingEntryIds.value.add(entry.id);
   try {
-    // Rust selects the native strategy. This downloads only what the current
-    // platform must materialize before it can copy or paste the entry.
-    await ensurePasteReady(entry, session);
+    // Wait for all missing content before copying or pasting the entry.
+    await downloadEntry(entry.id, session);
     // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
     const write = session.state.clipboardWriteChain.then(() => session.invoke(command, { entryId: entry.id }));
     session.state.clipboardWriteChain = write.catch(() => undefined);
@@ -79,7 +78,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   let saveId: string | undefined;
   try {
     if (!platformCapabilities.value.nativeFileExport) {
-      await ensureLocalFiles(entry, session);
+      await downloadEntry(entry.id, session);
       showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
       await session.start(() => session.ready);
@@ -90,14 +89,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       if (!preparation) return;
       saveId = preparation.saveId;
 
-      if (preparation.missing.length) {
-        // saveId 隔离任务：落盘到另存 staging 而非内容寻址缓存。
-        await downloadFiles(entry.id, preparation.missing, {
-          saveId: preparation.saveId,
-          entryLabel: entry.content,
-          session,
-        });
-      }
+      await downloadEntry(entry.id, session);
 
       const saved = await session.invoke<number>("finish_save_entry", { saveId: preparation.saveId });
       saveId = undefined;

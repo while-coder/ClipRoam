@@ -194,16 +194,6 @@ pub struct CollectedTree {
     pub sources: LocalSources,
 }
 
-/// A content this machine still needs before an entry is fully usable, as
-/// reported by the paste/save/download preparation commands.
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct MissingFile {
-    pub file_id: String,
-    pub size: u64,
-    pub source_device_id: String,
-}
-
 // ---------------------------------------------------------------------------
 // 路径：相对路径安全
 // ---------------------------------------------------------------------------

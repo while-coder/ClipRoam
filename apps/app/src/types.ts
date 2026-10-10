@@ -27,8 +27,7 @@ export type AccountPreferences = {
   maxCaptureFileCount: number;
 };
 
-export type MissingFile = { fileId: string; size: number; sourceDeviceId: string };
-export type SavePreparation = { saveId: string; missing: MissingFile[] };
+export type SavePreparation = { saveId: string };
 
 export type PlatformCapabilities = {
   mobile: boolean;
@@ -87,7 +86,7 @@ export type UploadProgress = { uploadedBytes: number; totalBytes: number };
 export type DownloadProgress = {
   finished: number;
   total: number;
-  /** 最新批次合计的已接收/总字节数，用于行内进度条与百分比展示。 */
+  /** 条目关联文件合计的已接收/总字节数，用于行内进度条与百分比展示。 */
   receivedBytes: number;
   totalBytes: number;
 };

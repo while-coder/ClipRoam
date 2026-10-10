@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::{AppHandle, State};
 
-use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
+use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry};
 use crate::file::cached_source_for;
 use crate::store::{save_metadata, select_entry};
 use crate::content::entry_contents_of;
@@ -63,18 +63,6 @@ impl EntrySnapshot {
         readable_path(&self.cache_dir, &self.entry, file_id)
             .or_else(|| self.hash_sources.get(file_id).cloned())
     }
-}
-
-pub(crate) fn missing_files(snapshot: &EntrySnapshot) -> Vec<MissingFile> {
-    entry_contents_of(&snapshot.entry)
-        .into_iter()
-        .filter(|(file_id, _)| snapshot.resolve(file_id).is_none())
-        .map(|(file_id, size)| MissingFile {
-            file_id,
-            size,
-            source_device_id: snapshot.entry.source_device_id.clone(),
-        })
-        .collect()
 }
 
 fn image_payload(snapshot: &EntrySnapshot) -> Result<ClipboardPayload, String> {

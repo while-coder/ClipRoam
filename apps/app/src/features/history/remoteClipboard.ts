@@ -5,7 +5,7 @@ import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { getSyncClient } from "../sync/syncEngine";
 import { getActiveConfig, getActivePreferences } from "../sync/syncSession";
-import { ensurePasteReady } from "../downloads/useDownloads";
+import { ensureLocalFiles } from "../downloads/useDownloads";
 
 /** 本机捕获落库计数；远端激活靠它识别「用户刚复制过」的竞态。 */
 export function bumpLocalClipboardRevision(): void {
@@ -32,7 +32,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
     if (!entry || entry.kind === "files") return;
     let localEntry = entry;
     if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;
-    if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry, session);
+    if (entry.kind === "image") localEntry = await ensureLocalFiles(localEntry, session);
 
     // A newer remote activation or a real local copy wins while an image is
     // downloading; never replace content the user copied in the meantime.

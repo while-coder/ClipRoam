@@ -1,7 +1,7 @@
 import { computed } from "vue";
-import { accountStateRef, getAccountSession, type AccountSession } from "../sync/accountSession";
+import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { refreshHistory } from "../history/useHistorySync";
-import type { DownloadProgress, LocalClipboardEntry, MissingFile } from "../../types";
+import type { DownloadProgress, LocalClipboardEntry } from "../../types";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
@@ -12,22 +12,17 @@ type DownloadTaskStatus = "queued" | "downloading" | "succeeded" | "failed" | "c
 export type DownloadTaskSnapshot = {
   id: string;
   accountKey: string;
-  /** 每次 downloadFiles() 自增；同 entry 重复批次按此归代，派生进度只看最新批。 */
+  /** 任务创建的批次序号；同一 fileId 的重复任务只统计最新一次。 */
   batchId: number;
   entryId: string;
   fileId: string;
-  saveId?: string;
+  entryIds: string[];
   /** 面板显示名：entryLabel + 序号，缺省用 fileId 前 8 位。 */
   label: string;
   size: number;
   status: DownloadTaskStatus;
   receivedBytes: number;
   error?: string;
-};
-
-type DownloadRequest = {
-  fileId: string;
-  size: number;
 };
 
 type BatchOutcome = {
@@ -39,16 +34,16 @@ type BatchOutcome = {
 /** All windows share the Rust download queue; this is the current window's snapshot. */
 export const downloadTasks = accountStateRef("downloadTasks");
 
-export async function downloadFiles(
-  entryId: string,
-  files: readonly DownloadRequest[],
-  options: { saveId?: string; entryLabel?: string; session?: AccountSession } = {},
-): Promise<void> {
-  const { session = getAccountSession(), ...request } = options;
+/** Enqueue each fileId and resolve only when all content is locally available. */
+export async function downloadEntry(entryId: string, session = getAccountSession()): Promise<void> {
   if (!session) throw new DownloadCancelledError("账号会话已结束");
-  const outcome = await session.invoke<BatchOutcome>("download_files", { entryId, files, ...request });
-  if (outcome.cancelled) throw new DownloadCancelledError("已取消");
-  if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
+  try {
+    const outcome = await session.invoke<BatchOutcome>("download_entry", { entryId });
+    if (outcome.cancelled) throw new DownloadCancelledError("已取消");
+    if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
+  } finally {
+    if (!session.signal.aborted) refreshHistory();
+  }
 }
 
 export function cancelDownload(taskId: string): void {
@@ -75,25 +70,26 @@ export function applyDownloadSnapshot(payload: DownloadTaskSnapshot[]): void {
   if (session) session.state.downloadTasks.value = payload.filter((task) => task.accountKey === session.accountKey);
 }
 
-/** 派生的逐条目下载进度：按 (entryId, batchId) 一次分组聚合——同批全部任务
- * 参与统计（含已成功的），只有批内仍有活动任务的批次才输出；避免逐任务
- * 全表扫描、同批重复计算。 */
+/** A shared file contributes progress to every entry waiting for it. */
 export const downloadProgressByEntryId = computed<Record<string, DownloadProgress>>(() => {
-  const batches = new Map<string, DownloadTaskSnapshot[]>();
+  const entries = new Map<string, Map<string, DownloadTaskSnapshot>>();
   for (const task of downloadTasks.value) {
-    const key = `${task.entryId}#${task.batchId}`;
-    const group = batches.get(key);
-    if (group) group.push(task);
-    else batches.set(key, [task]);
+    for (const entryId of task.entryIds) {
+      let files = entries.get(entryId);
+      if (!files) { files = new Map(); entries.set(entryId, files); }
+      const previous = files.get(task.fileId);
+      if (!previous || previous.batchId < task.batchId) files.set(task.fileId, task);
+    }
   }
   const progress: Record<string, DownloadProgress> = {};
-  for (const group of batches.values()) {
-    if (!group.some((task) => task.status === "queued" || task.status === "downloading")) continue;
-    progress[group[0]!.entryId] = {
-      finished: group.filter((task) => task.status === "succeeded").length,
-      total: group.length,
-      receivedBytes: group.reduce((sum, task) => sum + task.receivedBytes, 0),
-      totalBytes: group.reduce((sum, task) => sum + task.size, 0),
+  for (const [entryId, files] of entries) {
+    const tasks = [...files.values()];
+    if (!tasks.some((task) => task.status === "queued" || task.status === "downloading")) continue;
+    progress[entryId] = {
+      finished: tasks.filter((task) => task.status === "succeeded").length,
+      total: tasks.length,
+      receivedBytes: tasks.reduce((sum, task) => sum + task.receivedBytes, 0),
+      totalBytes: tasks.reduce((sum, task) => sum + task.size, 0),
     };
   }
   return progress;
@@ -102,33 +98,10 @@ export const downloadProgressByEntryId = computed<Record<string, DownloadProgres
 export const activeDownloadCount = computed(() =>
   downloadTasks.value.filter((task) => task.status === "queued" || task.status === "downloading").length);
 
-/**
- * Fetches every content this device is missing. All windows go through the
- * shared Rust queue; credentials and the HTTP pull itself
- * live in the Rust-side downloader.
- */
-export async function downloadRequiredFiles(
-  entry: LocalClipboardEntry,
-  prepareCommand: "prepare_entry_files" | "prepare_paste_entry",
-  session = getAccountSession(),
-): Promise<LocalClipboardEntry> {
+/** Download content then re-read the entry's local availability summary. */
+export async function ensureLocalFiles(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {
   if (entry.kind !== "files" && entry.kind !== "image") return entry;
   if (!session) throw new DownloadCancelledError("账号会话已结束");
-  const missing = await session.invoke<MissingFile[]>(prepareCommand, { entryId: entry.id });
-  if (!missing.length) return entry;
-  try {
-    await downloadFiles(entry.id, missing, { entryLabel: entry.content, session });
-  } finally {
-    if (!session.signal.aborted) refreshHistory();
-  }
-  // Re-read the persisted entry: its availability summary changed on disk.
+  await downloadEntry(entry.id, session);
   return (await session.client!.history.getEntry(entry.id)) as LocalClipboardEntry;
-}
-
-export async function ensureLocalFiles(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_entry_files", session);
-}
-
-export async function ensurePasteReady(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {
-  return downloadRequiredFiles(entry, "prepare_paste_entry", session);
 }
