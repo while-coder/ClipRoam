@@ -227,18 +227,6 @@ pub fn select_entry(
     .next())
 }
 
-pub fn count_entries(
-    connection: &Connection,
-    where_sql: &str,
-    values: &[rusqlite::types::Value],
-) -> Result<usize, String> {
-    let sql = format!("SELECT COUNT(*) FROM entries {where_sql}");
-    connection
-        .query_row(&sql, params_from_iter(values), |row| row.get::<_, i64>(0))
-        .map(|count| count.max(0) as usize)
-        .map_err(|error| error.to_string())
-}
-
 /// Newest-first ordering with the stable same-millisecond tie-break (rows
 /// inserted later within one millisecond sort first, matching the capture
 /// path's insert-at-front). The optional page limit is interpolated as an

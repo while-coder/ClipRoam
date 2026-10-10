@@ -1,3 +1,4 @@
+import { EntryActivateResponseSchema } from "@cliproam/protocol";
 import { errorMessage } from "../../utils/error";
 
 /** Structural stand-in for the protocol's zod schemas, keeping zod out of call sites' imports. */
@@ -38,11 +39,15 @@ export type SyncRequester = {
 
 // One requester per client session: everything rides the login session's
 // Bearer token over plain HTTP.
-export function createSyncRequester(httpUrl: string, token: string): SyncRequester {
+export function createSyncRequester(httpUrl: string, token: string, sessionSignal?: AbortSignal): SyncRequester {
   const httpFetch = async (method: string, path: string, init: RequestInit): Promise<Response> => {
+    const signal = sessionSignal
+      ? (init.signal ? AbortSignal.any([sessionSignal, init.signal]) : sessionSignal)
+      : init.signal;
     try {
       return await fetch(`${httpUrl}${path}`, {
         ...init,
+        signal,
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -50,6 +55,7 @@ export function createSyncRequester(httpUrl: string, token: string): SyncRequest
         },
       });
     } catch (error) {
+      if (sessionSignal?.aborted) throw sessionSignal.reason;
       // A timeout means the server is reachable but too slow — the retry
       // loops treat only the transient message as retryable, so a timeout
       // surfaces as its own error instead of a disconnect.
@@ -80,4 +86,13 @@ export function createSyncRequester(httpUrl: string, token: string): SyncRequest
   };
 
   return { fetch: httpFetch, request };
+}
+
+/** Broadcast clipboard activation after publication; no history-cache dependency. */
+export async function activateClipboardEntry(http: SyncRequester, deviceId: string, entryId: string): Promise<void> {
+  await http.request("POST", `/entries/${encodeURIComponent(entryId)}/activate`, {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId }),
+    signal: AbortSignal.timeout(30_000),
+  }, EntryActivateResponseSchema, "服务器返回了不兼容的激活响应");
 }

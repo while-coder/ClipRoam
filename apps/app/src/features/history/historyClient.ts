@@ -1,4 +1,4 @@
-import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, EntryActivateResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type Device, type EntryActivateRequest, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
+import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
 import type { SyncRequester } from "../sync/syncHttp";
 import { PAGE_SIZE } from "../../utils/constants";
@@ -7,7 +7,7 @@ const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
 /** Server paging and missing-detail backfill; never reads the pending queue. */
 export class HistoryClient {
-  constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly isStopped: () => boolean) {}
+  constructor(private readonly http: SyncRequester, private readonly isStopped: () => boolean) {}
   // Splits a long id list into fixed-size batches, collecting per-batch results.
   async #queryBatched<T>(ids: readonly string[], run: (batch: string[]) => Promise<T[]>): Promise<T[]> {
     const results: T[] = [];
@@ -25,24 +25,9 @@ export class HistoryClient {
     };
   }
 
-  // Adds an entry to the live clipboard of every other device. The response
-  // also confirms the entry exists, so reconcile can treat 404 as "gone".
-  async activate(entryId: string): Promise<ClipboardEntry> {
-    const request: EntryActivateRequest = { deviceId: this.device.id };
-    const stored = await this.http.request(
-      "POST",
-      `/entries/${encodeURIComponent(entryId)}/activate`,
-      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      EntryActivateResponseSchema,
-      "服务器返回了不兼容的激活响应",
-    );
-    return stored!.entry;
-  }
-
   /** One server page defines both the visible identities and the total. */
   async fetchHistoryPage(
     filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
   ): Promise<EntriesManifestPage> {
     const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
     if (filter.query?.trim()) params.set("search", filter.query.trim());
@@ -58,7 +43,7 @@ export class HistoryClient {
     if (this.isStopped()) return { total: 0, entries: [] };
     const entryIds = result!.manifest.map((entry) => entry.id);
     if (!entryIds.length) return { total: result!.total, entries: [] };
-    const entries = await this.fetchHistoryInfo(entryIds, deviceNames);
+    const entries = await this.fetchHistoryInfo(entryIds);
     if (this.isStopped()) return { total: 0, entries: [] };
     return { total: result!.total, entries };
   }
@@ -66,7 +51,6 @@ export class HistoryClient {
   /** Only detail backfill writes server entry/file information into the cache. */
   async fetchHistoryInfo(
     entryIds: string[],
-    deviceNames: Record<string, string> = {},
   ): Promise<LocalClipboardEntry[]> {
     if (!entryIds.length || this.isStopped()) return [];
     const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
@@ -86,11 +70,8 @@ export class HistoryClient {
       if (this.isStopped()) return [];
       await invoke("upsert_server_files", { statuses });
     }
-    const cached = await invoke<EntriesManifestPage>("get_cached_entries_for_display", {
-      filter: { kind: "all", entryIds }, deviceNames,
-    });
-    const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
-    return entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; });
+    if (this.isStopped()) return [];
+    return invoke<LocalClipboardEntry[]>("get_cached_entries_for_display", { entryIds });
   }
 
   async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {

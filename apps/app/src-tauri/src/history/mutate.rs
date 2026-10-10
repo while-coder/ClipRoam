@@ -1,5 +1,4 @@
-//! 条目更新与删除：服务器来源的写入（`clipboard.created` 回显 upsert，含本机
-//! 发布的回声）与服务器确认的删除。
+//! 历史详情补查写入缓存，以及服务器确认的删除。
 
 use tauri::{AppHandle, Emitter, State};
 

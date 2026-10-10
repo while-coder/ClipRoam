@@ -50,7 +50,6 @@ const props = defineProps<{
   /** Fetch a server page, backfilling missing details into the local cache. */
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
   ) => Promise<EntriesManifestPage>;
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
@@ -149,9 +148,6 @@ function onQueryUpdate(value: string): void {
 }
 onBeforeUnmount(cancelLongPress);
 
-const deviceNames = computed(() =>
-  Object.fromEntries(Object.entries(props.devicesById).map(([id, device]) => [id, device.name])),
-);
 const devices = computed(() => Object.values(props.devicesById));
 const selectedDeviceIds = ref<string[]>([]);
 
@@ -165,7 +161,6 @@ const {
   changePage,
 } = useHistoryManifest({
   fetchHistoryPage: props.fetchHistoryPage,
-  deviceNames: () => deviceNames.value,
   buildFilter: (page) => ({
     query: committedQuery.value,
     kind: filter.value,

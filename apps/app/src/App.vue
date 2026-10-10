@@ -18,7 +18,7 @@ import {
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount } from "./features/sync/syncSetup";
 import { startPasteBridge, startSyncBridgeService } from "./features/sync/bridge";
-import type { DownloadTaskSnapshot } from "./features/downloads/downloader";
+import type { DownloadTaskSnapshot } from "./features/downloads/useDownloads";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
@@ -84,6 +84,8 @@ import {
 } from "./features/history/useHistorySync";
 import {
   cancelPendingRefresh,
+  cancelUploadProgressFlush,
+  uploadProgressByEntryId,
   pendingCount,
   pendingEntries,
   refreshPending,
@@ -95,14 +97,16 @@ import {
   activeDownloadCount,
   downloadProgressByEntryId,
   downloadTasks,
-  downloader,
+  applyDownloadSnapshot,
+  refreshDownloadTasks,
+  cancelDownload,
+  stopAllDownloads,
   ensureLocalFiles,
 } from "./features/downloads/useDownloads";
 import {
   activeUploadCount,
   uploadTasks,
 } from "./features/uploads/useUploads";
-import { cancelUploadProgressFlush, uploadProgressByEntryId } from "./features/pending-upload/uploadProgress";
 import type {
   AccountPreferences,
   PlatformCapabilities,
@@ -361,12 +365,12 @@ async function initializeTauriServices(): Promise<void> {
     // 下载任务快照由 Rust 全局 Downloader 推送（main / paste 共享同一实例）；
     // Windows 虚拟文件的按需拉取也已在 Rust 侧直接入队，前端不再经手。
     listen<DownloadTaskSnapshot[]>("cliproam://download-changed", ({ payload }) => {
-      downloader.applySnapshot(payload);
+      applyDownloadSnapshot(payload);
     }),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
     // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused) void downloader.refresh().catch(() => undefined);
+      if (focused) void refreshDownloadTasks().catch(() => undefined);
     }),
   ]);
   unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -376,10 +380,10 @@ async function initializeTauriServices(): Promise<void> {
   }
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
-  await downloader.refresh().catch(() => undefined);
+  await refreshDownloadTasks().catch(() => undefined);
   // 「下载」页可见时的轮询兜底：隐藏窗口期间丢过事件也能在两个周期内追平。
   downloadPollTimer = window.setInterval(() => {
-    if (activeView.value === "downloads") void downloader.refresh().catch(() => undefined);
+    if (activeView.value === "downloads") void refreshDownloadTasks().catch(() => undefined);
   }, 2000);
 
   if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
@@ -615,8 +619,8 @@ onBeforeUnmount(() => {
     <DownloadsView
       v-else
       :download-tasks="downloadTasks"
-      @cancel-download="downloader.cancel($event)"
-      @cancel-all-downloads="downloader.stopAll()"
+      @cancel-download="cancelDownload($event)"
+      @cancel-all-downloads="stopAllDownloads()"
     />
 
     <nav v-if="isMobile && !isPasteWindow" class="mobile-navigation" aria-label="主导航">

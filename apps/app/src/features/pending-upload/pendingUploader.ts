@@ -9,7 +9,7 @@ const QUEUE_FAILURE_LIMIT = 3;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
 type PendingUploaderDeps = FileUploaderDeps & {
   onPublished(): void;
-  activate(entryId: string): Promise<ClipboardEntry>;
+  activate(entryId: string): Promise<void>;
 };
 type PendingQueueRow = {
   seq: number;
@@ -50,6 +50,7 @@ export class PendingUploader {
         await this.#publishQueueRow(row);
         this.#queueFailures.delete(row.seq);
       } catch (error) {
+        if (this.deps.isStopped()) return;
         // Transient failures wait out the backoff without counting against
         // the skip limit — HTTP coming back is expected, not the row's fault.
         if (isTransientNetworkError(error)) {
@@ -97,7 +98,7 @@ export class PendingUploader {
       await this.deps.activate(stored.id).catch(() => undefined);
     }
     if (this.deps.isStopped()) return;
-    await invoke("dequeue_pending_entry", { seq: row.seq }).catch(() => undefined);
+    await invoke("dequeue_pending_entry", { seq: row.seq });
   }
 
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {
@@ -107,9 +108,6 @@ export class PendingUploader {
       signal: AbortSignal.timeout(timeoutMs),
     };
   }
-
-  // Every write returns the server's stored entry: its id and timestamp are
-  // server-assigned, and the caller must adopt it into local state.
 
   // The HTTP response is the confirmation the socket echo used to be. The
   // queue-row payload carries no id and no createdAt: identity and timestamp

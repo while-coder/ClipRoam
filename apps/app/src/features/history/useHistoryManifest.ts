@@ -6,9 +6,7 @@ import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } 
 type ManifestOptions = {
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
   ) => Promise<EntriesManifestPage>;
-  deviceNames: () => Record<string, string>;
   buildFilter: (page: number) => EntriesManifestFilter;
   /** Bumped whenever the underlying history may have changed in the background. */
   revision: Ref<number>;
@@ -46,7 +44,6 @@ export function useHistoryManifest(options: ManifestOptions) {
     try {
       const result = await options.fetchHistoryPage(
         options.buildFilter(requestedPage),
-        options.deviceNames(),
       );
       if (token !== fetchToken) return;
       total.value = result.total;

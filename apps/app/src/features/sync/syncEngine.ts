@@ -16,8 +16,8 @@ import {
   refreshHistory,
 } from "../history/useHistorySync";
 import { uploadTasks } from "../uploads/useUploads";
-import { finishUploadProgress, queueUploadProgress } from "../pending-upload/uploadProgress";
-import { downloader } from "../downloads/useDownloads";
+import { cancelUploadProgressFlush, finishUploadProgress, queueUploadProgress } from "../pending-upload/usePendingUploads";
+import { stopAllDownloads } from "../downloads/useDownloads";
 import type { Device, SyncConfig } from "../../types";
 
 /**
@@ -58,10 +58,11 @@ function setConnectionState(value: boolean): void {
  */
 export function stopSyncClient(options: { activeOnly?: boolean } = {}): void {
   syncClient?.stop();
+  cancelUploadProgressFlush();
   syncClient = undefined;
   if (options.activeOnly) return;
   // 凭据失效时中止下载；窗口卸载不影响 Rust 下载任务。
-  downloader.stopAll("同步已断开");
+  stopAllDownloads("同步已断开");
   uploadTasks.value = [];
   setConnectionState(false);
 }
@@ -90,6 +91,7 @@ export function setSyncAutoUploadLimit(limitMb: number): void {
 
 export async function startSync(config: SyncConfig): Promise<void> {
   syncClient?.stop();
+  cancelUploadProgressFlush();
   setConnectionState(false);
   const device = await getDevice();
   const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
@@ -100,7 +102,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
     config.sessionToken,
     device,
     {
-      onConnected: setConnectionState,
+      onConnected: (value) => { if (syncClient === client) setConnectionState(value); },
       onDevices: (devices) => { rememberDevices(devices); },
       onDevicePresence: (device) => { rememberDevices([device]); },
       onEntry: () => {
@@ -116,11 +118,16 @@ export async function startSync(config: SyncConfig): Promise<void> {
         void invoke("remove_server_entry", { entryId });
       },
       onFileAvailable: () => {
+        if (syncClient !== client) return;
         // Refresh the current page; its details determine the file statuses to query.
         refreshHistory();
       },
-      onUploadProgress: queueUploadProgress,
-      onUploadFinished: finishUploadProgress,
+      onUploadProgress: (entryId, uploadedBytes, totalBytes) => {
+        if (syncClient === client) queueUploadProgress(entryId, uploadedBytes, totalBytes);
+      },
+      onUploadFinished: (entryId) => {
+        if (syncClient === client) finishUploadProgress(entryId);
+      },
       onError: (message) => { showToast(message, "error"); },
       onServeTasksChanged: () => {
         if (syncClient !== client) return;

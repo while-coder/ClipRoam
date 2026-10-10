@@ -8,12 +8,7 @@ import type {
   EntriesManifestPage,
 } from "../../types";
 
-/**
- * 历史数据的同步视图状态（从 App.vue 下沉）：revision 失效、远端 upsert
- * 批量合并、服务器文件可用性对账。引擎客户端与历史视图经 App.vue
- * 装配时注入，保持静态依赖单向。
- */
-/** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage })）。 */
+/** History refresh state and view focus helpers. */
 interface HistorySyncViewRef {
   focusSearch(): Promise<void>;
   focusSearchInput(): void;
@@ -35,7 +30,6 @@ export const historyRevision = ref(0);
 
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
-  deviceNames: Record<string, string>,
 ): Promise<EntriesManifestPage> {
   // 未登录没有活动档案；隐藏的 paste 窗口启动时也会来查，这里返回空页，
   // 不让「同步账号未登录」的错误以 toast 形式盖到主窗口的登录页上。
@@ -44,7 +38,7 @@ export async function fetchHistoryPage(
   }
   const client = deps.getSyncClient();
   if (!client) return { total: 0, entries: [] };
-  return client.history.fetchHistoryPage(filter, deviceNames);
+  return client.history.fetchHistoryPage(filter);
 }
 
 let refreshTimer: number | undefined;

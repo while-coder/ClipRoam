@@ -3,7 +3,7 @@ import { Download } from "lucide-vue-next";
 import TaskListView, { type TaskRow } from "../../components/TaskListView.vue";
 import { percentOf } from "../../utils/format";
 import { activeDownloadCount } from "./useDownloads";
-import type { DownloadTaskSnapshot } from "./downloader";
+import type { DownloadTaskSnapshot } from "./useDownloads";
 
 /**
  * 主窗口侧边栏的「下载」页：Rust 全局 Downloader 的任务快照在这里整页展示，

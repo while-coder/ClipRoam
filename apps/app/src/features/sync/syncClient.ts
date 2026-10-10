@@ -1,6 +1,6 @@
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type Device } from "@cliproam/protocol";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
-import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
+import { activateClipboardEntry, createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import { HistoryClient } from "../history/historyClient";
 import { PendingUploader } from "../pending-upload/pendingUploader";
@@ -35,13 +35,14 @@ export class SyncClient {
   #awaitingPong = false;
   #stopped = false;
   #http: SyncRequester;
+  #abortController = new AbortController();
   readonly history: HistoryClient;
   readonly pendingUploads: PendingUploader;
   readonly uploads: RelayUploader;
   constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, private readonly device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT) {
-    this.#http = createSyncRequester(httpUrl, token);
+    this.#http = createSyncRequester(httpUrl, token, this.#abortController.signal);
     const isStopped = () => this.#stopped;
-    this.history = new HistoryClient(this.#http, device, isStopped);
+    this.history = new HistoryClient(this.#http, isStopped);
     this.pendingUploads = new PendingUploader(this.#http, device, {
       isStopped,
       onPublished: handlers.onPublished,
@@ -49,7 +50,7 @@ export class SyncClient {
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
-      activate: (entryId) => this.history.activate(entryId),
+      activate: (entryId) => activateClipboardEntry(this.#http, device.id, entryId),
     }, autoUploadLimit);
     this.uploads = new RelayUploader(this.#http, {
       isStopped,
@@ -64,6 +65,7 @@ export class SyncClient {
   }
   stop(): void {
     this.#stopped = true;
+    this.#abortController.abort();
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
     this.#socket?.close();

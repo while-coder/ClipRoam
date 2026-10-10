@@ -5,20 +5,18 @@ import { isMobile, isPasteWindow, usePlatform } from "../../composables/usePlatf
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
-import { DownloadCancelledError } from "../downloads/downloader";
 import { getSyncClient } from "../sync/syncEngine";
-import { downloader, ensureLocalFiles, ensurePasteReady } from "../downloads/useDownloads";
+import { DownloadCancelledError, cancelEntryDownloads, downloadFiles, ensureLocalFiles, ensurePasteReady } from "../downloads/useDownloads";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry, SavePreparation } from "../../types";
 
 /**
- * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。数据落地经 Downloader
- * 与 Rust 命令，历史失效走 refreshHistory。
+ * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块与 Rust 命令，历史失效走 refreshHistory。
  */
 export const activatingEntryIds = ref(new Set<string>());
 export const savingEntryId = ref("");
 const { platformCapabilities } = usePlatform();
-/** 剪贴板写入串行化：下载可并发，落剪贴板同一时刻只允许一个 invoke。 */
+/** 剪贴板写入串行化：下载请求可同时发起，落剪贴板同一时刻只允许一个 invoke。 */
 let clipboardWriteChain: Promise<unknown> = Promise.resolve();
 
 async function activateEntry(
@@ -32,7 +30,7 @@ async function activateEntry(
   }
   if (activatingEntryIds.value.has(entry.id)) {
     // 下载中再次激活 = 取消该下载；无下载（如纯文本快速粘贴）则维持防重复。
-    if (await downloader.cancelEntry(entry.id) > 0) showToast("已取消下载", "info");
+    if (await cancelEntryDownloads(entry.id) > 0) showToast("已取消下载", "info");
     return;
   }
   activatingEntryIds.value.add(entry.id);
@@ -70,7 +68,7 @@ function pasteEntry(entry?: LocalClipboardEntry): Promise<void> {
 
 export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   if (savingEntryId.value === entry.id) {
-    if (await downloader.cancelEntry(entry.id) > 0) showToast("已取消下载", "info");
+    if (await cancelEntryDownloads(entry.id) > 0) showToast("已取消下载", "info");
     return;
   }
   if (savingEntryId.value || !canSaveEntry(entry)) return;
@@ -89,7 +87,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 
       if (preparation.missing.length) {
         // saveId 隔离任务：落盘到另存 staging 而非内容寻址缓存。
-        await downloader.downloadFiles(entry.id, preparation.missing, {
+        await downloadFiles(entry.id, preparation.missing, {
           saveId: preparation.saveId,
           entryLabel: entry.content,
         });

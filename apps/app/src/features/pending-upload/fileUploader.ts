@@ -1,12 +1,11 @@
 import { FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
-import { mapWithConcurrency, TRANSFER_CONCURRENCY } from "../sync/concurrency";
-import { isTransientNetworkError, TRANSIENT_NETWORK_ERROR_MESSAGE, type SyncRequester } from "../sync/syncHttp";
+import type { SyncRequester } from "../sync/syncHttp";
 import { base64ToBytes } from "../../utils/bytes";
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
-const UPLOAD_RETRY_BACKOFF_MS = 2_000;
+const TRANSFER_CONCURRENCY = 4;
 type FileReference = { fileId: string; size: number };
 export type FileUploaderDeps = {
   isStopped(): boolean;
@@ -18,21 +17,7 @@ export type FileUploaderDeps = {
 
 /** Upload captured content to the server pool as part of one pending row. */
 export class FileUploader {
-  #entryUploads = new Map<string, Promise<void>>();
   constructor(private readonly http: SyncRequester, private readonly deps: FileUploaderDeps) {}
-  async uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
-    const existingUpload = this.#entryUploads.get(entry.id);
-    if (existingUpload) return existingUpload;
-
-    const upload = this.#uploadFiles(entry, sizeLimit);
-    this.#entryUploads.set(entry.id, upload);
-    try {
-      await upload;
-    } finally {
-      this.#entryUploads.delete(entry.id);
-    }
-  }
-
   /**
    * Content ids are known before publishing, so a finished upload never changes
    * the entry — the server just learns it now holds those bytes. Everything is
@@ -41,8 +26,9 @@ export class FileUploader {
    * The candidates derive from the entry payload itself, so this works for a
    * published row and for a queue row that has no local entry yet alike.
    */
-  async #uploadFiles(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
+  async uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
     if (entry.kind !== "files" && entry.kind !== "image") return;
+    this.#checkStopped();
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
 
@@ -54,7 +40,7 @@ export class FileUploader {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadFile(file, (fileUploadedBytes) => {
+          await this.#uploadContent(file, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -65,11 +51,11 @@ export class FileUploader {
           return file.fileId;
         },
       );
+      this.#checkStopped();
       const uploaded = results.flatMap((result) => (
         result.status === "fulfilled" ? [result.value] : []
       ));
-      // The server now holds these contents; the UI's live availability set
-      // picks this up without waiting for the next pool query.
+      // Refresh history so its file-status backfill observes the completed uploads.
       for (const fileId of uploaded) {
         this.deps.onFileAvailable(fileId);
       }
@@ -98,23 +84,6 @@ export class FileUploader {
     }
   }
 
-  async #uploadFile(
-    file: FileReference,
-    onProgress: (uploadedBytes: number) => void,
-  ): Promise<void> {
-    while (!this.deps.isStopped()) {
-      try {
-        await this.#uploadContent(file, onProgress);
-        return;
-      } catch (error) {
-        if (this.deps.isStopped() || !isTransientNetworkError(error)) throw error;
-        // No socket to wait on: back off and re-probe HTTP directly.
-        await new Promise((resolve) => window.setTimeout(resolve, UPLOAD_RETRY_BACKOFF_MS));
-      }
-    }
-    throw new Error(TRANSIENT_NETWORK_ERROR_MESSAGE);
-  }
-
   // Uploads run over HTTP: one POST handshake that either reports the content
   // already stored or hands back the server's chunk ledger, then raw-byte PUTs
   // that each answer with the authoritative ledger. No socket correlation and
@@ -128,7 +97,9 @@ export class FileUploader {
     // not a failure: re-beginning hands back the current ledger and the
     // upload continues from it.
     for (let restart = 0; ; restart++) {
+      this.#checkStopped();
       const begin = await this.#uploadBegin(file);
+      this.#checkStopped();
       // The server already had these bytes, so the transfer is over before it
       // began — this is what makes copying a folder twice nearly free.
       if (begin.status === "stored") {
@@ -143,16 +114,19 @@ export class FileUploader {
       onProgress(begin.receivedBytes);
       let retired = false;
       while (missing.length > 0) {
+        this.#checkStopped();
         const index = missing[0]!;
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
         const data = await invoke<string>("read_upload_chunk", {
           fileId: file.fileId, offset, length,
         });
+        this.#checkStopped();
         if (!data) throw new Error("本机文件内容不可用");
         // A concurrent upload may store the same content mid-transfer; the
         // chunk response then reports `stored` and the remaining bytes are done.
         const chunk = await this.#uploadChunk(file.fileId, index, base64ToBytes(data));
+        this.#checkStopped();
         if (chunk === undefined) {
           retired = true;
           break;
@@ -176,6 +150,10 @@ export class FileUploader {
       // from spinning this loop forever.
       if (restart >= 3) throw new Error("服务器上传进度反复失效");
     }
+  }
+
+  #checkStopped(): void {
+    if (this.deps.isStopped()) throw new Error("同步已停止");
   }
 
   async #uploadBegin(file: FileReference): Promise<UploadBeginResponse> {
@@ -225,3 +203,30 @@ function decodeMissing(missing: string, chunkCount: number): number[] {
   return indices;
 }
 
+
+/**
+ * Runs `worker` over `items` with at most `limit` in flight. Unlike
+ * `Promise.allSettled` over the whole list, memory and socket pressure stay
+ * bounded no matter how many items there are. Results keep the input order.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let next = 0;
+
+  const runner = async (): Promise<void> => {
+    for (let index = next++; index < items.length; index = next++) {
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]!, index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
+  return results;
+}

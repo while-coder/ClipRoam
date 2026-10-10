@@ -1,160 +1,37 @@
-//! 条目读取：manifest / query / ids / 单条读取。
-//! Entries live in SQLite; every read goes through SQL, and each row's derived
-//! `summary` is recomputed just before it leaves the backend.
-
+//! Server-selected history cache reads and missing-record checks.
 use std::collections::{HashMap, HashSet};
 use rusqlite::{params_from_iter, types::Value};
-use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::content::{refresh_summary, ClipboardEntry, SummaryContext};
+use crate::content::{lightweight_entry, refresh_summary, ClipboardEntry, SummaryContext};
 use crate::file::{blob_ids_on_disk, history_stored_ids};
-use crate::store::{count_entries, newest_first_sql, select_entries};
+use crate::store::select_entries;
 use crate::utils::placeholders;
 use crate::AppState;
 
-use crate::content::lightweight_entry;
-
-/// Page size for `get_cached_entries_for_display`; mirrors `PAGE_SIZE` in the frontend.
-const MANIFEST_PAGE_SIZE: usize = 50;
-
-/// Filters for `get_cached_entries_for_display`, mirroring `GET /entries/manifest` on
-/// the server: keyword, kind, time range and source devices, then a page of
-/// the matches. An absent `page` returns every match — used where the whole
-/// history is needed.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EntriesManifestFilter {
-    #[serde(default)]
-    query: String,
-    #[serde(default)]
-    kind: String,
-    start: Option<i64>,
-    end: Option<i64>,
-    /// Source-device filter; empty means no filter.
-    #[serde(default)]
-    device_ids: Vec<String>,
-    /// Exact identities of a server page; local cache order/total are not authoritative.
-    entry_ids: Option<Vec<String>>,
-    page: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EntriesManifestPage {
-    total: usize,
-    entries: Vec<ClipboardEntry>,
-}
-
-/// Builds the WHERE clause and parameters for the manifest filters. Keyword
-/// matching mirrors the frontend's `clientManifest`: entry content, or the
-/// source device's display name. SQLite's `lower()` folds
-/// ASCII only — identical behaviour for CJK, narrower for accented Latin.
-fn manifest_query(
-    filter: &EntriesManifestFilter,
-    device_names: &HashMap<String, String>,
-    needle: &str,
-) -> (String, Vec<Value>) {
-    let mut clauses: Vec<String> = Vec::new();
-    let mut values: Vec<Value> = Vec::new();
-    if let Some(ids) = &filter.entry_ids {
-        if ids.is_empty() {
-            clauses.push("0".to_string());
-        } else {
-            clauses.push(format!("id IN ({})", placeholders(ids.len())));
-            values.extend(ids.iter().cloned().map(Value::Text));
-        }
-    }
-    if filter.kind != "all" {
-        clauses.push("kind = ?".to_string());
-        values.push(Value::Text(filter.kind.clone()));
-    }
-    // Device filter: an entry matches when its source is one of the selected
-    // devices. Empty selection filters nothing.
-    if !filter.device_ids.is_empty() {
-        let selected: HashSet<&str> =
-            filter.device_ids.iter().map(String::as_str).collect();
-        let known: Vec<&String> = device_names
-            .keys()
-            .filter(|id| selected.contains(id.as_str()))
-            .collect();
-        if !known.is_empty() {
-            clauses.push(format!(
-                "source_device_id IN ({})",
-                crate::utils::placeholders(known.len())
-            ));
-            values.extend(known.iter().map(|id| Value::Text((*id).clone())));
-        }
-    }
-    if !needle.is_empty() {
-        let matching_ids = device_names
-            .iter()
-            .filter(|(_, name)| name.to_lowercase().contains(needle))
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let mut alternatives = vec!["LOWER(content) LIKE ? ESCAPE '\\'".to_string()];
-        values.push(Value::Text(format!("%{}%", crate::utils::escape_like(needle))));
-        if !matching_ids.is_empty() {
-            alternatives.push(format!(
-                "source_device_id IN ({})",
-                crate::utils::placeholders(matching_ids.len())
-            ));
-            values.extend(matching_ids.into_iter().map(Value::Text));
-        }
-        clauses.push(format!("({})", alternatives.join(" OR ")));
-    }
-    if let Some(start) = filter.start {
-        clauses.push("created_ms >= ?".to_string());
-        values.push(Value::Integer(start));
-    }
-    if let Some(end) = filter.end {
-        clauses.push("created_ms <= ?".to_string());
-        values.push(Value::Integer(end));
-    }
-    let where_sql = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", clauses.join(" AND "))
-    };
-    (where_sql, values)
-}
-
+/// Read only the server page's identities; filtering, paging and total stay server-side.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn get_cached_entries_for_display(
     state: State<'_, AppState>,
-    filter: EntriesManifestFilter,
-    device_names: HashMap<String, String>,
-) -> Result<EntriesManifestPage, String> {
+    entry_ids: Vec<String>,
+) -> Result<Vec<ClipboardEntry>, String> {
+    if entry_ids.is_empty() { return Ok(Vec::new()); }
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
     let stored = history_stored_ids(&state, &mut history)?;
     let cache_dir = state.active_cache_dir(&history)?;
     let blobs = blob_ids_on_disk(&cache_dir);
     let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
-    let needle = filter.query.trim().to_lowercase();
-    let (where_sql, values) = manifest_query(&filter, &device_names, &needle);
-    let (limit, offset) = match filter.page {
-        Some(page) => {
-            let offset = page.saturating_sub(1) * MANIFEST_PAGE_SIZE;
-            (Some(MANIFEST_PAGE_SIZE), offset)
-        }
-        None => (None, 0),
-    };
     let path = state.active_history_path(&history)?;
-    // Count and page come out of one pass over the same connection so a
-    // concurrent capture cannot slip between them.
-    let (total, entries) = state.with_database(&path, |connection| {
-        let total = count_entries(connection, &where_sql, &values)?;
-        let entries = select_entries(connection, &where_sql, &newest_first_sql(limit, offset), &values)?;
-        Ok((total, entries))
+    let values = entry_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
+    let entries = state.with_database(&path, |connection| {
+        select_entries(connection, &format!("WHERE id IN ({})", placeholders(entry_ids.len())), "", &values)
     })?;
-    let mut entries = entries;
-    for entry in &mut entries {
-        refresh_summary(entry, &context);
-    }
-    Ok(EntriesManifestPage {
-        total,
-        entries: entries.iter().map(lightweight_entry).collect(),
-    })
+    let mut by_id = entries.into_iter().map(|entry| (entry.id.clone(), entry)).collect::<HashMap<_, _>>();
+    Ok(entry_ids.into_iter().filter_map(|id| {
+        let mut entry = by_id.remove(&id)?;
+        refresh_summary(&mut entry, &context);
+        Some(lightweight_entry(&entry))
+    }).collect())
 }
 
 /// Of the given ids, those the local history does not store — the remote side
@@ -188,7 +65,7 @@ pub(crate) fn find_unknown_entry_ids(
     })
 }
 
-/// The full entry, tree included — used when publishing to the server.
+/// Full cached details for previews and clipboard actions.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<ClipboardEntry, String> {
     let mut history = state.history.lock().map_err(|error| error.to_string())?;
