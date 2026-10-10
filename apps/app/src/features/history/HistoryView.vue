@@ -26,7 +26,6 @@ import {
   formatAge as formatAgeRelative,
   formatExactDateTime,
   parseLocalDate,
-  percentOf,
   TIME_FILTER_LABELS,
   validateDateRange,
 } from "../../utils/format";
@@ -38,7 +37,6 @@ import {
 import type {
   ClipboardEntry,
   Device,
-  DownloadProgress,
   EntriesManifestFilter,
   EntriesManifestPage,
   EntryFilter,
@@ -59,7 +57,6 @@ const props = defineProps<{
   importingShare: boolean;
   activatingEntryIds: ReadonlySet<string>;
   savingEntryId: string;
-  downloadProgressByEntryId: Record<string, DownloadProgress>;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
 }>();
 
@@ -198,26 +195,16 @@ function formatAge(createdAt: string): string {
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
-  return uploadStatusOf(entry, props.downloadProgressByEntryId);
+  return uploadStatusOf(entry);
 }
 
 /** upload-status 文案 → STag 色相：成功绿 / 上传蓝 / 进行中灰 / 待传警示黄。 */
 function uploadStatusTagType(status: string | undefined): string {
   if (status === "已上传") return "success";
   if (status?.startsWith("上传中")) return "info";
-  if (status?.startsWith("计算中") || status?.startsWith("下载中")) return "default";
+  if (status?.startsWith("计算中")) return "default";
   return "warning";
 }
-
-/** 下载中的条目在行内显示进度条；排队中 receivedBytes 为 0，从 0% 起步。 */
-function entryDownloadProgress(entry: LocalClipboardEntry): DownloadProgress | undefined {
-  return props.downloadProgressByEntryId[entry.id];
-}
-
-function downloadPercentOf(progress: DownloadProgress): number {
-  return percentOf(progress.receivedBytes, progress.totalBytes);
-}
-
 
 function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
   return entry.imageInfo?.thumbnail
@@ -368,14 +355,6 @@ function activateSelectedEntry(entry?: LocalClipboardEntry): void {
   emit("activate", entry, false);
 }
 
-/** paste 窗口下载中的条目：再次激活即取消，用 title 告知。 */
-function downloadCancelHint(entry: LocalClipboardEntry): string | undefined {
-  if (isPasteWindow && props.activatingEntryIds.has(entry.id) && props.downloadProgressByEntryId[entry.id]) {
-    return "下载中，再次按 Enter 或点击可取消";
-  }
-  return undefined;
-}
-
 function resetTimeFilter(): void {
   timeFilter.value = "all";
   startDate.value = "";
@@ -488,7 +467,6 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         role="button"
         :tabindex="activatingEntryIds.has(entry.id) ? -1 : 0"
         :aria-disabled="activatingEntryIds.has(entry.id)"
-        :title="downloadCancelHint(entry)"
         @mouseenter="selectedEntryId = entry.id"
         @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
         @click="selectOrActivate(entry)"
@@ -549,9 +527,6 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
               <span>·</span>
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
-          </span>
-          <span v-if="entryDownloadProgress(entry)" class="download-bar entry-download-bar" aria-hidden="true">
-            <span class="download-bar-fill" :style="{ width: `${downloadPercentOf(entryDownloadProgress(entry)!)}%` }"></span>
           </span>
         </span>
       </div>

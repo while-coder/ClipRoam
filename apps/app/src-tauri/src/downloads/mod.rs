@@ -194,7 +194,7 @@ pub(crate) struct TaskSnapshot {
     id: String,
     batch_id: u64,
     entry_id: String,
-    entry_ids: Vec<String>,
+    request_ids: Vec<String>,
     file_id: String,
     label: String,
     size: u64,
@@ -212,7 +212,7 @@ pub(crate) enum TaskOutcome {
 }
 
 struct DownloadTask {
-    requesters: HashSet<(String, String)>,
+    requesters: HashSet<(String, String, String)>,
     account: Arc<AccountContext>,
     id: String,
     batch_id: u64,
@@ -229,7 +229,14 @@ struct DownloadTask {
     outcome_tx: watch::Sender<Option<TaskOutcome>>,
 }
 
+struct DownloadCall {
+    account_key: String,
+    owner_id: String,
+    cancel_tx: watch::Sender<bool>,
+}
+
 struct DownloaderInner {
+    calls: HashMap<String, DownloadCall>,
     tasks: HashMap<String, DownloadTask>,
     queue: VecDeque<String>,
     /// (accountKey, fileId) -> taskId，只含非终态任务。
@@ -266,6 +273,7 @@ impl Downloader {
         Self {
             app,
             inner: Mutex::new(DownloaderInner {
+                calls: HashMap::new(),
                 tasks: HashMap::new(),
                 queue: VecDeque::new(),
                 inflight: HashMap::new(),
@@ -289,6 +297,7 @@ impl Downloader {
         &self,
         account: &Arc<AccountContext>,
         owner_id: &str,
+        request_id: &str,
         entry_id: &str,
         files: &[DownloadRequest],
         entry_label: Option<&str>,
@@ -298,6 +307,8 @@ impl Downloader {
             let mut inner = self.inner.lock().expect("downloader lock");
             // Closing marks the context before taking this same queue lock.
             if account.is_closed() { return Err("账号会话已结束".to_string()); }
+            let (cancel_tx, _) = watch::channel(false);
+            inner.calls.insert(request_id.to_string(), DownloadCall { account_key: account.key.clone(), owner_id: owner_id.to_string(), cancel_tx });
             let batch_id = inner.next_batch_id;
             inner.next_batch_id += 1;
             for (index, file) in files.iter().enumerate() {
@@ -308,7 +319,7 @@ impl Downloader {
                     .cloned()
                     .and_then(|task_id| inner.tasks.get_mut(&task_id))
                 {
-                    existing.requesters.insert((owner_id.to_string(), entry_id.to_string()));
+                    existing.requesters.insert((owner_id.to_string(), entry_id.to_string(), request_id.to_string()));
                     // 同账号同文件共享任务及完成通知。
                     watchers.push((existing.id.clone(), existing.outcome_tx.subscribe()));
                     continue;
@@ -320,7 +331,7 @@ impl Downloader {
                     task_id.clone(),
                     DownloadTask {
                         account: account.clone(),
-                        requesters: HashSet::from([(owner_id.to_string(), entry_id.to_string())]),
+                        requesters: HashSet::from([(owner_id.to_string(), entry_id.to_string(), request_id.to_string())]),
                         id: task_id.clone(),
                         batch_id,
                         entry_id: entry_id.to_string(),
@@ -351,25 +362,44 @@ impl Downloader {
         }
     }
 
-    /// 取消该条目所有非终态任务；返回取消数（0 = 没有下载在跑）。
-    pub(crate) fn cancel_entry(&self, entry_id: &str, account: &AccountContext) -> usize {
-        self.cancel_matching(|task| task.requesters.iter().any(|(_, entry)| entry == entry_id) && task.account.key == account.key, "已取消")
-    }
-
     /// 中止全部活动任务并清空队列（断开同步 / 面板「全部取消」共用）。
     pub(crate) fn stop_all(&self, reason: &str) {
         self.cancel_matching(|_| true, reason);
     }
 
     pub(crate) fn stop_account(&self, account: &AccountContext, owner_id: Option<&str>, reason: &str) {
-        if let Some(owner) = owner_id {
+        let ids: Vec<String> = {
+            let inner = self.inner.lock().expect("downloader lock");
+            inner.calls.iter().filter(|(_, call)| call.account_key == account.key
+                && owner_id.is_none_or(|owner| call.owner_id == owner))
+                .map(|(id, _)| id.clone()).collect()
+        };
+        for id in ids { self.release_call(&id, Some(reason)); }
+    }
+
+    /// Detach one invocation; files still needed by another invocation continue.
+    fn release_call(&self, request_id: &str, reason: Option<&str>) {
+        let ids = {
             let mut inner = self.inner.lock().expect("downloader lock");
-            for task in inner.tasks.values_mut().filter(|task| task.account.key == account.key) {
-                task.requesters.retain(|(session, _)| session != owner);
+            if let Some(call) = inner.calls.remove(request_id) {
+                if reason.is_some() { let _ = call.cancel_tx.send(true); }
             }
-        }
-        self.cancel_matching(|task| task.account.key == account.key
-            && (owner_id.is_none() || task.requesters.is_empty()), reason);
+            let mut ids = Vec::new();
+            for task in inner.tasks.values_mut() {
+                task.requesters.retain(|(_, _, request)| request != request_id);
+                if is_active(task.status) && task.requesters.is_empty() { ids.push(task.id.clone()); }
+            }
+            ids
+        };
+        for id in ids { self.cancel_one_if_unused(&id, reason.unwrap_or("已取消")); }
+        self.emit_snapshot();
+    }
+
+    fn call_cancel_receiver(&self, request_id: &str, owner_id: &str) -> Result<watch::Receiver<bool>, String> {
+        let inner = self.inner.lock().expect("downloader lock");
+        let call = inner.calls.get(request_id).filter(|call| call.owner_id == owner_id)
+            .ok_or("下载调用已结束")?;
+        Ok(call.cancel_tx.subscribe())
     }
 
     pub(crate) fn snapshot(&self) -> Vec<TaskSnapshot> {
@@ -427,11 +457,19 @@ impl Downloader {
     }
 
     /// 取消单个任务；返回是否真的取消了（false = 不存在或已终态）。
+    fn cancel_one_if_unused(&self, task_id: &str, reason: &str) -> bool {
+        self.cancel_one_inner(task_id, reason, true)
+    }
+
     fn cancel_one(&self, task_id: &str, reason: &str) -> bool {
+        self.cancel_one_inner(task_id, reason, false)
+    }
+
+    fn cancel_one_inner(&self, task_id: &str, reason: &str, only_unused: bool) -> bool {
         let mut inner = self.inner.lock().expect("downloader lock");
         let key = {
             let Some(task) = inner.tasks.get_mut(task_id) else { return false };
-            if !is_active(task.status) {
+            if !is_active(task.status) || (only_unused && !task.requesters.is_empty()) {
                 return false;
             }
             task.status = DownloadStatus::Cancelled;
@@ -554,7 +592,7 @@ impl Downloader {
                 id: task.id.clone(),
                 batch_id: task.batch_id,
                 entry_id: task.entry_id.clone(),
-                entry_ids: task.requesters.iter().map(|(_, entry)| entry.clone()).collect::<HashSet<_>>().into_iter().collect(),
+                request_ids: task.requesters.iter().map(|(_, _, request)| request.clone()).collect(),
                 file_id: task.file_id.clone(),
                 label: task.label.clone(),
                 size: task.size,
@@ -788,6 +826,7 @@ async fn cancellable_sleep(delay: Duration, cancel_rx: &watch::Receiver<bool>) -
 pub(crate) async fn download_entry(
     state: State<'_, AppState>,
     entry_id: String,
+    request_id: String,
     session_id: String,
 ) -> Result<BatchOutcome, String> {
     let account = state.account(&session_id)?;
@@ -795,35 +834,44 @@ pub(crate) async fn download_entry(
     let files: Vec<DownloadRequest> = entry_contents_of(&snapshot.entry).into_iter()
         .map(|(file_id, size)| DownloadRequest { file_id, size }).collect();
     let total = files.len();
-    let watchers = state.downloader.enqueue_batch(&account, &session_id, &entry_id, &files, Some(&snapshot.entry.content))?;
-    let mut cancelled = false;
-    let mut failed_count = 0usize;
-    for (_, mut rx) in watchers {
-        let outcome = rx
-            .wait_for(|outcome| outcome.is_some())
-            .await
-            .map_err(|error| error.to_string())?
-            .clone()
-            .expect("wait_for guarantees a matching value");
-        match outcome {
-            TaskOutcome::Succeeded => {}
-            TaskOutcome::Failed(_) => failed_count += 1,
-            TaskOutcome::Cancelled(_) => cancelled = true,
-        }
-    }
-    Ok(BatchOutcome { cancelled, failed_count, total })
+    let watchers = state.downloader.enqueue_batch(&account, &session_id, &request_id, &entry_id, &files, Some(&snapshot.entry.content))?;
+    let mut cancel_rx = match state.downloader.call_cancel_receiver(&request_id, &session_id) {
+        Ok(receiver) => receiver,
+        Err(_) => return Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
+    };
+    let result = tokio::select! {
+        biased;
+        _ = wait_cancelled(&mut cancel_rx) => Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
+        outcome = async {
+            let mut cancelled = false;
+            let mut failed_count = 0;
+            for (_, mut rx) in watchers {
+                let outcome = rx.wait_for(|outcome| outcome.is_some()).await
+                    .map_err(|error| error.to_string())?.clone().expect("terminal outcome");
+                match outcome {
+                    TaskOutcome::Succeeded => {}
+                    TaskOutcome::Failed(_) => failed_count += 1,
+                    TaskOutcome::Cancelled(_) => cancelled = true,
+                }
+            }
+            Ok::<_, String>(BatchOutcome { cancelled, failed_count, total })
+        } => outcome,
+    };
+    state.downloader.release_call(&request_id, None);
+    result
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn cancel_entry_download_call(state: State<'_, AppState>, request_id: String, session_id: String) -> Result<(), String> {
+    state.downloader.call_cancel_receiver(&request_id, &session_id)?;
+    state.downloader.release_call(&request_id, Some("已取消"));
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn cancel_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
     state.downloader.cancel_task(&task_id, "已取消");
     Ok(())
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn cancel_entry_downloads(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<usize, String> {
-    let account = state.account(&session_id)?;
-    Ok(state.downloader.cancel_entry(&entry_id, &account))
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -42,6 +42,7 @@ import {
   saveEntry,
   savingEntryId,
 } from "./features/history/useEntryActions";
+import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import { errorMessage } from "./utils/error";
@@ -91,7 +92,6 @@ import {
 } from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
-  downloadProgressByEntryId,
   downloadTasks,
   refreshDownloadTasks,
   cancelDownload,
@@ -602,7 +602,6 @@ onBeforeUnmount(() => {
       :importing-share="importingShare"
       :activating-entry-ids="activatingEntryIds"
       :saving-entry-id="savingEntryId"
-      :download-progress-by-entry-id="downloadProgressByEntryId"
       :ensure-local-files="ensureLocalFiles"
       @activate="activateFromView"
       @remove="removeEntry"
@@ -663,5 +662,6 @@ onBeforeUnmount(() => {
   <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />
 
   <ToastLayer />
+  <EntryDownloadToasts v-if="!isToastWindow" />
   <SMessageHost />
 </template>

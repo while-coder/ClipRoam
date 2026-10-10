@@ -4,7 +4,7 @@ import { createSettingsState } from "../settings/settingsState";
 import type { SyncClient } from "./syncClient";
 import type { SyncConfig, AccountPreferences, Device, LocalClipboardEntry, UploadProgress } from "../../types";
 import type { ServeTaskSnapshot } from "../uploads/relayUploader";
-import type { DownloadTaskSnapshot } from "../downloads/useDownloads";
+import type { DownloadTaskSnapshot, EntryDownloadToast } from "../downloads/useDownloads";
 
 function createAccountState() {
   return {
@@ -18,6 +18,7 @@ function createAccountState() {
     pendingCount: ref(0),
     uploadTasks: ref<ServeTaskSnapshot[]>([]),
     downloadTasks: ref<DownloadTaskSnapshot[]>([]),
+    entryDownloadToasts: ref<EntryDownloadToast[]>([]),
     uploadProgress: ref<Record<string, UploadProgress>>({}),
     pendingUploadProgress: new Map<string, UploadProgress>(),
     activatingEntryIds: ref(new Set<string>()),

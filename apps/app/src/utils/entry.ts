@@ -1,9 +1,8 @@
 const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
-import { formatFileSize, percentOf } from "./format";
+import { formatFileSize } from "./format";
 import type {
   ClipboardEntry,
   Device,
-  DownloadProgress,
   LocalClipboardEntry,
 } from "../types";
 
@@ -28,23 +27,12 @@ export function isHashing(entry: LocalClipboardEntry): boolean {
  */
 export function uploadStatus(
   entry: LocalClipboardEntry,
-  downloadProgress: Record<string, DownloadProgress>,
 ): string | undefined {
   const summary = entry.summary;
   if (!summary.fileCount) return undefined;
   // Content ids are computed in the background, so a fresh entry is usable
   // locally before it can be addressed on the server.
   if (isHashing(entry)) return `计算中 ${summary.hashedCount}/${summary.fileCount}`;
-  const download = downloadProgress[entry.id];
-  if (download) {
-    const percent = percentOf(download.receivedBytes, download.totalBytes, 99);
-    // 多文件批次保留「已完成/总数」；单文件它没有信息量，直接给字节进度。
-    const count = download.total > 1 ? `${download.finished}/${download.total} · ` : "";
-    const bytes = download.totalBytes
-      ? ` · ${formatFileSize(download.receivedBytes)}/${formatFileSize(download.totalBytes)}`
-      : "";
-    return `下载中 ${count}${percent}%${bytes}`;
-  }
   if (!summary.contentCount) return undefined;
   const storedCount = summary.storedCount;
   if (storedCount >= summary.contentCount) return "已上传";

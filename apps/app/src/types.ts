@@ -83,13 +83,6 @@ export type EntriesManifestPage = {
   entries: LocalClipboardEntry[];
 };
 export type UploadProgress = { uploadedBytes: number; totalBytes: number };
-export type DownloadProgress = {
-  finished: number;
-  total: number;
-  /** 条目关联文件合计的已接收/总字节数，用于行内进度条与百分比展示。 */
-  receivedBytes: number;
-  totalBytes: number;
-};
 export type EntryFilter = "all" | ClipboardKind;
 export type TimeFilter = "all" | "today" | "7-days" | "30-days" | "custom";
 export type SettingsPage = "general" | "shortcuts" | "account" | "data" | "about";

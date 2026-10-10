@@ -6,7 +6,7 @@ import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
 import { getSyncClient } from "../sync/syncEngine";
-import { DownloadCancelledError, cancelEntryDownloads, downloadEntry } from "../downloads/useDownloads";
+import { DownloadCancelledError, downloadEntry } from "../downloads/useDownloads";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry, SavePreparation } from "../../types";
 
@@ -28,11 +28,7 @@ async function activateEntry(
     await saveEntry(entry);
     return;
   }
-  if (activatingEntryIds.value.has(entry.id)) {
-    // 下载中再次激活 = 取消该下载；无下载（如纯文本快速粘贴）则维持防重复。
-    if (await cancelEntryDownloads(entry.id) > 0) showToast("已取消下载", "info");
-    return;
-  }
+  if (activatingEntryIds.value.has(entry.id)) return;
   activatingEntryIds.value.add(entry.id);
   try {
     // Wait for all missing content before copying or pasting the entry.
@@ -69,10 +65,6 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   const { savingEntryId } = session.state;
-  if (savingEntryId.value === entry.id) {
-    if (await cancelEntryDownloads(entry.id) > 0) showToast("已取消下载", "info");
-    return;
-  }
   if (savingEntryId.value || !canSaveEntry(entry)) return;
   savingEntryId.value = entry.id;
   let saveId: string | undefined;
