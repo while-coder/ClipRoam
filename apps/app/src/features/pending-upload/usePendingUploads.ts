@@ -9,7 +9,7 @@ import type { LocalClipboardEntry } from "../../types";
  * The durable upload queue's rows: captured offline or waiting to publish.
  * Served by Rust's `list_pending_entries` (every queue row as an entry-shaped
  * view with a temporary `p{seq}` id) — never derived from a whole-history read.
- * Details load only while the pending-sync view is open; refresh bursts
+ * Details load only while the pending-upload view is open; refresh bursts
  * elsewhere carry the O(1) `count_pending_entries` instead.
  */
 export const pendingEntries = ref<LocalClipboardEntry[]>([]);
@@ -22,7 +22,7 @@ export function refreshPending(): void {
   if (refreshTimer !== undefined) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = undefined;
-    if (activeView.value === "pending-sync") void refreshPendingEntries();
+    if (activeView.value === "pending-upload") void refreshPendingEntries();
     else void refreshPendingCount();
   }, 200);
 }
@@ -41,13 +41,13 @@ export async function removePendingEntry(entry: LocalClipboardEntry): Promise<vo
   });
 }
 
-/** The pending-sync list re-queries Rust on every refresh. */
+/** The pending-upload list re-queries Rust on every refresh. */
 export async function refreshPendingEntries(): Promise<void> {
   try {
     pendingEntries.value = await invoke<LocalClipboardEntry[]>("list_pending_entries");
     pendingCount.value = pendingEntries.value.length;
   } catch (error) {
-    showToast(`待同步记录读取失败：${errorMessage(error)}`, "error");
+    showToast(`待上传记录读取失败：${errorMessage(error)}`, "error");
   }
 }
 

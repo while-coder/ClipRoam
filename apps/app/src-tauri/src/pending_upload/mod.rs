@@ -9,6 +9,7 @@
 //!
 //! 队列变更只通知待同步视图；服务器历史由独立的查询链路维护。
 
+pub(crate) mod capture;
 mod resolve;
 
 pub(crate) use resolve::resolve_entry_files;
@@ -17,7 +18,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, SummaryContext};
-use crate::entry::lightweight_entry;
+use crate::content::lightweight_entry;
 use crate::AppState;
 
 use rusqlite::{params, Connection};

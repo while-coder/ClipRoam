@@ -11,7 +11,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 use super::{open_data_directory_with, spawn_paste_focus_loss_check};
-use crate::clipboard::capture::{decode_image_as_bmp, RichText};
+use crate::pending_upload::capture::{decode_image_as_bmp, RichText};
 
 pub(crate) use super::{
     consume_pending_shares, create_windows, deliver_paste, on_window_event,

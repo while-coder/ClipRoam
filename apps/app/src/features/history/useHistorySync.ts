@@ -44,7 +44,7 @@ export async function fetchHistoryPage(
   }
   const client = deps.getSyncClient();
   if (!client) return { total: 0, entries: [] };
-  return client.fetchHistoryPage(filter, deviceNames);
+  return client.history.fetchHistoryPage(filter, deviceNames);
 }
 
 let refreshTimer: number | undefined;

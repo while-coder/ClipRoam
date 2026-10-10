@@ -6,7 +6,7 @@
 //! transfer is still streaming in.
 
 use crate::{
-    clipboard::output::snapshot_entry,
+    history::clipboard::snapshot_entry,
     content::{ClipboardEntry, FileInfo, TreeNode},
     file::{download_path, is_file_id, partial_download_path},
     AppState,

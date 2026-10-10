@@ -18,7 +18,7 @@ import {
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount } from "./features/sync/syncSetup";
 import { startPasteBridge, startSyncBridgeService } from "./features/sync/bridge";
-import type { DownloadTaskSnapshot } from "./features/sync/fileTransfer";
+import type { DownloadTaskSnapshot } from "./features/downloads/downloader";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
@@ -30,10 +30,10 @@ import { initSettings } from "./features/settings/useSettings";
 import { openSettings as openDesktopSettings, settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
-import HistoryView from "./features/clipboard-history/HistoryView.vue";
+import HistoryView from "./features/history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
 import UploadsView from "./features/uploads/UploadsView.vue";
-import PendingSyncView from "./features/pending-sync/PendingSyncView.vue";
+import PendingUploadsView from "./features/pending-upload/PendingUploadsView.vue";
 import SetupWizard from "./features/setup/SetupWizard.vue";
 import type { SetupDraft } from "./features/setup/SetupWizard.vue";
 import {
@@ -42,13 +42,14 @@ import {
   removeEntry,
   saveEntry,
   savingEntryId,
-} from "./features/clipboard-history/useEntryActions";
+} from "./features/history/useEntryActions";
 import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
 import { isToastWindow, isPasteWindow, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
+import { bumpLocalClipboardRevision } from "./features/history/remoteClipboard";
 import {
   archiveKeyFor,
   currentUsername,
@@ -63,7 +64,6 @@ import {
   setActivePreferences,
 } from "./features/sync/syncSession";
 import {
-  bumpLocalClipboardRevision,
   connected,
   connectionStatus,
   devicesById,
@@ -81,7 +81,7 @@ import {
   historyRevision,
   initHistorySync,
   refreshHistory,
-} from "./features/clipboard-history/useHistorySync";
+} from "./features/history/useHistorySync";
 import {
   cancelPendingRefresh,
   pendingCount,
@@ -90,7 +90,7 @@ import {
   refreshPendingCount,
   refreshPendingEntries,
   removePendingEntry,
-} from "./features/pending-sync/usePendingSync";
+} from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
   downloadProgressByEntryId,
@@ -100,10 +100,9 @@ import {
 } from "./features/downloads/useDownloads";
 import {
   activeUploadCount,
-  cancelUploadProgressFlush,
-  uploadProgressByEntryId,
   uploadTasks,
 } from "./features/uploads/useUploads";
+import { cancelUploadProgressFlush, uploadProgressByEntryId } from "./features/pending-upload/uploadProgress";
 import type {
   AccountPreferences,
   PlatformCapabilities,
@@ -122,7 +121,7 @@ function openSettings(): void {
 
 const mobilePages = computed(() => [
   { view: "history" as const, label: "历史", icon: Clipboard, count: 0 },
-  { view: "pending-sync" as const, label: "待同步", icon: CloudUpload, count: pendingCount.value },
+  { view: "pending-upload" as const, label: "待上传", icon: CloudUpload, count: pendingCount.value },
   { view: "uploads" as const, label: "上传", icon: Upload, count: activeUploadCount.value },
   { view: "downloads" as const, label: "下载", icon: Download, count: activeDownloadCount.value },
 ]);
@@ -196,7 +195,7 @@ initSettings({
 });
 
 watch(activeView, (view) => {
-  if (view === "pending-sync") void refreshPendingEntries();
+  if (view === "pending-upload") void refreshPendingEntries();
 });
 
 function shareImportMessage(summary: ShareImportSummary): string {
@@ -534,13 +533,13 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="nav-item"
-          :class="{ active: activeView === 'pending-sync' }"
+          :class="{ active: activeView === 'pending-upload' }"
           type="button"
-          :aria-current="activeView === 'pending-sync' ? 'page' : undefined"
-          @click="activeView = 'pending-sync'"
+          :aria-current="activeView === 'pending-upload' ? 'page' : undefined"
+          @click="activeView = 'pending-upload'"
         >
           <CloudUpload :size="17" aria-hidden="true" />
-          <span>待同步</span>
+          <span>待上传</span>
           <span v-if="pendingCount" class="nav-count">{{ pendingCount }}</span>
         </button>
         <button
@@ -599,8 +598,8 @@ onBeforeUnmount(() => {
       @open-settings="openSettings"
     />
 
-    <PendingSyncView
-      v-else-if="activeView === 'pending-sync'"
+    <PendingUploadsView
+      v-else-if="activeView === 'pending-upload'"
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"

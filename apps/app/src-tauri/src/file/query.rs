@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use rusqlite::types::Value;
-use crate::entry::entry_contents_of;
+use crate::content::entry_contents_of;
 use crate::store::select_entries;
 use crate::utils::placeholders;
 use crate::AppState;

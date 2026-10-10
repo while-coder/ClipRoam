@@ -11,7 +11,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::{borrow::Cow, io::Cursor, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
-use crate::clipboard::capture::RichText;
+use crate::pending_upload::capture::RichText;
 
 pub struct PlatformClipboard {
     inner: Mutex<Clipboard>,

@@ -2,22 +2,22 @@ import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isPasteWindow } from "../../composables/usePlatform";
+import { isPasteWindow } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
-import { errorMessage } from "../../utils/error";
 import { getDevice } from "../../utils/device";
 import { SYNC_BRIDGE_DEVICES_EVENT } from "./bridge";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
+import { activateRemoteClipboard } from "../history/remoteClipboard";
 import {
-  getActiveConfig,
   getActivePreferences,
 } from "./syncSession";
 import {
   refreshHistory,
-} from "../clipboard-history/useHistorySync";
-import { finishUploadProgress, queueUploadProgress, uploadTasks } from "../uploads/useUploads";
-import { downloader, ensurePasteReady } from "../downloads/useDownloads";
+} from "../history/useHistorySync";
+import { uploadTasks } from "../uploads/useUploads";
+import { finishUploadProgress, queueUploadProgress } from "../pending-upload/uploadProgress";
+import { downloader } from "../downloads/useDownloads";
 import type { Device, SyncConfig } from "../../types";
 
 /**
@@ -45,14 +45,6 @@ export function getSyncClient(): SyncClient | undefined {
   return syncClient;
 }
 
-let localClipboardRevision = 0;
-let remoteActivationRevision = 0;
-
-/** 本机捕获落库计数；远端激活靠它识别「用户刚复制过」的竞态。 */
-export function bumpLocalClipboardRevision(): void {
-  localClipboardRevision += 1;
-}
-
 /** 连接状态唯一切换点：只在真实变化时更新，并恰好提示一次（断开→成功、成功→断开各一次）。 */
 function setConnectionState(value: boolean): void {
   if (connected.value === value) return;
@@ -68,7 +60,7 @@ export function stopSyncClient(options: { activeOnly?: boolean } = {}): void {
   syncClient?.stop();
   syncClient = undefined;
   if (options.activeOnly) return;
-  // 旧 FileTransfer.stop 的语义：同步断开时中止全部下载（凭据已失效）。
+  // 凭据失效时中止下载；窗口卸载不影响 Rust 下载任务。
   downloader.stopAll("同步已断开");
   uploadTasks.value = [];
   setConnectionState(false);
@@ -93,46 +85,7 @@ export function rememberDevices(devices: Device[]): void {
 
 /** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。 */
 export function setSyncAutoUploadLimit(limitMb: number): void {
-  syncClient?.setAutoUploadLimit(limitMb * 1024 * 1024);
-}
-
-async function activateRemoteClipboard(entryId: string): Promise<void> {
-  const config = getActiveConfig();
-  const client = syncClient;
-  if (
-    isMobile.value
-    || !getActivePreferences().autoReceiveClipboard
-    || !client
-  ) return;
-
-  const activationRevision = ++remoteActivationRevision;
-  const startingLocalRevision = localClipboardRevision;
-  try {
-    // Push carries an identity only; the same detail backfill supplies the cache.
-    const [entry] = await client.fetchHistoryInfo([entryId]);
-    if (!entry || entry.kind === "files") return;
-    let localEntry = entry;
-    if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;
-    if (entry.kind === "image") localEntry = await ensurePasteReady(localEntry);
-
-    // A newer remote activation or a real local copy wins while an image is
-    // downloading; never replace content the user copied in the meantime.
-    if (
-      activationRevision !== remoteActivationRevision
-      || startingLocalRevision !== localClipboardRevision
-      || getActiveConfig() !== config
-      || !getActivePreferences().autoReceiveClipboard
-    ) return;
-    await invoke("activate_remote_entry", { entryId: localEntry.id });
-  } catch (error) {
-    if (
-      activationRevision === remoteActivationRevision
-      && getActiveConfig() === config
-      && getActivePreferences().autoReceiveClipboard
-    ) {
-      showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
-    }
-  }
+  syncClient?.pendingUploads.setAutoUploadLimit(limitMb * 1024 * 1024);
 }
 
 export async function startSync(config: SyncConfig): Promise<void> {
@@ -171,7 +124,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onError: (message) => { showToast(message, "error"); },
       onServeTasksChanged: () => {
         if (syncClient !== client) return;
-        uploadTasks.value = [...client.serveTasksSnapshot()];
+        uploadTasks.value = [...client.uploads.serveTasksSnapshot()];
       },
       resolveEntryLabel: (entryId) =>
         invoke<ClipboardEntry>("get_entry", { entryId })

@@ -34,7 +34,7 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
 /// 接收导入），这里把差异收敛成统一入口。
 pub(crate) fn start_clipboard_monitor(app: tauri::AppHandle) {
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    crate::clipboard::capture::start_clipboard_monitor(app);
+    crate::pending_upload::capture::start_clipboard_monitor(app);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = app;

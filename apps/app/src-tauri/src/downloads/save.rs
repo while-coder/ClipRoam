@@ -9,9 +9,9 @@ use std::{
 };
 use tauri::{AppHandle, State};
 
-use crate::clipboard::output::{missing_files, snapshot_entry};
+use crate::history::clipboard::{missing_files, snapshot_entry};
 use crate::content::{rebuild_tree, sanitize_root_name, MissingFile, TreeNode};
-use crate::entry::entry_contents_of;
+use crate::content::entry_contents_of;
 use crate::AppState;
 
 // Each platform constructs only the destination kind it supports.

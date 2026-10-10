@@ -8,7 +8,7 @@ import {
 } from "@tauri-apps/api/window";
 import { isMobile, isPasteWindow } from "../../composables/usePlatform";
 import { requestProxyDevices } from "../sync/bridge";
-import { focusSearch } from "../clipboard-history/useHistorySync";
+import { focusSearch } from "../history/useHistorySync";
 
 // Mirrors the former Rust-side paste positioning: center the window below the
 // cursor and clamp it inside the monitor's work area. All values are physical

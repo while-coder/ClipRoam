@@ -1,14 +1,13 @@
 mod app_shell;
-mod clipboard;
 mod content;
-mod entry;
+mod history;
 mod file;
 mod logging;
-mod pending;
+mod pending_upload;
 mod platforms;
 mod store;
 mod sync;
-mod transfer;
+mod downloads;
 mod utils;
 
 use std::{
@@ -26,8 +25,8 @@ use store::{
     HistoryData,
 };
 use sync::SyncConfig;
-use transfer::download::{DownloadState, Downloader, VirtualDownloads};
-use transfer::save::SaveSession;
+use downloads::{DownloadState, Downloader, VirtualDownloads};
+use downloads::save::SaveSession;
 
 struct AppState {
     history: Mutex<HistoryData>,
@@ -187,15 +186,15 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             app_shell::get_platform_capabilities,
-            clipboard::capture::capture_current_clipboard_text,
-            clipboard::capture::capture_files_from_picker,
-            clipboard::capture::consume_mobile_shares,
-            entry::query::get_cached_entries_for_display,
-            entry::query::find_unknown_entry_ids,
-            entry::query::get_entry,
+            pending_upload::capture::capture_current_clipboard_text,
+            pending_upload::capture::capture_files_from_picker,
+            pending_upload::capture::consume_mobile_shares,
+            history::query::get_cached_entries_for_display,
+            history::query::find_unknown_entry_ids,
+            history::query::get_entry,
             file::store::find_unknown_file_ids,
             file::store::upsert_server_files,
-            transfer::download::list_entry_files,
+            downloads::list_entry_files,
             app_shell::get_device_identity,
             app_shell::save_device_alias,
             app_shell::get_device_info,
@@ -204,32 +203,32 @@ pub fn run() {
             app_shell::open_app_data_dir,
             sync::save_sync_config,
             sync::save_account_preferences,
-            entry::mutate::upsert_server_entries,
-            entry::mutate::remove_server_entry,
-            pending::peek_pending_entry,
-            pending::dequeue_pending_entry,
-            pending::count_pending_entries,
-            pending::list_pending_entries,
+            history::mutate::upsert_server_entries,
+            history::mutate::remove_server_entry,
+            pending_upload::peek_pending_entry,
+            pending_upload::dequeue_pending_entry,
+            pending_upload::count_pending_entries,
+            pending_upload::list_pending_entries,
             app_shell::start_window_drag,
             app_shell::hide_paste,
             app_shell::capture_paste_target,
             app_shell::hide_main,
             app_shell::show_toast,
             app_shell::hide_toast,
-            transfer::download::prepare_entry_files,
-            transfer::download::prepare_paste_entry,
-            transfer::save::prepare_save_entry,
-            transfer::download::read_upload_chunk,
-            transfer::download::download_files,
-            transfer::download::cancel_download,
-            transfer::download::cancel_entry_downloads,
-            transfer::download::stop_all_downloads,
-            transfer::download::download_tasks,
-            transfer::save::cancel_save_entry,
-            transfer::save::finish_save_entry,
-            clipboard::output::activate_remote_entry,
-            clipboard::output::copy_entry,
-            clipboard::output::paste_entry
+            downloads::prepare_entry_files,
+            downloads::prepare_paste_entry,
+            downloads::save::prepare_save_entry,
+            file::read::read_upload_chunk,
+            downloads::download_files,
+            downloads::cancel_download,
+            downloads::cancel_entry_downloads,
+            downloads::stop_all_downloads,
+            downloads::download_tasks,
+            downloads::save::cancel_save_entry,
+            downloads::save::finish_save_entry,
+            history::clipboard::activate_remote_entry,
+            history::clipboard::copy_entry,
+            history::clipboard::paste_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running ClipRoam");

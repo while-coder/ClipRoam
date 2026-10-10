@@ -1,13 +1,3 @@
-//! 条目（entries）的处理逻辑：读取、更新与删除。
-//!
-//! - `query.rs`：manifest / query / ids 等读取命令，行离开后端前重算
-//!   派生 summary；
-//! - `mutate.rs`：服务器来源的条目写入（upsert、发布换 id）与删除；
-//! - 本文件放两种条目视图共用的整形与内容枚举辅助。
-
-pub(crate) mod mutate;
-pub(crate) mod query;
-
 use crate::content::{describe_roots, tree_contents, ClipboardEntry, LocalSources};
 
 /// Every content an entry references, whichever kind carries it.

@@ -5,7 +5,7 @@ import { isMobile, isPasteWindow, usePlatform } from "../../composables/usePlatf
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
-import { DownloadCancelledError } from "../sync/fileTransfer";
+import { DownloadCancelledError } from "../downloads/downloader";
 import { getSyncClient } from "../sync/syncEngine";
 import { downloader, ensureLocalFiles, ensurePasteReady } from "../downloads/useDownloads";
 import { refreshHistory } from "./useHistorySync";
@@ -138,7 +138,7 @@ export async function removeEntry(entry: ClipboardEntry): Promise<void> {
     return;
   }
   try {
-    await client.delete(entry.id);
+    await client.history.delete(entry.id);
   } catch (error) {
     showToast(`删除失败：${errorMessage(error)}`, "error");
     return;

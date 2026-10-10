@@ -13,7 +13,7 @@ use crate::store::{count_entries, newest_first_sql, select_entries};
 use crate::utils::placeholders;
 use crate::AppState;
 
-use super::lightweight_entry;
+use crate::content::lightweight_entry;
 
 /// Page size for `get_cached_entries_for_display`; mirrors `PAGE_SIZE` in the frontend.
 const MANIFEST_PAGE_SIZE: usize = 50;

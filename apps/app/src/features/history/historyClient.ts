@@ -1,0 +1,140 @@
+import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, EntryActivateResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type Device, type EntryActivateRequest, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
+import { invoke } from "@tauri-apps/api/core";
+import type { SyncRequester } from "../sync/syncHttp";
+import { PAGE_SIZE } from "../../utils/constants";
+import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
+const ENTRY_HTTP_TIMEOUT_MS = 30_000;
+
+/** Server paging and missing-detail backfill; never reads the pending queue. */
+export class HistoryClient {
+  constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly isStopped: () => boolean) {}
+  // Splits a long id list into fixed-size batches, collecting per-batch results.
+  async #queryBatched<T>(ids: readonly string[], run: (batch: string[]) => Promise<T[]>): Promise<T[]> {
+    const results: T[] = [];
+    for (let index = 0; index < ids.length; index += ENTRY_QUERY_BATCH) {
+      results.push(...await run(ids.slice(index, index + ENTRY_QUERY_BATCH)));
+    }
+    return results;
+  }
+
+  #jsonInit(request: unknown, timeoutMs: number): RequestInit {
+    return {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(timeoutMs),
+    };
+  }
+
+  // Adds an entry to the live clipboard of every other device. The response
+  // also confirms the entry exists, so reconcile can treat 404 as "gone".
+  async activate(entryId: string): Promise<ClipboardEntry> {
+    const request: EntryActivateRequest = { deviceId: this.device.id };
+    const stored = await this.http.request(
+      "POST",
+      `/entries/${encodeURIComponent(entryId)}/activate`,
+      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
+      EntryActivateResponseSchema,
+      "服务器返回了不兼容的激活响应",
+    );
+    return stored!.entry;
+  }
+
+  /** One server page defines both the visible identities and the total. */
+  async fetchHistoryPage(
+    filter: EntriesManifestFilter,
+    deviceNames: Record<string, string>,
+  ): Promise<EntriesManifestPage> {
+    const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
+    if (filter.query?.trim()) params.set("search", filter.query.trim());
+    if (filter.kind && filter.kind !== "all") params.set("kind", filter.kind);
+    if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
+    if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
+    for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
+    const result = await this.http.request(
+      "GET", `/entries/manifest?${params}`,
+      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+      EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
+    );
+    if (this.isStopped()) return { total: 0, entries: [] };
+    const entryIds = result!.manifest.map((entry) => entry.id);
+    if (!entryIds.length) return { total: result!.total, entries: [] };
+    const entries = await this.fetchHistoryInfo(entryIds, deviceNames);
+    if (this.isStopped()) return { total: 0, entries: [] };
+    return { total: result!.total, entries };
+  }
+
+  /** Only detail backfill writes server entry/file information into the cache. */
+  async fetchHistoryInfo(
+    entryIds: string[],
+    deviceNames: Record<string, string> = {},
+  ): Promise<LocalClipboardEntry[]> {
+    if (!entryIds.length || this.isStopped()) return [];
+    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+    if (this.isStopped()) return [];
+    if (missing.length) {
+      const entries = await this.#fetchEntries(missing);
+      if (this.isStopped()) return [];
+      await invoke("upsert_server_entries", { entries });
+    }
+    if (this.isStopped()) return [];
+    // Only this page's details supply file identities; unknown/unstored files
+    // are re-queried before computing the list's cached summaries.
+    const fileIds = await invoke<string[]>("find_unknown_file_ids", { entryIds });
+    if (this.isStopped()) return [];
+    if (fileIds.length) {
+      const statuses = await this.#fetchFiles(fileIds);
+      if (this.isStopped()) return [];
+      await invoke("upsert_server_files", { statuses });
+    }
+    const cached = await invoke<EntriesManifestPage>("get_cached_entries_for_display", {
+      filter: { kind: "all", entryIds }, deviceNames,
+    });
+    const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
+    return entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; });
+  }
+
+  async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
+    return this.#queryBatched(entryIds, async (batch) => {
+      const result = await this.http.request(
+        "POST", "/entries/query",
+        this.#jsonInit({ entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
+        EntryQueryResponseSchema, "服务器返回了不兼容的历史记录响应",
+      );
+      return result!.entries;
+    });
+  }
+
+  // Pool availability for a batch of content ids. This replaces the per-entry
+  // `missing` list the protocol dropped: the client asks once per upsert batch
+  // which contents the server already holds, so locally stored availability
+  // marks stay truthful without the server restamping every entry read.
+  async #fetchFiles(fileIds: readonly string[]): Promise<FileStatus[]> {
+    return this.#queryBatched(fileIds, (batch) => this.#fetchFileStatusBatch(batch));
+  }
+
+  async #fetchFileStatusBatch(fileIds: readonly string[]): Promise<FileStatus[]> {
+    const request: FileQueryRequest = { fileIds: [...fileIds] };
+    const queried = await this.http.request(
+      "POST",
+      "/files/query",
+      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
+      FileQueryResponseSchema,
+      "服务器返回了不兼容的文件状态响应",
+    );
+    return queried!.files;
+  }
+
+  // A 404 is not a failure: another device may have deleted the entry first,
+  // and the outcome every device converges on is the same.
+  async delete(entryId: string): Promise<void> {
+    await this.http.request(
+      "DELETE",
+      `/entries/${encodeURIComponent(entryId)}`,
+      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+      null,
+      "",
+      true,
+    );
+  }
+
+}

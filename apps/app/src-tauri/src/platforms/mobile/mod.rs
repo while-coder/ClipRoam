@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use crate::clipboard::capture::{RichText, ShareImportSummary};
+use crate::pending_upload::capture::{RichText, ShareImportSummary};
 use crate::content::ClipboardEntry;
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ pub(crate) fn supports_native_file_export() -> bool {
     false
 }
 
-pub(crate) async fn prompt_save_destination(_app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::transfer::save::SaveDestination>, String> {
+pub(crate) async fn prompt_save_destination(_app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::downloads::save::SaveDestination>, String> {
     Ok(None)
 }
 

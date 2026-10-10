@@ -13,7 +13,7 @@ import {
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
-import EntryKindIcon from "./EntryKindIcon.vue";
+import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import ImagePreview from "./ImagePreview.vue";

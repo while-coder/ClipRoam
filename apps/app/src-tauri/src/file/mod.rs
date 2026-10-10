@@ -11,6 +11,7 @@
 //! 校验形状。
 
 pub(crate) mod cache;
+pub(crate) mod read;
 pub(crate) mod query;
 pub(crate) mod store;
 

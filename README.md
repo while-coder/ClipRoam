@@ -16,19 +16,26 @@ ClipRoam 是一个本地优先的跨平台剪贴板历史与设备漫游工具�
 - 文件按内容寻址（`fileId = sha256(内容)`）存储：相同内容只保存一份，服务器已持有的内容直接秒传，改名或换路径后再复制也不会重传
 - 文件可按每台客户端设置的阈值自动上传；上传中断后会从服务器保留的分片位置自动续传；未上传的大文件在源设备在线时通过 WebSocket 中继
 
-复制文件后内容标识在后台计算，条目会立刻出现在历史里并标注「计算中」，此时已可在本机粘贴；标识齐全后才发布到服务器。
+复制文件后先进入待上传列表并标注「计算中」，内容标识齐全后逐项发布到服务器。历史记录由服务器分页查询，与待上传列表独立维护。
 
 剪贴板条目只引用内容标识，目录结构单独保存在条目的树里，因此目录本身不占存储、同一内容出现在多个路径也只保存一份。本机复制再本机粘贴时直接使用原始路径，不产生任何副本；原文件已移动或删除时才在缓存目录中用硬链接重建视图。Windows 远端粘贴会立即向资源管理器提供虚拟文件，普通文件边下载边读取，小文件包完成校验后再展开；macOS/Linux 会先下载缺失内容，再把恢复后的真实路径写入 Finder 或文件管理器的剪贴板。服务器已有副本时不要求源设备在线；只有未自动上传的文件才要求源设备在线。
 
 macOS 首次自动粘贴时需要在“系统设置 → 隐私与安全性 → 辅助功能”中允许 ClipRoam。Linux 的文件剪贴板同时支持 X11 与 Wayland；自动模拟 `Ctrl+V` 在 X11 需要 `xdotool`，Wayland 优先使用 `wtype`，也可使用 `ydotool`。
 
-## 服务端结构
+## 客户端系统与目录
 
-- `apps/server/src/index.ts`：进程入口，只启动服务。
-- `app/`：`ClipRoamServer`、运行配置与 WebSocket 连接类型。
-- `files/`：内容寻址的文件子系统，与剪贴板记录相互独立。`FileStore` 是按用户隔离的内容池（落盘路径、内容索引、回收），`UploadService`（秒传、分块账本续传、内容校验）与 `FileDownloadService`（下载需求登记）各管一半生命周期。文件字节与下载编排全部走 HTTP：`PUT /upload/:fileId` 上传、`GET /files/:entryId/:fileId` 下载（内容缺失时登记需求并立即返回 `NOT_STORED`，客户端重试）、`GET /files/requests` 供持有内容的设备长轮询领取需求并推送；WebSocket 只负责剪贴板同步。这一层不认识条目，只认识内容标识。
-- `services/`：`AuthService`（账号和限流）、`AdminService` 与 `TlsCertificateService`。
-- `storage/`：`AccountStore`、`UserDataStore`（剪贴板记录与设备）、`ClipRoamStore` 与数据路径。
+| 系统 | 前端 `apps/app/src/features/` | Rust `apps/app/src-tauri/src/` |
+| --- | --- | --- |
+| 历史记录 | `history/`：分页查询、补查记录和文件详情、复制/粘贴入口 | `history/`：记录缓存读取、更新、删除及剪贴板写入 |
+| 待上传列表 | `pending-upload/`：队列展示、逐项发布、自动上传文件及进度 | `pending_upload/`：监听剪贴板、捕获入队、哈希解析、出队 |
+| 下载列表 | `downloads/`：异步下载调用和任务快照 | `downloads/`：全局 FIFO 队列、逐项下载、取消、另存 |
+| 上传列表 | `uploads/`：其他设备请求触发的并发中继发送与任务展示 | 共用 `file/read.rs` 读取本机内容 |
+
+历史按 `manifest → 缺失记录补查 → 缺失文件状态补查 → 本地摘要 → UI` 查询，不读取待上传队列。剪贴板捕获只更新待上传列表，成功发布后才由服务器历史查询显示记录。
+
+下载通过异步 `downloadFiles()` 等待 Rust 队列结果；同一时刻下载一个文件，所有窗口共用队列。上传列表收到 `file.requested` 即启动发送，各中继会话并发执行，不等待前一个任务完成，以免服务器等待超时。
+
+公共基础设施保留独立目录：前端 `sync/` 管理会话、HTTP 和推送；Rust `content/`、`file/`、`store/`、`platforms/` 管理内容结构、缓存、持久化和系统适配。服务端保持现有目录和接口，`clipboard/` 管理用户历史，`files/` 管理内容存储与中继，`app/routes/` 提供查询、发布和文件传输接口。管理后台 `apps/admin` 与协议包 `packages/protocol` 保持独立。
 
 ## 开发
 

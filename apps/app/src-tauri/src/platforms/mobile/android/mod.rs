@@ -7,7 +7,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 use tauri_plugin_cliproam_share_receiver::{PendingShare, ShareReceiverExt};
 
-use crate::clipboard::capture::{capture_files, capture_image, capture_text, RichText, ShareImportSummary};
+use crate::pending_upload::capture::{capture_files, capture_image, capture_text, RichText, ShareImportSummary};
 use crate::AppState;
 
 pub(crate) use super::{
@@ -23,9 +23,9 @@ pub(crate) fn supports_native_file_export() -> bool {
     true
 }
 
-pub(crate) async fn prompt_save_destination(app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::transfer::save::SaveDestination>, String> {
+pub(crate) async fn prompt_save_destination(app: &AppHandle, _single_file: bool, _file_name: &str) -> Result<Option<crate::downloads::save::SaveDestination>, String> {
     app.share_receiver().pick_directory()
-        .map(|selection| selection.uri.map(crate::transfer::save::SaveDestination::DocumentTree))
+        .map(|selection| selection.uri.map(crate::downloads::save::SaveDestination::DocumentTree))
         .map_err(|error| error.to_string())
 }
 

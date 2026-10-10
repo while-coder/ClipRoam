@@ -7,6 +7,9 @@
 //! is answered separately, so the same content is never stored twice.
 
 mod tree;
+pub(crate) mod clipboard;
+mod entry;
+pub(crate) use entry::{entry_contents_of, lightweight_entry};
 
 pub use tree::{
     collect_tree, describe_roots, file_entry_signature, file_signature, readable_path,

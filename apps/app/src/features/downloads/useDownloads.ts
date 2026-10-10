@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { Downloader, type DownloadTaskSnapshot } from "../sync/fileTransfer";
-import { fullEntry, refreshHistory } from "../clipboard-history/useHistorySync";
+import { Downloader, type DownloadTaskSnapshot } from "./downloader";
+import { fullEntry, refreshHistory } from "../history/useHistorySync";
 import type { DownloadProgress, LocalClipboardEntry, MissingFile } from "../../types";
 
 /** 下载面板的任务快照；Rust Downloader 事件推来时由薄桥整体替换。 */

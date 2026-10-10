@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Monitor, Trash2 } from "lucide-vue-next";
-import EntryKindIcon from "../clipboard-history/EntryKindIcon.vue";
+import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import { deviceName as deviceDisplayName, isHashing } from "../../utils/entry";
 import { formatAge as formatAgeRelative, formatExactDateTime, percentOf } from "../../utils/format";
 import type { Device, LocalClipboardEntry, UploadProgress } from "../../types";
@@ -42,14 +42,14 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
     <header class="titlebar workspace-titlebar">
       <div class="page-title">
         <span>工作区</span>
-        <h1>待同步</h1>
+        <h1>待上传</h1>
       </div>
       <div class="titlebar-actions">
-        <span class="pending-total" role="status">共 {{ entries.length }} 条待同步</span>
+        <span class="pending-total" role="status">共 {{ entries.length }} 条待上传</span>
       </div>
     </header>
 
-    <section class="history-list" aria-label="待同步列表">
+    <section class="history-list" aria-label="待上传列表">
       <div v-for="entry in entries" :key="entry.id" class="history-item pending-item">
         <EntryKindIcon :kind="entry.kind" :root-kind="entry.summary.rootKind" />
         <span class="entry-body">
@@ -71,7 +71,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
         </span>
       </div>
 
-      <SEmpty v-if="!entries.length">没有待同步的内容，所有内容都已同步到服务器</SEmpty>
+      <SEmpty v-if="!entries.length">没有待上传的内容，所有内容都已同步到服务器</SEmpty>
     </section>
   </section>
 </template>

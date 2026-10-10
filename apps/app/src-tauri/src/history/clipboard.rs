@@ -11,11 +11,11 @@ use tauri::{AppHandle, State};
 use crate::content::{file_signature, readable_path, rebuild_tree, ClipboardEntry, MissingFile};
 use crate::file::cached_source_for;
 use crate::store::{save_metadata, select_entry};
-use crate::entry::entry_contents_of;
+use crate::content::entry_contents_of;
 use crate::utils::sanitize_name_component;
 use crate::AppState;
 
-use super::capture::{image_signature, rich_text_signature, RichText};
+use crate::content::clipboard::{image_signature, rich_text_signature, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FilePasteStrategy {

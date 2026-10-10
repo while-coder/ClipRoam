@@ -1,4 +1,4 @@
-import { MANUAL_UPLOAD_LIMIT } from "../features/sync/fileTransfer";
+const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
 import { formatFileSize, percentOf } from "./format";
 import type {
   ClipboardEntry,
@@ -8,7 +8,7 @@ import type {
 } from "../types";
 
 /**
- * Pure display helpers shared by the history and pending-sync views. Anything
+ * Pure display helpers shared by the history and pending-upload views. Anything
  * that reads reactive state takes it as an argument so both views can feed it
  * from their own props.
  */

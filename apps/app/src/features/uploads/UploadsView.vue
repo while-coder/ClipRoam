@@ -3,11 +3,11 @@ import { Upload } from "lucide-vue-next";
 import { computed } from "vue";
 import TaskListView, { type TaskRow } from "../../components/TaskListView.vue";
 import { percentOf } from "../../utils/format";
-import type { ServeTaskSnapshot } from "../sync/fileTransfer";
+import type { ServeTaskSnapshot } from "./relayUploader";
 
 /**
  * 主窗口侧边栏的「上传」页：收到 file.requested 且本机应答（中继发送）时的
- * 待发送任务台账。台账在 SyncClient 的 FileTransfer 内存中，快照由 App.vue
+ * 待发送任务台账。台账在 RelayUploader 内存中，快照由 App.vue
  * 缓存并透传（事件驱动，无需本组件订阅）。布局骨架在 TaskListView，
  * 这里只注入上传侧的差异项。
  */

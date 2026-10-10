@@ -1,37 +1,12 @@
-import {
-  ENTRY_QUERY_BATCH,
-  EntryManifestResponseSchema,
-  EntryQueryResponseSchema,
-  EntryActivateResponseSchema,
-  DeviceListResponseSchema,
-  EntryPublishResponseSchema,
-  type EntryPublishInput,
-  FileQueryResponseSchema,
-  ServerMessageSchema,
-  type ClientMessage,
-  type ClipboardEntry,
-  type Device,
-  type EntryActivateRequest,
-  type EntryPublishRequest,
-  type FileQueryRequest,
-  type FileStatus,
-} from "@cliproam/protocol";
-import { invoke } from "@tauri-apps/api/core";
-
+import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type Device } from "@cliproam/protocol";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
-import { FileTransfer } from "./fileTransfer";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
-import { PAGE_SIZE } from "../../utils/constants";
-import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
-
+import { HistoryClient } from "../history/historyClient";
+import { PendingUploader } from "../pending-upload/pendingUploader";
+import { RelayUploader } from "../uploads/relayUploader";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
-const QUEUE_FAILURE_BACKOFF_MS = 60_000;
-const QUEUE_FAILURE_LIMIT = 3;
 const HEARTBEAT_INTERVAL_MS = 25_000;
-// 队列排空的轮询间隔：捕获到发布的最大延迟，也是空队列的空转成本。
-const DRAIN_POLL_INTERVAL_MS = 2_000;
-
 type SyncHandlers = {
   onConnected: (connected: boolean) => void;
   /** 登录后拉取的一次性设备表；此后设备增减走 device.presence 推送。 */
@@ -52,202 +27,47 @@ type SyncHandlers = {
   resolveEntryLabel?: (entryId: string) => Promise<string | undefined>;
 };
 
-/**
- * One publishable row of the Rust-side durable capture queue. The row is
- * self-contained: a files row's placeholder tree is resolved back into the
- * row itself before Peek hands it over, so `extra` is published as-is. The
- * local display id mirrors the Rust-side `temp_entry_id`: `p${seq}`.
- */
-type PendingQueueRow = {
-  seq: number;
-  kind: ClipboardEntry["kind"];
-  content: string;
-  extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
-};
-
-/**
- * The sync orchestrator. All operations ride HTTP (see `syncHttp.ts`, the
- * file pipeline in `fileTransfer.ts`); the socket is a push-only channel:
- * nothing waits on it. History pages come from HTTP; local storage caches
- * entry details and live pushes keep those details current.
- */
+/** Session wiring and push notifications; business workers live in their systems. */
 export class SyncClient {
   #socket?: WebSocket;
   #reconnectTimer?: number;
   #pingTimer?: number;
   #awaitingPong = false;
   #stopped = false;
-  #queueFailures = new Map<number, { at: number; count: number }>();
-  // Rows that exhausted their retries stay in the queue but are skipped for
-  // this session so they cannot block the rows behind them; a reconnect
-  // clears the set and gives them another chance.
-  #skippedRows = new Set<number>();
   #http: SyncRequester;
-  #files: FileTransfer;
-
-  constructor(
-    httpUrl: string,
-    private readonly webSocketUrl: string,
-    private readonly token: string,
-    private readonly device: Device,
-    private readonly handlers: SyncHandlers,
-    private autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT,
-  ) {
+  readonly history: HistoryClient;
+  readonly pendingUploads: PendingUploader;
+  readonly uploads: RelayUploader;
+  constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, private readonly device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT) {
     this.#http = createSyncRequester(httpUrl, token);
-    this.#files = new FileTransfer(this.#http, {
-      isStopped: () => this.#stopped,
+    const isStopped = () => this.#stopped;
+    this.history = new HistoryClient(this.#http, device, isStopped);
+    this.pendingUploads = new PendingUploader(this.#http, device, {
+      isStopped,
+      onPublished: handlers.onPublished,
       onUploadProgress: handlers.onUploadProgress,
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
+      activate: (entryId) => this.history.activate(entryId),
+    }, autoUploadLimit);
+    this.uploads = new RelayUploader(this.#http, {
+      isStopped,
       onServeTasksChanged: handlers.onServeTasksChanged,
       resolveEntryLabel: handlers.resolveEntryLabel,
     });
   }
-
   connect(): void {
     this.#stopped = false;
     this.#open();
-    this.#drainLoop();
+    this.pendingUploads.start();
   }
-
   stop(): void {
     this.#stopped = true;
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
     this.#stopHeartbeat();
     this.#socket?.close();
-    // 下载已移交 Downloader，由调用方（App.vue stopSyncClient）统一 stopAll。
   }
-
-  /** 中继应答任务快照（内存台账，随客户端重建清空）；「上传」页读取。 */
-  serveTasksSnapshot() {
-    return this.#files.serveTasksSnapshot();
-  }
-
-  /** 设置保存即生效：运行期更新自动上传档位，无需重建客户端。 */
-  setAutoUploadLimit(limitBytes: number): void {
-    this.autoUploadLimit = limitBytes;
-  }
-
-  // The resident drain loop: the durable capture queue is the single replay
-  // mechanism — captures land there with their full payload, and this loop
-  // publishes them strictly in insertion order on a fixed pulse. A row that
-  // cannot proceed right now (recent failure backoff, lost HTTP) waits for a
-  // later pulse; a row that failed three times is skipped for this session so
-  // it cannot block the rows behind it — reconnecting gives it another chance.
-  async #drainLoop(): Promise<void> {
-    while (!this.#stopped) {
-      await new Promise((resolve) => window.setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
-      if (this.#stopped) return;
-      const row = await invoke<PendingQueueRow | null>("peek_pending_entry", {
-        skipSeqs: this.#skippedRows.size ? [...this.#skippedRows] : null,
-      }).catch(() => null);
-      if (!row) continue;
-      const failure = this.#queueFailures.get(row.seq);
-      if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) continue;
-      try {
-        await this.#publishQueueRow(row);
-        this.#queueFailures.delete(row.seq);
-      } catch (error) {
-        // Transient failures wait out the backoff without counting against
-        // the skip limit — HTTP coming back is expected, not the row's fault.
-        if (isTransientNetworkError(error)) {
-          this.#queueFailures.set(row.seq, { at: Date.now(), count: failure?.count ?? 0 });
-          continue;
-        }
-        const attempts = (failure?.count ?? 0) + 1;
-        if (attempts >= QUEUE_FAILURE_LIMIT) {
-          // Stop retrying for this session: the row stays in the queue (its
-          // payload lives nowhere else) but no longer blocks the rows behind
-          // it. Reconnecting clears the skip set and retries it.
-          this.#queueFailures.delete(row.seq);
-          this.#skippedRows.add(row.seq);
-          this.handlers.onError(
-            `剪贴板记录同步失败，已暂时跳过：${errorMessage(error)}`,
-          );
-          continue;
-        }
-        this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
-      }
-    }
-  }
-
-  // Publishes one queue row: the metadata goes first (other devices can start
-  // pulling while the contents upload), then the contents — the upload HTTP is
-  // content-addressed and needs no entry id — then the broadcast activation,
-  // and the row leaves the queue. Refresh on HTTP confirmation immediately;
-  // only detail queries populate the local history cache.
-  async #publishQueueRow(row: PendingQueueRow): Promise<void> {
-    const payload: EntryPublishInput = {
-      kind: row.kind,
-      content: row.content,
-      html: row.extra.html ?? undefined,
-      rtf: row.extra.rtf ?? undefined,
-      fileInfo: row.extra.fileInfo ?? undefined,
-      imageInfo: row.extra.imageInfo ?? undefined,
-      sourceDeviceId: this.device.id,
-    };
-    const stored = await this.#publishEntry(payload);
-    this.handlers.onPublished();
-    await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
-    if (stored.kind !== "files") {
-      await this.activate(stored.id).catch(() => undefined);
-    }
-    await invoke("dequeue_pending_entry", { seq: row.seq }).catch(() => undefined);
-  }
-
-  // Splits a long id list into fixed-size batches, collecting per-batch results.
-  async #queryBatched<T>(ids: readonly string[], run: (batch: string[]) => Promise<T[]>): Promise<T[]> {
-    const results: T[] = [];
-    for (let index = 0; index < ids.length; index += ENTRY_QUERY_BATCH) {
-      results.push(...await run(ids.slice(index, index + ENTRY_QUERY_BATCH)));
-    }
-    return results;
-  }
-
-  #jsonInit(request: unknown, timeoutMs: number): RequestInit {
-    return {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-      signal: AbortSignal.timeout(timeoutMs),
-    };
-  }
-
-  // Every write returns the server's stored entry: its id and timestamp are
-  // server-assigned, and the caller must adopt it into local state.
-
-  // The HTTP response is the confirmation the socket echo used to be. The
-  // queue-row payload carries no id and no createdAt: identity and timestamp
-  // belong to the server, which dedupes by content either way.
-  async #publishEntry(entry: EntryPublishInput): Promise<ClipboardEntry> {
-    const request: EntryPublishRequest = {
-      deviceId: this.device.id,
-      entry,
-    };
-    const stored = await this.#http.request(
-      "POST",
-      "/entries",
-      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      EntryPublishResponseSchema,
-      "服务器返回了不兼容的发布响应",
-    );
-    return stored!.entry;
-  }
-
-  // Adds an entry to the live clipboard of every other device. The response
-  // also confirms the entry exists, so reconcile can treat 404 as "gone".
-  async activate(entryId: string): Promise<ClipboardEntry> {
-    const request: EntryActivateRequest = { deviceId: this.device.id };
-    const stored = await this.#http.request(
-      "POST",
-      `/entries/${encodeURIComponent(entryId)}/activate`,
-      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      EntryActivateResponseSchema,
-      "服务器返回了不兼容的激活响应",
-    );
-    return stored!.entry;
-  }
-
   // The login-time device table, pulled over HTTP with no socket involved.
   async pullDevices(): Promise<void> {
     try {
@@ -271,104 +91,6 @@ export class SyncClient {
       "服务器返回了不兼容的设备列表响应",
     );
     return devices!.devices;
-  }
-
-  /** One server page defines both the visible identities and the total. */
-  async fetchHistoryPage(
-    filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
-  ): Promise<EntriesManifestPage> {
-    const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
-    if (filter.query?.trim()) params.set("search", filter.query.trim());
-    if (filter.kind && filter.kind !== "all") params.set("kind", filter.kind);
-    if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
-    if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
-    for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
-    const result = await this.#http.request(
-      "GET", `/entries/manifest?${params}`,
-      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
-      EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
-    );
-    if (this.#stopped) return { total: 0, entries: [] };
-    const entryIds = result!.manifest.map((entry) => entry.id);
-    if (!entryIds.length) return { total: result!.total, entries: [] };
-    const entries = await this.fetchHistoryInfo(entryIds, deviceNames);
-    if (this.#stopped) return { total: 0, entries: [] };
-    return { total: result!.total, entries };
-  }
-
-  /** Only detail backfill writes server entry/file information into the cache. */
-  async fetchHistoryInfo(
-    entryIds: string[],
-    deviceNames: Record<string, string> = {},
-  ): Promise<LocalClipboardEntry[]> {
-    if (!entryIds.length || this.#stopped) return [];
-    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
-    if (this.#stopped) return [];
-    if (missing.length) {
-      const entries = await this.#fetchEntries(missing);
-      if (this.#stopped) return [];
-      await invoke("upsert_server_entries", { entries });
-    }
-    if (this.#stopped) return [];
-    // Only this page's details supply file identities; unknown/unstored files
-    // are re-queried before computing the list's cached summaries.
-    const fileIds = await invoke<string[]>("find_unknown_file_ids", { entryIds });
-    if (this.#stopped) return [];
-    if (fileIds.length) {
-      const statuses = await this.#fetchFiles(fileIds);
-      if (this.#stopped) return [];
-      await invoke("upsert_server_files", { statuses });
-    }
-    const cached = await invoke<EntriesManifestPage>("get_cached_entries_for_display", {
-      filter: { kind: "all", entryIds }, deviceNames,
-    });
-    const byId = new Map(cached.entries.map((entry) => [entry.id, entry]));
-    return entryIds.flatMap((id) => { const entry = byId.get(id); return entry ? [entry] : []; });
-  }
-
-  async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
-    return this.#queryBatched(entryIds, async (batch) => {
-      const result = await this.#http.request(
-        "POST", "/entries/query",
-        this.#jsonInit({ entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
-        EntryQueryResponseSchema, "服务器返回了不兼容的历史记录响应",
-      );
-      return result!.entries;
-    });
-  }
-
-  // Pool availability for a batch of content ids. This replaces the per-entry
-  // `missing` list the protocol dropped: the client asks once per upsert batch
-  // which contents the server already holds, so locally stored availability
-  // marks stay truthful without the server restamping every entry read.
-  async #fetchFiles(fileIds: readonly string[]): Promise<FileStatus[]> {
-    return this.#queryBatched(fileIds, (batch) => this.#fetchFileStatusBatch(batch));
-  }
-
-  async #fetchFileStatusBatch(fileIds: readonly string[]): Promise<FileStatus[]> {
-    const request: FileQueryRequest = { fileIds: [...fileIds] };
-    const queried = await this.#http.request(
-      "POST",
-      "/files/query",
-      this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      FileQueryResponseSchema,
-      "服务器返回了不兼容的文件状态响应",
-    );
-    return queried!.files;
-  }
-
-  // A 404 is not a failure: another device may have deleted the entry first,
-  // and the outcome every device converges on is the same.
-  async delete(entryId: string): Promise<void> {
-    await this.#http.request(
-      "DELETE",
-      `/entries/${encodeURIComponent(entryId)}`,
-      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
-      null,
-      "",
-      true,
-    );
   }
 
   #send(message: ClientMessage): boolean {
@@ -441,13 +163,13 @@ export class SyncClient {
       case "file.requested":
         // Fire-and-forget: serving streams a whole file and must not block
         // the socket's message pump.
-        void this.#files.serveRelayRequest(message).catch(() => undefined);
+        void this.uploads.serveRelayRequest(message).catch(() => undefined);
         return;
       case "auth.ack":
         this.handlers.onConnected(true);
         this.#startHeartbeat();
         // A fresh session gives previously skipped rows another chance.
-        this.#skippedRows.clear();
+        this.pendingUploads.retrySkipped();
         return;
       case "pong":
         this.#awaitingPong = false;

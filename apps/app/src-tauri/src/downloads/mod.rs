@@ -11,7 +11,8 @@
 //! `virtual_downloads` 调用、其他 Mutex 一律 clone 所需数据 → drop inner →
 //! 再做，避免嵌套锁。
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+pub(crate) mod save;
+
 use futures_util::StreamExt;
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
@@ -19,17 +20,17 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    io::{Read, Seek, SeekFrom, Write},
+    io::Write,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 
-use crate::clipboard::output::{missing_files, snapshot_entry, FilePasteStrategy};
+use crate::history::clipboard::{missing_files, snapshot_entry, FilePasteStrategy};
 use crate::content::MissingFile;
-use crate::entry::entry_contents_of;
-use crate::file::{cached_file_path, cached_source_for, download_path, partial_download_path};
+use crate::content::entry_contents_of;
+use crate::file::{download_path, partial_download_path};
 use crate::store::select_entry;
 use crate::sync::server_http_url;
 use crate::utils::ensure_parent_dir;
@@ -294,11 +295,8 @@ pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, f
 }
 
 // ---------------------------------------------------------------------------
-// 为前端提供条目内容：上传用分块读取，以及驱动下载的可用性快照。
+// 为前端提供条目内容候选与驱动下载的可用性快照。
 // ---------------------------------------------------------------------------
-
-/// Largest chunk served per `read_upload_chunk` call.
-const FILE_CHUNK_LIMIT: usize = 128 * 1024;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -348,48 +346,11 @@ pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String) 
     prepare_entry(&state, &entry_id, true)
 }
 
-/// Reads one chunk of a content by content id alone — the upload HTTP is
-/// content-addressed and never involves an entry. The path comes from the
-/// local blob cache first, then from the hash cache's reverse lookup of the
-/// original source file (a file hashed here before can stand in for content
-/// that never landed as a blob).
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn read_upload_chunk(
-    state: State<'_, AppState>,
-    file_id: String,
-    offset: u64,
-    length: usize,
-) -> Result<String, String> {
-    let path = {
-        let history = state.history.lock().map_err(|error| error.to_string())?;
-        let cache_dir = state.active_cache_dir(&history)?;
-        let history_path = state.active_history_path(&history)?;
-        // `cached_file_path` stats the candidates itself, so a hit is always
-        // a file that exists right now.
-        cached_file_path(&cache_dir, &file_id).or_else(|| {
-            state
-                .with_database(&history_path, |connection| {
-                    Ok(cached_source_for(connection, &file_id))
-                })
-                .ok()
-                .flatten()
-        })
-    }
-    .ok_or_else(|| "本机文件内容不可用".to_string())?;
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|error| error.to_string())?;
-    let mut bytes = vec![0; length.min(FILE_CHUNK_LIMIT)];
-    let count = file.read(&mut bytes).map_err(|error| error.to_string())?;
-    bytes.truncate(count);
-    Ok(BASE64.encode(bytes))
-}
-
 // ---------------------------------------------------------------------------
 // Downloader：全局下载管理器（队列 / 并发 / 去重 / 拉流 worker / 命令）
 // ---------------------------------------------------------------------------
 /// 同一时刻最多在下载的文件数（跨条目全局）。
-const MAX_CONCURRENT_DOWNLOADS: usize = 4;
+const MAX_CONCURRENT_DOWNLOADS: usize = 1;
 /// 字节进度事件的节流间隔；状态转换不受限，立即推送。
 const PROGRESS_THROTTLE: Duration = Duration::from_millis(200);
 /// 终态任务在列表里保留多久供面板展示结果。
