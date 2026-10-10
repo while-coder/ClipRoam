@@ -77,7 +77,6 @@ import {
 import {
   cancelRefreshBurst,
   fetchHistoryPage,
-  fetchManifest,
   focusSearchInput,
   historyRevision,
   initHistorySync,
@@ -582,7 +581,6 @@ onBeforeUnmount(() => {
       v-if="activeView === 'history'"
       ref="historyView"
       :fetch-history-page="fetchHistoryPage"
-      :fetch-manifest="fetchManifest"
       :revision="historyRevision"
       :devices-by-id="devicesById"
       :connection-status="connectionStatus"

@@ -48,11 +48,7 @@ import type {
 } from "../../types";
 
 const props = defineProps<{
-  fetchManifest: (
-    filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
-  ) => Promise<EntriesManifestPage>;
-  /** Server-style manifest fetch: filtering and paging run in Rust. */
+  /** Fetch a server page, backfilling missing details into the local cache. */
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
     deviceNames: Record<string, string>,
@@ -172,7 +168,6 @@ const {
   changePage,
 } = useHistoryManifest({
   fetchHistoryPage: props.fetchHistoryPage,
-  fetchManifest: props.fetchManifest,
   deviceNames: () => deviceNames.value,
   buildFilter: (page) => ({
     query: committedQuery.value,

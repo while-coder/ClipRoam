@@ -36,14 +36,6 @@ export function initHistorySync(next: HistorySyncDeps): void {
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
 export const historyRevision = ref(0);
 
-/** First-page convenience entry; filtering and caching use the same page flow. */
-export function fetchManifest(
-  filter: EntriesManifestFilter,
-  deviceNames: Record<string, string>,
-): Promise<EntriesManifestPage> {
-  return fetchHistoryPage({ ...filter, page: 1 }, deviceNames);
-}
-
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
   deviceNames: Record<string, string>,

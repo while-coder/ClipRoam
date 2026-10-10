@@ -4,10 +4,6 @@ import { errorMessage } from "../../utils/error";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 
 type ManifestOptions = {
-  fetchManifest: (
-    filter: EntriesManifestFilter,
-    deviceNames: Record<string, string>,
-  ) => Promise<EntriesManifestPage>;
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
     deviceNames: Record<string, string>,
@@ -48,8 +44,7 @@ export function useHistoryManifest(options: ManifestOptions) {
     const token = ++fetchToken;
     targetPage = requestedPage;
     try {
-      const fetchPage = requestedPage === 1 ? options.fetchManifest : options.fetchHistoryPage;
-      const result = await fetchPage(
+      const result = await options.fetchHistoryPage(
         options.buildFilter(requestedPage),
         options.deviceNames(),
       );
