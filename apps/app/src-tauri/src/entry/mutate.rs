@@ -20,7 +20,7 @@ pub(crate) fn upsert_server_entries(
         return Ok(());
     }
     {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let history = state.history.lock().map_err(|error| error.to_string())?;
         let history_path = state.active_history_path(&history)?;
         // The rows go in ascending created_at order, so within one millisecond
         // the newest insert gets the highest rowid and the created_ms DESC,
@@ -35,8 +35,6 @@ pub(crate) fn upsert_server_entries(
                 Ok(())
             })
         })?;
-        // The rows changed, so the derived file-id cache is stale.
-        history.file_ids = None;
     }
     app.emit("cliproam://history-changed", ())
         .map_err(|error| error.to_string())
@@ -47,7 +45,7 @@ pub(crate) fn upsert_server_entries(
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, entry_id: String) -> Result<(), String> {
     {
-        let mut history = state.history.lock().map_err(|error| error.to_string())?;
+        let history = state.history.lock().map_err(|error| error.to_string())?;
         let path = state.active_history_path(&history)?;
         state.with_database(&path, |connection| {
             with_transaction(connection, |transaction| {
@@ -55,8 +53,6 @@ pub(crate) fn remove_server_entry(app: AppHandle, state: State<'_, AppState>, en
                 Ok(())
             })
         })?;
-        // The row is gone, so the derived file-id cache is stale.
-        history.file_ids = None;
         // Dropping references is what frees disk space, so the sweep runs here.
         let cache_dir = state.active_cache_dir(&history)?;
         let _ = state.with_database(&path, |connection| {

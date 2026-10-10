@@ -1,26 +1,25 @@
-//! 文件内容相关的查询命令：历史引用的内容 id。
+//! 文件内容相关的查询：指定页的条目详情引用的内容 id。
 
 use std::collections::HashSet;
 
-use super::cache::history_file_ids as cache_history_file_ids;
+use rusqlite::types::Value;
+use crate::entry::entry_contents_of;
+use crate::store::select_entries;
+use crate::utils::placeholders;
 use crate::AppState;
 
-/// Every content id the durable history references, derived from the entries'
-/// extras Rust-side so the whole history never crosses the IPC boundary. The
-/// derived set is cached on the history and invalidated by any `entries`
-/// write, so repeated calls in a refresh burst re-parse nothing.
-pub(crate) fn derived_history_file_ids(
+/// Read full cached details only for this page; file trees stay Rust-side.
+pub(crate) fn entry_file_ids(
     state: &AppState,
-    history: &mut crate::store::HistoryData,
+    history: &crate::store::HistoryData,
+    entry_ids: &[String],
 ) -> Result<HashSet<String>, String> {
-    if history.file_ids.is_none() {
-        let path = state.active_history_path(history)?;
-        let ids = state.with_database(&path, |connection| Ok(cache_history_file_ids(connection)))?;
-        history.file_ids = Some(ids);
-    }
-    Ok(history
-        .file_ids
-        .as_ref()
-        .expect("the set was derived above when absent")
-        .clone())
+    if entry_ids.is_empty() { return Ok(HashSet::new()); }
+    let path = state.active_history_path(history)?;
+    let where_sql = format!("WHERE id IN ({})", placeholders(entry_ids.len()));
+    let values = entry_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
+    state.with_database(&path, |connection| {
+        let entries = select_entries(connection, &where_sql, "", &values)?;
+        Ok(entries.iter().flat_map(entry_contents_of).map(|(id, _)| id).collect())
+    })
 }

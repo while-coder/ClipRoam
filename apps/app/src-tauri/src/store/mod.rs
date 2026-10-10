@@ -41,10 +41,6 @@ pub struct HistoryData {
     pub last_clipboard: String,
     pub last_file_signature: String,
     pub last_image_signature: String,
-    /// Every content id the durable history references, derived from the
-    /// entries' extras. `None` means stale: any write to the `entries` table
-    /// resets it, and the next derivation re-derives it in one pass.
-    pub file_ids: Option<HashSet<String>>,
     /// Content ids the server pool holds (`files` table, `stored = 1`), kept in
     /// memory so refreshing a summary never queries SQLite. `None` means not
     /// loaded yet; placeholder rows (`stored = 0`) never change the set, so

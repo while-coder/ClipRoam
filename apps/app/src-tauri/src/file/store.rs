@@ -111,35 +111,25 @@ pub(crate) fn history_stored_ids(
         .clone())
 }
 
-/// Of the ids the durable history references — the file-side counterpart of
-/// the server's entry manifest — those with no confirmed pool answer yet, i.e.
-/// the frontend's batch for the next `/files/query`. By default that means "no
-/// row at all"; `recheck_unstored` also re-asks ids whose last answer was
-/// `stored = 0`, so a reconnect heals a `file.available` push that was missed
-/// while offline. Also refreshes the stored-id cache while the connection is
-/// open; summary reads only ever test referenced ids, so scoping the cache to
-/// them stays truthful.
+/// From this page's cached entry details, query files that are unknown or
+/// still marked unstored. Confirmed stored files need no repeat HTTP request.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn find_unknown_file_ids(
     state: State<'_, AppState>,
-    recheck_unstored: Option<bool>,
+    entry_ids: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    let referenced = super::query::derived_history_file_ids(&state, &mut history)?;
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    let referenced = super::query::entry_file_ids(&state, &history, &entry_ids)?;
     let referenced: Vec<String> = referenced.into_iter().collect();
     let path = state.active_history_path(&history)?;
     let rows = state.with_database(&path, |connection| file_rows(connection, &referenced))?;
-    let mut known = HashSet::new();
     let mut stored = HashSet::new();
     for (file_id, is_stored) in rows {
-        known.insert(file_id.clone());
         if is_stored {
             stored.insert(file_id);
         }
     }
-    history.stored_file_ids = Some(stored.clone());
-    let answered = if recheck_unstored.unwrap_or(false) { stored } else { known };
-    Ok(referenced.into_iter().filter(|id| !answered.contains(id)).collect())
+    Ok(referenced.into_iter().filter(|id| !stored.contains(id)).collect())
 }
 
 /// Persists a `/files/query` batch. Ids the server reports as not stored are

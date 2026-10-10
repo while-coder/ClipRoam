@@ -17,7 +17,6 @@ import {
   applyRemoteUpserts,
   queueRemoteUpsert,
   refreshHistory,
-  syncFileStatuses,
   syncedEntryIds,
 } from "../clipboard-history/useHistorySync";
 import { finishUploadProgress, queueUploadProgress, uploadTasks } from "../uploads/useUploads";
@@ -62,11 +61,6 @@ function setConnectionState(value: boolean): void {
   if (connected.value === value) return;
   connected.value = value;
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
-  // 重连成功后重查一次"未存储"的文件可用性，兜住离线期间错过的
-  // `file.available` 推送（原对账时机已随登录对账移除）。
-  if (value) {
-    void syncFileStatuses(true);
-  }
 }
 
 /**
@@ -175,9 +169,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
         void invoke("remove_server_entry", { entryId });
       },
       onFileAvailable: () => {
-        // Content-addressed push: the server now holds this content. The
-        // persisted row is written by the next `/files/query` backfill —
-        // this only nudges the refresh burst that triggers it.
+        // Refresh the current page; its details determine the file statuses to query.
         refreshHistory();
       },
       onUploadProgress: queueUploadProgress,

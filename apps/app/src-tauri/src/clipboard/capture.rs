@@ -328,9 +328,6 @@ pub(crate) fn capture_files(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(), 
                             Ok(())
                         })
                     });
-                    // A row write lands, so the derived file-id cache is stale
-                    // (conservatively — only `created_at` changed here).
-                    history.file_ids = None;
                     outcome
                 }
                 None => {

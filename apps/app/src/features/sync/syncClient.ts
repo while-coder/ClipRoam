@@ -300,6 +300,15 @@ export class SyncClient {
       await invoke("upsert_server_entries", { entries });
     }
     if (this.#stopped) return { total: 0, entries: [] };
+    // Only this page's details supply file identities; unknown/unstored files
+    // are re-queried before computing the list's cached summaries.
+    const fileIds = await invoke<string[]>("find_unknown_file_ids", { entryIds });
+    if (this.#stopped) return { total: 0, entries: [] };
+    if (fileIds.length) {
+      const statuses = await this.fetchFiles(fileIds);
+      if (this.#stopped) return { total: 0, entries: [] };
+      await invoke("upsert_server_files", { statuses });
+    }
     const cached = await invoke<EntriesManifestPage>("list_entries_manifest", {
       filter: { kind: "all", entryIds }, deviceNames,
     });

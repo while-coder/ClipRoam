@@ -78,36 +78,11 @@ export function refreshHistory(): void {
     historyRevision.value += 1;
     void deps.refreshPendingCount();
     if (activeView.value === "pending-sync") void deps.refreshPendingEntries();
-    void syncFileStatuses();
   }, 200);
 }
 
 export function cancelRefreshBurst(): void {
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
-}
-
-/**
- * Server-pool availability is persisted in the local `files` table; this only
- * fills its gaps. Rust reports the content ids without a confirmed pool
- * answer, one batched `/files/query` answers them, and the result lands in
- * the table where the summaries read it. Steady state returns an empty list,
- * so it costs nothing; a failure just leaves the gap for the next pass.
- * `recheckUnstored` (reconnect only) also re-asks ids last answered "not
- * stored", healing a `file.available` push missed while offline.
- */
-export async function syncFileStatuses(recheckUnstored = false): Promise<void> {
-  const client = deps.getSyncClient();
-  if (!client) return;
-  try {
-    const fileIds = await invoke<string[]>("find_unknown_file_ids", { recheckUnstored });
-    if (!fileIds.length) return;
-    const statuses = await client.fetchFiles(fileIds);
-    await invoke("upsert_server_files", { statuses });
-    // The summaries changed, so the history view refetches its current page.
-    historyRevision.value += 1;
-  } catch {
-    // Auxiliary display state; the next refresh retries.
-  }
 }
 
 const pendingRemoteUpserts = new Map<string, ClipboardEntry>();

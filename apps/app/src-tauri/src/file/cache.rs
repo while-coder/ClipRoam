@@ -50,27 +50,6 @@ pub fn remember_file_hash(connection: &Connection, source: &str, size: u64, modi
     }
 }
 
-/// Every content id the durable history references (image contents plus file
-/// tree leaves), streamed row by row so the entries themselves never load.
-/// This is the reference side of `find_unknown_file_ids`: rows the `files` table
-/// is missing get queried from the pool and persisted.
-pub fn history_file_ids(connection: &Connection) -> HashSet<String> {
-    let mut statement = match connection.prepare("SELECT extra FROM entries") {
-        Ok(statement) => statement,
-        Err(_) => return HashSet::new(),
-    };
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>("extra"))
-        .into_iter()
-        .flatten()
-        .flatten();
-    let mut ids = HashSet::new();
-    for extra in rows {
-        extend_referenced_ids(&extra, &mut ids);
-    }
-    ids
-}
-
 /// Content ids one `extra` JSON blob references (image contents plus file tree
 /// leaves). Shared by the history scan and the pending-queue scan, which use
 /// the same `ClipboardEntryExtra` shape.
