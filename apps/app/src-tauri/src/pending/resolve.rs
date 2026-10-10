@@ -173,7 +173,7 @@ fn apply_hashes(
                 .map_err(|error| error.to_string())
         })?;
     }
-    app.emit("cliproam://history-changed", ())
+    app.emit("cliproam://pending-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
 }

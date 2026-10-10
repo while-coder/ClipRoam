@@ -44,7 +44,6 @@ import type {
   EntryFilter,
   LocalClipboardEntry,
   TimeFilter,
-  UploadProgress,
 } from "../../types";
 
 const props = defineProps<{
@@ -61,7 +60,6 @@ const props = defineProps<{
   importingShare: boolean;
   activatingEntryIds: ReadonlySet<string>;
   savingEntryId: string;
-  uploadProgressByEntryId: Record<string, UploadProgress>;
   downloadProgressByEntryId: Record<string, DownloadProgress>;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
 }>();
@@ -70,7 +68,6 @@ const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
   remove: [entry: ClipboardEntry];
   save: [entry: LocalClipboardEntry];
-  refresh: [];
   "open-settings": [];
 }>();
 
@@ -206,7 +203,7 @@ function formatAge(createdAt: string): string {
 }
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
-  return uploadStatusOf(entry, props.uploadProgressByEntryId, props.downloadProgressByEntryId);
+  return uploadStatusOf(entry, props.downloadProgressByEntryId);
 }
 
 /** upload-status 文案 → STag 色相：成功绿 / 上传蓝 / 进行中灰 / 待传警示黄。 */
@@ -263,7 +260,6 @@ async function captureCurrentClipboard(): Promise<void> {
   capturingClipboard.value = true;
   try {
     const captured = await invoke<boolean>("capture_current_clipboard_text");
-    emit("refresh");
     showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
   } catch (error) {
     showToast(`读取剪贴板失败：${errorMessage(error)}`, "error");
@@ -277,7 +273,6 @@ async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
   uploadingFiles.value = true;
   try {
     const captured = await invoke<boolean>("capture_files_from_picker", { mode });
-    emit("refresh");
     showToast(captured ? "已加入上传队列" : "未选择文件", captured ? "success" : "info");
   } catch (error) {
     showToast(`选择文件失败：${errorMessage(error)}`, "error");

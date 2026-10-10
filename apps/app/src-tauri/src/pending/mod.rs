@@ -7,7 +7,7 @@
 //! - **Dequeue**：[`dequeue_pending_entry`]，同步成功后删除该行；
 //! - **List**：[`list_pending_entries`]，待同步视图的展示数据。
 //!
-//! 发布成功后新条目由服务器 `clipboard.created` 回显入库（服务器 id）。
+//! 队列变更只通知待同步视图；服务器历史由独立的查询链路维护。
 
 mod resolve;
 
@@ -181,7 +181,7 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
                 .map_err(|error| error.to_string())
         })?;
     }
-    app.emit("cliproam://history-changed", ())
+    app.emit("cliproam://pending-changed", ())
         .map_err(|error| error.to_string())
 }
 

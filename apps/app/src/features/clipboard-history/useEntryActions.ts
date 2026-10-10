@@ -128,23 +128,10 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
 }
 
-/** A pending row's display id is `p{seq}`; extract the seq its Dequeue takes. */
-function pendingSeqOf(entryId: string): number | null {
-  return /^p\d+$/.test(entryId) ? Number(entryId.slice(1)) : null;
-}
-
 // Deletion is server-authoritative: the request goes out, and the local entry
 // is only cleaned up when the `clipboard.deleted` echo arrives (the server
-// broadcasts to every device, including the initiator). A pending queue row
-// never reached the server, so it is dequeued outright.
+// broadcasts to every device, including the initiator).
 export async function removeEntry(entry: ClipboardEntry): Promise<void> {
-  const seq = pendingSeqOf(entry.id);
-  if (seq !== null) {
-    await invoke("dequeue_pending_entry", { seq }).catch((error) => {
-      showToast(`删除失败：${errorMessage(error)}`, "error");
-    });
-    return;
-  }
   const client = getSyncClient();
   if (!client) {
     showToast("网络异常，暂时无法删除，请检查同步连接", "error");

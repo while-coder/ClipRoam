@@ -1,7 +1,6 @@
 import { nextTick, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { activeView } from "../../composables/useActiveView";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
 import type {
@@ -11,7 +10,7 @@ import type {
 
 /**
  * 历史数据的同步视图状态（从 App.vue 下沉）：revision 失效、远端 upsert
- * 批量合并、服务器文件可用性对账。引擎客户端与 pending 刷新经 App.vue
+ * 批量合并、服务器文件可用性对账。引擎客户端与历史视图经 App.vue
  * 装配时注入，保持静态依赖单向。
  */
 /** HistoryView 暴露实例的最小面（defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage })）。 */
@@ -22,8 +21,6 @@ interface HistorySyncViewRef {
 
 interface HistorySyncDeps {
   getSyncClient(): SyncClient | undefined;
-  refreshPendingCount(): Promise<void>;
-  refreshPendingEntries(): Promise<void>;
   getHistoryView(): HistorySyncViewRef | undefined;
 }
 
@@ -53,24 +50,20 @@ export async function fetchHistoryPage(
 let refreshTimer: number | undefined;
 
 /**
- * Background events (captures, remote notifications, file availability) arrive in
- * bursts; each one only invalidates views. A burst coalesces into one pass:
- * the history view refetches its current page on the revision bump, while the
- * pending badge (and, when its view is open, the queue details) re-query
- * Rust-side. Nothing reads whole history.
+ * Server entry and file-availability changes can arrive in bursts. Coalesce
+ * them into one revision bump so the history view refetches its current page.
  */
 export function refreshHistory(): void {
   if (refreshTimer !== undefined) return;
   refreshTimer = window.setTimeout(() => {
     refreshTimer = undefined;
     historyRevision.value += 1;
-    void deps.refreshPendingCount();
-    if (activeView.value === "pending-sync") void deps.refreshPendingEntries();
   }, 200);
 }
 
 export function cancelRefreshBurst(): void {
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+  refreshTimer = undefined;
 }
 
 export function focusSearch(): void {

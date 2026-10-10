@@ -3,7 +3,7 @@ import { Monitor, Trash2 } from "lucide-vue-next";
 import EntryKindIcon from "../clipboard-history/EntryKindIcon.vue";
 import { deviceName as deviceDisplayName, isHashing } from "../../utils/entry";
 import { formatAge as formatAgeRelative, formatExactDateTime, percentOf } from "../../utils/format";
-import type { ClipboardEntry, Device, LocalClipboardEntry, UploadProgress } from "../../types";
+import type { Device, LocalClipboardEntry, UploadProgress } from "../../types";
 
 /**
  * Everything in this list shares one state — 未同步. Once an entry reaches the
@@ -18,7 +18,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  remove: [entry: ClipboardEntry];
+  remove: [entry: LocalClipboardEntry];
 }>();
 
 function formatAge(createdAt: string): string {

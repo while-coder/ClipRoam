@@ -83,10 +83,13 @@ import {
   refreshHistory,
 } from "./features/clipboard-history/useHistorySync";
 import {
+  cancelPendingRefresh,
   pendingCount,
   pendingEntries,
+  refreshPending,
   refreshPendingCount,
   refreshPendingEntries,
+  removePendingEntry,
 } from "./features/pending-sync/usePendingSync";
 import {
   activeDownloadCount,
@@ -144,8 +147,6 @@ let shareReceiverListener: PluginListener | undefined;
 // 历史视图 ref 留在本组件，经注入读取。
 initHistorySync({
   getSyncClient,
-  refreshPendingCount,
-  refreshPendingEntries,
   getHistoryView: () => historyView.value,
 });
 
@@ -213,7 +214,6 @@ async function consumeMobileShares(): Promise<void> {
   try {
     const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
     if (!summary.shares) return;
-    refreshHistory();
     showToast(shareImportMessage(summary), "success");
   } catch (error) {
     showToast(`接收系统分享失败：${errorMessage(error)}，请重新分享`, "error");
@@ -283,6 +283,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     currentUsername.value = config.username;
     hasSavedSyncConfig.value = true;
     await persistAccountPreferences(preferences);
+    refreshPending();
     setupVisible.value = false;
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
     await startSync(config);
@@ -350,8 +351,9 @@ async function initializeTauriServices(): Promise<void> {
     startToastWindowListener(),
     listen("cliproam://entry-created", () => {
       bumpLocalClipboardRevision();
-      refreshHistory();
+      refreshPending();
     }),
+    listen("cliproam://pending-changed", refreshPending),
     listen("cliproam://history-changed", refreshHistory),
     listen("cliproam://show-paste", () => { void showPasteWindow(); }),
     isPasteWindow
@@ -475,6 +477,7 @@ onBeforeUnmount(() => {
   if (downloadPollTimer !== undefined) window.clearInterval(downloadPollTimer);
   disposeToast();
   cancelRefreshBurst();
+  cancelPendingRefresh();
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
@@ -588,13 +591,11 @@ onBeforeUnmount(() => {
       :importing-share="importingShare"
       :activating-entry-ids="activatingEntryIds"
       :saving-entry-id="savingEntryId"
-      :upload-progress-by-entry-id="uploadProgressByEntryId"
       :download-progress-by-entry-id="downloadProgressByEntryId"
       :ensure-local-files="ensureLocalFiles"
       @activate="activateFromView"
       @remove="removeEntry"
       @save="saveEntry"
-      @refresh="refreshHistory"
       @open-settings="openSettings"
     />
 
@@ -604,7 +605,7 @@ onBeforeUnmount(() => {
       :devices-by-id="devicesById"
       :current-time="currentTime"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
-      @remove="removeEntry"
+      @remove="removePendingEntry"
     />
 
     <UploadsView

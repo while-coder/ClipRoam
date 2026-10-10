@@ -5,7 +5,6 @@ import type {
   Device,
   DownloadProgress,
   LocalClipboardEntry,
-  UploadProgress,
 } from "../types";
 
 /**
@@ -29,7 +28,6 @@ export function isHashing(entry: LocalClipboardEntry): boolean {
  */
 export function uploadStatus(
   entry: LocalClipboardEntry,
-  uploadProgress: Record<string, UploadProgress>,
   downloadProgress: Record<string, DownloadProgress>,
 ): string | undefined {
   const summary = entry.summary;
@@ -46,10 +44,6 @@ export function uploadStatus(
       ? ` · ${formatFileSize(download.receivedBytes)}/${formatFileSize(download.totalBytes)}`
       : "";
     return `下载中 ${count}${percent}%${bytes}`;
-  }
-  const progress = uploadProgress[entry.id];
-  if (progress) {
-    return `上传中 ${percentOf(progress.uploadedBytes, progress.totalBytes, 99)}%`;
   }
   if (!summary.contentCount) return undefined;
   const storedCount = summary.storedCount;
