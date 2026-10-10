@@ -117,7 +117,6 @@ export class HistoryClient {
       "",
       true,
     );
-    await this.session.invoke("remove_server_entry", { entryId });
   }
 
 }

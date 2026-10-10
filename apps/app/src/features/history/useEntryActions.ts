@@ -132,7 +132,7 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
 }
 
-// Clean the originating archive immediately after the server confirms deletion.
+// Server-confirmed deletion only marks history changed; the view owns refetching.
 export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   const client = getSyncClient();
   if (!client) {
@@ -141,6 +141,7 @@ export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   }
   try {
     await client.history.delete(entry.id);
+    if (!client.session.signal.aborted) refreshHistory();
   } catch (error) {
     if (!client.session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error");
     return;
