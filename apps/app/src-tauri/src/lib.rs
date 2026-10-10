@@ -26,7 +26,7 @@ use store::{
     HistoryData,
 };
 use sync::SyncConfig;
-use downloads::{DownloadState, Downloader, VirtualDownloads};
+use downloads::{DownloadState, Downloader};
 use downloads::save::SaveSession;
 
 struct AppState {
@@ -46,7 +46,6 @@ struct AppState {
     account_preferences: Mutex<sync::AccountPreferences>,
     downloads: Mutex<HashMap<String, DownloadState>>,
     save_sessions: Mutex<HashMap<String, SaveSession>>,
-    virtual_downloads: VirtualDownloads,
     /// 全局下载管理器：队列/并发/去重/拉流都在这里（main 与 paste 共享）。
     downloader: Downloader,
     share_import: Mutex<()>,
@@ -87,14 +86,6 @@ impl AppState {
         Ok(cache_dir_for(&self.histories_dir, key))
     }
 
-    /// 设置页「虚拟文件粘贴」开关（Windows 粘贴策略每次调用时读取）；
-    /// 锁中毒时按默认关闭——物化路径在所有平台都可用。
-    pub(crate) fn use_virtual_files(&self) -> bool {
-        self.account_preferences
-            .lock()
-            .map(|preferences| preferences.use_virtual_files)
-            .unwrap_or(false)
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -155,7 +146,6 @@ pub fn run() {
                 account_preferences: Mutex::new(account_preferences),
                 downloads: Mutex::new(HashMap::new()),
                 save_sessions: Mutex::new(HashMap::new()),
-                virtual_downloads: VirtualDownloads::default(),
                 downloader: Downloader::new(app.handle().clone()),
                 share_import: Mutex::new(()),
             });

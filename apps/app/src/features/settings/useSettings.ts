@@ -52,7 +52,6 @@ const settingsPage = accountStateRef("settingsPage");
 const autoUploadLimitMb = accountStateRef("autoUploadLimitMb");
 const autoReceiveClipboard = accountStateRef("autoReceiveClipboard");
 const watchClipboard = accountStateRef("watchClipboard");
-const useVirtualFiles = accountStateRef("useVirtualFiles");
 const excludePatternsInput = accountStateRef("excludePatternsInput");
 const serverMaxFileMb = accountStateRef("serverMaxFileMb");
 const deviceAliasInput = accountStateRef("deviceAliasInput");
@@ -77,7 +76,6 @@ function openSettings(): void {
   autoUploadLimitMb.value = preferences.autoUploadLimitMb;
   autoReceiveClipboard.value = preferences.autoReceiveClipboard;
   watchClipboard.value = preferences.watchClipboard;
-  useVirtualFiles.value = preferences.useVirtualFiles;
   excludePatternsInput.value = preferences.excludePatterns.join("\n");
   serverMaxFileMb.value = preferences.serverMaxFileMb;
   // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
@@ -208,7 +206,7 @@ async function openAppDataDirectory(): Promise<void> {
 async function saveSettings(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
-  const { settingsVisible, settingsPage, autoUploadLimitMb, autoReceiveClipboard, watchClipboard, useVirtualFiles, excludePatternsInput, deviceAliasInput, savedDeviceAlias, savingSettings, changingPassword, settingsError } = session.state;
+  const { settingsVisible, settingsPage, autoUploadLimitMb, autoReceiveClipboard, watchClipboard, excludePatternsInput, deviceAliasInput, savedDeviceAlias, savingSettings, changingPassword, settingsError } = session.state;
 
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
@@ -223,7 +221,6 @@ async function saveSettings(): Promise<void> {
     autoUploadLimitMb: autoUploadLimitMb.value,
     autoReceiveClipboard: autoReceiveClipboard.value,
     watchClipboard: watchClipboard.value,
-    useVirtualFiles: useVirtualFiles.value,
     excludePatterns: excludePatternsInput.value
       .split("\n")
       .map((pattern) => pattern.trim())
@@ -367,7 +364,6 @@ export {
   autoUploadLimitMb,
   autoReceiveClipboard,
   watchClipboard,
-  useVirtualFiles,
   excludePatternsInput,
   serverMaxFileMb,
   deviceAliasInput,

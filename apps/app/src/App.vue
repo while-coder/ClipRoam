@@ -4,7 +4,7 @@ import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_USE_VIRTUAL_FILES, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
 import {
   Clipboard,
   Cloud,
@@ -290,9 +290,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       watchClipboard: sameArchive
         ? getActivePreferences().watchClipboard
         : DEFAULT_WATCH_CLIPBOARD,
-      useVirtualFiles: sameArchive
-        ? getActivePreferences().useVirtualFiles
-        : DEFAULT_USE_VIRTUAL_FILES,
       excludePatterns: sameArchive
         ? getActivePreferences().excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],

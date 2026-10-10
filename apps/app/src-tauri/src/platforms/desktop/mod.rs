@@ -77,19 +77,6 @@ pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
     false
 }
 
-/// 虚拟文件粘贴目前只有 Windows 实现；其余桌面平台走物化路径。
-pub(crate) fn supports_virtual_file_paste(_entry: &crate::content::ClipboardEntry) -> bool {
-    false
-}
-
-pub(crate) fn set_virtual_file_clipboard(
-    _app: &AppHandle,
-    _window_label: &str,
-    _entry: crate::content::ClipboardEntry,
-) -> Result<(), String> {
-    Err("当前平台不支持虚拟文件粘贴".to_string())
-}
-
 pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
 }

@@ -8,7 +8,7 @@
 //! 3 秒退避后整个传输从零重启（GET 无 offset），总超时 5 分钟。
 //!
 //! 锁纪律：Downloader 的 `inner` 锁内只做纯内存操作；事件 emit、
-//! `virtual_downloads` 调用、其他 Mutex 一律 clone 所需数据 → drop inner →
+//! 其他 Mutex 一律 clone 所需数据 → drop inner →
 //! 再做，避免嵌套锁。
 
 pub(crate) mod save;
@@ -27,7 +27,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 
-use crate::history::clipboard::{missing_files, snapshot_entry_for, FilePasteStrategy};
+use crate::history::clipboard::{missing_files, snapshot_entry_for};
 use crate::content::MissingFile;
 use crate::content::entry_contents_of;
 use crate::file::{download_path, partial_download_path};
@@ -36,71 +36,6 @@ use crate::sync::server_http_url;
 use crate::account::AccountContext;
 use crate::utils::ensure_parent_dir;
 use crate::AppState;
-
-#[derive(Default)]
-pub(crate) struct VirtualDownloadStatus {
-    requested: bool,
-    pub(crate) complete: bool,
-    pub(crate) error: Option<String>,
-}
-
-#[derive(Default)]
-pub(crate) struct VirtualDownloads {
-    pub(crate) transfers: Mutex<std::collections::HashMap<String, VirtualDownloadStatus>>,
-    pub(crate) changed: std::sync::Condvar,
-}
-
-impl VirtualDownloads {
-    pub(crate) fn request(&self, file_id: &str) -> bool {
-        let Ok(mut transfers) = self.transfers.lock() else { return false };
-        let status = transfers.entry(file_id.to_string()).or_default();
-        if status.complete {
-            return false;
-        }
-        if status.error.take().is_some() {
-            status.requested = false;
-        }
-        if status.requested {
-            false
-        } else {
-            status.requested = true;
-            true
-        }
-    }
-
-    pub(crate) fn begin(&self, file_id: &str) {
-        if let Ok(mut transfers) = self.transfers.lock() {
-            transfers.insert(file_id.to_string(), VirtualDownloadStatus {
-                requested: true,
-                complete: false,
-                error: None,
-            });
-            self.changed.notify_all();
-        }
-    }
-
-    pub(crate) fn progress(&self) {
-        self.changed.notify_all();
-    }
-
-    pub(crate) fn complete(&self, file_id: &str) {
-        if let Ok(mut transfers) = self.transfers.lock() {
-            let status = transfers.entry(file_id.to_string()).or_default();
-            status.complete = true;
-            status.error = None;
-            self.changed.notify_all();
-        }
-    }
-
-    pub(crate) fn fail(&self, file_id: &str, error: String) {
-        if let Ok(mut transfers) = self.transfers.lock() {
-            let status = transfers.entry(file_id.to_string()).or_default();
-            status.complete = false;
-            status.error = Some(error);
-            self.changed.notify_all();
-        }
-    }
-}
 
 pub(crate) struct DownloadState {
     pub(crate) path: std::path::PathBuf,
@@ -159,7 +94,6 @@ pub(crate) fn begin_transfer(
             },
         )
     } else {
-        state.virtual_downloads.begin(file_id);
         let final_path = {
             let cache_dir = account.cache_dir.clone();
             download_path(&cache_dir, file_id).ok_or_else(|| "内容标识不合法".to_string())?
@@ -198,8 +132,7 @@ pub(crate) fn begin_transfer(
     Ok(())
 }
 
-/// 追加一段已收字节：累计大小与哈希、写 `.part`；Cache 目标顺带唤醒等待
-/// 前缀的虚拟文件读循环。
+/// 追加一段已收字节：累计大小与哈希、写 `.part`。
 pub(crate) fn append_chunk(state: &AppState, transfer_id: &str, bytes: &[u8]) -> Result<(), String> {
     let mut downloads = state.downloads.lock().map_err(|error| error.to_string())?;
     let download = downloads
@@ -215,9 +148,6 @@ pub(crate) fn append_chunk(state: &AppState, transfer_id: &str, bytes: &[u8]) ->
         .open(&download.path)
         .and_then(|mut file| file.write_all(bytes))
         .map_err(|error| error.to_string())?;
-    if matches!(download.target, DownloadTarget::Cache { .. }) {
-        state.virtual_downloads.progress();
-    }
     Ok(())
 }
 
@@ -247,7 +177,6 @@ pub(crate) fn finish_transfer(state: &AppState, transfer_id: &str) -> Result<(),
             // truncated download must never enter the cache, where the blob
             // scan accepts any file whose name is a content id.
             fs::rename(&download.path, final_path).map_err(|error| error.to_string())?;
-            state.virtual_downloads.complete(&download.file_id);
         }
         DownloadTarget::Save {
             save_id,
@@ -268,8 +197,7 @@ pub(crate) fn finish_transfer(state: &AppState, transfer_id: &str) -> Result<(),
     Ok(())
 }
 
-/// 取消/失败一个传输：删 `.part` 并回滚落盘目标（Save 会话移出 in_progress、
-/// Cache 置虚拟文件错误态唤醒等待者）。
+/// 取消/失败一个传输：删 `.part` 并回滚另存会话的 in_progress。
 pub(crate) fn cancel_transfer(state: &AppState, transfer_id: &str, reason: &str) {
     let download = state.downloads.lock().ok().and_then(|mut downloads| downloads.remove(transfer_id));
     if let Some(download) = download {
@@ -282,12 +210,11 @@ pub(crate) fn fail_download_target(state: &AppState, download: &DownloadState, m
     clear_download_target(state, &download.target, &download.file_id, message);
 }
 
-pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, message: &str) {
+pub(crate) fn clear_download_target(state: &AppState, target: &DownloadTarget, file_id: &str, _message: &str) {
     match target {
         DownloadTarget::Cache { partial_path, .. } => {
             // Drop the staging file a cancelled or failed transfer leaves behind.
             let _ = fs::remove_file(partial_path);
-            state.virtual_downloads.fail(file_id, message.to_string());
         }
         DownloadTarget::Save { save_id, .. } => {
             if let Ok(mut sessions) = state.save_sessions.lock() {
@@ -326,31 +253,22 @@ pub(crate) fn list_entry_files(
         .collect())
 }
 
-/// Contents this machine cannot read yet, de-duplicated — the frontend turns
-/// each one into a download. With `paste_only` only the contents that must
-/// exist before this platform can start a paste are returned, so the frontend
-/// does not need to know which operating system it runs on.
-fn prepare_entry(state: &AppState, entry_id: &str, paste_only: bool, account: &crate::account::AccountContext) -> Result<Vec<MissingFile>, String> {
+/// 尚不可本地读取的内容：复制、粘贴和下载统一等待这些文件就绪。
+fn prepare_entry(entry_id: &str, account: &crate::account::AccountContext) -> Result<Vec<MissingFile>, String> {
     let snapshot = snapshot_entry_for(entry_id, account)?;
-    if paste_only
-        && !FilePasteStrategy::for_entry(&snapshot.entry, state.use_virtual_files())
-            .requires_complete_content(&snapshot.entry.kind)
-    {
-        return Ok(Vec::new());
-    }
     Ok(missing_files(&snapshot))
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn prepare_entry_files(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
     let account = state.account(&session_id)?;
-    prepare_entry(&state, &entry_id, false, &account)
+    prepare_entry(&entry_id, &account)
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn prepare_paste_entry(state: State<'_, AppState>, entry_id: String, session_id: String) -> Result<Vec<MissingFile>, String> {
     let account = state.account(&session_id)?;
-    prepare_entry(&state, &entry_id, true, &account)
+    prepare_entry(&entry_id, &account)
 }
 
 // ---------------------------------------------------------------------------
@@ -554,22 +472,6 @@ impl Downloader {
         }
         self.emit_snapshot();
         Ok(watchers)
-    }
-
-    /// Windows 虚拟文件入口（virtual_files.rs 调用）；内部已去重，重复调用安全。
-    pub(crate) fn enqueue_virtual(&self, entry_id: &str, file_id: &str, size: u64) {
-        let state = self.app.state::<AppState>();
-        let Some(config) = state.sync_config.lock().ok().and_then(|config| config.clone()) else { return };
-        let Ok(account) = AccountContext::new(&state, config) else { return };
-        let account = Arc::new(account);
-        let _ = self.enqueue_batch(
-            &account,
-            None,
-            entry_id,
-            &[DownloadRequest { file_id: file_id.to_string(), size }],
-            None,
-            None,
-        );
     }
 
     pub(crate) fn cancel_task(&self, task_id: &str, reason: &str) {

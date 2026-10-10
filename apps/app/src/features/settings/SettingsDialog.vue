@@ -34,7 +34,6 @@ import {
   settingsError,
   settingsPage,
   signOut,
-  useVirtualFiles,
   validateNewPassword,
   validatePasswordConfirmation,
   watchClipboard,
@@ -153,17 +152,6 @@ const {
                   :disabled="savingSettings"
                 />
                 <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
-                <label v-if="platformCapabilities.virtualFilePaste" class="setting-switch" for="use-virtual-files">
-                  <span class="setting-switch-copy">
-                    <strong>虚拟文件粘贴</strong>
-                    <small>默认关闭：文件先下载到本机再粘贴，与 Mac/Linux 行为一致；开启后直接以虚拟文件粘贴。</small>
-                  </span>
-                  <SSwitch
-                    id="use-virtual-files"
-                    v-model:value="useVirtualFiles"
-                    :disabled="savingSettings"
-                  />
-                </label>
               </SCard>
               <SCard title="复制过滤">
                 <p class="settings-section-desc">复制文件/文件夹时按名称跳过匹配的内容，不进入历史与同步。</p>

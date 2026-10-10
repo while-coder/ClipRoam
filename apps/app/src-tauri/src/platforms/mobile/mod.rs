@@ -12,7 +12,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::pending_upload::capture::{RichText, ShareImportSummary};
-use crate::content::ClipboardEntry;
 
 // ---------------------------------------------------------------------------
 // 剪贴板读写
@@ -68,18 +67,6 @@ pub(crate) fn requires_paste_window() -> bool {
 /// 移动端不轮询系统剪贴板（Android 通过分享接收导入）。
 pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
     false
-}
-
-pub(crate) fn supports_virtual_file_paste(_entry: &ClipboardEntry) -> bool {
-    false
-}
-
-pub(crate) fn set_virtual_file_clipboard(
-    _app: &AppHandle,
-    _window_label: &str,
-    _entry: ClipboardEntry,
-) -> Result<(), String> {
-    Err("当前平台不支持虚拟文件粘贴".to_string())
 }
 
 pub(crate) fn begin_window_drag(_window: &tauri::WebviewWindow) -> Result<(), String> {

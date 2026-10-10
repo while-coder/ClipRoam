@@ -1,7 +1,6 @@
 //! Windows 平台实现：clipboard-win 剪贴板读写、SendInput 合成 Ctrl+V、
-//! 拖拽焦点守卫，以及 COM 虚拟文件剪贴板（见 virtual_files.rs）。
+//! 以及拖拽焦点守卫。
 
-pub(crate) mod virtual_files;
 
 use std::{
     path::PathBuf,
@@ -17,10 +16,6 @@ pub(crate) use super::{
     consume_pending_shares, create_windows, deliver_paste, on_window_event,
     prompt_save_destination, register_plugins, requires_paste_window, setup_desktop_shell,
     show_detached_toast, supports_native_file_export,
-};
-pub(crate) use virtual_files::{
-    set_clipboard as set_virtual_file_clipboard,
-    supports_entry as supports_virtual_file_paste,
 };
 
 // ---------------------------------------------------------------------------

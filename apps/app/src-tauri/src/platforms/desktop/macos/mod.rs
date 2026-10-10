@@ -15,8 +15,7 @@ pub(crate) use super::{
     begin_window_drag, consume_pending_shares, create_windows, on_paste_window_focus,
     on_window_event, prompt_save_destination, register_plugins, requires_paste_window,
     setup_desktop_shell, should_ignore_paste_focus_loss, should_skip_clipboard_poll,
-    show_detached_toast, supports_native_file_export, supports_virtual_file_paste,
-    set_virtual_file_clipboard,
+    show_detached_toast, supports_native_file_export,
 };
 
 /// 快捷粘贴窗口弹出前的最前台应用（unix pid）。隐藏粘贴窗口后 macOS 会把

@@ -20,8 +20,6 @@ export type AccountPreferences = {
   autoReceiveClipboard: boolean;
   /** 是否监听本机剪贴板（自动捕获复制内容进历史）；关闭后仅接收同步内容。 */
   watchClipboard: boolean;
-  /** Windows 独有：文件粘贴是否走 virtual_files（不预下载）；默认 false = 先下载再粘贴。 */
-  useVirtualFiles: boolean;
   excludePatterns: string[];
   /** 登录时服务器下发的单文件存储上限（MB），自动上传档位不超过它。 */
   serverMaxFileMb: number;
@@ -42,8 +40,6 @@ export type PlatformCapabilities = {
   nativeFileExport: boolean;
   openDataDirectory: boolean;
   shareReceiver: boolean;
-  /** 本平台支持 virtual_files 粘贴（当前仅 Windows 桌面），控制设置开关的显隐。 */
-  virtualFilePaste: boolean;
 };
 
 /**

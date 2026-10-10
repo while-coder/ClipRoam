@@ -17,37 +17,9 @@ use crate::AppState;
 
 use crate::content::clipboard::{image_signature, rich_text_signature, RichText};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilePasteStrategy {
-    VirtualStream,
-    MaterializedPaths,
-}
-
-impl FilePasteStrategy {
-    /// `use_virtual_files` 来自设置页开关：关闭（默认）时 Windows 也走
-    /// 物化路径——先下载再粘贴，与 mac/linux 一致。
-    pub(crate) fn for_entry(entry: &ClipboardEntry, use_virtual_files: bool) -> Self {
-        if entry.kind == "files"
-            && use_virtual_files
-            && crate::platforms::supports_virtual_file_paste(entry)
-        {
-            return Self::VirtualStream;
-        }
-        Self::MaterializedPaths
-    }
-
-    pub(crate) fn requires_complete_content(self, kind: &str) -> bool {
-        kind == "image" || (kind == "files" && self == Self::MaterializedPaths)
-    }
-}
-
-
 pub(crate) enum ClipboardPayload {
     Text(RichText),
     Files(Vec<String>),
-    /// 仅在 `FilePasteStrategy::VirtualStream`（当前只有 Windows）下构造；
-    /// 非 Windows 上写入时由平台适配层返回错误。
-    VirtualFiles(Box<ClipboardEntry>),
     Image(Vec<u8>),
 }
 
@@ -63,13 +35,6 @@ pub(crate) struct EntrySnapshot {
     /// original name.
     hash_sources: HashMap<String, PathBuf>,
     pub cache_dir: PathBuf,
-}
-
-pub(crate) fn snapshot_entry(state: &AppState, entry_id: &str) -> Result<EntrySnapshot, String> {
-    let config = state.sync_config.lock().map_err(|error| error.to_string())?
-        .clone().ok_or("同步账号未登录")?;
-    let account = crate::account::AccountContext::new(state, config)?;
-    snapshot_entry_for(entry_id, &account)
 }
 
 pub(crate) fn snapshot_entry_for(entry_id: &str, account: &crate::account::AccountContext) -> Result<EntrySnapshot, String> {
@@ -142,7 +107,6 @@ fn activation_signature(payload: &ClipboardPayload) -> (String, String, String) 
             let paths = paths.iter().map(PathBuf::from).collect::<Vec<_>>();
             (file_signature(&paths), String::new(), String::new())
         }
-        ClipboardPayload::VirtualFiles(_) => (String::new(), String::new(), String::new()),
         ClipboardPayload::Image(image) => (String::new(), String::new(), image_signature(image)),
         ClipboardPayload::Text(rich_text) => (String::new(), rich_text_signature(rich_text), String::new()),
     }
@@ -245,29 +209,22 @@ pub(crate) fn apply_clipboard_entry(
             if intact {
                 ClipboardPayload::Files(roots.clone())
             } else {
-                match FilePasteStrategy::for_entry(&snapshot.entry, state.use_virtual_files()) {
-                    FilePasteStrategy::VirtualStream => {
-                        ClipboardPayload::VirtualFiles(Box::new(snapshot.entry.clone()))
-                    }
-                    FilePasteStrategy::MaterializedPaths => {
-                        let view = snapshot
-                            .cache_dir
-                            .join("views")
-                            .join(sanitize_name_component(&snapshot.entry.id));
-                        let _ = fs::remove_dir_all(&view);
-                        // Real copies, not hard links: the view is handed to
-                        // other applications, and an in-place edit there must
-                        // not reach back into the content-addressed cache blob
-                        // (the filename is the sha256 — corrupted bytes would
-                        // then be trusted for every entry sharing the content).
-                        rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), false)?;
-                        let paths = file_info
-                            .keys()
-                            .map(|root| view.join(root).display().to_string())
-                            .collect();
-                        ClipboardPayload::Files(paths)
-                    }
-                }
+                let view = snapshot
+                    .cache_dir
+                    .join("views")
+                    .join(sanitize_name_component(&snapshot.entry.id));
+                let _ = fs::remove_dir_all(&view);
+                // Real copies, not hard links: the view is handed to
+                // other applications, and an in-place edit there must
+                // not reach back into the content-addressed cache blob
+                // (the filename is the sha256 — corrupted bytes would
+                // then be trusted for every entry sharing the content).
+                rebuild_tree(&view, file_info, &|file_id| snapshot.resolve(file_id), false)?;
+                let paths = file_info
+                    .keys()
+                    .map(|root| view.join(root).display().to_string())
+                    .collect();
+                ClipboardPayload::Files(paths)
             }
         }
         "image" => image_payload(&snapshot)?,
@@ -279,9 +236,6 @@ pub(crate) fn apply_clipboard_entry(
     activate_with_signature(&state, signature, &account, || match payload {
         ClipboardPayload::Text(rich_text) => crate::platforms::write_clipboard_text(&app, &rich_text),
         ClipboardPayload::Files(paths) => crate::platforms::write_clipboard_files(&app, &paths),
-        ClipboardPayload::VirtualFiles(entry) => {
-            crate::platforms::set_virtual_file_clipboard(&app, window.label(), *entry)
-        }
         ClipboardPayload::Image(image) => crate::platforms::write_clipboard_image(&app, &image),
     })?;
 

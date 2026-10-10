@@ -14,9 +14,8 @@ pub(crate) use super::{
     begin_window_drag, create_windows, deliver_paste, manage_platform_state, on_paste_window_focus,
     on_window_event, open_data_directory, read_clipboard_files,
     read_clipboard_image, read_clipboard_text, requires_paste_window, setup_desktop_shell,
-    set_virtual_file_clipboard, should_ignore_paste_focus_loss, should_skip_clipboard_poll,
-    show_detached_toast, supports_virtual_file_paste,
-    synthesize_paste, write_clipboard_files, write_clipboard_image, write_clipboard_text,
+    should_ignore_paste_focus_loss, should_skip_clipboard_poll,
+    show_detached_toast, synthesize_paste, write_clipboard_files, write_clipboard_image, write_clipboard_text,
 };
 
 pub(crate) fn supports_native_file_export() -> bool {
