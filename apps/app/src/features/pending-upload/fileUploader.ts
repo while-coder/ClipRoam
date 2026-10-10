@@ -115,7 +115,8 @@ export class FileUploader {
       let retired = false;
       while (missing.length > 0) {
         this.#checkStopped();
-        const index = missing[0]!;
+        // Spread simultaneous devices across the server's currently missing chunks.
+        const index = missing[Math.floor(Math.random() * missing.length)]!;
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
         const data = await invoke<string>("read_upload_chunk", {
