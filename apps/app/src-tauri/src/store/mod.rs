@@ -102,8 +102,7 @@ impl DatabasePool {
     }
 }
 
-/// 打开一个历史库。当作第一次启动：只建缺失的表，不做任何存在性检测或
-/// 旧数据迁移。
+/// Open a history database and upgrade older unversioned caches.
 pub fn open_history_database(path: &Path) -> Result<Connection, String> {
     ensure_parent_dir(path)?;
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
@@ -125,6 +124,7 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
             );
             CREATE TABLE IF NOT EXISTS entries (
                 id TEXT PRIMARY KEY,
+                version INTEGER NOT NULL DEFAULT 0,
                 kind TEXT NOT NULL,
                 content TEXT NOT NULL,
                 extra TEXT NOT NULL DEFAULT '{}',
@@ -159,6 +159,13 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
             ",
         )
         .map_err(|error| error.to_string())?;
+    let has_version: bool = connection
+        .query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('entries') WHERE name = 'version')", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if !has_version {
+        connection.execute("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 0", [])
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -170,7 +177,7 @@ pub fn entry_created_ms(created_at: &str) -> i64 {
         .unwrap_or(0)
 }
 
-const ENTRY_COLUMNS: &str = "id, kind, content, extra, created_at, source_device_id, sources";
+const ENTRY_COLUMNS: &str = "id, version, kind, content, extra, created_at, source_device_id, sources";
 
 /// Builds a `ClipboardEntry` from one `entries` row. `summary` is derived
 /// state and starts empty — recompute with `refresh_summary` before the entry
@@ -180,6 +187,7 @@ pub fn entry_from_row(row: &rusqlite::Row) -> rusqlite::Result<ClipboardEntry> {
         serde_json::from_str::<ClipboardEntryExtra>(&row.get::<_, String>("extra")?).unwrap_or_default();
     Ok(ClipboardEntry {
         id: row.get("id")?,
+        version: row.get("version")?,
         kind: row.get("kind")?,
         content: row.get("content")?,
         html: extra.html,
@@ -270,7 +278,7 @@ pub fn cache_dir_for_path(path: &Path) -> PathBuf {
         .join("files")
 }
 
-/// Writes one entry row, replacing any row with the same id. The full extra
+/// Writes a newer entry revision; late responses cannot overwrite newer data. The full extra
 /// payload (rich text, trees, thumbnails) rides the row write, so hashing
 /// results and remote updates need no separate pass. `sources` lives in its
 /// own column, so the row's extra omits `localSources` (see
@@ -280,9 +288,14 @@ pub fn upsert_entry_row(connection: &Connection, entry: &ClipboardEntry) -> Resu
     let sources = serde_json::to_string(&entry.sources).map_err(|error| error.to_string())?;
     connection
         .execute(
-            "INSERT OR REPLACE INTO entries (id, kind, content, extra, created_at, created_ms, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO entries (id, version, kind, content, extra, created_at, created_ms, source_device_id, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET version = excluded.version, kind = excluded.kind,
+                 content = excluded.content, extra = excluded.extra, created_at = excluded.created_at,
+                 created_ms = excluded.created_ms, source_device_id = excluded.source_device_id, sources = excluded.sources
+             WHERE excluded.version > entries.version",
             params![
                 entry.id,
+                entry.version,
                 entry.kind,
                 entry.content,
                 extra,
@@ -328,4 +341,35 @@ pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_cache_upgrades_and_late_details_cannot_regress_it() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE entries (
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+            extra TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+            created_ms INTEGER NOT NULL DEFAULT 0, source_device_id TEXT NOT NULL,
+            sources TEXT NOT NULL DEFAULT '{}');
+            INSERT INTO entries (id, kind, content, created_at, source_device_id)
+                VALUES ('1', 'text', 'cached', '2026-10-10T00:00:00Z', 'device');").unwrap();
+        init_tables(&connection).unwrap();
+        init_tables(&connection).unwrap();
+        let mut entry = select_entry(&connection, "1").unwrap().unwrap();
+        assert_eq!(entry.version, 0);
+        entry.version = 2;
+        entry.created_at = "2026-10-10T00:02:00Z".into();
+        upsert_entry_row(&connection, &entry).unwrap();
+        entry.version = 1;
+        entry.created_at = "2026-10-10T00:01:00Z".into();
+        upsert_entry_row(&connection, &entry).unwrap();
+        let stored = select_entry(&connection, "1").unwrap().unwrap();
+        assert_eq!(stored.version, 2);
+        assert_eq!(stored.created_at, "2026-10-10T00:02:00Z");
+        assert_eq!(crate::content::lightweight_entry(&stored).version, 2);
+    }
 }

@@ -1,6 +1,7 @@
-//! Server-selected history cache reads and missing-record checks.
-use std::collections::{HashMap, HashSet};
-use rusqlite::{params_from_iter, types::Value};
+//! Server-selected history cache reads and revision checks.
+use std::collections::HashMap;
+use rusqlite::{params_from_iter, types::Value, Connection};
+use serde::Deserialize;
 use tauri::State;
 
 use crate::content::{lightweight_entry, refresh_summary, ClipboardEntry, SummaryContext};
@@ -34,35 +35,40 @@ pub(crate) fn get_cached_entries_for_display(
     }).collect())
 }
 
-/// Of the given ids, those the local history does not store — the remote side
-/// of the sync reconcile's manifest diff. The manifest page is a few dozen
-/// ids, so the membership test runs inside SQLite instead of hauling every
-/// local id across the IPC boundary. Input order is preserved.
+#[derive(Deserialize)]
+pub(crate) struct ClipboardManifestEntry {
+    id: String,
+    version: u64,
+}
+
+/// Compare only this manifest's revisions, preserving server page order.
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn find_unknown_entry_ids(
+pub(crate) fn find_stale_entry_ids(
     state: State<'_, AppState>,
-    entry_ids: Vec<String>,
+    manifest: Vec<ClipboardManifestEntry>,
 ) -> Result<Vec<String>, String> {
-    if entry_ids.is_empty() {
+    if manifest.is_empty() {
         return Ok(Vec::new());
     }
     let history = state.history.lock().map_err(|error| error.to_string())?;
     let path = state.active_history_path(&history)?;
-    state.with_database(&path, |connection| {
-        let marks = placeholders(entry_ids.len());
-        let sql = format!("SELECT id FROM entries WHERE id IN ({marks})");
-        let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
-        let values = entry_ids
-            .iter()
-            .map(|id| Value::Text(id.clone()))
-            .collect::<Vec<_>>();
-        let present = statement
-            .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<HashSet<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        Ok(entry_ids.into_iter().filter(|id| !present.contains(id)).collect())
-    })
+    state.with_database(&path, |connection| stale_entry_ids(connection, manifest))
+}
+
+fn stale_entry_ids(connection: &Connection, manifest: Vec<ClipboardManifestEntry>) -> Result<Vec<String>, String> {
+    if manifest.is_empty() { return Ok(Vec::new()); }
+    let marks = placeholders(manifest.len());
+    let sql = format!("SELECT id, version FROM entries WHERE id IN ({marks})");
+    let mut statement = connection.prepare(&sql).map_err(|error| error.to_string())?;
+    let values = manifest.iter().map(|entry| Value::Text(entry.id.clone())).collect::<Vec<_>>();
+    let present = statement
+        .query_map(params_from_iter(values), |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(manifest.into_iter()
+        .filter(|entry| present.get(&entry.id).is_none_or(|version| *version < entry.version))
+        .map(|entry| entry.id).collect())
 }
 
 /// Full cached details for previews and clipboard actions.
@@ -83,4 +89,20 @@ pub(crate) fn get_entry(state: State<'_, AppState>, entry_id: String) -> Result<
         .ok_or_else(|| "剪贴板记录不存在".to_string())?;
     refresh_summary(&mut entry, &context);
     Ok(entry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_only_fetches_missing_and_newer_revisions_in_page_order() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE entries (id TEXT PRIMARY KEY, version INTEGER NOT NULL);
+            INSERT INTO entries VALUES ('legacy', 0), ('same', 2), ('changed', 1), ('ahead', 3);").unwrap();
+        let manifest = [("changed", 2), ("same", 2), ("missing", 1), ("legacy", 1), ("ahead", 2)]
+            .into_iter().map(|(id, version)| ClipboardManifestEntry { id: id.into(), version }).collect();
+        assert_eq!(stale_entry_ids(&connection, manifest).unwrap(), ["changed", "missing", "legacy"]);
+        assert!(stale_entry_ids(&connection, Vec::new()).unwrap().is_empty());
+    }
 }

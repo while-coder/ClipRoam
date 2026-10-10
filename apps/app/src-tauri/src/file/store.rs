@@ -46,7 +46,7 @@ pub(crate) fn stored_file_ids(connection: &Connection) -> Result<HashSet<String>
 const QUERY_CHUNK: usize = 500;
 
 /// Which of the given ids have a row, and whether it is stored. Same shape as
-/// `find_unknown_entry_ids`: the candidate list goes into SQLite via IN, so
+/// `find_stale_entry_ids`: the candidate list goes into SQLite via IN, so
 /// only referenced rows are read back — the table is never dumped whole.
 fn file_rows(connection: &Connection, file_ids: &[String]) -> Result<Vec<(String, bool)>, String> {
     let mut rows = Vec::new();

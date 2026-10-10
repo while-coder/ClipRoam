@@ -190,7 +190,7 @@ pub fn run() {
             pending_upload::capture::capture_files_from_picker,
             pending_upload::capture::consume_mobile_shares,
             history::query::get_cached_entries_for_display,
-            history::query::find_unknown_entry_ids,
+            history::query::find_stale_entry_ids,
             history::query::get_entry,
             file::store::find_unknown_file_ids,
             file::store::upsert_server_files,

@@ -20,6 +20,7 @@ import { userDatabasePath } from "../DataPaths.js";
 
 type EntryRow = {
   id: number;
+  version: number;
   kind: string;
   content: string;
   extra: string;
@@ -43,6 +44,7 @@ export class UserDataStore {
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL DEFAULT 1,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -59,6 +61,10 @@ export class UserDataStore {
         updated_at TEXT NOT NULL
       );
     `);
+    const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
+    if (!columns.some(({ name }) => name === "version")) {
+      this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+    }
     if (this.#database.pragma("user_version", { simple: true }) === 0) {
       this.#transaction(() => {
         const rows = this.#database.prepare("SELECT id, kind, content, extra FROM entries WHERE kind = 'files'").all() as EntryRow[];
@@ -100,18 +106,18 @@ export class UserDataStore {
     };
     const rows = this.#database
       .prepare(`
-        SELECT id
+        SELECT id, version
         FROM entries
         ${where}
         ORDER BY created_at DESC
         LIMIT @limit OFFSET @offset
       `)
-      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number }>;
+      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number; version: number }>;
     const { count } = this.#database
       .prepare(`SELECT COUNT(*) AS count FROM entries ${where}`)
       .get(filters) as { count: number };
     return {
-      manifest: rows.map(({ id }) => ({ id: String(id) })),
+      manifest: rows.map(({ id, version }) => ({ id: String(id), version })),
       total: count,
     };
   }
@@ -123,7 +129,7 @@ export class UserDataStore {
       if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
-          SELECT id, kind, content, extra, source_device_id, created_at
+          SELECT id, version, kind, content, extra, source_device_id, created_at
           FROM entries
           WHERE id IN (${placeholders(ids.length)})
           ORDER BY created_at DESC
@@ -209,7 +215,7 @@ export class UserDataStore {
   // The server owns identity: it dedupes by content hash, assigns the rowid
   // and stamps arrival time. The client's id and clock are ignored, so a
   // retried publish cannot mint a second row. A hash conflict refreshes time;
-  // both the HTTP response and the push must use the actual persisted row.
+  // increments its revision; responses and pushes use the persisted row.
   upsert(entry: EntryPublishInput): ClipboardEntry {
     const createdAt = new Date().toISOString();
     const extra = JSON.stringify({
@@ -223,8 +229,8 @@ export class UserDataStore {
         INSERT INTO entries (
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at
-        RETURNING id, kind, content, extra, source_device_id, created_at
+        ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
+        RETURNING id, version, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -274,6 +280,7 @@ export class UserDataStore {
     const result = ClipboardEntrySchema.safeParse({
       ...(typeof extra === "object" && extra !== null ? extra : {}),
       id: String(row.id),
+      version: row.version,
       kind: row.kind,
       content: row.content,
       sourceDeviceId: row.source_device_id,

@@ -47,6 +47,7 @@ export const ImageInfoSchema = z.object({
 
 export const ClipboardEntrySchema = z.object({
   id: z.string(),
+  version: z.number().int().positive().safe(),
   kind: ClipboardKindSchema,
   content: z.string(),
   html: z.string().optional(),
@@ -84,10 +85,10 @@ export function isFileNode(node: TreeNode): node is { f: string; s: number } {
   return typeof (node as { f?: unknown }).f === "string";
 }
 
-// The connection-time manifest is intentionally small. Full entry metadata is
-// fetched only for records missing from the local history.
+// Full details are fetched only when the local record is missing or outdated.
 export const ClipboardManifestEntrySchema = z.object({
   id: z.string(),
+  version: z.number().int().positive().safe(),
 });
 
 export const DeviceSchema = z.object({
@@ -142,10 +143,10 @@ export const AuthResponseSchema = z.object({
 
 // Entries run over HTTP. The publish response is the sender's confirmation —
 // the socket echo the WebSocket flow once waited for no longer exists.
-// Identity belongs to the server: it assigns the id (arrival order) and the
-// timestamp, and deduplicates by content hash. A client may still send its
+// Identity and revision belong to the server: it assigns the id (arrival order),
+// timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });

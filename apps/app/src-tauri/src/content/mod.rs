@@ -105,6 +105,9 @@ pub struct EntrySummary {
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntry {
     pub id: String,
+    /// Server revision; zero marks a local pending row or an unversioned cache.
+    #[serde(default)]
+    pub version: u64,
     pub kind: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

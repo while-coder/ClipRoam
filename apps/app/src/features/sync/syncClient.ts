@@ -1,4 +1,4 @@
-import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type Device } from "@cliproam/protocol";
+import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { activateClipboardEntry, createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
@@ -15,7 +15,7 @@ type SyncHandlers = {
   onEntry: () => void;
   /** HTTP confirmation only invalidates the list; details come from cache backfill. */
   onPublished: () => void;
-  onActivation: (entryId: string) => void;
+  onActivation: (entry: ClipboardManifestEntry) => void;
   onDelete: (entryId: string) => void;
   onFileAvailable: (fileId: string) => void;
   onUploadProgress: (entryId: string, uploadedBytes: number, totalBytes: number) => void;
@@ -180,7 +180,7 @@ export class SyncClient {
         this.handlers.onEntry();
         return;
       case "clipboard.activated":
-        this.handlers.onActivation(message.entry.id);
+        this.handlers.onActivation({ id: message.entry.id, version: message.entry.version });
         return;
       case "clipboard.deleted":
         this.handlers.onDelete(message.entryId);

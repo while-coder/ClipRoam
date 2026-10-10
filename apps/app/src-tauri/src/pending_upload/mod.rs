@@ -89,6 +89,7 @@ pub(crate) fn row_entry(row: &PendingRow) -> ClipboardEntry {
     let extra: ClipboardEntryExtra = serde_json::from_str(&row.extra).unwrap_or_default();
     ClipboardEntry {
         id: temp_entry_id(row.seq),
+        version: 0,
         kind: row.kind.clone(),
         content: row.content.clone(),
         html: extra.html,

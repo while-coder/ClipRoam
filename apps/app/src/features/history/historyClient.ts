@@ -1,11 +1,11 @@
-import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
+import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type ClipboardManifestEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
 import { invoke } from "@tauri-apps/api/core";
 import type { SyncRequester } from "../sync/syncHttp";
 import { PAGE_SIZE } from "../../utils/constants";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
-/** Server paging and missing-detail backfill; never reads the pending queue. */
+/** Server paging and versioned detail backfill; never reads the pending queue. */
 export class HistoryClient {
   constructor(private readonly http: SyncRequester, private readonly isStopped: () => boolean) {}
   // Splits a long id list into fixed-size batches, collecting per-batch results.
@@ -41,19 +41,18 @@ export class HistoryClient {
       EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
     );
     if (this.isStopped()) return { total: 0, entries: [] };
-    const entryIds = result!.manifest.map((entry) => entry.id);
-    if (!entryIds.length) return { total: result!.total, entries: [] };
-    const entries = await this.fetchHistoryInfo(entryIds);
+    const entries = await this.fetchHistoryInfo(result!.manifest);
     if (this.isStopped()) return { total: 0, entries: [] };
     return { total: result!.total, entries };
   }
 
   /** Only detail backfill writes server entry/file information into the cache. */
   async fetchHistoryInfo(
-    entryIds: string[],
+    manifest: ClipboardManifestEntry[],
   ): Promise<LocalClipboardEntry[]> {
+    const entryIds = manifest.map((entry) => entry.id);
     if (!entryIds.length || this.isStopped()) return [];
-    const missing = await invoke<string[]>("find_unknown_entry_ids", { entryIds });
+    const missing = await invoke<string[]>("find_stale_entry_ids", { manifest });
     if (this.isStopped()) return [];
     if (missing.length) {
       const entries = await this.#fetchEntries(missing);

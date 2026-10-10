@@ -19,6 +19,7 @@ pub(crate) fn lightweight_entry(entry: &ClipboardEntry) -> ClipboardEntry {
     // entry's thumbnail, and it is a few kilobytes per image entry at most.
     let mut lightweight = ClipboardEntry {
         id: entry.id.clone(),
+        version: entry.version,
         kind: entry.kind.clone(),
         content: entry.content.clone(),
         html: None,

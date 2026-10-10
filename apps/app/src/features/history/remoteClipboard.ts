@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ClipboardManifestEntry } from "@cliproam/protocol";
 import { isMobile } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
@@ -14,7 +15,7 @@ export function bumpLocalClipboardRevision(): void {
   localClipboardRevision += 1;
 }
 
-export async function activateRemoteClipboard(entryId: string): Promise<void> {
+export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEntry): Promise<void> {
   const config = getActiveConfig();
   const client = getSyncClient();
   if (
@@ -26,8 +27,8 @@ export async function activateRemoteClipboard(entryId: string): Promise<void> {
   const activationRevision = ++remoteActivationRevision;
   const startingLocalRevision = localClipboardRevision;
   try {
-    // Push carries an identity only; the same detail backfill supplies the cache.
-    const [entry] = await client.history.fetchHistoryInfo([entryId]);
+    // Push supplies the same identity/revision pair as a manifest page.
+    const [entry] = await client.history.fetchHistoryInfo([manifestEntry]);
     if (!entry || entry.kind === "files") return;
     let localEntry = entry;
     if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;
