@@ -74,11 +74,10 @@ export class PendingUploader {
     }
   }
 
-  // Publishes one queue row: the metadata goes first (other devices can start
-  // pulling while the contents upload), then the contents — the upload HTTP is
-  // content-addressed and needs no entry id — then the broadcast activation,
-  // and the row leaves the queue. Refresh on HTTP confirmation immediately;
-  // only detail queries populate the local history cache.
+  // Upload contents before publishing metadata: any file failure keeps the row
+  // pending without creating or updating the server entry. Content-addressed
+  // uploads need no entry id and are reused if publishing must be retried.
+  // Only a confirmed publish refreshes history and lets the row leave the queue.
   async #publishQueueRow(row: PendingQueueRow): Promise<void> {
     const payload: EntryPublishInput = {
       kind: row.kind,
@@ -89,11 +88,11 @@ export class PendingUploader {
       imageInfo: row.extra.imageInfo ?? undefined,
       sourceDeviceId: this.device.id,
     };
+    await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
+    if (this.deps.isStopped()) return;
     const stored = await this.#publishEntry(payload);
     if (this.deps.isStopped()) return;
     this.deps.onPublished();
-    await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
-    if (this.deps.isStopped()) return;
     if (stored.kind !== "files") {
       await this.deps.activate(stored.id).catch(() => undefined);
     }

@@ -63,20 +63,8 @@ export class FileUploader {
         result.status === "rejected" ? [result.reason] : []
       ));
       if (failures.length) {
-        // A source the local machine can no longer read never becomes
-        // uploadable, so that failure keeps the published record (its bytes
-        // stay downloadable from the device that still holds them) instead of
-        // failing the entry.
-        const allMissingSource = failures.every((reason) => (
-          String(reason).includes("本机文件内容不可用")
-        ));
-        if (allMissingSource) {
-          this.deps.onError("部分源文件已删除或移动，已保留剪贴板记录和可用文件");
-          return;
-        }
-        // Anything else (auth, network, server) is a real failure: surface it
-        // so the caller's retry/skip handling engages instead of leaving the
-        // content silently unuploaded.
+        // Any failed file fails the entry, including a missing local source.
+        // The pending row remains queued for the caller's retry/skip handling.
         throw failures[0];
       }
     } finally {
