@@ -4,7 +4,7 @@ import { isPasteWindow } from "../../composables/usePlatform";
 import { activeView } from "../../composables/useActiveView";
 import { showToast } from "../toast/useToast";
 import { getDevice } from "../../utils/device";
-import { SYNC_BRIDGE_DEVICES_EVENT, startSyncBridgeService } from "./bridge";
+import { SYNC_BRIDGE_DEVICES_EVENT, SYNC_BRIDGE_HISTORY_EVENT, startSyncBridgeService } from "./bridge";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
 import { AccountSession, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
@@ -27,6 +27,7 @@ export function getSyncClient(): SyncClient | undefined { return getAccountSessi
 function setConnectionState(session: AccountSession, value: boolean): void {
   if (session.state.connected.value === value) return;
   session.state.connected.value = value;
+  if (value) refreshHistory();
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
 }
 
@@ -65,6 +66,10 @@ async function registerAccountEvents(session: AccountSession): Promise<void> {
     }))),
     session.ownAsync(listen("cliproam://pending-changed", session.guard(refreshPending))),
     session.ownAsync(listen("cliproam://history-changed", session.guard(refreshHistory))),
+    session.ownAsync(listen<{ accountKey: string }>(SYNC_BRIDGE_HISTORY_EVENT, session.guard(({ payload }) => {
+      // Mark locally without rebroadcasting, so the two windows cannot echo.
+      if (payload.accountKey === session.accountKey) session.state.historyRevision.value += 1;
+    }))),
     session.ownAsync(listen<DownloadTaskSnapshot[]>("cliproam://download-changed", session.guard(({ payload }) => {
       applyDownloadSnapshot(payload);
     }))),

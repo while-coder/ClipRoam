@@ -8,10 +8,10 @@ use crate::store::{delete_entries_by_ids, upsert_entry_row, with_transaction};
 use crate::AppState;
 
 /// Reconciling a fresh install can deliver hundreds of server entries at once;
-/// one archive-bound transaction and event avoid repeated window refreshes.
+/// one archive-bound transaction stores the queried details without invalidating
+/// the history view that is already refreshing them.
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn upsert_server_entries(
-    app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<ClipboardEntry>,
     session_id: String,
@@ -35,8 +35,7 @@ pub(crate) fn upsert_server_entries(
             })
         })?;
     }
-    app.emit("cliproam://history-changed", ())
-        .map_err(|error| error.to_string())
+    Ok(())
 }
 
 /// Applies a server-confirmed deletion: drops the entry, then frees the blobs

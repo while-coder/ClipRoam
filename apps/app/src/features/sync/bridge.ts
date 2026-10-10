@@ -12,6 +12,8 @@ import type { Device } from "@cliproam/protocol";
 const SYNC_BRIDGE_DEVICES_REQUEST_EVENT = "cliproam://sync-bridge-devices-request";
 /** main → paste 的设备表广播（主动推送兼请求回执）。 */
 export const SYNC_BRIDGE_DEVICES_EVENT = "cliproam://sync-bridge-devices";
+/** History invalidation between main and paste; carries no entry details. */
+export const SYNC_BRIDGE_HISTORY_EVENT = "cliproam://sync-bridge-history-changed";
 
 type DevicesRequest = { kind: "devices" };
 

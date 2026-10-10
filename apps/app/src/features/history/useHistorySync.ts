@@ -1,8 +1,11 @@
 import { nextTick } from "vue";
+import { emitTo } from "@tauri-apps/api/event";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
+import { SYNC_BRIDGE_HISTORY_EVENT } from "../sync/bridge";
+import { isPasteWindow } from "../../composables/usePlatform";
 import type {
   EntriesManifestFilter,
   EntriesManifestPage,
@@ -44,7 +47,11 @@ export async function fetchHistoryPage(
 /** Mark history changed immediately; only a mounted history view fetches it. */
 export function refreshHistory(): void {
   const session = getAccountSession();
-  if (session) session.state.historyRevision.value += 1;
+  if (!session) return;
+  session.state.historyRevision.value += 1;
+  void emitTo(isPasteWindow ? "main" : "paste", SYNC_BRIDGE_HISTORY_EVENT, {
+    accountKey: session.accountKey,
+  }).catch(() => undefined);
 }
 
 export function focusSearch(): void {
