@@ -146,7 +146,6 @@ let shareReceiverListener: PluginListener | undefined;
 // 历史视图 ref 留在本组件，经注入读取。
 initHistorySync({
   getSyncClient,
-  canFetchHistory: () => isPasteWindow || connected.value,
   refreshPendingCount,
   refreshPendingEntries,
   getHistoryView: () => historyView.value,
@@ -287,9 +286,8 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     hasSavedSyncConfig.value = true;
     await persistAccountPreferences(preferences);
     setupVisible.value = false;
-    // 先 startSync 再刷新：burst 200ms 后跑文件状态对账时，新 client 必已就位。
+    // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
     await startSync(config);
-    refreshHistory();
     await nextTick();
     await focusSearchInput();
   } catch (error) {

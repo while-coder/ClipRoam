@@ -2,8 +2,8 @@ import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Device } from "@cliproam/protocol";
 
 /**
- * 跨窗口设备名广播：主窗口是唯一 sync 持有者，设备表由 sync 回调维护；
- * paste 快捷粘贴窗口不持有 sync 客户端，设备名靠主窗口广播补充。
+ * 跨窗口设备名广播：主窗口负责实时同步，设备表由 sync 回调维护；
+ * paste 快捷粘贴窗口只做 HTTP 历史查询，设备名靠主窗口广播补充。
  * （文件下载不走桥：paste 窗口凭配置里的凭据直接走公共 HTTP 下载管线。）
  */
 

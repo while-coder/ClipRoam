@@ -25,7 +25,6 @@ interface HistorySyncViewRef {
 
 interface HistorySyncDeps {
   getSyncClient(): SyncClient | undefined;
-  canFetchHistory(): boolean;
   refreshPendingCount(): Promise<void>;
   refreshPendingEntries(): Promise<void>;
   getHistoryView(): HistorySyncViewRef | undefined;
@@ -59,7 +58,7 @@ export async function fetchHistoryPage(
     return { total: 0, entries: [] };
   }
   const client = deps.getSyncClient();
-  if (!client || !deps.canFetchHistory()) return { total: 0, entries: [] };
+  if (!client) return { total: 0, entries: [] };
   return client.fetchHistoryPage(filter, deviceNames);
 }
 

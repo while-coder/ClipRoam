@@ -38,6 +38,8 @@ type SyncHandlers = {
   onDevices: (devices: Device[]) => void;
   onDevicePresence: (device: Device) => void;
   onEntry: (entry: ClipboardEntry) => void;
+  /** Persist and refresh our own published row from the HTTP confirmation. */
+  onPublished: (entry: ClipboardEntry) => Promise<void>;
   onActivation: (entry: ClipboardEntry) => void;
   onDelete: (entryId: string) => void;
   onFileAvailable: (fileId: string) => void;
@@ -173,8 +175,8 @@ export class SyncClient {
   // Publishes one queue row: the metadata goes first (other devices can start
   // pulling while the contents upload), then the contents — the upload HTTP is
   // content-addressed and needs no entry id — then the broadcast activation,
-  // and the row leaves the queue. The new history entry itself arrives through
-  // the server's `clipboard.created` echo.
+  // and the row leaves the queue. Adopt the HTTP confirmation immediately,
+  // before uploading contents; a socket echo is only an idempotent update.
   async #publishQueueRow(row: PendingQueueRow): Promise<void> {
     const payload: EntryPublishInput = {
       kind: row.kind,
@@ -186,6 +188,7 @@ export class SyncClient {
       sourceDeviceId: this.device.id,
     };
     const stored = await this.#publishEntry(payload);
+    await this.handlers.onPublished(stored);
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
     if (stored.kind !== "files") {
       await this.activate(stored.id).catch(() => undefined);

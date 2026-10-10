@@ -65,7 +65,6 @@ function setConnectionState(value: boolean): void {
   // 重连成功后重查一次"未存储"的文件可用性，兜住离线期间错过的
   // `file.available` 推送（原对账时机已随登录对账移除）。
   if (value) {
-    refreshHistory();
     void syncFileStatuses(true);
   }
 }
@@ -163,6 +162,9 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onEntry: (entry) => {
         void queueRemoteUpsert(entry);
       },
+      onPublished: async (entry) => {
+        if (syncClient === client) await applyRemoteUpserts([entry]);
+      },
       onActivation: (entry) => {
         if (syncClient === client) void activateRemoteClipboard(entry);
       },
@@ -198,12 +200,13 @@ export async function startSync(config: SyncConfig): Promise<void> {
     getActivePreferences().autoUploadLimitMb * 1024 * 1024,
   );
   syncClient = client;
+  // 会话客户端就绪即刷新首页/当前页，不以 WebSocket 认证作为 HTTP 查询门槛。
+  refreshHistory();
   // 快捷粘贴窗口只使用 HTTP 查询历史；不启动 socket、捕获队列或上传循环。
   if (isPasteWindow) {
-    refreshHistory();
     return;
   }
-  client.connect();
-  // 设备表直接走 HTTP；连接成功后由当前视图请求服务器对应页。
+  // 设备表和历史查询走 HTTP，推送通道独立建立并自行重连。
   void client.pullDevices();
+  client.connect();
 }
