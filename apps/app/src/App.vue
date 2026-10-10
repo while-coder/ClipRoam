@@ -630,6 +630,8 @@ onBeforeUnmount(() => {
       @cancel-all-downloads="stopAllDownloads()"
     />
 
+    <EntryDownloadToasts v-if="isMobile && !isPasteWindow" mobile />
+
     <nav v-if="isMobile && !isPasteWindow" class="mobile-navigation" aria-label="主导航">
       <button
         v-for="page in mobilePages"
@@ -662,6 +664,6 @@ onBeforeUnmount(() => {
   <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />
 
   <ToastLayer />
-  <EntryDownloadToasts v-if="!isToastWindow" />
+  <EntryDownloadToasts v-if="!isToastWindow && !isMobile" />
   <SMessageHost />
 </template>

@@ -4,6 +4,7 @@ import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { refreshHistory } from "../history/useHistorySync";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
+import { isMobile } from "../../composables/usePlatform";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
@@ -77,7 +78,10 @@ export async function downloadEntry(entryId: string, session = getAccountSession
   } finally {
     if (!session.signal.aborted) {
       refreshHistory();
-      session.schedule(`entry-download-toast-${call.id}`, () => dismissEntryDownloadToast(call.id), 5000);
+      const current = session.state.entryDownloadToasts.value.find((item) => item.id === call.id);
+      if (!isMobile.value || current?.status !== "failed") {
+        session.schedule(`entry-download-toast-${call.id}`, () => dismissEntryDownloadToast(call.id), 5000);
+      }
     }
   }
 }

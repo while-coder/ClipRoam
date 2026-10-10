@@ -1,7 +1,22 @@
 <script setup lang="ts">
-import { Download, X } from "lucide-vue-next";
+import { ChevronDown, ChevronUp, Download, X } from "lucide-vue-next";
+import { computed, ref, watch } from "vue";
 import { cancelEntryDownloadCall, dismissEntryDownloadToast, entryDownloadToasts, type EntryDownloadToast } from "./useDownloads";
 import { formatFileSize, percentOf } from "../../utils/format";
+
+const props = defineProps<{ mobile?: boolean }>();
+const expanded = ref(false);
+const activeCount = computed(() => entryDownloadToasts.value.filter((call) => call.status === "downloading").length);
+const failedCount = computed(() => entryDownloadToasts.value.filter((call) => call.status === "failed").length);
+const summary = computed(() => {
+  const parts = [];
+  if (activeCount.value) parts.push(`正在下载 ${activeCount.value} 个条目`);
+  if (failedCount.value) parts.push(`${failedCount.value} 个失败`);
+  return parts.join(" · ") || "条目下载已结束";
+});
+watch(() => entryDownloadToasts.value.length, (count) => {
+  if (!count) expanded.value = false;
+});
 
 function received(call: EntryDownloadToast): number {
   if (call.status === "succeeded") return call.totalBytes;
@@ -22,12 +37,21 @@ function statusText(call: EntryDownloadToast): string {
   if (call.status === "failed") return "下载失败";
   if (call.status === "cancelled") return "已取消";
   if (call.cancelling) return "正在取消";
+  if (Object.values(call.files).some((file) => file.status === "downloading")) return "正在下载";
   return call.ready ? "正在准备文件" : "等待下载";
 }
 </script>
 
 <template>
-  <aside v-if="entryDownloadToasts.length" class="entry-download-toasts" aria-label="条目下载列表">
+  <aside v-if="entryDownloadToasts.length" class="entry-download-toasts" :class="{ 'mobile-download-panel': props.mobile }" aria-label="条目下载列表">
+    <button v-if="props.mobile" class="mobile-download-toggle" type="button" :aria-expanded="expanded"
+      aria-controls="mobile-entry-download-list" @click="expanded = !expanded">
+      <Download :size="18" aria-hidden="true" />
+      <span role="status">{{ summary }}</span>
+      <span class="mobile-download-toggle-label">{{ expanded ? '收起' : '展开' }}</span>
+      <component :is="expanded ? ChevronDown : ChevronUp" :size="18" aria-hidden="true" />
+    </button>
+    <div v-show="!props.mobile || expanded" :id="props.mobile ? 'mobile-entry-download-list' : undefined" class="entry-download-list">
     <article v-for="call in entryDownloadToasts" :key="call.id" class="entry-download-toast" :class="call.status">
       <Download :size="18" class="entry-download-icon" aria-hidden="true" />
       <div class="entry-download-body">
@@ -37,7 +61,7 @@ function statusText(call: EntryDownloadToast): string {
           role="progressbar" :aria-label="`${call.label} 下载进度`" :aria-valuenow="percent(call)" :aria-valuemin="0" :aria-valuemax="100">
           <span class="download-bar-fill" :style="{ width: `${percent(call)}%` }"></span>
         </div>
-        <span class="entry-download-bytes">{{ formatFileSize(received(call)) }} / {{ formatFileSize(call.totalBytes) }}</span>
+        <span class="entry-download-bytes">{{ formatFileSize(received(call)) }} / {{ formatFileSize(call.totalBytes) }}<template v-if="props.mobile"> · {{ percent(call) }}%</template></span>
         <span v-if="call.error && call.status !== 'cancelled'" class="entry-download-error">{{ call.error }}</span>
       </div>
       <button v-if="call.status === 'downloading'" class="entry-download-action" type="button"
@@ -46,6 +70,7 @@ function statusText(call: EntryDownloadToast): string {
         <X :size="16" aria-hidden="true" />
       </button>
     </article>
+    </div>
   </aside>
 </template>
 
@@ -60,9 +85,52 @@ function statusText(call: EntryDownloadToast): string {
   gap: 8px;
   width: min(360px, calc(100vw - 24px));
   max-height: min(60vh, 480px);
+  overflow: hidden;
+}
+.entry-download-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.mobile-download-panel {
+  position: static;
+  z-index: auto;
+  grid-row: 2;
+  width: auto;
+  min-width: 0;
+  max-height: min(45dvh, 360px);
+  gap: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--border);
+}
+.mobile-download-toggle {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  color: var(--color-foreground);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  touch-action: manipulation;
+}
+.mobile-download-toggle > span:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mobile-download-toggle > svg { flex-shrink: 0; }
+.mobile-download-toggle-label { color: var(--color-secondary-text); }
+.mobile-download-toggle:active { background: var(--sui-bg-active); }
+.mobile-download-panel .entry-download-list {
+  padding: 0 max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left));
+}
+.mobile-download-panel .entry-download-label { white-space: normal; overflow-wrap: anywhere; }
+.mobile-download-panel .entry-download-action { min-width: 48px; min-height: 48px; }
 .entry-download-toast {
   display: flex;
   flex-shrink: 0;
