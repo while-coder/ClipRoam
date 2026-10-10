@@ -166,8 +166,6 @@ export class SyncClient {
       case "auth.ack":
         this.handlers.onConnected(true);
         this.#startHeartbeat();
-        // A fresh session gives previously skipped rows another chance.
-        this.pendingUploads.retrySkipped();
         return;
       case "pong":
         this.#awaitingPong = false;

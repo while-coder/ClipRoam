@@ -1,9 +1,10 @@
 //! 持久上传队列（pending）：捕获与同步之间的唯一缓冲，与 entries 表零关联。
 //!
-//! 四个操作：
+//! 队列操作：
 //! - **Enqueue**：[`enqueue_pending_entry`]，捕获时入队；
 //! - **Peek**：[`peek_pending_entry`]，取最早一行；files 行先把 sha256
-//!   解析写回本行，失败行用 `skip_seqs` 暂时跳过；
+//!   解析写回本行，只处理 wait 状态，失败行标记 failed；
+//! - **Fail**：[`fail_pending_entry`]，同步失败后标记状态；
 //! - **Dequeue**：[`dequeue_pending_entry`]，同步成功后删除该行；
 //! - **List**：[`list_pending_entries`]，待同步视图的展示数据。
 //!
@@ -57,6 +58,7 @@ pub fn temp_entry_id(seq: i64) -> String {
 #[derive(Clone)]
 pub(crate) struct PendingRow {
     pub(crate) seq: i64,
+    pub(crate) status: String,
     pub(crate) kind: String,
     pub(crate) content: String,
     pub(crate) extra: String,
@@ -66,12 +68,13 @@ pub(crate) struct PendingRow {
 /// 全部队列行，最早在前。Peek 与 List 共用。
 pub(crate) fn list_rows(connection: &Connection) -> Result<Vec<PendingRow>, String> {
     let mut statement = connection
-        .prepare("SELECT seq, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
+        .prepare("SELECT seq, status, kind, content, extra, created_at FROM pending_entries ORDER BY seq ASC")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(PendingRow {
                 seq: row.get("seq")?,
+                status: row.get("status")?,
                 kind: row.get("kind")?,
                 content: row.get("content")?,
                 extra: row.get("extra")?,
@@ -117,28 +120,28 @@ pub(crate) struct PendingRowView {
     extra: serde_json::Value,
 }
 
-/// 取最早的可发布行，队列为空时返回 `None`。`skip_seqs` 里的行原地跳过
-/// （不删，等待重试）。
+/// 取最早的 wait 行，没有等待同步的行时返回 `None`。
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn peek_pending_entry(
     app: tauri::AppHandle,
-    skip_seqs: Option<Vec<i64>>,
     session_id: String,
 ) -> Result<Option<PendingRowView>, String> {
     let state = app.state::<AppState>();
     let account = state.account(&session_id)?;
-    let skip = skip_seqs.unwrap_or_default();
     // files 行解析前后各读一次队列，读时只短暂持锁。
     let read = || -> Result<Vec<PendingRow>, String> {
         account.with_database(|connection| list_rows(connection))
     };
     for row in read()? {
-        if skip.contains(&row.seq) {
+        if row.status != "wait" {
             continue;
         }
         if row.kind == "files" {
             // 解析大目录耗时，期间不持锁；结果写回本行，所以要重读。
-            resolve_entry_files(&app, row.seq, &account)?;
+            if let Err(error) = resolve_entry_files(&app, row.seq, &account) {
+                mark_failed(&app, &account, row.seq)?;
+                return Err(error);
+            }
             let Some(resolved) = read()?.into_iter().find(|resolved| resolved.seq == row.seq)
             else {
                 continue;
@@ -165,6 +168,22 @@ fn publish_extra(extra: &str) -> serde_json::Value {
     serde_json::from_str(extra).unwrap_or_else(|_| {
         serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
     })
+}
+
+fn mark_failed(app: &AppHandle, account: &crate::account::AccountContext, seq: i64) -> Result<(), String> {
+    account.with_database(|connection| {
+        connection.execute("UPDATE pending_entries SET status = 'failed' WHERE seq = ?", params![seq])
+            .map_err(|error| error.to_string())
+    })?;
+    app.emit("cliproam://pending-changed", ())
+        .map_err(|error| error.to_string())
+}
+
+/// 一次同步失败即持久化为 failed，后续循环跳过该行。
+#[tauri::command(rename_all = "camelCase", async)]
+pub(crate) fn fail_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64, session_id: String) -> Result<(), String> {
+    let account = state.account(&session_id)?;
+    mark_failed(&app, &account, seq)
 }
 
 // ---------------------------------------------------------------------------

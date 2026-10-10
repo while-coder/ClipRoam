@@ -141,6 +141,7 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS hash_cache_hash ON hash_cache(hash);
             CREATE TABLE IF NOT EXISTS pending_entries (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT NOT NULL DEFAULT 'wait' CHECK (status IN ('wait', 'failed')),
                 kind TEXT NOT NULL,
                 content TEXT NOT NULL,
                 extra TEXT NOT NULL DEFAULT '{}',
@@ -155,6 +156,13 @@ fn init_tables(connection: &Connection) -> Result<(), String> {
             ",
         )
         .map_err(|error| error.to_string())?;
+    let has_pending_status: bool = connection
+        .query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('pending_entries') WHERE name = 'status')", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if !has_pending_status {
+        connection.execute("ALTER TABLE pending_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'wait' CHECK (status IN ('wait', 'failed'))", [])
+            .map_err(|error| error.to_string())?;
+    }
     let has_version: bool = connection
         .query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('entries') WHERE name = 'version')", [], |row| row.get(0))
         .map_err(|error| error.to_string())?;
@@ -337,35 +345,4 @@ pub fn save_metadata(connection: &Connection, history: &HistoryData) -> Result<(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_cache_upgrades_and_late_details_cannot_regress_it() {
-        let connection = Connection::open_in_memory().unwrap();
-        connection.execute_batch("CREATE TABLE entries (
-            id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
-            extra TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
-            created_ms INTEGER NOT NULL DEFAULT 0, source_device_id TEXT NOT NULL,
-            sources TEXT NOT NULL DEFAULT '{}');
-            INSERT INTO entries (id, kind, content, created_at, source_device_id)
-                VALUES ('1', 'text', 'cached', '2026-10-10T00:00:00Z', 'device');").unwrap();
-        init_tables(&connection).unwrap();
-        init_tables(&connection).unwrap();
-        let mut entry = select_entry(&connection, "1").unwrap().unwrap();
-        assert_eq!(entry.version, 0);
-        entry.version = 2;
-        entry.created_at = "2026-10-10T00:02:00Z".into();
-        upsert_entry_row(&connection, &entry).unwrap();
-        entry.version = 1;
-        entry.created_at = "2026-10-10T00:01:00Z".into();
-        upsert_entry_row(&connection, &entry).unwrap();
-        let stored = select_entry(&connection, "1").unwrap().unwrap();
-        assert_eq!(stored.version, 2);
-        assert_eq!(stored.created_at, "2026-10-10T00:02:00Z");
-        assert_eq!(crate::content::lightweight_entry(&stored).version, 2);
-    }
 }

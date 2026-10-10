@@ -1,10 +1,8 @@
 import type { ClipboardEntry, Device, EntryPublishInput, EntryPublishRequest } from "@cliproam/protocol";
-import { isTransientNetworkError, type SyncRequester } from "../sync/syncHttp";
+import type { SyncRequester } from "../sync/syncHttp";
 import { errorMessage } from "../../utils/error";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
-const QUEUE_FAILURE_BACKOFF_MS = 60_000;
-const QUEUE_FAILURE_LIMIT = 3;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
 type PendingUploaderDeps = FileUploaderDeps & {
   onPublished(): void;
@@ -18,8 +16,6 @@ type PendingQueueRow = {
 
 /** Captures stay durable in Rust; one row is published at a time. */
 export class PendingUploader {
-  #queueFailures = new Map<number, { at: number; count: number }>();
-  #skippedRows = new Set<number>();
   #files: FileUploader;
   constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly deps: PendingUploaderDeps, private autoUploadLimit: number) {
     this.#files = new FileUploader(http, deps);
@@ -27,48 +23,29 @@ export class PendingUploader {
   start(): void {
     void this.deps.session.start(() => this.#drainLoop()).catch(() => undefined);
   }
-  retrySkipped(): void { this.#skippedRows.clear(); }
   setAutoUploadLimit(limitBytes: number): void { this.autoUploadLimit = limitBytes; }
-  // The resident drain loop: the durable capture queue is the single replay
-  // mechanism — captures land there with their full payload, and this loop
-  // publishes them strictly in insertion order on a fixed pulse. A row that
-  // cannot proceed right now (recent failure backoff, lost HTTP) waits for a
-  // later pulse; a row that failed three times is skipped for this session so
-  // it cannot block the rows behind it — reconnecting gives it another chance.
+  // Only waiting rows are processed; a failed row stays in the durable queue
+  // until its status is manually changed back to wait.
   async #drainLoop(): Promise<void> {
     while (!this.deps.session.signal.aborted) {
       await this.deps.session.delay(DRAIN_POLL_INTERVAL_MS);
-      const row = await this.deps.session.invoke<PendingQueueRow | null>("peek_pending_entry", {
-        skipSeqs: this.#skippedRows.size ? [...this.#skippedRows] : null,
-      }).catch(() => null);
+      const row = await this.deps.session.invoke<PendingQueueRow | null>("peek_pending_entry").catch((error) => {
+        if (!this.deps.session.signal.aborted) this.deps.onError(`待同步记录读取失败：${errorMessage(error)}`);
+        return null;
+      });
       if (!row) continue;
-      const failure = this.#queueFailures.get(row.seq);
-      if (failure && Date.now() - failure.at < QUEUE_FAILURE_BACKOFF_MS) continue;
       try {
         await this.#publishQueueRow(row);
-        this.#queueFailures.delete(row.seq);
       } catch (error) {
         if (this.deps.session.signal.aborted) return;
         console.warn(`Pending upload failed: seq=${row.seq} kind=${row.kind}`, error);
-        // Transient failures wait out the backoff without counting against
-        // the skip limit — HTTP coming back is expected, not the row's fault.
-        if (isTransientNetworkError(error)) {
-          this.#queueFailures.set(row.seq, { at: Date.now(), count: failure?.count ?? 0 });
-          continue;
+        try {
+          await this.deps.session.invoke("fail_pending_entry", { seq: row.seq });
+        } catch (statusError) {
+          if (!this.deps.session.signal.aborted) this.deps.onError(`同步失败状态保存失败：${errorMessage(statusError)}`);
+          return;
         }
-        const attempts = (failure?.count ?? 0) + 1;
-        if (attempts >= QUEUE_FAILURE_LIMIT) {
-          // Stop retrying for this session: the row stays in the queue (its
-          // payload lives nowhere else) but no longer blocks the rows behind
-          // it. Reconnecting clears the skip set and retries it.
-          this.#queueFailures.delete(row.seq);
-          this.#skippedRows.add(row.seq);
-          this.deps.onError(
-            `剪贴板记录同步失败，已暂时跳过：${errorMessage(error)}`,
-          );
-          continue;
-        }
-        this.#queueFailures.set(row.seq, { at: Date.now(), count: attempts });
+        this.deps.onError(`剪贴板记录同步失败：${errorMessage(error)}`);
       }
     }
   }

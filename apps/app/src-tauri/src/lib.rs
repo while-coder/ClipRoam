@@ -216,6 +216,7 @@ pub fn run() {
             history::mutate::upsert_server_entries,
             history::mutate::remove_server_entry,
             pending_upload::peek_pending_entry,
+            pending_upload::fail_pending_entry,
             pending_upload::dequeue_pending_entry,
             pending_upload::count_pending_entries,
             pending_upload::list_pending_entries,
