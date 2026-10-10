@@ -562,5 +562,9 @@ pub(crate) struct ShareImportSummary {
 #[tauri::command(async)]
 pub(crate) fn consume_mobile_shares(app: AppHandle, state: State<'_, AppState>) -> Result<ShareImportSummary, String> {
     let _guard = state.share_import.lock().map_err(|error| error.to_string())?;
+    // 前端事件可能早于登录：没有活动档案时不读取、更不确认原生分享队列。
+    if not_logged_in(&state)? {
+        return Ok(ShareImportSummary::default());
+    }
     crate::platforms::consume_pending_shares(&app)
 }

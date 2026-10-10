@@ -145,6 +145,7 @@ let ageRefreshTimer: number | undefined;
 /** 「下载」页可见时的快照轮询兜底；事件流丢包时列表最多滞后一个周期。 */
 let downloadPollTimer: number | undefined;
 let shareReceiverListener: PluginListener | undefined;
+let shareConsumeRequested = false;
 
 // 历史同步视图（useHistorySync 单例）的装配：引擎客户端经 engine 导出触达，
 // 历史视图 ref 留在本组件，经注入读取。
@@ -212,12 +213,18 @@ function shareImportMessage(summary: ShareImportSummary): string {
 }
 
 async function consumeMobileShares(): Promise<void> {
-  if (!platformCapabilities.value.shareReceiver || importingShare.value) return;
+  // 未登录只保留原生 inbox，登录成功后再导入并确认消费。
+  if (!platformCapabilities.value.shareReceiver || !getActiveConfig()?.sessionToken) return;
+  shareConsumeRequested = true;
+  if (importingShare.value) return;
   importingShare.value = true;
   try {
-    const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
-    if (!summary.shares) return;
-    showToast(shareImportMessage(summary), "success");
+    // 导入期间又收到分享时再拉一次，避免 received 事件被并发保护丢掉。
+    while (shareConsumeRequested && getActiveConfig()?.sessionToken) {
+      shareConsumeRequested = false;
+      const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
+      if (summary.shares) showToast(shareImportMessage(summary), "success");
+    }
   } catch (error) {
     showToast(`接收系统分享失败：${errorMessage(error)}，请重新分享`, "error");
   } finally {
@@ -288,6 +295,8 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await persistAccountPreferences(preferences);
     refreshPending();
     setupVisible.value = false;
+    // 会话和档案已落盘：取一次未登录期间保留的系统分享，不等待 WS 连接。
+    await consumeMobileShares();
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
     await startSync(config);
     await nextTick();
