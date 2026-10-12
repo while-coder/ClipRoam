@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { ServerSettings } from "@cliproam/protocol";
 import type { AuthService } from "../../account/AuthService.js";
+import { requireSessionUser } from "./SessionUser.js";
 
 export type AuthRouteDeps = {
-  auth: Pick<AuthService, "register" | "login" | "changePassword">;
+  auth: Pick<AuthService, "register" | "login" | "changePassword" | "verifySession">;
   // Changing the password invalidates every live session, so the socket for
   // each of the user's devices is closed and the clients re-login.
   onPasswordChanged: (userId: string) => void;
@@ -28,6 +29,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   app.post("/auth/login", async (request, reply) => {
     const result = await auth.login(request.body);
     return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
+  });
+
+  // 恢复已有会话并刷新设备信息；不签发新 token，也不延长会话有效期。
+  app.post("/auth/session/verify", async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const result = auth.verifySession(user, request.body);
+    return reply.code(result.statusCode).send(result.payload);
   });
 
   app.post("/auth/password", async (request, reply) => {

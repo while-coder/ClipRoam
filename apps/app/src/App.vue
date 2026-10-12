@@ -16,7 +16,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
-import { authenticateAccount } from "./features/sync/syncSetup";
+import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
 import { startPasteBridge } from "./features/sync/bridge";
 import {
   disposeQuickPasteShortcut,
@@ -153,6 +153,8 @@ const initializing = ref(true);
 const setupVisible = ref(false);
 const setupError = ref("");
 const testingConnection = ref(false);
+const verifyingSession = ref(false);
+const savedSessionConfig = ref<SyncConfig>();
 let authenticationController: AbortController | undefined;
 const importingShare = ref(false);
 let unlisteners: UnlistenFn[] = [];
@@ -177,6 +179,8 @@ initSyncEngine({
     currentUsername.value = expiredConfig.username;
     setupError.value = message;
     setupVisible.value = true;
+    hasSavedSyncConfig.value = false;
+    savedSessionConfig.value = undefined;
     if (!alreadyRelogging) {
       void persistSyncConfig(expiredConfig);
       void nextTick(() => setupWizard.value?.setFields(expiredConfig));
@@ -222,7 +226,7 @@ function shareImportMessage(summary: ShareImportSummary): string {
 
 async function consumeMobileShares(): Promise<void> {
   // 未登录只保留原生 inbox，登录成功后再导入并确认消费。
-  if (!platformCapabilities.value.shareReceiver || !getActiveConfig()?.sessionToken) return;
+  if (!platformCapabilities.value.shareReceiver || !hasSavedSyncConfig.value || !getActiveConfig()?.sessionToken) return;
   shareConsumeRequested = true;
   if (importingShare.value) return;
   importingShare.value = true;
@@ -248,6 +252,7 @@ function closeSetup(): void {
 }
 
 async function connectAndSave(draft: SetupDraft): Promise<void> {
+  if (testingConnection.value) return;
   setupError.value = "";
   const { serverAddress, username, password, serverProtocol } = draft;
 
@@ -299,14 +304,14 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await persistSyncConfig(config);
     setActiveConfig(config);
     currentUsername.value = config.username;
-    hasSavedSyncConfig.value = true;
     await persistAccountPreferences(preferences);
     refreshPending();
-    setupVisible.value = false;
-    // 会话和档案已落盘：取一次未登录期间保留的系统分享，不等待 WS 连接。
-    await consumeMobileShares();
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
     await startSync(config);
+    savedSessionConfig.value = undefined;
+    hasSavedSyncConfig.value = true;
+    setupVisible.value = false;
+    await consumeMobileShares();
     await nextTick();
     await focusSearchInput();
   } catch (error) {
@@ -319,6 +324,44 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     }
   } finally {
     testingConnection.value = false;
+    if (authenticationController === controller) authenticationController = undefined;
+  }
+}
+
+async function restoreSavedSession(): Promise<void> {
+  const config = savedSessionConfig.value;
+  if (!config || testingConnection.value) return;
+  setupError.value = "";
+  testingConnection.value = true;
+  verifyingSession.value = true;
+  const controller = new AbortController();
+  authenticationController = controller;
+  try {
+    await verifyAccountSession(config, await getDevice(), controller.signal);
+    controller.signal.throwIfAborted();
+    await startSync(config);
+    controller.signal.throwIfAborted();
+    savedSessionConfig.value = undefined;
+    hasSavedSyncConfig.value = true;
+    setupVisible.value = false;
+    await consumeMobileShares();
+    await nextTick();
+    await focusSearchInput();
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    const message = errorMessage(error);
+    setupError.value = message;
+    if (message.startsWith("服务器尚未支持登录状态验证")) showToast(message, "error");
+    if (message === "登录已失效，请重新登录") {
+      const expiredConfig = { ...config, sessionToken: "" };
+      savedSessionConfig.value = undefined;
+      setActiveConfig(expiredConfig);
+      await persistSyncConfig(expiredConfig);
+      setupWizard.value?.focusPasswordInput();
+    }
+  } finally {
+    testingConnection.value = false;
+    verifyingSession.value = false;
     if (authenticationController === controller) authenticationController = undefined;
   }
 }
@@ -451,10 +494,11 @@ onMounted(async () => {
     setActiveConfig(config);
     setActivePreferences(await loadAccountPreferences());
     currentUsername.value = config.username;
-    // 登录态完整才允许从登录页返回主界面；token 过期重登时保留返回入口。
-    hasSavedSyncConfig.value = Boolean(config.username && config.sessionToken);
-    if (!config.username || !config.sessionToken) setupVisible.value = !isPasteWindow;
+    // 保存的 token 必须经服务器验证，才能进入主界面。
+    hasSavedSyncConfig.value = false;
+    if (config.username && config.sessionToken && !isPasteWindow) savedSessionConfig.value = config;
   }
+  if (!isPasteWindow) setupVisible.value = true;
   initializing.value = false;
 
   if (startupWarning) showToast(startupWarning, "error");
@@ -467,7 +511,8 @@ onMounted(async () => {
   if (setupVisible.value) {
     await nextTick();
     setupWizard.value?.setFields(config ?? undefined);
-    setupWizard.value?.focusServerInput();
+    if (savedSessionConfig.value) await restoreSavedSession();
+    else setupWizard.value?.focusServerInput();
   } else if (config?.username && config.sessionToken) {
     try {
       if (!isPasteWindow) await startSync(config);
@@ -511,7 +556,10 @@ onBeforeUnmount(() => {
       :has-saved-sync-config="hasSavedSyncConfig"
       :busy="testingConnection"
       :error="setupError"
+      :verifying-session="verifyingSession"
+      :saved-session="savedSessionConfig"
       @submit="connectAndSave"
+      @retry-session="restoreSavedSession"
       @close="closeSetup"
       @reset-error="setupError = ''"
     />

@@ -1,4 +1,4 @@
-import { AuthCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol";
+import { AuthCredentialsSchema, ChangePasswordSchema, DeviceSchema, DeviceIdSchema } from "@cliproam/protocol";
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 import type { AuthenticatedUser } from "./AccountStore.js";
 
@@ -73,5 +73,14 @@ export class AuthService {
 
   authenticateSession(token: string): AuthenticatedUser | undefined {
     return this.store.authenticateSession(token);
+  }
+
+  verifySession(user: AuthenticatedUser, body: unknown): HttpResult {
+    const parsed = DeviceSchema.extend({ id: DeviceIdSchema }).safeParse(body);
+    if (!parsed.success) {
+      return { statusCode: 400, payload: { message: "设备信息格式不正确" } };
+    }
+    this.store.upsertDevice(user.id, { ...parsed.data, id: user.deviceId });
+    return { statusCode: 204, payload: undefined };
   }
 }

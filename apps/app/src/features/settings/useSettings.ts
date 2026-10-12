@@ -229,8 +229,7 @@ async function saveSettings(): Promise<void> {
     maxCaptureFileCount: activePreferences.maxCaptureFileCount,
   };
   try {
-    // 别名变化先落 device.json，再走 HTTP 立即上报服务器；旧服务器没有该
-    // 端点时忽略，随后的 startSync 重连仍会带着新名字兜底。
+    // 别名变化先落 device.json，再走 HTTP 立即上报服务器。
     const deviceAlias = deviceAliasInput.value.trim();
     if (deviceAlias !== savedDeviceAlias.value) {
       await session.invoke("save_device_alias", { alias: deviceAlias });
@@ -238,7 +237,7 @@ async function saveSettings(): Promise<void> {
       try {
         await pushDeviceInfo(activeConfig.serverAddress, activeConfig.serverProtocol, activeConfig.sessionToken, await session.start(() => getDevice()), controller.signal);
       } catch {
-        // 上报失败不阻塞保存：重连时的 WS auth 消息仍会携带设备信息。
+        // 上报失败不阻塞保存：下次启动同步时的会话验证会重新读取并上报设备信息。
       }
     }
     if (

@@ -82,6 +82,23 @@ export async function authenticateAccount(
   return result.data;
 }
 
+// 应用启动时用已有 token 验证会话，同时刷新设备信息。
+export async function verifyAccountSession(
+  config: { serverAddress: string; serverProtocol: ServerProtocol; sessionToken: string },
+  device: Device,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { httpUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
+  try {
+    await postJson(httpUrl, "/auth/session/verify", device, { Authorization: `Bearer ${config.sessionToken}` }, signal);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Route POST:/auth/session/verify not found")) {
+      throw new Error("服务器尚未支持登录状态验证，请更新服务器，或输入密码重新登录。");
+    }
+    throw error;
+  }
+}
+
 // 设备信息（别名等）变化后主动上报。
 export async function pushDeviceInfo(
   address: string,

@@ -19,16 +19,19 @@ import { errorMessage } from "../../utils/error";
 import { CONFIGURED_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import type { SyncConfig } from "../../types";
 
-defineProps<{
+const props = defineProps<{
   hasSavedSyncConfig: boolean;
   busy: boolean;
   error: string;
+  verifyingSession: boolean;
+  savedSession?: SyncConfig;
 }>();
 
 const emit = defineEmits<{
   submit: [draft: SetupDraft];
   close: [];
   "reset-error": [];
+  "retry-session": [];
 }>();
 
 const setupServerAddress = ref(DEFAULT_SERVER_ADDRESS);
@@ -39,6 +42,24 @@ const authMode = ref<AuthMode>("login");
 const serverFieldError = ref("");
 const usernameFieldError = ref("");
 const passwordFieldError = ref("");
+const matchesSavedSession = computed(() => {
+  const config = props.savedSession;
+  if (!config || authMode.value !== "login") return false;
+  try {
+    return normalizeServerAddress(setupServerAddress.value) === normalizeServerAddress(config.serverAddress)
+      && setupServerProtocol.value === config.serverProtocol
+      && setupUsername.value.trim() === config.username;
+  } catch {
+    return false;
+  }
+});
+const sessionVerificationError = computed(() => props.error.startsWith("服务器尚未支持登录状态验证")
+  ? "服务器暂不支持自动登录，请输入密码登录，或更新服务器。"
+  : "");
+const canUseSavedSession = computed(() => matchesSavedSession.value && !setupPassword.value);
+const passwordHint = computed(() => matchesSavedSession.value
+  ? "已保存登录状态，可直接登录；输入密码可重新登录。"
+  : "密码长度至少 6 位");
 // SInput 根元素是 span 外壳，ref 拿不到内部 input：容器 ref + querySelector 聚焦。
 const serverInput = ref<{ $el?: Element }>();
 const accountPasswordInput = ref<{ $el?: Element }>();
@@ -80,6 +101,10 @@ function validateUsernameField(): boolean {
 }
 
 function validatePasswordField(): boolean {
+  if (canUseSavedSession.value) {
+    passwordFieldError.value = "";
+    return true;
+  }
   const length = setupPassword.value.length;
   passwordFieldError.value = length >= 6 && length <= 128 ? "" : "密码长度需为 6-128 位";
   return !passwordFieldError.value;
@@ -93,12 +118,17 @@ function switchAuthMode(mode: AuthMode): void {
 }
 
 function submit(): void {
+  if (props.busy) return;
   // 先校验再 emit：validateServerField 会回写规范化后的地址，
   // 保证父组件拿到的是规范化 serverAddress。
   const serverAddress = validateServerField();
   const usernameValid = validateUsernameField();
   const passwordValid = validatePasswordField();
   if (!serverAddress || !usernameValid || !passwordValid) return;
+  if (canUseSavedSession.value) {
+    emit("retry-session");
+    return;
+  }
   emit("submit", {
     serverAddress,
     serverProtocol: setupServerProtocol.value,
@@ -138,16 +168,18 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
 
   <section class="setup-content">
     <div class="setup-intro">
-      <span class="setup-icon" aria-hidden="true"><Server :size="24" /></span>
-      <span class="setup-eyebrow">{{ hasSavedSyncConfig ? "重新登录" : "首次设置" }}</span>
+      <div class="setup-brand">
+        <span class="setup-icon" aria-hidden="true"><Server :size="20" /></span>
+        <span class="setup-eyebrow">{{ verifyingSession ? "正在恢复登录" : "ClipRoam" }}</span>
+      </div>
       <h1>{{ authMode === "login" ? "登录同步服务器" : "创建同步账号" }}</h1>
       <p>每个账号拥有独立的剪贴板内容和设备列表。</p>
     </div>
 
     <SForm class="setup-form" @submit.prevent="submit">
       <div class="auth-mode-switch" aria-label="账号操作">
-        <button type="button" :class="{ active: authMode === 'login' }" :aria-pressed="authMode === 'login'" @click="switchAuthMode('login')">登录</button>
-        <button type="button" :class="{ active: authMode === 'register' }" :aria-pressed="authMode === 'register'" @click="switchAuthMode('register')">注册</button>
+        <button type="button" :disabled="busy" :class="{ active: authMode === 'login' }" :aria-pressed="authMode === 'login'" @click="switchAuthMode('login')">登录</button>
+        <button type="button" :disabled="busy" :class="{ active: authMode === 'register' }" :aria-pressed="authMode === 'register'" @click="switchAuthMode('register')">注册</button>
       </div>
 
       <div class="server-connection-fields">
@@ -166,7 +198,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
             @blur="validateServerField"
           />
         </SFormItem>
-        <SFormItem label="协议" :hint="protocolHint">
+        <SFormItem label="协议">
           <SSelect
             id="server-protocol"
             v-model:value="setupServerProtocol"
@@ -175,6 +207,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
           />
         </SFormItem>
       </div>
+      <p class="connection-hint">{{ protocolHint }}</p>
 
       <SFormItem label="账号" :error="usernameFieldError">
         <SInput
@@ -190,27 +223,27 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
         />
       </SFormItem>
 
-      <SFormItem label="密码" hint="密码长度至少 6 位" :error="passwordFieldError">
+      <SFormItem label="密码" :hint="passwordHint" :error="passwordFieldError">
         <SInput
           id="account-password"
           ref="accountPasswordInput"
           v-model:value="setupPassword"
           type="password"
           :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'"
-          placeholder="请输入密码"
+          :placeholder="matchesSavedSession ? '留空使用已保存的登录状态' : '请输入密码'"
           :disabled="busy"
           :invalid="Boolean(passwordFieldError)"
           @blur="validatePasswordField"
         />
       </SFormItem>
 
-      <SAlert v-if="error" type="error">{{ error }}</SAlert>
+      <SAlert v-if="error && !sessionVerificationError" type="error">{{ error }}</SAlert>
 
       <SButton type="primary" :loading="busy" block @click="submit">
         <ShieldCheck v-if="!busy" :size="16" aria-hidden="true" />
         {{ busy
-          ? (authMode === "login" ? "正在登录…" : "正在创建账号…")
-          : (authMode === "login" ? "登录并连接" : "创建账号并连接") }}
+          ? (verifyingSession ? "正在验证登录状态…" : authMode === "login" ? "正在登录…" : "正在创建账号…")
+          : (authMode === "login" ? "登录" : "创建账号") }}
       </SButton>
     </SForm>
   </section>

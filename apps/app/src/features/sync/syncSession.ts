@@ -6,7 +6,7 @@ import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
 import type { AccountPreferences, SyncConfig } from "../../types";
 
-/** 登录态完整才允许从登录页返回主界面；token 过期重登时保留返回入口。 */
+/** 登录或会话验证通过后，才允许从登录页返回主界面。 */
 export const hasSavedSyncConfig = ref(false);
 export const currentUsername = ref("");
 

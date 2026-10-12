@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
+  CircleHelp,
   Image,
   Search,
 } from "lucide-vue-next";
@@ -64,6 +65,7 @@ const emit = defineEmits<{
 const { isMobile } = usePlatform();
 
 const query = ref("");
+const showMobileHint = ref(false);
 const filter = ref<EntryFilter>("all");
 const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
@@ -327,7 +329,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       >
         <span v-if="capturingClipboard" class="s-spinner" aria-hidden="true" />
         <Clipboard v-else :size="15" aria-hidden="true" />
-        <span>读取当前剪贴板</span>
+        <span>{{ isMobile ? '读取剪贴板' : '读取当前剪贴板' }}</span>
       </SButton>
     </template>
     <template #toolbar>
@@ -336,21 +338,34 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         <span class="s-spinner" aria-hidden="true" />
         <span>正在接收系统分享…</span>
       </div>
-      <label class="search-field">
-        <Search :size="17" aria-hidden="true" />
-        <SInput
-          ref="searchInput"
-          v-model:value="query"
-          type="text"
-          placeholder="搜索剪贴板历史"
-          aria-label="搜索剪贴板历史"
-          enterkeyhint="search"
-          clearable
-          @keydown.enter="!$event.isComposing && commitSearch()"
-          @update:value="onQueryUpdate"
-        />
-        <kbd>Enter</kbd>
-      </label>
+      <div class="history-search-row">
+        <label class="search-field">
+          <Search :size="17" aria-hidden="true" />
+          <SInput
+            ref="searchInput"
+            v-model:value="query"
+            type="text"
+            placeholder="搜索剪贴板历史"
+            aria-label="搜索剪贴板历史"
+            enterkeyhint="search"
+            clearable
+            @keydown.enter="!$event.isComposing && commitSearch()"
+            @update:value="onQueryUpdate"
+          />
+          <kbd>Enter</kbd>
+        </label>
+        <button
+          v-if="isMobile"
+          class="history-help-button"
+          type="button"
+          aria-label="历史记录操作说明"
+          aria-controls="mobile-history-hint"
+          :aria-expanded="showMobileHint"
+          @click="showMobileHint = !showMobileHint"
+        >
+          <CircleHelp :size="18" aria-hidden="true" />
+        </button>
+      </div>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
           <EntryTypeFilter v-model="filter" />
@@ -370,7 +385,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
-      <p v-if="isMobile" class="mobile-history-hint">单击图片或文件预览，双击文字复制，长按打开菜单</p>
+      <p v-if="isMobile && showMobileHint" id="mobile-history-hint" class="mobile-history-hint">单击图片或文件预览，双击文字复制，长按打开菜单</p>
     </section>
     </template>
 

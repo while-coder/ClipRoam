@@ -14,7 +14,8 @@ defineProps<{
   <span class="entry-body">
     <span class="entry-content">{{ entry.content }}</span>
     <span class="entry-meta">
-      <Monitor :size="12" aria-hidden="true" /> {{ deviceName }}
+      <Monitor :size="12" aria-hidden="true" />
+      <span class="entry-device-name" :title="deviceName">{{ deviceName }}</span>
       <span>·</span>
       <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt, currentTime) }}</span>
       <slot />
