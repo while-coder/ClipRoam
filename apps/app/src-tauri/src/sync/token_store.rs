@@ -8,12 +8,12 @@
 /// token 写入系统凭据库；空 token 表示登出，顺带清掉凭据库条目。
 /// 返回 false 表示凭据库不可用（如无 secret service 的 Linux），调用方
 /// 应把 token 留在配置文件里（行为与回落存储一致）。
-pub(crate) fn store_session_token(token: &str) -> bool {
+pub(crate) fn store_session_token(token: &str) -> Result<bool, String> {
     imp::store(token)
 }
 
-/// 从系统凭据库读取 token；不存在或凭据库不可用时返回 `None`。
-pub(crate) fn load_session_token() -> Option<String> {
+/// 从系统凭据库读取 token；不存在返回 `None`，访问失败保留错误供用户重试。
+pub(crate) fn load_session_token() -> Result<Option<String>, String> {
     imp::load()
 }
 
@@ -25,33 +25,81 @@ pub(crate) fn load_session_token() -> Option<String> {
     target_os = "linux"
 ))]
 mod imp {
-    use keyring::Entry;
+    use keyring::{Entry, Error};
 
     const SERVICE: &str = "com.whilecode.cliproam";
     const USER: &str = "sync-session-token";
 
-    fn entry() -> Option<Entry> {
-        Entry::new(SERVICE, USER).ok()
+    fn entry() -> Result<Entry, String> {
+        Entry::new(SERVICE, USER).map_err(|error| format!("无法访问系统凭据库：{error}"))
     }
 
-    pub(super) fn store(token: &str) -> bool {
-        let Some(entry) = entry() else {
-            return false;
-        };
+    pub(super) fn store(token: &str) -> Result<bool, String> {
         if token.is_empty() {
-            // 登出清凭证：条目本就不存在时报错无碍，同样视为已清空。
-            let _ = entry.delete_credential();
-            true
+            delete(&entry()?)?;
+            Ok(true)
         } else {
-            entry.set_password(token).is_ok()
+            // 仍保留凭据库不可用时的文件回落；只在成功写入后剥离文件 token。
+            Ok(entry().is_ok_and(|entry| entry.set_password(token).is_ok()))
         }
     }
 
-    pub(super) fn load() -> Option<String> {
-        entry()?
-            .get_password()
-            .ok()
-            .filter(|token| !token.is_empty())
+    fn delete(entry: &Entry) -> Result<(), String> {
+        match entry.delete_credential() {
+            Ok(()) | Err(Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!(
+                "无法清除系统保存的登录凭证：{error}。请允许访问凭据库后重试退出登录。"
+            )),
+        }
+    }
+
+    fn read(entry: &Entry) -> Result<Option<String>, String> {
+        match entry.get_password() {
+            Ok(token) => Ok((!token.is_empty()).then_some(token)),
+            Err(Error::NoEntry) => Ok(None),
+            Err(error) => Err(format!(
+                "无法读取系统保存的登录凭证：{error}。请允许访问凭据库或解锁钥匙串后重试。"
+            )),
+        }
+    }
+
+    pub(super) fn load() -> Result<Option<String>, String> {
+        read(&entry()?)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use keyring::mock::MockCredential;
+
+        #[test]
+        fn denied_deletion_is_not_reported_as_logout_success() {
+            let entry = Entry::new_with_credential(Box::new(MockCredential::default()));
+            entry.set_password("old-session").unwrap();
+            entry
+                .get_credential()
+                .downcast_ref::<MockCredential>()
+                .unwrap()
+                .set_error(Error::Invalid("access".into(), "denied".into()));
+            assert!(delete(&entry).is_err());
+            assert_eq!(read(&entry).unwrap().as_deref(), Some("old-session"));
+            delete(&entry).unwrap();
+            assert!(read(&entry).unwrap().is_none());
+            delete(&entry).unwrap();
+        }
+
+        #[test]
+        fn denied_read_can_be_retried_after_authorization() {
+            let entry = Entry::new_with_credential(Box::new(MockCredential::default()));
+            entry.set_password("saved-session").unwrap();
+            entry
+                .get_credential()
+                .downcast_ref::<MockCredential>()
+                .unwrap()
+                .set_error(Error::Invalid("access".into(), "denied".into()));
+            assert!(read(&entry).is_err());
+            assert_eq!(read(&entry).unwrap().as_deref(), Some("saved-session"));
+        }
     }
 }
 
@@ -62,11 +110,11 @@ mod imp {
     target_os = "linux"
 )))]
 mod imp {
-    pub(super) fn store(token: &str) -> bool {
-        token.is_empty()
+    pub(super) fn store(token: &str) -> Result<bool, String> {
+        Ok(token.is_empty())
     }
 
-    pub(super) fn load() -> Option<String> {
-        None
+    pub(super) fn load() -> Result<Option<String>, String> {
+        Ok(None)
     }
 }

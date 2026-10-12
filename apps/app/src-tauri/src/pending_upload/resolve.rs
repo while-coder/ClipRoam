@@ -27,7 +27,11 @@ struct PendingHash {
 /// Resolves every still-unresolved content id of a `files` queue row, folding
 /// the results back into the row itself. Runs when the upload queue's drain
 /// reaches the row. Idempotent: already-resolved sources are skipped.
-pub fn resolve_entry_files(app: &AppHandle, seq: i64, account: &crate::account::AccountContext) -> Result<(), String> {
+pub fn resolve_entry_files(
+    app: &AppHandle,
+    seq: i64,
+    account: &crate::account::AccountContext,
+) -> Result<(), String> {
     let mut entry = {
         let Some(row) = account.with_database(|connection| {
             Ok(list_rows(connection)?
@@ -63,23 +67,34 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64, account: &crate::account::
         // The connection lock only covers the two quick cache reads/writes; the hash
         // itself runs unlocked — hashing a large file takes a while and every
         // command for this account queues behind the connection.
-        let cached = account.with_database(|connection| {
-                Ok(cached_file_hash(connection, &item.source, item.size, modified_at))
+        let cached = account
+            .with_database(|connection| {
+                Ok(cached_file_hash(
+                    connection,
+                    &item.source,
+                    item.size,
+                    modified_at,
+                ))
             })
             .ok()
             .flatten();
         let file_id = match cached {
             Some(hash) => Some(hash),
             None => {
-                // A file that vanished between copy and hash hashes to None
-                // and drops out of the tree.
-                hash_file(Path::new(&item.source)).ok().map(|hashed| {
-                    let _ = account.with_database(|connection| {
-                        remember_file_hash(connection, &item.source, item.size, modified_at, &hashed);
+                let hashed = hash_source(Path::new(&item.source))?;
+                if let Some(hashed) = &hashed {
+                    account.with_database(|connection| {
+                        remember_file_hash(
+                            connection,
+                            &item.source,
+                            item.size,
+                            modified_at,
+                            &hashed,
+                        );
                         Ok(())
-                    });
-                    hashed
-                })
+                    })?;
+                }
+                hashed
             }
         };
         batch.push((item.path, file_id));
@@ -92,6 +107,18 @@ pub fn resolve_entry_files(app: &AppHandle, seq: i64, account: &crate::account::
         apply_hashes(app, seq, account, &mut entry, &batch)?;
     }
     Ok(())
+}
+
+/// 只有确实消失的文件才能从树中移除；权限或 I/O 错误保留来源供重试。
+fn hash_source(path: &Path) -> Result<Option<String>, String> {
+    match hash_file(path) {
+        Ok(hash) => Ok(Some(hash)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "无法读取文件 {}：{error}。请检查文件访问权限，授权后在待上传列表中重试。",
+            path.display(),
+        )),
+    }
 }
 
 /// Folds resolved content ids into the queue row: the tree leaves, the content
@@ -127,14 +154,17 @@ fn apply_hashes(
             }
         }
     }
-    entry.sources.files.retain_mut(|source| match hashes.get(source.path.as_str()) {
-        Some(Some(file_id)) => {
-            source.file_id = Some((*file_id).to_string());
-            true
-        }
-        Some(None) => false,
-        None => true,
-    });
+    entry
+        .sources
+        .files
+        .retain_mut(|source| match hashes.get(source.path.as_str()) {
+            Some(Some(file_id)) => {
+                source.file_id = Some((*file_id).to_string());
+                true
+            }
+            Some(None) => false,
+            None => true,
+        });
     let content = match &entry.file_info {
         Some(file_info) => describe_roots(file_info),
         None => entry.content.clone(),
@@ -154,4 +184,28 @@ fn apply_hashes(
     app.emit("cliproam://pending-changed", ())
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::hash_source;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn permission_failure_is_retryable_and_does_not_mean_file_disappeared() {
+        let directory =
+            std::env::temp_dir().join(format!("cliproam-hash-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("source.txt");
+        fs::write(&path, b"recover after permission grant").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = hash_source(&path);
+        // 恢复权限再断言，避免测试失败时留下不可读的临时文件。
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let restored = hash_source(&path);
+        fs::remove_dir_all(&directory).unwrap();
+        assert!(denied.unwrap_err().contains("授权后"));
+        assert!(restored.unwrap().is_some());
+        assert!(hash_source(&path).unwrap().is_none());
+    }
 }

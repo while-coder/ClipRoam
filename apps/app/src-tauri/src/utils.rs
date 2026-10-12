@@ -1,7 +1,12 @@
 //! 跨模块复用的小工具：哈希、时间与 SQL 辅助。
 
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 // ---------------------------------------------------------------------------
 // 哈希
@@ -27,12 +32,12 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
     to_hex(&Sha256::digest(bytes))
 }
 
-pub fn hash_file(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+pub fn hash_file(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; HASH_READ_BUFFER];
     loop {
-        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        let count = file.read(&mut buffer)?;
         if count == 0 {
             break;
         }
@@ -64,7 +69,9 @@ pub fn now_millis() -> u64 {
 
 /// Comma-separated `?` marks for an IN clause.
 pub fn placeholders(count: usize) -> String {
-    std::iter::repeat_n("?", count).collect::<Vec<_>>().join(", ")
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Escapes LIKE wildcards so a keyword or a path matches literally. Callers
@@ -148,7 +155,10 @@ fn glob_match(text: &str, pattern: &str) -> bool {
         (Some(text_char), Some('?')) => glob_match(&text[text_char.len_utf8()..], &pattern[1..]),
         (Some(text_char), Some(pattern_char)) => {
             text_char == pattern_char
-                && glob_match(&text[text_char.len_utf8()..], &pattern[pattern_char.len_utf8()..])
+                && glob_match(
+                    &text[text_char.len_utf8()..],
+                    &pattern[pattern_char.len_utf8()..],
+                )
         }
     }
 }
@@ -159,7 +169,11 @@ mod tests {
 
     #[test]
     fn matches_plain_names_and_wildcards() {
-        let patterns = vec!["node_modules".to_string(), "*.log".to_string(), "build*".to_string()];
+        let patterns = vec![
+            "node_modules".to_string(),
+            "*.log".to_string(),
+            "build*".to_string(),
+        ];
         assert!(name_matches_any("node_modules", &patterns));
         assert!(name_matches_any("NODE_MODULES", &patterns));
         assert!(name_matches_any("error.log", &patterns));

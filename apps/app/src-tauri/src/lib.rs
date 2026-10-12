@@ -40,6 +40,8 @@ struct AppState {
     /// schema migration, so writes share these instead of reopening.
     database_pool: Mutex<DatabasePool>,
     sync_config: Mutex<Option<SyncConfig>>,
+    /// 串行化凭据读取与登录/退出持久化，避免授权返回后覆盖较新的退出状态。
+    sync_config_io: Mutex<()>,
     sync_config_path: PathBuf,
     /// Preferences of the active history profile (`preferences.json` next to
     /// its SQLite); reloaded whenever the active profile changes.
@@ -129,6 +131,7 @@ pub fn run() {
                 histories_dir,
                 database_pool: Mutex::new(DatabasePool::default()),
                 sync_config: Mutex::new(sync_config),
+                sync_config_io: Mutex::new(()),
                 sync_config_path,
                 account_preferences: Mutex::new(account_preferences),
                 downloads: Mutex::new(HashMap::new()),
@@ -197,6 +200,7 @@ pub fn run() {
             history::mutate::remove_server_entry,
             pending_upload::peek_pending_entry,
             pending_upload::fail_pending_entry,
+            pending_upload::retry_pending_entry,
             pending_upload::dequeue_pending_entry,
             pending_upload::count_pending_entries,
             pending_upload::list_pending_entries,

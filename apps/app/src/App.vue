@@ -90,6 +90,7 @@ import {
   refreshPending,
   refreshPendingCount,
   removePendingEntry,
+  retryPendingEntry,
 } from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
@@ -157,6 +158,7 @@ const accountRuntimeError = ref("");
 const testingConnection = ref(false);
 const verifyingSession = ref(false);
 const savedSessionConfig = ref<SyncConfig>();
+const savedConfigReadFailed = ref(false);
 let authenticationController: AbortController | undefined;
 const importingShare = ref(false);
 let unlisteners: UnlistenFn[] = [];
@@ -184,7 +186,9 @@ initSyncEngine({
     hasSavedSyncConfig.value = false;
     savedSessionConfig.value = undefined;
     if (!alreadyRelogging) {
-      void persistSyncConfig(expiredConfig);
+      void persistSyncConfig(expiredConfig).catch((error) => {
+        if (getActiveConfig() === expiredConfig) showToast(errorMessage(error), "error");
+      });
       void nextTick(() => setupWizard.value?.setFields(expiredConfig));
     }
   },
@@ -274,6 +278,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       device,
       controller.signal,
     );
+    savedConfigReadFailed.value = false;
     controller.signal.throwIfAborted();
     accountCreated = draft.authMode === "register";
     // 推送通道不设登录门槛：连不上只影响实时推送，登录后的常驻连接会自行
@@ -339,6 +344,29 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
   }
 }
 
+async function retrySavedConfig(): Promise<void> {
+  if (testingConnection.value || accountRuntimeError.value) return;
+  testingConnection.value = true;
+  setupError.value = "";
+  let recovered = false;
+  try {
+    const config = await loadSyncConfig();
+    savedConfigReadFailed.value = false;
+    setActiveConfig(config ?? undefined);
+    currentUsername.value = config?.username ?? "";
+    savedSessionConfig.value = config?.sessionToken ? config : undefined;
+    setupWizard.value?.setFields(config ?? undefined);
+    recovered = Boolean(savedSessionConfig.value);
+    if (!recovered) setupError.value = "未找到可恢复的登录状态，请输入密码登录。";
+  } catch (error) {
+    savedConfigReadFailed.value = true;
+    setupError.value = `无法读取连接设置：${errorMessage(error)}`;
+  } finally {
+    testingConnection.value = false;
+  }
+  if (recovered) await restoreSavedSession();
+}
+
 async function restoreSavedSession(): Promise<void> {
   if (accountRuntimeError.value) { setupError.value = accountRuntimeError.value; return; }
   const config = savedSessionConfig.value;
@@ -379,7 +407,11 @@ async function restoreSavedSession(): Promise<void> {
       const expiredConfig = { ...config, sessionToken: "" };
       savedSessionConfig.value = undefined;
       setActiveConfig(expiredConfig);
-      await persistSyncConfig(expiredConfig);
+      try {
+        await persistSyncConfig(expiredConfig);
+      } catch (clearError) {
+        setupError.value = `${message}；${errorMessage(clearError)}`;
+      }
       setupWizard.value?.focusPasswordInput();
     }
   } finally {
@@ -523,6 +555,7 @@ onMounted(async () => {
   if (configResult.status === "fulfilled") {
     config = configResult.value;
   } else {
+    savedConfigReadFailed.value = true;
     setupError.value = `无法读取连接设置：${readableStartupError(configResult.reason)}`;
     startupWarning = setupError.value;
   }
@@ -596,8 +629,10 @@ onBeforeUnmount(() => {
       :error="setupError"
       :verifying-session="verifyingSession"
       :saved-session="savedSessionConfig"
+      :can-retry-saved-config="savedConfigReadFailed"
       @submit="connectAndSave"
       @retry-session="restoreSavedSession"
+      @retry-saved-config="retrySavedConfig"
       @close="closeSetup"
       @reset-error="setupError = ''"
     />
@@ -702,6 +737,7 @@ onBeforeUnmount(() => {
       :current-time="currentTime"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
       @remove="removePendingEntry"
+      @retry="retryPendingEntry"
     />
 
     <UploadsView

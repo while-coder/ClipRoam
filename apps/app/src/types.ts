@@ -61,7 +61,7 @@ export type EntrySummary = {
   previewPath?: string;
 };
 
-export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary };
+export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary; pendingStatus?: "wait" | "failed" };
 
 /**
  * History page filters. Page numbers start at 1 in the app, HTTP and local

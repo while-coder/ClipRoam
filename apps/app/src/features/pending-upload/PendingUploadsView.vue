@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Trash2 } from "lucide-vue-next";
+import { RotateCcw, Trash2 } from "lucide-vue-next";
 import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
@@ -8,9 +8,7 @@ import { percentOf } from "../../utils/format";
 import type { Device, LocalClipboardEntry, UploadProgress } from "../../types";
 
 /**
- * Everything in this list shares one state — 未同步. Once an entry reaches the
- * server (published, or adopted after a content upload) it disappears from
- * here, so no per-entry status text is rendered.
+ * 待上传记录成功后离开列表；失败记录显示重试入口，保留原始内容。
  */
 const props = defineProps<{
   entries: LocalClipboardEntry[];
@@ -21,6 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   remove: [entry: LocalClipboardEntry];
+  retry: [entry: LocalClipboardEntry];
 }>();
 
 /**
@@ -28,6 +27,7 @@ const emit = defineEmits<{
  * 落后于 fileCount 即在算），上传进度由同步客户端按 `p{seq}` 实时上报。
  */
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
+  if (entry.pendingStatus === "failed") return "同步失败";
   if (isHashing(entry)) return `计算中 ${entry.summary.hashedCount}/${entry.summary.fileCount}`;
   const progress = props.uploadProgressByEntryId[entry.id];
   if (!progress) return undefined;
@@ -47,10 +47,13 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
         <ClipboardEntryContent :entry="entry" :device-name="deviceDisplayName(devicesById, entry)" :current-time="currentTime">
           <template v-if="entryUploadStatus(entry)">
             <span>·</span>
-            <STag type="info" size="small">{{ entryUploadStatus(entry) }}</STag>
+            <STag :type="entry.pendingStatus === 'failed' ? 'error' : 'info'" size="small">{{ entryUploadStatus(entry) }}</STag>
           </template>
         </ClipboardEntryContent>
         <span class="entry-actions">
+          <SIconButton v-if="entry.pendingStatus === 'failed'" :size="28" title="重试上传" aria-label="重试上传" @click.stop="emit('retry', entry)">
+            <RotateCcw :size="15" aria-hidden="true" />
+          </SIconButton>
           <SIconButton type="error" :size="28" title="删除" aria-label="删除" @click.stop="emit('remove', entry)">
             <Trash2 :size="15" aria-hidden="true" />
           </SIconButton>

@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    clipboard_relative_path, sanitize_root_name, unique_root_name,
-    ClipboardEntry, CollectedTree, EntrySummary, FileInfo, LocalSource, LocalSources, TreeNode,
+    clipboard_relative_path, sanitize_root_name, unique_root_name, ClipboardEntry, CollectedTree,
+    EntrySummary, FileInfo, LocalSource, LocalSources, TreeNode,
 };
 use crate::file::cached_file_path;
 use crate::utils::{ensure_parent_dir, modified_millis, name_matches_any};
@@ -17,7 +17,11 @@ use crate::utils::{ensure_parent_dir, modified_millis, name_matches_any};
 pub fn tree_contents(file_info: &FileInfo) -> Vec<(String, u64)> {
     let mut contents = Vec::new();
     let mut seen = HashSet::new();
-    fn walk(dir: &IndexMap<String, TreeNode>, seen: &mut HashSet<String>, contents: &mut Vec<(String, u64)>) {
+    fn walk(
+        dir: &IndexMap<String, TreeNode>,
+        seen: &mut HashSet<String>,
+        contents: &mut Vec<(String, u64)>,
+    ) {
         for node in dir.values() {
             match node {
                 TreeNode::File { f, s } => {
@@ -62,8 +66,10 @@ pub fn collect_tree(paths: &[PathBuf], exclude: &[String]) -> Result<CollectedTr
     let mut sources = LocalSources::default();
     let mut used = HashSet::new();
     for path in paths {
-        let Ok(metadata) = fs::symlink_metadata(path) else {
-            continue;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(file_access_error(path, error)),
         };
         if metadata.file_type().is_symlink() {
             continue;
@@ -77,7 +83,14 @@ pub fn collect_tree(paths: &[PathBuf], exclude: &[String]) -> Result<CollectedTr
         }
         let name = unique_root_name(&sanitize_root_name(&base), &mut used);
         sources.roots.push(path.display().to_string());
-        collect_node(path, &metadata, &mut file_info, &mut sources, &name, exclude)?;
+        collect_node(
+            path,
+            &metadata,
+            &mut file_info,
+            &mut sources,
+            &name,
+            exclude,
+        )?;
     }
     if file_info.is_empty() {
         return Err("剪贴板中没有可用的文件".to_string());
@@ -97,7 +110,13 @@ fn collect_node(
         return Ok(());
     }
     if !metadata.is_dir() {
-        file_info.insert(name.to_string(), TreeNode::File { f: String::new(), s: metadata.len() });
+        file_info.insert(
+            name.to_string(),
+            TreeNode::File {
+                f: String::new(),
+                s: metadata.len(),
+            },
+        );
         sources.files.push(LocalSource {
             path: name.to_string(),
             source: path.display().to_string(),
@@ -121,16 +140,18 @@ fn collect_dir(
     exclude: &[String],
 ) -> Result<FileInfo, String> {
     let mut children = fs::read_dir(path)
-        .map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
+        .map_err(|error| file_access_error(path, error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| file_access_error(path, error))?;
     children.sort_by_key(|child| child.file_name());
     let mut dir = FileInfo::default();
     for child in children {
         let child_path = child.path();
         // Following links could walk outside the copied tree entirely.
-        let Ok(child_metadata) = fs::symlink_metadata(&child_path) else {
-            continue;
+        let child_metadata = match fs::symlink_metadata(&child_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(file_access_error(&child_path, error)),
         };
         if child_metadata.file_type().is_symlink() {
             continue;
@@ -145,7 +166,13 @@ fn collect_dir(
             dir.insert(child_name, TreeNode::Dir(nested));
             continue;
         }
-        dir.insert(child_name.clone(), TreeNode::File { f: String::new(), s: child_metadata.len() });
+        dir.insert(
+            child_name.clone(),
+            TreeNode::File {
+                f: String::new(),
+                s: child_metadata.len(),
+            },
+        );
         sources.files.push(LocalSource {
             path: child_relative_path,
             source: child_path.display().to_string(),
@@ -157,12 +184,22 @@ fn collect_dir(
     Ok(dir)
 }
 
+fn file_access_error(path: &Path, error: std::io::Error) -> String {
+    format!(
+        "无法读取 {}：{error}。请检查文件访问权限后重试。",
+        path.display()
+    )
+}
+
 pub fn describe_roots(file_info: &FileInfo) -> String {
     let count = file_info.len();
     match count {
         0 => "文件".to_string(),
         1 => file_info.keys().next().expect("count is one").clone(),
-        _ => format!("{} 等 {count} 项", file_info.keys().next().expect("count is nonzero")),
+        _ => format!(
+            "{} 等 {count} 项",
+            file_info.keys().next().expect("count is nonzero")
+        ),
     }
 }
 
@@ -171,9 +208,18 @@ pub fn file_signature(paths: &[PathBuf]) -> String {
         .iter()
         .map(|path| {
             let metadata = fs::symlink_metadata(path).ok();
-            let size = metadata.as_ref().map(|value| value.len()).unwrap_or_default();
-            let modified_at = metadata.as_ref().and_then(modified_millis).unwrap_or_default();
-            format!("{}:{size}:{modified_at}", path.to_string_lossy().to_ascii_lowercase())
+            let size = metadata
+                .as_ref()
+                .map(|value| value.len())
+                .unwrap_or_default();
+            let modified_at = metadata
+                .as_ref()
+                .and_then(modified_millis)
+                .unwrap_or_default();
+            format!(
+                "{}:{size}:{modified_at}",
+                path.to_string_lossy().to_ascii_lowercase()
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -182,7 +228,12 @@ pub fn file_signature(paths: &[PathBuf]) -> String {
 /// The signature is taken over the copied roots, matching what the clipboard
 /// monitor sees, so re-copying the same folder reuses the existing entry.
 pub fn file_entry_signature(entry: &ClipboardEntry) -> String {
-    let roots = entry.sources.roots.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let roots = entry
+        .sources
+        .roots
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     file_signature(&roots)
 }
 
@@ -290,7 +341,8 @@ pub fn local_source_of(entry: &ClipboardEntry, file_id: &str) -> Option<PathBuf>
             let metadata = fs::symlink_metadata(&path).ok()?;
             let unchanged = metadata.is_file()
                 && metadata.len() == source.size
-                && (source.modified_at.is_none() || modified_millis(&metadata) == source.modified_at);
+                && (source.modified_at.is_none()
+                    || modified_millis(&metadata) == source.modified_at);
             unchanged.then_some(path)
         })
 }
@@ -349,4 +401,34 @@ fn build_dir(
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::collect_tree;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn unreadable_directory_prevents_publishing_a_partial_capture() {
+        let directory =
+            std::env::temp_dir().join(format!("cliproam-tree-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let readable = directory.join("readable.txt");
+        let blocked = directory.join("blocked");
+        fs::write(&readable, b"readable").unwrap();
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("hidden.txt"), b"hidden").unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = collect_tree(&[readable.clone(), blocked.clone()], &[]);
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+        let restored = collect_tree(&[readable, blocked], &[]);
+        fs::remove_dir_all(&directory).unwrap();
+        assert!(denied
+            .err()
+            .expect("capture must fail before permission grant")
+            .contains("权限"));
+        let tree = restored.unwrap();
+        assert_eq!(tree.sources.files.len(), 2);
+        assert_eq!(tree.sources.roots.len(), 2);
+    }
 }

@@ -23,6 +23,13 @@ export async function removePendingEntry(entry: LocalClipboardEntry): Promise<vo
   catch (error) { if (!session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error"); }
 }
 
+export async function retryPendingEntry(entry: LocalClipboardEntry): Promise<void> {
+  const session = getAccountSession();
+  if (!session || !/^p\d+$/.test(entry.id)) return;
+  try { await session.invoke("retry_pending_entry", { seq: Number(entry.id.slice(1)) }); }
+  catch (error) { if (!session.signal.aborted) showToast(`重试失败：${errorMessage(error)}`, "error"); }
+}
+
 export async function refreshPendingEntries(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;

@@ -14,7 +14,7 @@ mod token_store;
 
 /// 会话凭证：全局唯一（`sync-config.json`），决定本次启动激活哪个账号档案。
 /// 客户端偏好与服务器限额跟档案走，见 [`AccountPreferences`]。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncConfig {
     #[serde(default)]
@@ -135,27 +135,90 @@ pub(crate) fn server_http_url(config: &SyncConfig) -> Result<String, String> {
     ))
 }
 
-pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
-    let mut config: SyncConfig = fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())?;
-    if config.session_token.is_empty() {
-        // 文件已剥离 token：从系统凭据库补回；拿不到则视为未登录。
-        config.session_token = token_store::load_session_token().unwrap_or_default();
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum TokenStorage {
+    Keyring,
+    File,
+    SignedOut,
+}
+
+/// 仅存在于磁盘；前端仍使用 SyncConfig。显式区分退出与钥匙串 token。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSyncConfig {
+    #[serde(flatten)]
+    config: SyncConfig,
+    #[serde(default)]
+    token_storage: Option<TokenStorage>,
+}
+
+impl StoredSyncConfig {
+    fn uses_keyring(&self) -> bool {
+        self.token_storage == Some(TokenStorage::Keyring)
+            || (self.token_storage.is_none() && self.config.session_token.is_empty())
     }
-    Some(config)
+
+    fn resolve(
+        mut self,
+        load: impl FnOnce() -> Result<Option<String>, String>,
+    ) -> Result<SyncConfig, String> {
+        if self.uses_keyring() {
+            self.config.session_token = load()?.unwrap_or_default();
+        } else if self.token_storage == Some(TokenStorage::SignedOut) {
+            self.config.session_token.clear();
+        }
+        Ok(self.config)
+    }
+}
+
+fn read_stored_sync_config(path: &Path) -> Option<StoredSyncConfig> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+pub(crate) fn load_sync_config(path: &Path) -> Option<SyncConfig> {
+    // setup 在主线程，不在此处弹出或等待钥匙串 UI；交给异步读取命令。
+    read_stored_sync_config(path).map(|stored| stored.config)
 }
 
 pub(crate) fn write_sync_config(path: &Path, config: &Option<SyncConfig>) -> Result<(), String> {
-    let mut persisted = config.clone();
-    if let Some(config) = persisted.as_mut() {
-        // token 优先进系统凭据库，成功则文件不落凭证；凭据库不可用时回落
-        // 文件（行为与旧版一致）。空 token 表示登出：同样进 token_store
-        // 清掉凭据库条目，避免重启后从凭据库「复活」已退出的会话。
-        if token_store::store_session_token(&config.session_token) {
-            config.session_token = String::new();
+    write_sync_config_with(path, config, token_store::store_session_token)
+}
+
+fn write_sync_config_with(
+    path: &Path,
+    config: &Option<SyncConfig>,
+    store: impl FnOnce(&str) -> Result<bool, String>,
+) -> Result<(), String> {
+    let signing_out = config
+        .as_ref()
+        .is_none_or(|config| config.session_token.is_empty());
+    let stored_in_keyring = if signing_out {
+        // 文件回落和已退出配置不依赖钥匙串，无凭据服务的平台仍能退出。
+        if read_stored_sync_config(path).is_some_and(|previous| previous.uses_keyring()) {
+            store("")?;
         }
-    }
+        false
+    } else {
+        store(&config.as_ref().expect("signed-in config").session_token)?
+    };
+    let persisted = config.as_ref().map(|config| {
+        let mut config = config.clone();
+        let token_storage = if signing_out {
+            TokenStorage::SignedOut
+        } else if stored_in_keyring {
+            config.session_token.clear();
+            TokenStorage::Keyring
+        } else {
+            TokenStorage::File
+        };
+        StoredSyncConfig {
+            config,
+            token_storage: Some(token_storage),
+        }
+    });
     let json = serde_json::to_string_pretty(&persisted).map_err(|error| error.to_string())?;
     // 原子写：直接覆盖的话，写一半崩溃/断电会留下无法解析的配置，下次启动
     // 回落到未登录档案——用户视角等于账号历史全部「消失」。
@@ -177,13 +240,39 @@ pub(crate) fn write_preferences(
     write_file_atomic(path, json.as_bytes())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncConfig>, String> {
-    Ok(state
+    let _io = state
+        .sync_config_io
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let current = state
         .sync_config
         .lock()
         .map_err(|error| error.to_string())?
-        .clone())
+        .clone();
+    let Some(config) = current
+        .as_ref()
+        .filter(|config| config.session_token.is_empty())
+    else {
+        return Ok(current);
+    };
+    let Some(stored) = read_stored_sync_config(&state.sync_config_path) else {
+        return Ok(current);
+    };
+    if stored.config != *config || !stored.uses_keyring() {
+        return Ok(current);
+    }
+    // 每次重试重新访问凭据库，不缓存授权拒绝；等待系统 UI 时不持状态锁。
+    let recovered = stored.resolve(token_store::load_session_token)?;
+    let mut latest = state
+        .sync_config
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if *latest == current {
+        *latest = Some(recovered);
+    }
+    Ok(latest.clone())
 }
 
 #[tauri::command]
@@ -191,7 +280,9 @@ pub(crate) fn get_account_preferences(
     state: State<'_, AppState>,
 ) -> Result<AccountPreferences, String> {
     let history = state.history.lock().map_err(|error| error.to_string())?;
-    if history.active_history.is_none() { return Err("同步账号未登录".to_string()); }
+    if history.active_history.is_none() {
+        return Err("同步账号未登录".to_string());
+    }
     Ok(state
         .account_preferences
         .lock()
@@ -212,22 +303,167 @@ pub(crate) fn save_account_preferences(
     write_preferences(&path, &preferences)?;
     // The runtime capture settings cache belongs only to the active archive.
     if history.active_history.as_deref() == Some(account.key.as_str()) {
-        *state.account_preferences.lock().map_err(|error| error.to_string())? = preferences;
+        *state
+            .account_preferences
+            .lock()
+            .map_err(|error| error.to_string())? = preferences;
     }
     Ok(())
 }
 
 /// 保存登录配置不代表登录成功。停用旧账号后，等待 login/verify 的启用步骤。
-#[tauri::command(rename_all = "camelCase")]
+#[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn save_sync_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: Option<SyncConfig>,
 ) -> Result<(), String> {
+    let _io = state
+        .sync_config_io
+        .lock()
+        .map_err(|error| error.to_string())?;
     write_sync_config(&state.sync_config_path, &config)?;
     state.deactivate_account()?;
-    *state.sync_config.lock().map_err(|error| error.to_string())? = config;
-    if let Some(paste) = app.get_webview_window("paste") { let _ = paste.hide(); }
+    *state
+        .sync_config
+        .lock()
+        .map_err(|error| error.to_string())? = config;
+    if let Some(paste) = app.get_webview_window("paste") {
+        let _ = paste.hide();
+    }
     let _ = app.emit_to("paste", "cliproam://sync-config-changed", ());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    struct ConfigFile(PathBuf);
+
+    impl ConfigFile {
+        fn new() -> Self {
+            let directory =
+                std::env::temp_dir().join(format!("cliproam-config-test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&directory).unwrap();
+            Self(directory.join("sync-config.json"))
+        }
+    }
+
+    impl Drop for ConfigFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.0.parent().unwrap());
+        }
+    }
+
+    fn config(token: &str) -> SyncConfig {
+        SyncConfig {
+            server_address: "localhost:4810".into(),
+            server_protocol: "http".into(),
+            username: "user".into(),
+            session_token: token.into(),
+        }
+    }
+
+    #[test]
+    fn failed_logout_keeps_saved_session_and_successful_logout_never_restores_it() {
+        let file = ConfigFile::new();
+        write_sync_config_with(&file.0, &Some(config("saved-token")), |_| Ok(true)).unwrap();
+        let before = fs::read(&file.0).unwrap();
+        let error = write_sync_config_with(&file.0, &Some(config("")), |token| {
+            assert!(token.is_empty());
+            Err("keychain access denied".into())
+        });
+        assert!(error.is_err());
+        assert_eq!(fs::read(&file.0).unwrap(), before);
+
+        write_sync_config_with(&file.0, &Some(config("")), |token| {
+            assert!(token.is_empty());
+            Ok(true)
+        })
+        .unwrap();
+        let stored = read_stored_sync_config(&file.0).unwrap();
+        assert!(stored.token_storage == Some(TokenStorage::SignedOut));
+        let signed_out = stored
+            .resolve(|| panic!("logout must not consult old keychain credentials"))
+            .unwrap();
+        assert!(signed_out.session_token.is_empty());
+        assert_eq!(signed_out.username, "user");
+    }
+
+    #[test]
+    fn saved_keychain_session_can_be_reloaded_after_access_is_granted() {
+        let file = ConfigFile::new();
+        write_sync_config_with(&file.0, &Some(config("saved-token")), |_| Ok(true)).unwrap();
+        assert!(!fs::read_to_string(&file.0).unwrap().contains("saved-token"));
+        assert!(load_sync_config(&file.0).unwrap().session_token.is_empty());
+        assert!(read_stored_sync_config(&file.0)
+            .unwrap()
+            .resolve(|| Err("access denied".into()))
+            .is_err());
+        let restored = read_stored_sync_config(&file.0)
+            .unwrap()
+            .resolve(|| Ok(Some("saved-token".into())))
+            .unwrap();
+        assert_eq!(restored.session_token, "saved-token");
+    }
+
+    #[test]
+    fn file_fallback_and_logout_do_not_require_an_available_keychain() {
+        let file = ConfigFile::new();
+        write_sync_config_with(&file.0, &Some(config("file-token")), |_| Ok(false)).unwrap();
+        let restored = read_stored_sync_config(&file.0)
+            .unwrap()
+            .resolve(|| panic!("file token must not read an older keychain token"))
+            .unwrap();
+        assert_eq!(restored.session_token, "file-token");
+        write_sync_config_with(&file.0, &Some(config("")), |_| {
+            panic!("file fallback logout must work without keychain access")
+        })
+        .unwrap();
+        assert!(read_stored_sync_config(&file.0)
+            .unwrap()
+            .resolve(|| panic!("signed out"))
+            .unwrap()
+            .session_token
+            .is_empty());
+    }
+
+    #[test]
+    fn clearing_config_deletes_saved_keychain_credentials() {
+        let file = ConfigFile::new();
+        write_sync_config_with(&file.0, &Some(config("saved-token")), |_| Ok(true)).unwrap();
+        let mut deleted = false;
+        write_sync_config_with(&file.0, &None, |token| {
+            assert!(token.is_empty());
+            deleted = true;
+            Ok(true)
+        })
+        .unwrap();
+        assert!(deleted);
+        assert!(load_sync_config(&file.0).is_none());
+    }
+
+    #[test]
+    fn legacy_config_without_storage_marker_remains_readable() {
+        let legacy = serde_json::to_string(&config("")).unwrap();
+        let stored: StoredSyncConfig = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(
+            stored
+                .resolve(|| Ok(Some("legacy-keychain-token".into())))
+                .unwrap()
+                .session_token,
+            "legacy-keychain-token"
+        );
+        let legacy = serde_json::to_string(&config("legacy-file-token")).unwrap();
+        let stored: StoredSyncConfig = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(
+            stored
+                .resolve(|| panic!("legacy file fallback"))
+                .unwrap()
+                .session_token,
+            "legacy-file-token"
+        );
+    }
 }

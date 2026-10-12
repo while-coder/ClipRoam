@@ -25,6 +25,7 @@ const props = defineProps<{
   error: string;
   verifyingSession: boolean;
   savedSession?: SyncConfig;
+  canRetrySavedConfig?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -32,6 +33,7 @@ const emit = defineEmits<{
   close: [];
   "reset-error": [];
   "retry-session": [];
+  "retry-saved-config": [];
 }>();
 
 const setupServerAddress = ref(DEFAULT_SERVER_ADDRESS);
@@ -238,6 +240,10 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
       </SFormItem>
 
       <SAlert v-if="error && !sessionVerificationError" type="error">{{ error }}</SAlert>
+
+      <SButton v-if="canRetrySavedConfig" :disabled="busy" block @click="emit('retry-saved-config')">
+        重试读取登录状态
+      </SButton>
 
       <SButton type="primary" :loading="busy" block @click="submit">
         <ShieldCheck v-if="!busy" :size="16" aria-hidden="true" />

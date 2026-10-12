@@ -18,8 +18,8 @@ pub(crate) use resolve::resolve_entry_files;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, SummaryContext};
 use crate::content::lightweight_entry;
+use crate::content::{refresh_summary, ClipboardEntry, ClipboardEntryExtra, SummaryContext};
 use crate::AppState;
 
 use rusqlite::{params, Connection};
@@ -165,14 +165,22 @@ pub(crate) fn peek_pending_entry(
 
 /// 行内 extra 转发布 payload；损坏的行发空 extra，不卡住后面的队列。
 fn publish_extra(extra: &str) -> serde_json::Value {
-    serde_json::from_str(extra).unwrap_or_else(|_| {
-        serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null })
-    })
+    serde_json::from_str(extra).unwrap_or_else(
+        |_| serde_json::json!({ "html": null, "rtf": null, "fileInfo": null, "imageInfo": null }),
+    )
 }
 
-fn mark_failed(app: &AppHandle, account: &crate::account::AccountContext, seq: i64) -> Result<(), String> {
+fn mark_failed(
+    app: &AppHandle,
+    account: &crate::account::AccountContext,
+    seq: i64,
+) -> Result<(), String> {
     account.with_database(|connection| {
-        connection.execute("UPDATE pending_entries SET status = 'failed' WHERE seq = ?", params![seq])
+        connection
+            .execute(
+                "UPDATE pending_entries SET status = 'failed' WHERE seq = ?",
+                params![seq],
+            )
             .map_err(|error| error.to_string())
     })?;
     app.emit("cliproam://pending-changed", ())
@@ -181,9 +189,39 @@ fn mark_failed(app: &AppHandle, account: &crate::account::AccountContext, seq: i
 
 /// 一次同步失败即持久化为 failed，后续循环跳过该行。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn fail_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64, session_id: String) -> Result<(), String> {
+pub(crate) fn fail_pending_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    seq: i64,
+    session_id: String,
+) -> Result<(), String> {
     let account = state.account(&session_id)?;
     mark_failed(&app, &account, seq)
+}
+
+fn retry_failed_row(connection: &Connection, seq: i64) -> Result<usize, String> {
+    connection
+        .execute(
+            "UPDATE pending_entries SET status = 'wait' WHERE seq = ? AND status = 'failed'",
+            params![seq],
+        )
+        .map_err(|error| error.to_string())
+}
+
+/// 授权或网络恢复后重试失败记录，保留全部文件来源与已完成的哈希。
+#[tauri::command(rename_all = "camelCase", async)]
+pub(crate) fn retry_pending_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    seq: i64,
+    session_id: String,
+) -> Result<(), String> {
+    let account = state.account(&session_id)?;
+    if account.with_database(|connection| retry_failed_row(connection, seq))? > 0 {
+        app.emit("cliproam://pending-changed", ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +230,12 @@ pub(crate) fn fail_pending_entry(app: AppHandle, state: State<'_, AppState>, seq
 
 /// 删除一行队列。payload 只在本行，删即全部删除。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, seq: i64, session_id: String) -> Result<(), String> {
+pub(crate) fn dequeue_pending_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    seq: i64,
+    session_id: String,
+) -> Result<(), String> {
     let account = state.account(&session_id)?;
     {
         account.with_database(|connection| {
@@ -211,7 +254,10 @@ pub(crate) fn dequeue_pending_entry(app: AppHandle, state: State<'_, AppState>, 
 
 /// 队列行数——侧边栏角标的数据，O(1)；进「待同步」视图才拉明细。
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn count_pending_entries(state: State<'_, AppState>, session_id: String) -> Result<usize, String> {
+pub(crate) fn count_pending_entries(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<usize, String> {
     let account = state.account(&session_id)?;
     account.with_database(|connection| {
         connection
@@ -224,17 +270,76 @@ pub(crate) fn count_pending_entries(state: State<'_, AppState>, session_id: Stri
 }
 
 /// 全部队列行，条目形态——待同步视图的数据。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingEntryView {
+    #[serde(flatten)]
+    entry: ClipboardEntry,
+    pending_status: String,
+}
+
 #[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn list_pending_entries(state: State<'_, AppState>, session_id: String) -> Result<Vec<ClipboardEntry>, String> {
+pub(crate) fn list_pending_entries(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<PendingEntryView>, String> {
     let account = state.account(&session_id)?;
-    let stored = account.with_database(|connection| crate::file::store::stored_file_ids(connection))?;
+    let stored =
+        account.with_database(|connection| crate::file::store::stored_file_ids(connection))?;
     let cache_dir = account.cache_dir.clone();
     let blobs = crate::file::blob_ids_on_disk(&cache_dir);
-    let context = SummaryContext { stored: &stored, blobs: &blobs, cache_dir: &cache_dir };
+    let context = SummaryContext {
+        stored: &stored,
+        blobs: &blobs,
+        cache_dir: &cache_dir,
+    };
     let rows = account.with_database(|connection| list_rows(connection))?;
-    let mut entries: Vec<ClipboardEntry> = rows.iter().map(row_entry).collect();
-    for entry in &mut entries {
-        refresh_summary(entry, &context);
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let mut entry = row_entry(row);
+            refresh_summary(&mut entry, &context);
+            PendingEntryView {
+                entry: lightweight_entry(&entry),
+                pending_status: row.status.clone(),
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_failed_row;
+    use rusqlite::Connection;
+
+    #[test]
+    fn retry_only_requeues_selected_failed_row_and_preserves_its_payload() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE pending_entries (seq INTEGER PRIMARY KEY, status TEXT, extra TEXT);
+             INSERT INTO pending_entries VALUES (1, 'failed', 'retained-source-and-hash');
+             INSERT INTO pending_entries VALUES (2, 'failed', 'other-record');",
+            )
+            .unwrap();
+        assert_eq!(retry_failed_row(&connection, 1).unwrap(), 1);
+        let row: (String, String) = connection
+            .query_row(
+                "SELECT status, extra FROM pending_entries WHERE seq = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("wait".into(), "retained-source-and-hash".into()));
+        assert_eq!(retry_failed_row(&connection, 1).unwrap(), 0);
+        assert_eq!(retry_failed_row(&connection, 99).unwrap(), 0);
+        let other: String = connection
+            .query_row(
+                "SELECT status FROM pending_entries WHERE seq = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(other, "failed");
     }
-    Ok(entries.iter().map(lightweight_entry).collect())
 }

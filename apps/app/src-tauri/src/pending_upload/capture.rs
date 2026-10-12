@@ -530,6 +530,7 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
         if let Some(signature) = signature {
             if let Ok(mut history) = app.state::<AppState>().history.lock() { signature.record(&mut history); }
         }
+        let mut last_capture_error: Option<String> = None;
         while !stopped.load(Ordering::Acquire) {
             // 监听开关（设置页「监听剪贴板」）关闭时只空转等待：本机复制不再
             // 捕获，远程同步的接收与激活不受影响。锁中毒时保持默认监听。
@@ -546,12 +547,25 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
             if crate::platforms::should_skip_clipboard_poll(&mut last_clipboard_sequence) {
                 continue;
             }
-            if let Some(paths) = crate::platforms::read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
-                let _ = capture_files(&app, paths);
+            let result = if let Some(paths) = crate::platforms::read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
+                Some(capture_files(&app, paths))
             } else if let Some(rich_text) = crate::platforms::read_clipboard_text(&app) {
-                let _ = capture_text(&app, rich_text);
+                Some(capture_text(&app, rich_text))
             } else if let Some(image) = crate::platforms::read_clipboard_image(&app) {
-                let _ = capture_image(&app, image);
+                Some(capture_image(&app, image))
+            } else {
+                None
+            };
+            match result {
+                Some(Err(error)) => {
+                    // 继续轮询以便授权后恢复，同一个错误只提示一次。
+                    if last_capture_error.as_ref() != Some(&error) {
+                        log::warn!("剪贴板捕获失败：{error}");
+                        let _ = crate::app_shell::show_toast(app.clone(), error.clone(), "error".into());
+                    }
+                    last_capture_error = Some(error);
+                }
+                _ => last_capture_error = None,
             }
             thread::sleep(Duration::from_millis(350));
         }
