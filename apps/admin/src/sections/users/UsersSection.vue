@@ -294,8 +294,10 @@ onUnmounted(() => clearTimeout(searchTimer));
         <SListItem v-for="device in devices" :key="device.id">
           <div class="device-info">
             <strong :title="device.name">{{ device.name }}</strong>
+            <STag :type="device.online ? 'success' : 'default'" size="small">{{ device.online ? '在线' : '离线' }}</STag>
             <span class="muted" :title="deviceMeta(device)">{{ deviceMeta(device) }}</span>
-            <time class="muted" :datetime="device.lastSeenAt">最后登录 {{ formatDateTime(device.lastSeenAt) }}</time>
+            <time v-if="device.lastOnlineAt" class="muted" :datetime="device.lastOnlineAt">最后上线 {{ formatDateTime(device.lastOnlineAt) }}</time>
+            <span v-else class="muted">最后上线 未记录</span>
           </div>
           <template #suffix>
             <div class="device-actions">

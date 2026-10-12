@@ -98,6 +98,9 @@ export const DeviceSchema = z.object({
   osVersion: z.string().min(1).max(80).default("未知"),
   // 旧版本客户端不上报应用版本，缺省时按未知处理，避免历史设备行解析失败被丢弃。
   appVersion: z.string().min(1).max(80).default("未知"),
+  // Server-owned fields; older clients and local device identity may omit them.
+  online: z.boolean().optional(),
+  lastOnlineAt: z.string().datetime().nullable().optional(),
 });
 
 // `DeviceSchema.id` stays unconstrained on purpose: it validates device
@@ -242,7 +245,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("clipboard.activated"),
-    entry: ClipboardEntrySchema,
+    entry: ClipboardManifestEntrySchema,
   }),
   z.object({
     type: z.literal("clipboard.deleted"),
@@ -250,8 +253,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("device.presence"),
-    device: DeviceSchema,
-    online: z.boolean(),
+    device: DeviceSchema.extend({ online: z.boolean() }),
   }),
   // A file may become available after its entry was already synced to another
   // device. Keep that per-file state current without re-sending the entry.

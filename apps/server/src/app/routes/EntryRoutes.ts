@@ -99,7 +99,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (entry.kind !== "files") {
       // Self-excluded on purpose: a delayed self-echo would overwrite a
       // newer local clipboard captured moments after this one.
-      broadcast(user.id, { type: "clipboard.activated", entry }, user.deviceId);
+      broadcast(user.id, { type: "clipboard.activated", entry: { id: entry.id, version: entry.version } }, user.deviceId);
       logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${user.deviceId}`);
     }
     return { entry } satisfies EntryActivateResponse;

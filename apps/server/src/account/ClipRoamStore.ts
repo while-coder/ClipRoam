@@ -61,7 +61,7 @@ export class ClipRoamStore {
     return this.#userStore(userId).listByIds(entryIds);
   }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
-  touchDevice(userId: string, deviceId: string): void { this.#userStore(userId).touchDevice(deviceId); }
+  recordDeviceOnline(userId: string, deviceId: string): string { return this.#userStore(userId).recordDeviceOnline(deviceId); }
   listDevices(userId: string): Device[] { return this.#userStore(userId).listDevices(); }
   getDevice(userId: string, deviceId: string): Device | undefined { return this.#userStore(userId).getDevice(deviceId); }
   upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
@@ -76,8 +76,8 @@ export class ClipRoamStore {
     return this.#accounts.resetPassword(userId, newPassword);
   }
 
-  listUserDevices(userId: string): Array<Device & { lastSeenAt: string }> {
-    return this.#userStore(userId).listDevicesWithLastSeen();
+  listUserDevices(userId: string): Device[] {
+    return this.#userStore(userId).listDevices();
   }
 
   // The accounts-side session for this device dies with the device row, so a

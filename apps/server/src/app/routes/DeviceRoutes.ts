@@ -6,6 +6,7 @@ import { parseOr400 } from "./parseRequest.js";
 
 export type DeviceRouteDeps = {
   store: Pick<ClipRoamStore, "listDevices" | "upsertDevice">;
+  isDeviceOnline: (userId: string, deviceId: string) => boolean;
 };
 
 export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps): void {
@@ -13,7 +14,7 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps
   app.get("/devices", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    return { devices: store.listDevices(user.id) } satisfies DeviceListResponse;
+    return { devices: store.listDevices(user.id).map((device) => ({ ...device, online: deps.isDeviceOnline(user.id, device.id) })) } satisfies DeviceListResponse;
   });
   // 设备信息上报（登录时也会随 body 带一份）。以会话绑定的 deviceId 为准：
   // body.id 仅为形状校验，落库时覆盖，杜绝与 session 不一致的孤儿设备行。

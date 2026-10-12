@@ -24,7 +24,7 @@ const logger = getLogger("SocketHub");
 export type SocketHubDeps = {
   authenticateSession: (token: string) => { id: string; deviceId: string } | undefined;
   getDevice: (userId: string, deviceId: string) => Device | undefined;
-  touchDevice: (userId: string, deviceId: string) => void;
+  recordDeviceOnline: (userId: string, deviceId: string) => string;
 };
 
 // Authenticated sockets only ever send auth and ping: every other
@@ -32,8 +32,18 @@ export type SocketHubDeps = {
 // handshake and the server-push fan-out the routes call into.
 export class SocketHub {
   readonly #clients = new Set<ClientConnection>();
+  readonly #onlineDevices = new Map<string, Set<string>>();
 
   constructor(private readonly deps: SocketHubDeps) {}
+
+  isDeviceOnline(userId: string, deviceId: string): boolean {
+    for (const client of this.#clients) {
+      if (client.userId !== userId || client.device.id !== deviceId || client.socket.readyState !== 1) continue;
+      const user = this.deps.authenticateSession(client.token);
+      if (user?.id === userId && user.deviceId === deviceId) return true;
+    }
+    return false;
+  }
 
   handleSocket(socket: WebSocket): void {
     let client: ClientConnection | undefined;
@@ -129,21 +139,35 @@ export class SocketHub {
       socket.close(1008, "Authentication failed");
       return undefined;
     }
+    const wasOnline = this.isDeviceOnline(user.id, device.id);
+    if (!wasOnline) device.lastOnlineAt = this.deps.recordDeviceOnline(user.id, device.id);
     const client: ClientConnection = { socket, userId: user.id, device, token };
     this.#clients.add(client);
-    this.deps.touchDevice(user.id, device.id);
+    const onlineDevices = this.#onlineDevices.get(user.id) ?? new Set<string>();
+    onlineDevices.add(device.id);
+    this.#onlineDevices.set(user.id, onlineDevices);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
     // A bare confirmation; the client pulls the manifest and device list over
     // HTTP (`GET /entries/manifest`) once it sees this.
     this.#send(client, { type: "auth.ack" });
-    this.broadcast(user.id, { type: "device.presence", device, online: true });
+    if (!wasOnline) {
+      this.broadcast(user.id, { type: "device.presence", device: { ...device, online: true } });
+    }
     return client;
   }
 
   #handleClientClose(client: ClientConnection): void {
-    this.#clients.delete(client);
+    if (!this.#clients.delete(client)) return;
     logger.info(`Device disconnected: user=${client.userId} device=${client.device.id}`);
-    this.broadcast(client.userId, { type: "device.presence", device: client.device, online: false });
+    if (!this.isDeviceOnline(client.userId, client.device.id)) {
+      const onlineDevices = this.#onlineDevices.get(client.userId);
+      // Several connections can close together after session revocation.
+      // Publish the device transition only once, even if all tokens are invalid.
+      if (!onlineDevices?.delete(client.device.id)) return;
+      if (!onlineDevices.size) this.#onlineDevices.delete(client.userId);
+      const device = this.deps.getDevice(client.userId, client.device.id) ?? client.device;
+      this.broadcast(client.userId, { type: "device.presence", device: { ...device, online: false } });
+    }
   }
 
   #send(client: ConnectionTarget, message: ServerMessage): void {

@@ -174,7 +174,7 @@ export class SyncClient {
         this.handlers.onEntry();
         return;
       case "clipboard.activated":
-        this.handlers.onActivation({ id: message.entry.id, version: message.entry.version });
+        this.handlers.onActivation(message.entry);
         return;
       case "clipboard.deleted":
         this.handlers.onDelete(message.entryId);

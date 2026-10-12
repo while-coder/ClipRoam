@@ -33,7 +33,7 @@ export class ClipRoamServer {
     this.#sockets = new SocketHub({
       authenticateSession: (token) => this.#auth.authenticateSession(token),
       getDevice: (userId, deviceId) => this.#store.getDevice(userId, deviceId),
-      touchDevice: (userId, deviceId) => this.#store.touchDevice(userId, deviceId),
+      recordDeviceOnline: (userId, deviceId) => this.#store.recordDeviceOnline(userId, deviceId),
     });
     this.#relays = new FileRelayService();
     this.#uploads = new UploadService(
@@ -101,6 +101,7 @@ export class ClipRoamServer {
     });
     registerDeviceRoutes(this.#app, {
       store: this.#store,
+      isDeviceOnline: this.#sockets.isDeviceOnline.bind(this.#sockets),
     });
     registerAuthRoutes(this.#app, {
       auth: this.#auth,
@@ -117,6 +118,7 @@ export class ClipRoamServer {
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },
       disconnectUser: this.#sockets.disconnectUser.bind(this.#sockets),
+      isDeviceOnline: this.#sockets.isDeviceOnline.bind(this.#sockets),
     });
     this.#app.addHook("onClose", async () => {
       this.#store.close();

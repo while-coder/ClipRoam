@@ -7,7 +7,7 @@ export type TransferSettings = {
 };
 export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
-export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; appVersion: string; lastSeenAt: string };
+export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; appVersion: string; lastOnlineAt: string | null; online: boolean };
 export type AdminFile = { fileId: string; size: number; stored: boolean; createdAt: string };
 export type FileStats = { count: number; storedCount: number; storedBytes: number };
 

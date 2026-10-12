@@ -58,12 +58,19 @@ export class UserDataStore {
       CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
         device_info TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        last_online_at TEXT
       );
     `);
     const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
     if (!columns.some(({ name }) => name === "version")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+    }
+    const deviceColumns = this.#database.pragma("table_info(devices)") as Array<{ name: string }>;
+    if (!deviceColumns.some(({ name }) => name === "last_online_at")) {
+      this.#database.exec("ALTER TABLE devices ADD COLUMN last_online_at TEXT");
+    }
+    if (deviceColumns.some(({ name }) => name === "updated_at")) {
+      this.#database.exec("ALTER TABLE devices DROP COLUMN updated_at");
     }
     if (this.#database.pragma("user_version", { simple: true }) === 0) {
       this.#transaction(() => {
@@ -151,47 +158,45 @@ export class UserDataStore {
       appVersion: device.appVersion,
     };
     this.#database.prepare(`
-      INSERT INTO devices (device_id, device_info, updated_at)
+      INSERT INTO devices (device_id, device_info, last_online_at)
       VALUES (?, ?, ?)
-      ON CONFLICT(device_id) DO UPDATE SET device_info = excluded.device_info, updated_at = excluded.updated_at
+      ON CONFLICT(device_id) DO UPDATE SET
+        device_info = excluded.device_info,
+        last_online_at = COALESCE(devices.last_online_at, excluded.last_online_at)
     `).run(device.id, JSON.stringify(deviceInfo), new Date().toISOString());
   }
 
-  touchDevice(deviceId: string): void {
-    this.#database.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
-      .run(new Date().toISOString(), deviceId);
+  recordDeviceOnline(deviceId: string): string {
+    const now = new Date().toISOString();
+    this.#database.prepare("UPDATE devices SET last_online_at = ? WHERE device_id = ?")
+      .run(now, deviceId);
+    return now;
   }
 
   listDevices(): Device[] {
-    return this.#listDeviceRows().map(({ device }) => device);
+    return this.#listDeviceRows();
   }
 
   // WS 认证时的会话反查：拿 session 绑定的 deviceId 取设备信息，省掉客户端
   // 在 auth 消息里重复上报。
   getDevice(deviceId: string): Device | undefined {
-    const row = this.#database.prepare("SELECT device_info FROM devices WHERE device_id = ?").get(deviceId) as
-      | { device_info: string }
+    const row = this.#database.prepare("SELECT device_info, last_online_at FROM devices WHERE device_id = ?").get(deviceId) as
+      | { device_info: string; last_online_at: string | null }
       | undefined;
     if (!row) return undefined;
     const result = DeviceSchema.safeParse({ ...JSON.parse(row.device_info), id: deviceId });
-    return result.success ? result.data : undefined;
+    return result.success ? { ...result.data, lastOnlineAt: row.last_online_at } : undefined;
   }
 
-  // Admin view: the row's updated_at doubles as the last time the device
-  // signed in or re-registered.
-  listDevicesWithLastSeen(): Array<Device & { lastSeenAt: string }> {
-    return this.#listDeviceRows().map(({ device, updatedAt }) => ({ ...device, lastSeenAt: updatedAt }));
-  }
-
-  #listDeviceRows(): Array<{ device: Device; updatedAt: string }> {
-    const rows = this.#database.prepare("SELECT device_id, device_info, updated_at FROM devices ORDER BY updated_at DESC")
-      .all() as Array<{ device_id: string; device_info: string; updated_at: string }>;
-    return rows.flatMap(({ device_id, device_info, updated_at }) => {
+  #listDeviceRows(): Device[] {
+    const rows = this.#database.prepare("SELECT device_id, device_info, last_online_at FROM devices ORDER BY last_online_at DESC, device_id")
+      .all() as Array<{ device_id: string; device_info: string; last_online_at: string | null }>;
+    return rows.flatMap(({ device_id, device_info, last_online_at }) => {
       const result = DeviceSchema.safeParse({
         ...JSON.parse(device_info),
         id: device_id,
       });
-      return result.success ? [{ device: result.data, updatedAt: updated_at }] : [];
+      return result.success ? [{ ...result.data, lastOnlineAt: last_online_at }] : [];
     });
   }
 

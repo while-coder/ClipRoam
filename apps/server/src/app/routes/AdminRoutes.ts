@@ -26,6 +26,7 @@ export type AdminRouteDeps = {
   store: ClipRoamStore;
   broadcast: (userId: string, message: ServerMessage) => void;
   disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
+  isDeviceOnline: (userId: string, deviceId: string) => boolean;
   // The running HTTP(S) server, so a new TLS certificate can be applied
   // without a restart when the runtime supports it.
   liveServer: { setSecureContext?: (context: TlsOptions) => void };
@@ -163,7 +164,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     if (!store.hasUser(userId)) {
       return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
     }
-    return { devices: store.listUserDevices(userId) };
+    return { devices: store.listUserDevices(userId).map((device) => ({ ...device, online: deps.isDeviceOnline(userId, device.id) })) };
   });
 
   app.delete("/admin-api/users/:userId/devices/:deviceId", async (request, reply) => {
