@@ -12,7 +12,6 @@ import {
   CloudUpload,
   Download,
   LoaderCircle,
-  Settings2,
   Upload,
 } from "lucide-vue-next";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
@@ -26,7 +25,7 @@ import {
 import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
-import { openSettings as openDesktopSettings, settingsVisible } from "./features/settings/useSettings";
+import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
 import HistoryView from "./features/history/HistoryView.vue";
@@ -111,10 +110,6 @@ import type {
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
-function openSettings(): void {
-  openDesktopSettings();
-}
-
 const mobilePages = computed(() => [
   { view: "history" as const, label: "历史", icon: Clipboard, count: 0 },
   { view: "pending-upload" as const, label: "待上传", icon: CloudUpload, count: pendingCount.value },
@@ -579,10 +574,6 @@ onBeforeUnmount(() => {
       </nav>
 
       <div class="sidebar-bottom">
-        <button class="nav-item" :class="{ active: settingsVisible }" type="button" @click="openSettings">
-          <Settings2 :size="17" aria-hidden="true" />
-          <span>设置</span>
-        </button>
         <div class="sidebar-status" :class="connectionStatus.tone" :title="connectionStatus.title">
           <Cloud v-if="connected" :size="15" aria-hidden="true" />
           <CloudOff v-else :size="15" aria-hidden="true" />
@@ -597,7 +588,6 @@ onBeforeUnmount(() => {
       :fetch-history-page="fetchHistoryPage"
       :revision="historyRevision"
       :devices-by-id="devicesById"
-      :connection-status="connectionStatus"
       :current-time="currentTime"
       :importing-share="importingShare"
       :activating-entry-ids="activatingEntryIds"
@@ -606,7 +596,6 @@ onBeforeUnmount(() => {
       @activate="activateFromView"
       @remove="removeEntry"
       @save="saveEntry"
-      @open-settings="openSettings"
     />
 
     <PendingUploadsView

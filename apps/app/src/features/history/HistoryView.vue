@@ -2,18 +2,15 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Clipboard,
-  ChevronDown,
-  FilePlus,
-  FolderPlus,
   Image,
-  Monitor,
   Search,
-  Settings2,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
 import EntryKindIcon from "../../components/EntryKindIcon.vue";
+import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
+import WorkspacePage from "../../components/WorkspacePage.vue";
+import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import ImagePreview from "./ImagePreview.vue";
@@ -21,10 +18,7 @@ import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
-import { errorMessage } from "../../utils/error";
 import {
-  formatAge as formatAgeRelative,
-  formatExactDateTime,
   parseLocalDate,
   TIME_FILTER_LABELS,
   validateDateRange,
@@ -52,7 +46,6 @@ const props = defineProps<{
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
   devicesById: Record<string, Device>;
-  connectionStatus: { label: string; title: string; tone: string };
   currentTime: number;
   importingShare: boolean;
   activatingEntryIds: ReadonlySet<string>;
@@ -64,7 +57,6 @@ const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
   remove: [entry: ClipboardEntry];
   save: [entry: LocalClipboardEntry];
-  "open-settings": [];
 }>();
 
 const { isMobile } = usePlatform();
@@ -75,8 +67,6 @@ const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
 const endDate = ref("");
 const selectedEntryId = ref("");
-const capturingClipboard = ref(false);
-const uploadingFiles = ref(false);
 const menuEntry = ref<LocalClipboardEntry>();
 const menuX = ref(0);
 const menuY = ref(0);
@@ -87,16 +77,6 @@ const historyListElement = ref<HTMLElement>();
 
 function focusSearchInputEl(): void {
   searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus();
-}
-
-// 类型筛选给 STagFilter 的中文标签（组件按标签字符串匹配，再映射回 EntryFilter）。
-const FILTER_LABELS: Record<EntryFilter, string> = { all: "全部", text: "文本", files: "文件", image: "图片" };
-const FILTER_OPTIONS = Object.values(FILTER_LABELS);
-
-function onFilterTagUpdate(value: string[]): void {
-  const label = value[0];
-  const match = (Object.entries(FILTER_LABELS) as [EntryFilter, string][]).find(([, text]) => text === label);
-  filter.value = match?.[0] ?? "all";
 }
 
 const timeRangeError = computed(() => (
@@ -190,10 +170,6 @@ const selectedLocalIndex = computed(() =>
   pageEntries.value.findIndex((entry) => entry.id === selectedEntryId.value),
 );
 
-function formatAge(createdAt: string): string {
-  return formatAgeRelative(createdAt, props.currentTime);
-}
-
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry);
 }
@@ -235,32 +211,6 @@ async function focusSearch(): Promise<void> {
 /** 只把焦点还给搜索框；不清搜索词、不重拉列表（关设置弹窗等场景用）。 */
 function focusSearchInput(): void {
   focusSearchInputEl();
-}
-
-async function captureCurrentClipboard(): Promise<void> {
-  if (capturingClipboard.value) return;
-  capturingClipboard.value = true;
-  try {
-    const captured = await invoke<boolean>("capture_current_clipboard_text");
-    showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
-  } catch (error) {
-    showToast(`读取剪贴板失败：${errorMessage(error)}`, "error");
-  } finally {
-    capturingClipboard.value = false;
-  }
-}
-
-async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
-  if (uploadingFiles.value) return;
-  uploadingFiles.value = true;
-  try {
-    const captured = await invoke<boolean>("capture_files_from_picker", { mode });
-    showToast(captured ? "已加入上传队列" : "未选择文件", captured ? "success" : "info");
-  } catch (error) {
-    showToast(`选择文件失败：${errorMessage(error)}`, "error");
-  } finally {
-    uploadingFiles.value = false;
-  }
 }
 
 function openEntryPreview(entry: LocalClipboardEntry): void {
@@ -384,28 +334,11 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>
-  <section class="app-content history-content">
-    <div v-if="isPasteWindow" class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
-    <header v-else class="titlebar workspace-titlebar">
-      <div class="page-title">
-        <span>工作区</span>
-        <h1>剪贴板历史</h1>
-      </div>
-      <div class="titlebar-actions">
-        <span v-if="isMobile" class="mobile-connection" :class="connectionStatus.tone">{{ connectionStatus.label }}</span>
-        <SIconButton title="上传文件" aria-label="上传文件" :size="30" :disabled="uploadingFiles" @click="captureFilesFromPicker('file')">
-          <span v-if="uploadingFiles" class="s-spinner" aria-hidden="true" />
-          <FilePlus v-else :size="18" aria-hidden="true" />
-        </SIconButton>
-        <SIconButton v-if="!isMobile" title="上传文件夹" aria-label="上传文件夹" :size="30" :disabled="uploadingFiles" @click="captureFilesFromPicker('folder')">
-          <FolderPlus :size="18" aria-hidden="true" />
-        </SIconButton>
-        <SIconButton v-if="isMobile" title="设置" aria-label="打开设置" :size="30" @click="emit('open-settings')">
-          <Settings2 :size="19" aria-hidden="true" />
-        </SIconButton>
-      </div>
-    </header>
-
+  <WorkspacePage title="剪贴板历史" layout="history">
+    <template v-if="isPasteWindow" #header>
+      <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
+    </template>
+    <template #toolbar>
     <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
       <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
         <span class="s-spinner" aria-hidden="true" />
@@ -426,19 +359,9 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         />
         <kbd>Enter</kbd>
       </label>
-      <SButton v-if="isMobile" class="mobile-capture-button" block :loading="capturingClipboard" @click="captureCurrentClipboard">
-        <Clipboard v-if="!capturingClipboard" :size="18" aria-hidden="true" />
-        {{ capturingClipboard ? "正在读取…" : "读取当前剪贴板" }}
-      </SButton>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
-          <label v-if="isMobile" class="mobile-type-filter">
-            <select v-model="filter" aria-label="内容类型">
-              <option v-for="(label, value) in FILTER_LABELS" :key="value" :value="value">{{ label }}</option>
-            </select>
-            <ChevronDown :size="14" aria-hidden="true" />
-          </label>
-          <STagFilter v-else :value="[FILTER_LABELS[filter]]" :options="FILTER_OPTIONS" :multiple="false" @update:value="onFilterTagUpdate" />
+          <EntryTypeFilter v-model="filter" />
           <TimeFilterControl
             v-model="timeFilter"
             v-model:start-date="startDate"
@@ -451,12 +374,13 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
             :devices="devices"
           />
         </div>
-        <div v-if="!isMobile" class="filter-actions">
+        <div class="filter-actions">
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
       <p v-if="isMobile" class="mobile-history-hint">点按文本复制，点按文件下载，长按打开菜单</p>
     </section>
+    </template>
 
     <section ref="historyListElement" class="history-list" aria-label="剪贴板历史" @scroll="closeEntryMenu">
       <div
@@ -513,12 +437,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
           :root-kind="entry.summary.rootKind"
           :loading="activatingEntryIds.has(entry.id)"
         />
-        <span class="entry-body">
-          <span class="entry-content">{{ entry.content }}</span>
-          <span class="entry-meta">
-            <Monitor :size="12" /> {{ deviceDisplayName(props.devicesById, entry) }}
-            <span>·</span>
-            <span :title="formatExactDateTime(entry.createdAt)">{{ formatAge(entry.createdAt) }}</span>
+        <ClipboardEntryContent :entry="entry" :device-name="deviceDisplayName(devicesById, entry)" :current-time="currentTime">
             <template v-if="fileEntrySummary(entry)">
               <span>·</span>
               <span>{{ fileEntrySummary(entry) }}</span>
@@ -527,8 +446,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
               <span>·</span>
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
-          </span>
-        </span>
+        </ClipboardEntryContent>
       </div>
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
@@ -539,7 +457,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       </SEmpty>
     </section>
 
-    <footer class="footer-hint">
+    <template #footer>
       <span v-if="!isMobile && isPasteWindow">单击记录立即粘贴</span>
       <span v-else-if="!isMobile">双击预览图片或文件，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
@@ -550,7 +468,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         :total="manifestTotal"
         @update:page="changePage"
       />
-    </footer>
+    </template>
 
     <EntryContextMenu
       v-if="menuEntry"
@@ -580,7 +498,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       :entry="previewEntry"
       @close="closeEntryPreview"
     />
-  </section>
+  </WorkspacePage>
 </template>
 
 <style scoped>

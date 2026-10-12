@@ -2,6 +2,8 @@
 import { X } from "lucide-vue-next";
 import type { Component } from "vue";
 import { formatFileSize } from "../utils/format";
+import WorkspacePage from "./WorkspacePage.vue";
+import TransferProgress from "./TransferProgress.vue";
 
 /**
  * 传输任务列表的通用骨架：上传/下载两页共用（头部、任务行、进度条、空态）。
@@ -47,19 +49,13 @@ function inProgress(task: TaskRow): boolean {
 </script>
 
 <template>
-  <section class="app-content history-content pending-content">
-    <header class="titlebar workspace-titlebar">
-      <div class="page-title">
-        <span>工作区</span>
-        <h1>{{ title }}</h1>
-      </div>
-      <div class="titlebar-actions">
-        <SButton v-if="cancellable && activeCount" type="error" @click="emit('cancel-all')">全部取消</SButton>
-        <span class="pending-total" role="status">
-          {{ activeCount ? `${activeCount} 个进行中` : `共 ${tasks.length} 个任务` }}
-        </span>
-      </div>
-    </header>
+  <WorkspacePage :title="title">
+    <template #actions>
+      <SButton v-if="cancellable && activeCount" type="error" @click="emit('cancel-all')">全部取消</SButton>
+      <span class="pending-total" role="status">
+        {{ activeCount ? `${activeCount} 个进行中` : `共 ${tasks.length} 个任务` }}
+      </span>
+    </template>
 
     <section class="history-list downloads-list" :aria-label="listLabel">
       <div v-for="task in tasks" :key="task.id" class="history-item download-row">
@@ -74,9 +70,7 @@ function inProgress(task: TaskRow): boolean {
             <template v-if="task.status === spinningStatus">· {{ formatFileSize(transferred(task)) }}/{{ formatFileSize(task.size) }}</template>
             <template v-else-if="task.size">· {{ formatFileSize(task.size) }}</template>
           </span>
-          <span v-if="inProgress(task)" class="download-bar">
-            <span class="download-bar-fill" :style="{ width: `${percent(task)}%` }"></span>
-          </span>
+          <TransferProgress v-if="inProgress(task)" :percent="percent(task)" :label="`${task.label} ${title}进度`" />
         </span>
         <span v-if="cancellable" class="entry-actions">
           <SIconButton
@@ -94,5 +88,5 @@ function inProgress(task: TaskRow): boolean {
 
       <SEmpty v-if="!tasks.length">{{ emptyText }}</SEmpty>
     </section>
-  </section>
+  </WorkspacePage>
 </template>

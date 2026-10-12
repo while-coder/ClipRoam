@@ -13,8 +13,8 @@ import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
 /**
- * 设置弹窗的模块级单例（对齐 usePlatform 风格）。弹窗状态被侧边栏、
- * HistoryView 的 open-settings 事件和全局键盘（Esc）三方共享，所以提升到
+ * 设置弹窗的模块级单例（对齐 usePlatform 风格）。弹窗状态被工作区菜单和
+ * 全局键盘（Esc）共享，所以提升到
  * 模块层；触达同步引擎的部分通过 App.vue 注入的 bridge 完成。
  */
 export type SettingsBridge = {

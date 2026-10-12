@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Download, X } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { cancelEntryDownloadCall, dismissEntryDownloadToast, entryDownloadToasts, type EntryDownloadToast } from "./useDownloads";
 import { formatFileSize, percentOf } from "../../utils/format";
+import TransferProgress from "../../components/TransferProgress.vue";
 
 const props = defineProps<{ mobile?: boolean }>();
 const expanded = ref(false);
@@ -57,10 +58,7 @@ function statusText(call: EntryDownloadToast): string {
       <div class="entry-download-body">
         <strong class="entry-download-label" :title="call.label">{{ call.label }}</strong>
         <span class="entry-download-state" role="status">{{ statusText(call) }} · {{ finished(call) }}/{{ call.total }} 个文件</span>
-        <div v-if="call.status === 'downloading' || call.status === 'succeeded'" class="download-bar"
-          role="progressbar" :aria-label="`${call.label} 下载进度`" :aria-valuenow="percent(call)" :aria-valuemin="0" :aria-valuemax="100">
-          <span class="download-bar-fill" :style="{ width: `${percent(call)}%` }"></span>
-        </div>
+        <TransferProgress v-if="call.status === 'downloading' || call.status === 'succeeded'" :percent="percent(call)" :label="`${call.label} 下载进度`" />
         <span class="entry-download-bytes">{{ formatFileSize(received(call)) }} / {{ formatFileSize(call.totalBytes) }}<template v-if="props.mobile"> · {{ percent(call) }}%</template></span>
         <span v-if="call.error && call.status !== 'cancelled'" class="entry-download-error">{{ call.error }}</span>
       </div>
@@ -164,7 +162,4 @@ function statusText(call: EntryDownloadToast): string {
 }
 .entry-download-action:hover:not(:disabled) { background: var(--sui-bg-hover); }
 .entry-download-action:active:not(:disabled) { background: var(--sui-bg-active); }
-@media (prefers-reduced-motion: reduce) {
-  .download-bar-fill { transition: none; }
-}
 </style>
