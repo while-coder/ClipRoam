@@ -84,15 +84,18 @@ export async function authenticateAccount(
 
 // 应用启动时用已有 token 验证会话，同时刷新设备信息。
 export async function verifyAccountSession(
-  config: { serverAddress: string; serverProtocol: ServerProtocol; sessionToken: string },
+  config: { serverAddress: string; serverProtocol: ServerProtocol; username: string; sessionToken: string },
   device: Device,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<AuthResponse> {
   const { httpUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
   try {
-    await postJson(httpUrl, "/auth/session/verify", device, { Authorization: `Bearer ${config.sessionToken}` }, signal);
+    const body = await postJson(httpUrl, "/auth/verify", { username: config.username, sessionToken: config.sessionToken, device }, {}, signal);
+    const result = AuthResponseSchema.safeParse(body);
+    if (!result.success) throw new Error("服务器返回了不兼容的登录响应");
+    return result.data;
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Route POST:/auth/session/verify not found")) {
+    if (error instanceof Error && error.message.includes("Route POST:/auth/verify not found")) {
       throw new Error("服务器尚未支持登录状态验证，请更新服务器，或输入密码重新登录。");
     }
     throw error;

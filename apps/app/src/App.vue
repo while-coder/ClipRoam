@@ -349,10 +349,16 @@ async function restoreSavedSession(): Promise<void> {
   const controller = new AbortController();
   authenticationController = controller;
   try {
-    await verifyAccountSession(config, await getDevice(), controller.signal);
+    const verified = await verifyAccountSession(config, await getDevice(), controller.signal);
     controller.signal.throwIfAborted();
     await invoke("activate_account");
-    setActivePreferences(await loadAccountPreferences());
+    const preferences = await loadAccountPreferences();
+    await persistAccountPreferences({
+      ...preferences,
+      autoUploadLimitMb: Math.min(preferences.autoUploadLimitMb, verified.settings.maxStoredFileMb),
+      serverMaxFileMb: Math.max(1, Math.floor(verified.settings.maxStoredFileMb)),
+      maxCaptureFileCount: Math.max(1, Math.floor(verified.settings.maxCaptureFileCount)),
+    });
     await startSync(config);
     await enableAccountShortcuts();
     controller.signal.throwIfAborted();
@@ -369,7 +375,7 @@ async function restoreSavedSession(): Promise<void> {
     const message = errorMessage(error);
     setupError.value = message;
     if (message.startsWith("服务器尚未支持登录状态验证")) showToast(message, "error");
-    if (message === "登录已失效，请重新登录") {
+    if (message === "登录已失效，请重新登录" || message === "设备与登录会话不匹配，请重新登录") {
       const expiredConfig = { ...config, sessionToken: "" };
       savedSessionConfig.value = undefined;
       setActiveConfig(expiredConfig);

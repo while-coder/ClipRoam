@@ -1,4 +1,4 @@
-import { AuthCredentialsSchema, ChangePasswordSchema, DeviceSchema, DeviceIdSchema } from "@cliproam/protocol";
+import { AuthCredentialsSchema, AuthVerifyCredentialsSchema, ChangePasswordSchema } from "@cliproam/protocol";
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 import type { AuthenticatedUser } from "./AccountStore.js";
 
@@ -19,7 +19,7 @@ export class AuthService {
       const deviceId = parsed.data.device.id;
       const session = await this.store.register(parsed.data.username, parsed.data.password, deviceId);
       this.store.upsertDevice(session.user.id, parsed.data.device);
-      return { statusCode: 201, payload: session };
+      return { statusCode: 201, payload: { ...session, user: { username: session.user.username } } };
     } catch (error) {
       if (error instanceof UsernameTakenError) {
         return { statusCode: 409, payload: { code: "USERNAME_TAKEN", message: error.message } };
@@ -35,13 +35,29 @@ export class AuthService {
     }
 
     try {
-      const deviceId = parsed.data.device.id;
-      const session = await this.store.login(parsed.data.username, parsed.data.password, deviceId);
+      const session = await this.store.login(parsed.data.username, parsed.data.password, parsed.data.device.id);
       this.store.upsertDevice(session.user.id, parsed.data.device);
-      return { statusCode: 200, payload: session };
+      return { statusCode: 200, payload: { ...session, user: { username: session.user.username } } };
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
         return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: error.message } };
+      }
+      throw error;
+    }
+  }
+
+  verify(body: unknown): HttpResult {
+    const parsed = AuthVerifyCredentialsSchema.safeParse(body);
+    if (!parsed.success) {
+      return { statusCode: 400, payload: { code: "INVALID_CREDENTIALS", message: "账号、会话或设备信息格式不正确" } };
+    }
+    try {
+      const session = this.store.verify(parsed.data.username, parsed.data.sessionToken, parsed.data.device.id);
+      this.store.upsertDevice(session.user.id, parsed.data.device);
+      return { statusCode: 200, payload: { ...session, user: { username: session.user.username } } };
+    } catch (error) {
+      if (error instanceof InvalidCredentialsError) {
+        return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: "登录已失效，请重新登录" } };
       }
       throw error;
     }
@@ -73,14 +89,5 @@ export class AuthService {
 
   authenticateSession(token: string): AuthenticatedUser | undefined {
     return this.store.authenticateSession(token);
-  }
-
-  verifySession(user: AuthenticatedUser, body: unknown): HttpResult {
-    const parsed = DeviceSchema.extend({ id: DeviceIdSchema }).safeParse(body);
-    if (!parsed.success) {
-      return { statusCode: 400, payload: { message: "设备信息格式不正确" } };
-    }
-    this.store.upsertDevice(user.id, { ...parsed.data, id: user.deviceId });
-    return { statusCode: 204, payload: undefined };
   }
 }

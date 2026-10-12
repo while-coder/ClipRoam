@@ -115,6 +115,10 @@ export const AuthCredentialsSchema = z.object({
   device: DeviceSchema.extend({ id: DeviceIdSchema }),
 });
 
+export const AuthVerifyCredentialsSchema = AuthCredentialsSchema.omit({ password: true }).extend({
+  sessionToken: z.string().min(1).max(256),
+});
+
 export const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(6).max(128),
   newPassword: z.string().min(6).max(128),
@@ -138,7 +142,6 @@ export const AuthResponseSchema = z.object({
   sessionToken: z.string().min(1),
   expiresAt: z.string(),
   user: z.object({
-    id: z.string(),
     username: z.string(),
   }),
   settings: ServerSettingsSchema,

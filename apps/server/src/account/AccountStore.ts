@@ -3,7 +3,7 @@ import { secretsEqual } from "../common/secretsEqual.js";
 import { promisify } from "node:util";
 import type { AuthResponse } from "@cliproam/protocol";
 // `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
-type AuthSession = Omit<AuthResponse, "settings">;
+export type AuthSession = Omit<AuthResponse, "settings" | "user"> & { user: AccountUser };
 import type Database from "better-sqlite3";
 import { escapeLike, openDatabase, withTransaction } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
@@ -15,7 +15,7 @@ export type AccountUser = { id: string; username: string };
 
 // A resolved session also knows which device it was issued to: relay sessions
 // use that to bind a transfer to a single sender device.
-export type AuthenticatedUser = AccountUser & { deviceId: string };
+export type AuthenticatedUser = AccountUser & { deviceId: string; expiresAt: string };
 
 export type AdminUserSummary = { id: string; username: string; createdAt: string; activeSessions: number };
 
@@ -86,13 +86,38 @@ export class AccountStore {
       await derivePassword(password, randomBytes(16));
       throw new InvalidCredentialsError();
     }
+
     const actualHash = await derivePassword(password, Buffer.from(row.password_salt));
     if (!secretsEqual(actualHash.toString("hex"), Buffer.from(row.password_hash).toString("hex"))) {
       throw new InvalidCredentialsError();
     }
+
     const current = this.#database.prepare("SELECT password_hash FROM users WHERE id = ?").get(row.id) as { password_hash: Uint8Array } | undefined;
-    if (!current || !Buffer.from(current.password_hash).equals(Buffer.from(row.password_hash))) throw new InvalidCredentialsError();
-    return this.#issueSession({ id: row.id, username: row.username }, deviceId);
+    if (!current || !Buffer.from(current.password_hash).equals(Buffer.from(row.password_hash))) {
+      throw new InvalidCredentialsError();
+    }
+
+    const user = { id: row.id, username: row.username };
+    return this.#issueSession(user, deviceId);
+  }
+
+  verify(username: string, sessionToken: string, deviceId: string): AuthSession {
+    const row = this.#database.prepare(`
+      SELECT users.id, users.username, sessions.token_hash, sessions.expires_at
+      FROM users JOIN sessions ON sessions.user_id = users.id
+      WHERE users.username = ? COLLATE NOCASE AND sessions.device_id = ? AND sessions.expires_at > ?
+    `).get(username.trim(), deviceId, new Date().toISOString()) as (AccountUser & { token_hash: string; expires_at: string }) | undefined;
+    if (!row) {
+      throw new InvalidCredentialsError();
+    }
+
+    const actualHash = hashSessionToken(sessionToken);
+    if (!secretsEqual(actualHash, row.token_hash)) {
+      throw new InvalidCredentialsError();
+    }
+
+    const user = { id: row.id, username: row.username };
+    return { sessionToken, expiresAt: row.expires_at, user };
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
@@ -120,7 +145,7 @@ export class AccountStore {
   authenticateSession(token: string): AuthenticatedUser | undefined {
     if (!token) return undefined;
     return this.#database.prepare(`
-      SELECT users.id, users.username, sessions.device_id AS deviceId
+      SELECT users.id, users.username, sessions.device_id AS deviceId, sessions.expires_at AS expiresAt
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `).get(hashSessionToken(token), new Date().toISOString()) as AuthenticatedUser | undefined;

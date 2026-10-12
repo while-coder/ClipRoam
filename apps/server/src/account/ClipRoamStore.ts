@@ -1,6 +1,5 @@
 import { rm } from "node:fs/promises";
 import type {
-  AuthResponse,
   ClipboardEntry,
   Device,
   EntryManifestQuery,
@@ -11,11 +10,9 @@ import { getLogger } from "../app/Logger.js";
 import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS } from "../app/ServerConfig.js";
 import { FileStore } from "../files/FileStore.js";
 import { userDirectory } from "../DataPaths.js";
-import { AccountStore, type AdminUserSummary, type AuthenticatedUser } from "./AccountStore.js";
+import { AccountStore, type AdminUserSummary, type AuthenticatedUser, type AuthSession } from "./AccountStore.js";
 import { UserDataStore } from "../clipboard/UserDataStore.js";
 
-// `AuthResponse` 去掉服务器附带字段：`settings` 由路由层注入。
-type AuthSession = Omit<AuthResponse, "settings">;
 
 export { InvalidCredentialsError, UsernameTakenError } from "./AccountStore.js";
 
@@ -44,6 +41,10 @@ export class ClipRoamStore {
 
   login(username: string, password: string, deviceId: string): Promise<AuthSession> {
     return this.#accounts.login(username, password, deviceId);
+  }
+
+  verify(username: string, sessionToken: string, deviceId: string): AuthSession {
+    return this.#accounts.verify(username, sessionToken, deviceId);
   }
 
   changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
