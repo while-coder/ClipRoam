@@ -108,7 +108,7 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
   if (isPasteWindow) void pasteEntry(entry);
   else if (entry.kind === "files") {
-    showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“另存为…”手动下载", "info");
+    showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“下载”手动下载", "info");
   } else {
     void copyEntry(entry);
   }

@@ -473,7 +473,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       :saving-entry-id="savingEntryId"
       :is-mobile="isMobile"
       @activate="emit('activate', $event, false)"
-      @preview="openEntryPreview"
       @save="emit('save', $event)"
       @remove="emit('remove', $event)"
       @close="closeEntryMenu"

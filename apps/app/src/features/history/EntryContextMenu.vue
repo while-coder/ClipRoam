@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Eye, Trash2 } from "lucide-vue-next";
+import { Copy, Download, Trash2 } from "lucide-vue-next";
 import { canSaveEntry, saveEntryLabel } from "../../utils/entry";
 import type { LocalClipboardEntry } from "../../types";
 
 /**
- * 历史条目的右键/长按菜单（复制、另存为、删除）。定位来自触发点
+ * 历史条目的右键/长按菜单（复制、下载、删除）。定位来自触发点
  * 坐标而不是 trigger 元素；骨架（Teleport + fixed + 外点关闭 + 键盘导航）
  * 与 DeviceFilterControl 相同。
  */
@@ -20,7 +20,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry];
-  preview: [entry: LocalClipboardEntry];
   save: [entry: LocalClipboardEntry];
   remove: [entry: LocalClipboardEntry];
   close: [];
@@ -29,7 +28,8 @@ const emit = defineEmits<{
 const menu = ref<HTMLElement>();
 const menuStyle = ref<Record<string, string>>({});
 const saving = computed(() => props.savingEntryId === props.entry.id);
-const saveLabel = computed(() => saveEntryLabel(props.entry, props.savingEntryId, props.isMobile));
+const saveLabel = computed(() => saveEntryLabel(props.entry, props.savingEntryId));
+const canCopy = computed(() => props.entry.kind === "text" || (!props.isMobile && props.entry.kind === "image"));
 // 删除二次确认：第一击进入待确认态（3 秒无操作自动复位），第二击才执行。
 const confirmingRemove = ref(false);
 let confirmResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,7 +76,6 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
-const onPreview = run((entry) => emit("preview", entry));
 
 function handleMenuKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
@@ -147,19 +146,15 @@ onBeforeUnmount(() => {
       :style="menuStyle"
       @keydown="handleMenuKeydown"
     >
-      <SButton type="text" block role="menuitem" :disabled="activating" @click="onActivate(entry)">
+      <SButton v-if="canCopy" type="text" block role="menuitem" :disabled="activating" @click="onActivate(entry)">
         <span v-if="activating" class="s-spinner" aria-hidden="true" />
         <Copy v-else :size="15" aria-hidden="true" />
         <span>复制</span>
       </SButton>
-      <SButton v-if="canSaveEntry(entry)" type="text" block role="menuitem" :disabled="saving" @click="onSave(entry)">
+      <SButton v-if="entry.kind !== 'text'" type="text" block role="menuitem" :disabled="saving || !canSaveEntry(entry)" @click="onSave(entry)">
         <span v-if="saving" class="s-spinner" aria-hidden="true" />
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
-      </SButton>
-      <SButton v-if="entry.kind !== 'text'" type="text" block role="menuitem" @click="onPreview(entry)">
-        <Eye :size="15" aria-hidden="true" />
-        <span>{{ entry.kind === "image" ? "预览图片" : "预览文件" }}</span>
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
