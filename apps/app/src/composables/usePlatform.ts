@@ -7,6 +7,7 @@ import type { PlatformCapabilities } from "../types";
 
 export const isPasteWindow = getCurrentWindow().label === "paste";
 export const isToastWindow = getCurrentWindow().label === "toast";
+if (isPasteWindow) document.documentElement.classList.add("paste-window-root");
 if (isToastWindow) document.documentElement.classList.add("toast-window-root");
 
 const platformCapabilities = ref<PlatformCapabilities>(DESKTOP_CAPABILITIES);

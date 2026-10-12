@@ -6,6 +6,7 @@ import {
 
 
 import { errorMessageFromBody } from "./syncHttp";
+import { anyAbortSignal } from "../../utils/abort";
 
 export type AuthMode = "login" | "register";
 export type ServerProtocol = "http" | "https";
@@ -41,7 +42,7 @@ export function getServerUrls(
 
 async function postJson(httpUrl: string, path: string, body: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<unknown> {
   const timeoutSignal = AbortSignal.timeout(30_000);
-  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const requestSignal = signal ? anyAbortSignal([signal, timeoutSignal]) : timeoutSignal;
   let response: Response;
   let responseBody: unknown;
   try {

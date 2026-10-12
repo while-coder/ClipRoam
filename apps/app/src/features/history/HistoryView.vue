@@ -78,7 +78,7 @@ const searchInput = ref<{ $el?: Element }>();
 const historyListElement = ref<HTMLElement>();
 
 function focusSearchInputEl(): void {
-  searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus();
+  searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
 }
 
 const timeRangeError = computed(() => (
@@ -168,10 +168,6 @@ const filterResultSummary = computed(() => {
   return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
 });
 
-const selectedLocalIndex = computed(() =>
-  pageEntries.value.findIndex((entry) => entry.id === selectedEntryId.value),
-);
-
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry);
 }
@@ -216,7 +212,7 @@ function focusSearchInput(): void {
 }
 
 function openEntryPreview(entry: LocalClipboardEntry): void {
-  if (isPasteWindow || entry.kind === "text") return;
+  if (entry.kind === "text") return;
   previewEntry.value = entry;
 }
 
@@ -225,14 +221,25 @@ function closeEntryPreview(): void {
   void nextTick(focusSearchInputEl);
 }
 
-function selectOrActivate(entry: LocalClipboardEntry): void {
-  // 长按弹菜单后的那次 click 是抬手带出来的，不算选择，避免移动端误触发激活。
+function handleEntryMouseDown(entry: LocalClipboardEntry): void {
+  if (!isPasteWindow) return;
+  selectedEntryId.value = entry.id;
+  emit("activate", entry, true);
+}
+
+function handleEntryClick(entry: LocalClipboardEntry): void {
+  if (!isMobile.value) return;
   if (longPressFired) {
     longPressFired = false;
     return;
   }
-  selectedEntryId.value = entry.id;
-  if (isPasteWindow || isMobile.value) emit("activate", entry, true);
+  openEntryPreview(entry);
+}
+
+function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
+  if (isPasteWindow || longPressFired) return;
+  if (entry.kind === "text") emit("activate", entry, false);
+  else if (!isMobile.value) openEntryPreview(entry);
 }
 
 // —— 条目右键/长按菜单 ——
@@ -246,6 +253,7 @@ let longPressY = 0;
 
 function openEntryMenu(entry: LocalClipboardEntry, x: number, y: number): void {
   if (isPasteWindow) return;
+  if (isMobile.value) longPressFired = true;
   const now = Date.now();
   if (now - lastMenuOpenedAt < 600 && menuEntry.value?.id === entry.id) return;
   lastMenuOpenedAt = now;
@@ -263,17 +271,16 @@ function cancelLongPress(): void {
 }
 
 function handleEntryTouchStart(entry: LocalClipboardEntry, event: TouchEvent): void {
-  if (isPasteWindow || event.touches.length !== 1) {
-    cancelLongPress();
+  cancelLongPress();
+  if (!isMobile.value || event.touches.length !== 1) {
     return;
   }
+  longPressFired = false;
   const touch = event.touches[0]!;
   longPressX = touch.clientX;
   longPressY = touch.clientY;
-  longPressFired = false;
   longPressTimer = setTimeout(() => {
     longPressTimer = undefined;
-    longPressFired = true;
     openEntryMenu(entry, longPressX, longPressY);
   }, 500);
 }
@@ -295,44 +302,13 @@ function closeEntryMenu(): void {
   menuEntry.value = undefined;
 }
 
-/// 粘贴窗口用 mousedown 触发粘贴：窗口刚成为 key 窗口且焦点在搜索框时，
-/// WebKit 会把第一次点击只用于失焦、吞掉 click 事件，mousedown 不受影响。
-function activateOnMouseDown(entry: LocalClipboardEntry): void {
-  selectedEntryId.value = entry.id;
-  emit("activate", entry, true);
-}
-
-function activateSelectedEntry(entry?: LocalClipboardEntry): void {
-  if (!entry) return;
-  emit("activate", entry, false);
-}
-
 function resetTimeFilter(): void {
   timeFilter.value = "all";
   startDate.value = "";
   endDate.value = "";
 }
 
-/**
- * Shared document-keydown hook: the App-level handler delegates here after its
- * own dialogs (settings, setup) and the ui-kit modal guard had their chance.
- * Returns true when the key was handled and should not fall through to window
- * hiding. Image preview is an SModal now — Esc/Tab/Enter stay with its stack.
- */
-function handleKeydown(event: KeyboardEvent): boolean {
-  if (event.key === "Enter" && !event.shiftKey) {
-    // 焦点在搜索框等输入控件里时，回车属于输入框，不再触发列表条目的
-    // 复制/粘贴，避免一次按键同时执行两个操作。
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("input, textarea, select, [contenteditable]")) return false;
-    event.preventDefault();
-    activateSelectedEntry(pageEntries.value[Math.max(selectedLocalIndex.value, 0)]);
-    return true;
-  }
-  return false;
-}
-
-defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
+defineExpose({ focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>
@@ -341,9 +317,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
     <template v-if="!isPasteWindow" #actions>
-      <button
-        class="capture-clipboard-button"
-        type="button"
+      <SButton
         aria-label="读取当前剪贴板"
         title="读取当前剪贴板"
         :aria-busy="capturingClipboard"
@@ -352,9 +326,9 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         @keydown.stop
       >
         <span v-if="capturingClipboard" class="s-spinner" aria-hidden="true" />
-        <Clipboard v-else :size="18" aria-hidden="true" />
+        <Clipboard v-else :size="15" aria-hidden="true" />
         <span>读取当前剪贴板</span>
-      </button>
+      </SButton>
     </template>
     <template #toolbar>
     <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
@@ -396,7 +370,7 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
-      <p v-if="isMobile" class="mobile-history-hint">点按文本复制，点按文件下载，长按打开菜单</p>
+      <p v-if="isMobile" class="mobile-history-hint">单击图片或文件预览，双击文字复制，长按打开菜单</p>
     </section>
     </template>
 
@@ -409,12 +383,10 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         role="button"
         :tabindex="activatingEntryIds.has(entry.id) ? -1 : 0"
         :aria-disabled="activatingEntryIds.has(entry.id)"
-        @mouseenter="selectedEntryId = entry.id"
-        @mousedown.left="isPasteWindow && activateOnMouseDown(entry)"
-        @click="selectOrActivate(entry)"
-        @dblclick.stop="openEntryPreview(entry)"
-        @keydown.enter.stop="activateSelectedEntry(entry)"
-        @keydown.space.prevent.stop="activateSelectedEntry(entry)"
+        @mouseenter="!isMobile && (selectedEntryId = entry.id)"
+        @mousedown.left="handleEntryMouseDown(entry)"
+        @click="handleEntryClick(entry)"
+        @dblclick.stop="handleEntryDoubleClick(entry)"
         @contextmenu.prevent="openEntryMenu(entry, $event.clientX, $event.clientY)"
         @touchstart="handleEntryTouchStart(entry, $event)"
         @touchmove="handleEntryTouchMove"
@@ -422,28 +394,33 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
         @touchcancel="handleEntryTouchEnd"
       >
         <button
-          v-if="entry.kind === 'image' && !isPasteWindow"
+          v-if="entry.kind === 'image' && isPasteWindow"
           class="image-thumbnail"
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
           @click.stop="openEntryPreview(entry)"
+          @mousedown.stop
+          @dblclick.stop
           @keydown.stop
           @touchstart.stop
         >
           <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
           <Image v-else :size="18" aria-hidden="true" />
         </button>
-        <span v-else-if="entry.kind === 'image' && thumbnailSource(entry)" class="image-thumbnail" aria-hidden="true">
-          <img :src="thumbnailSource(entry)" alt="" loading="lazy" />
+        <span v-else-if="entry.kind === 'image'" class="image-thumbnail" aria-hidden="true">
+          <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" alt="" loading="lazy" />
+          <Image v-else :size="18" />
         </span>
         <button
-          v-else-if="entry.kind === 'files' && !isPasteWindow"
+          v-else-if="entry.kind === 'files' && isPasteWindow"
           class="file-preview-trigger"
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
           @click.stop="openEntryPreview(entry)"
+          @mousedown.stop
+          @dblclick.stop
           @keydown.stop
           @touchstart.stop
         >
@@ -476,9 +453,8 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
     </section>
 
     <template #footer>
-      <span v-if="!isMobile && isPasteWindow">单击记录立即粘贴</span>
-      <span v-else-if="!isMobile">双击预览图片或文件，右键打开菜单</span>
-      <span v-if="!isMobile"><kbd>Enter</kbd> {{ isPasteWindow ? "粘贴" : "复制" }}</span>
+      <span v-if="isPasteWindow">单击条目粘贴，点击图片或文件图标预览</span>
+      <span v-else-if="!isMobile">双击图片或文件预览，双击文字复制，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <PaginationControl
         :page="currentPage"
@@ -520,16 +496,6 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
 </template>
 
 <style scoped>
-.capture-clipboard-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  align-self: center; flex-shrink: 0; min-width: 44px; min-height: 44px; padding: 0 10px;
-  color: var(--color-secondary-text); background: transparent; border: 0; border-radius: 8px;
-  font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; touch-action: manipulation;
-}
-.capture-clipboard-button:hover:not(:disabled) { color: var(--color-foreground); background: var(--sui-bg-hover); }
-.capture-clipboard-button:active:not(:disabled) { background: var(--sui-bg-active); }
-.capture-clipboard-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.capture-clipboard-button:disabled { opacity: 0.5; cursor: default; }
 .file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .file-preview-trigger:hover { background: var(--sui-bg-hover); }
 @media (max-width: 640px) {

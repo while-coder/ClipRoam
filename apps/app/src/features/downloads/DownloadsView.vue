@@ -41,7 +41,10 @@ function percent(record: DownloadRecord): number {
     </template>
     <template #actions>
       <SButton v-if="canCancel" type="error" @click="emit('cancel-all')">全部取消</SButton>
-      <SButton :disabled="!hasFinished" @click="emit('clear-finished')">清空已结束</SButton>
+      <SButton :disabled="!hasFinished" @click="emit('clear-finished')">
+        <Trash2 :size="15" aria-hidden="true" />
+        清空已结束
+      </SButton>
     </template>
     <section class="history-list downloads-list" aria-label="下载记录">
       <article v-for="record in records" :key="record.id" class="download-record">

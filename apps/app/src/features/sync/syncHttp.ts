@@ -1,5 +1,6 @@
 import type { AccountSession } from "./accountSession";
 import { errorMessage } from "../../utils/error";
+import { anyAbortSignal } from "../../utils/abort";
 
 /** Structural stand-in for the protocol's zod schemas, keeping zod out of call sites' imports. */
 type Schema<T> = { safeParse: (value: unknown) => { success: true; data: T } | { success: false } };
@@ -42,7 +43,7 @@ export type SyncRequester = {
 export function createSyncRequester(httpUrl: string, token: string, session: AccountSession): SyncRequester {
   const sessionSignal = session.signal;
   const httpFetch = async (method: string, path: string, init: RequestInit): Promise<Response> => {
-    const signal = init.signal ? AbortSignal.any([sessionSignal, init.signal]) : sessionSignal;
+    const signal = init.signal ? anyAbortSignal([sessionSignal, init.signal]) : sessionSignal;
     try {
       return await fetch(`${httpUrl}${path}`, {
         ...init,

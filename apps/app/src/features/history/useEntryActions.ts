@@ -98,9 +98,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 }
 
 /**
- * Activation requests from the history view. `viaClick` mirrors the old
- * select-or-activate split: clicks activate immediately only in the paste
- * window and on mobile, keyboard/double-click everywhere.
+ * 快捷粘贴窗口单击条目触发粘贴；其他窗口双击文字或菜单操作触发复制。
  */
 export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   if (viaClick) {

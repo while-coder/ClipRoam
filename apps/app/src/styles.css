@@ -34,6 +34,11 @@
 
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+/* 隐藏的快捷粘贴窗口聚焦控件时，不允许浏览器滚动外壳，只让历史列表滚动。 */
+html.paste-window-root,
+html.paste-window-root body,
+html.paste-window-root #app,
+html.paste-window-root .app-shell { overflow: clip; }
 html.toast-window-root,
 html.toast-window-root body,
 html.toast-window-root #app {
@@ -446,9 +451,14 @@ kbd {
   border-radius: 7px;
 }
 button.image-thumbnail { cursor: zoom-in; }
-.image-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+.image-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
 .image-thumbnail > svg { color: #93c5fd; }
 .image-thumbnail:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+/* 桌面历史列表的图标与图片预览统一占位，含快捷粘贴窗口。 */
+.app-shell:not(.mobile-app) .history-item { grid-template-columns: 48px minmax(0, 1fr) auto; min-height: 74px; }
+.app-shell.paste-app:not(.mobile-app) .history-item { grid-template-columns: 48px minmax(0, 1fr); }
+.app-shell:not(.mobile-app) .history-item .kind-icon { width: 48px; height: 48px; }
+.app-shell:not(.mobile-app) .history-item .kind-icon > svg { width: 24px; height: 24px; }
 .entry-body { display: grid; gap: 6px; min-width: 0; }
 .entry-content {
   display: -webkit-box;

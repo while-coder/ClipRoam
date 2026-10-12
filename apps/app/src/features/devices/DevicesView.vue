@@ -80,7 +80,7 @@ onBeforeUnmount(() => { disposed = true; });
 
       <article v-for="device in devices" :key="device.id" class="device-card">
         <div class="device-heading">
-          <span class="kind-icon"><component :is="deviceIcon(device)" :size="22" aria-hidden="true" /></span>
+          <span class="kind-icon"><component :is="deviceIcon(device)" :size="18" aria-hidden="true" /></span>
           <div class="device-name">
             <h2>{{ device.name }}</h2>
             <STag v-if="device.id === currentDeviceId" type="info" size="small">当前设备</STag>
@@ -112,24 +112,29 @@ onBeforeUnmount(() => { disposed = true; });
 <style scoped>
 .device-list { padding: 16px; }
 .device-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 16px; color: var(--color-secondary-text); font-size: 13px; line-height: 1.6; }
-.device-card { padding: 16px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--color-surface); }
-.device-heading { display: flex; align-items: center; gap: 12px; }
-.device-heading .kind-icon { flex-shrink: 0; }
+.device-card { padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--color-surface); }
+.device-heading { display: flex; align-items: center; gap: 8px; }
+.device-heading .kind-icon { width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
 .device-name { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.device-name h2 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.device-name h2 { margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
 .device-status { display: flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--color-secondary-text); font-size: 12px; }
 .device-status.online { color: var(--color-accent); }
 .status-dot { width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
-.device-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; margin: 16px 0 0; font-size: 13px; line-height: 1.6; }
-.device-details dt { margin-bottom: 3px; color: var(--color-secondary-text); font-size: 12px; }
-.device-details dd { margin: 0; overflow-wrap: anywhere; }
+.device-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1.5fr); gap: 4px 16px; margin: 8px 0 0; font-size: 13px; line-height: 1.5; }
+.device-details > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.device-details dt { flex-shrink: 0; color: var(--color-secondary-text); font-size: 12px; }
+.device-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .device-age { display: inline-block; margin-left: 8px; color: var(--color-secondary-text); font-size: 12px; }
+.device-id { grid-column: 1 / -1; }
 .device-id dd { color: var(--color-secondary-text); font-family: ui-monospace, monospace; font-size: 12px; }
 .device-error { color: var(--sui-error); font-size: 13px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .device-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+  .device-last-online { grid-column: 1 / -1; }
+}
 @media (max-width: 480px) {
   .device-list { padding: 12px; }
-  .device-card { padding: 14px; }
-  .device-details { gap: 12px; }
-  .device-last-online, .device-id { grid-column: 1 / -1; }
+  .device-card { padding: 10px; }
+  .device-details { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

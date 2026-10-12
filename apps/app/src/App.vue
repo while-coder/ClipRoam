@@ -334,9 +334,6 @@ function handleKeys(event: KeyboardEvent): void {
     }
     return;
   }
-  // The history view handles selection keys; a true return means the key was
-  // consumed. Its dialogs are SModals now — the guard above already returned.
-  if (historyView.value?.handleKeydown(event)) return;
   if (event.key === "Escape") {
     event.preventDefault();
     void hideWindow();
