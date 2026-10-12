@@ -66,9 +66,10 @@ export class SyncClient {
     this.#socket?.close();
   }
   // The login-time device table, pulled over HTTP with no socket involved.
-  async pullDevices(): Promise<void> {
+  async pullDevices(): Promise<boolean> {
     try {
       this.handlers.onDevices(await this.#fetchDevices());
+      return true;
     } catch (error) {
       // An expired session must reach the re-login flow, not a toast. A
       // transient network failure stays silent too: the connection-state
@@ -76,6 +77,7 @@ export class SyncClient {
       const message = errorMessage(error);
       if (message === "登录已失效，请重新登录") this.handlers.onAuthenticationFailed(message);
       else if (!isTransientNetworkError(error)) this.handlers.onError(`获取设备列表失败：${message}`);
+      return false;
     }
   }
 

@@ -4,7 +4,7 @@ import { createSettingsState } from "../settings/settingsState";
 import type { SyncClient } from "./syncClient";
 import type { SyncConfig, AccountPreferences, Device, LocalClipboardEntry, UploadProgress } from "../../types";
 import type { ServeTaskSnapshot } from "../uploads/relayUploader";
-import type { DownloadTaskSnapshot, EntryDownloadToast } from "../downloads/useDownloads";
+import type { DownloadRecord, DownloadTaskSnapshot, EntryDownloadToast } from "../downloads/useDownloads";
 
 function createAccountState() {
   return {
@@ -12,12 +12,14 @@ function createAccountState() {
     settingsRequestController: undefined as AbortController | undefined,
     connected: ref(false),
     devicesById: ref<Record<string, Device>>({}),
-    activeView: ref<"history" | "pending-upload" | "uploads" | "downloads">("history"),
+    activeView: ref<"history" | "pending-upload" | "uploads" | "downloads" | "devices">("history"),
     historyRevision: ref(0),
     pendingEntries: ref<LocalClipboardEntry[]>([]),
     pendingCount: ref(0),
     uploadTasks: ref<ServeTaskSnapshot[]>([]),
     downloadTasks: ref<DownloadTaskSnapshot[]>([]),
+    downloadRecords: ref<DownloadRecord[]>([]),
+    downloadRecordsRevision: 0,
     entryDownloadToasts: ref<EntryDownloadToast[]>([]),
     uploadProgress: ref<Record<string, UploadProgress>>({}),
     pendingUploadProgress: new Map<string, UploadProgress>(),

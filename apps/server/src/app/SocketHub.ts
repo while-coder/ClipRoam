@@ -166,6 +166,8 @@ export class SocketHub {
       if (!onlineDevices?.delete(client.device.id)) return;
       if (!onlineDevices.size) this.#onlineDevices.delete(client.userId);
       const device = this.deps.getDevice(client.userId, client.device.id) ?? client.device;
+      // 离线设备显示最后一次在线的结束时间，而不是本次连接的开始时间。
+      device.lastOnlineAt = this.deps.recordDeviceOnline(client.userId, client.device.id);
       this.broadcast(client.userId, { type: "device.presence", device: { ...device, online: false } });
     }
   }

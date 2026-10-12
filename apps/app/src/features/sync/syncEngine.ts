@@ -12,7 +12,7 @@ import { activateRemoteClipboard, bumpLocalClipboardRevision } from "../history/
 import { getActivePreferences } from "./syncSession";
 import { refreshHistory } from "../history/useHistorySync";
 import { finishUploadProgress, queueUploadProgress, refreshPending, refreshPendingEntries } from "../pending-upload/usePendingUploads";
-import { applyDownloadSnapshot, refreshDownloadTasks, type DownloadTaskSnapshot } from "../downloads/useDownloads";
+import { applyDownloadSnapshot, refreshDownloadRecords, refreshDownloadTasks, type DownloadTaskSnapshot } from "../downloads/useDownloads";
 import type { Device, SyncConfig } from "../../types";
 
 export interface SyncEngineDeps {
@@ -72,6 +72,9 @@ async function registerAccountEvents(session: AccountSession): Promise<void> {
     }))),
     session.ownAsync(listen<DownloadTaskSnapshot[]>("cliproam://download-changed", session.guard(({ payload }) => {
       applyDownloadSnapshot(payload);
+    }))),
+    session.ownAsync(listen<string>("cliproam://download-records-changed", session.guard(({ payload }) => {
+      if (payload === session.accountKey) void refreshDownloadRecords().catch(() => undefined);
     }))),
   ];
   if (!isPasteWindow) registrations.push(session.ownAsync(startSyncBridgeService({

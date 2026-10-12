@@ -37,8 +37,8 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
 
 <template>
   <WorkspacePage title="待上传">
-    <template #actions>
-      <span class="pending-total" role="status">共 {{ entries.length }} 条待上传</span>
+    <template #status>
+      <span role="status">共 {{ entries.length }} 条待上传</span>
     </template>
 
     <section class="history-list" aria-label="待上传列表">

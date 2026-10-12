@@ -7,11 +7,11 @@ withDefaults(defineProps<{
 </script>
 
 <template>
-  <section class="app-content history-content" :class="{ 'pending-content': layout === 'list' }">
+  <section class="app-content history-content" :class="{ 'pending-content': layout === 'list', 'has-footer': !!$slots.footer }">
     <slot name="header">
       <header class="titlebar workspace-titlebar">
         <div class="page-title">
-          <span>工作区</span>
+          <span :class="{ 'workspace-page-status': !!$slots.status }"><slot name="status">工作区</slot></span>
           <h1>{{ title }}</h1>
         </div>
         <div class="titlebar-actions"><slot name="actions" /><WorkspaceMenu /></div>

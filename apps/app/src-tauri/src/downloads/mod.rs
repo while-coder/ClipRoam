@@ -12,6 +12,7 @@
 //! 再做，避免嵌套锁。
 
 pub(crate) mod save;
+pub(crate) mod records;
 
 use futures_util::StreamExt;
 use reqwest::header::AUTHORIZATION;
@@ -176,7 +177,7 @@ pub(crate) struct BatchOutcome {
     total: usize,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DownloadStatus {
     Queued,
@@ -187,7 +188,7 @@ pub(crate) enum DownloadStatus {
 }
 
 /// 推给前端的任务快照，字段与 TS 的 `DownloadTaskSnapshot` 一一对应。
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TaskSnapshot {
     account_key: String,
@@ -385,9 +386,15 @@ impl Downloader {
                 if reason.is_some() { let _ = call.cancel_tx.send(true); }
             }
             let mut ids = Vec::new();
+            let mut prune_ids = Vec::new();
             for task in inner.tasks.values_mut() {
+                let was_requested = task.requesters.iter().any(|(_, _, request)| request == request_id);
                 task.requesters.retain(|(_, _, request)| request != request_id);
                 if is_active(task.status) && task.requesters.is_empty() { ids.push(task.id.clone()); }
+                if was_requested && !is_active(task.status) && task.requesters.is_empty() { prune_ids.push(task.id.clone()); }
+            }
+            for id in prune_ids {
+                self.schedule_prune_locked(&inner, &id);
             }
             ids
         };
@@ -486,6 +493,7 @@ impl Downloader {
         if inner.inflight.get(&key).map(|id| id == task_id).unwrap_or(false) {
             inner.inflight.remove(&key);
         }
+        self.schedule_prune_locked(&inner, task_id);
         true
     }
 
@@ -624,7 +632,7 @@ impl Downloader {
                 let terminal = inner
                     .tasks
                     .get(&task_id)
-                    .map(|task| !is_active(task.status))
+                    .map(|task| !is_active(task.status) && task.requesters.is_empty())
                     .unwrap_or(false);
                 if terminal {
                     inner.tasks.remove(&task_id);
@@ -828,36 +836,76 @@ pub(crate) async fn download_entry(
     entry_id: String,
     request_id: String,
     session_id: String,
+    save_id: Option<String>,
 ) -> Result<BatchOutcome, String> {
     let account = state.account(&session_id)?;
     let snapshot = snapshot_entry_for(&entry_id, &account)?;
     let files: Vec<DownloadRequest> = entry_contents_of(&snapshot.entry).into_iter()
         .map(|(file_id, size)| DownloadRequest { file_id, size }).collect();
     let total = files.len();
-    let watchers = state.downloader.enqueue_batch(&account, &session_id, &request_id, &entry_id, &files, Some(&snapshot.entry.content))?;
-    let mut cancel_rx = match state.downloader.call_cancel_receiver(&request_id, &session_id) {
-        Ok(receiver) => receiver,
-        Err(_) => return Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
+    // Reusing already-local content for copy/preview is not a new download.
+    if save_id.is_none() && files.iter().all(|file| snapshot.resolve(&file.file_id)
+        .and_then(|path| fs::metadata(path).ok())
+        .is_some_and(|metadata| metadata.is_file() && metadata.len() == file.size)) {
+        return Ok(BatchOutcome { cancelled: false, failed_count: 0, total });
+    }
+    let destination = match &save_id {
+        Some(save_id) => save::attach_download_record(&state, save_id, &account, &entry_id, &request_id)?,
+        None => "应用缓存".to_string(),
     };
-    let result = tokio::select! {
-        biased;
-        _ = wait_cancelled(&mut cancel_rx) => Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
-        outcome = async {
-            let mut cancelled = false;
-            let mut failed_count = 0;
-            for (_, mut rx) in watchers {
-                let outcome = rx.wait_for(|outcome| outcome.is_some()).await
-                    .map_err(|error| error.to_string())?.clone().expect("terminal outcome");
-                match outcome {
-                    TaskOutcome::Succeeded => {}
-                    TaskOutcome::Failed(_) => failed_count += 1,
-                    TaskOutcome::Cancelled(_) => cancelled = true,
+    records::begin(&state.downloader.app, &account, &records::DownloadRecord {
+        id: request_id.clone(), entry_id: entry_id.clone(), label: snapshot.entry.content.clone(),
+        size: files.iter().map(|file| file.size).sum(), file_count: total,
+        status: "downloading".into(), created_ms: chrono::Utc::now().timestamp_millis(),
+        finished_ms: None, received_bytes: 0, destination, error: None, files: vec![],
+    })?;
+    let mut task_ids = Vec::new();
+    let result = async {
+        let watchers = state.downloader.enqueue_batch(&account, &session_id, &request_id, &entry_id, &files, Some(&snapshot.entry.content))?;
+        task_ids = watchers.iter().map(|(id, _)| id.clone()).collect();
+        let mut cancel_rx = match state.downloader.call_cancel_receiver(&request_id, &session_id) {
+            Ok(receiver) => receiver,
+            Err(_) => return Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
+        };
+        tokio::select! {
+            biased;
+            _ = wait_cancelled(&mut cancel_rx) => Ok(BatchOutcome { cancelled: true, failed_count: 0, total }),
+            outcome = async {
+                let mut cancelled = false;
+                let mut failed_count = 0;
+                for (_, mut rx) in watchers {
+                    let outcome = rx.wait_for(|outcome| outcome.is_some()).await
+                        .map_err(|error| error.to_string())?.clone().expect("terminal outcome");
+                    match outcome {
+                        TaskOutcome::Succeeded => {}
+                        TaskOutcome::Failed(_) => failed_count += 1,
+                        TaskOutcome::Cancelled(_) => cancelled = true,
+                    }
                 }
-            }
-            Ok::<_, String>(BatchOutcome { cancelled, failed_count, total })
-        } => outcome,
+                Ok::<_, String>(BatchOutcome { cancelled, failed_count, total })
+            } => outcome,
+        }
+    }.await;
+    let mut tasks: Vec<TaskSnapshot> = state.downloader.snapshot().into_iter()
+        .filter(|task| task.account_key == account.key && task_ids.contains(&task.id)).collect();
+    if result.as_ref().is_ok_and(|outcome| outcome.cancelled) {
+        // A deduplicated transfer may continue for another caller after this one cancels.
+        for task in tasks.iter_mut().filter(|task| is_active(task.status)) {
+            task.status = DownloadStatus::Cancelled;
+            task.error = Some("已取消".into());
+        }
+    }
+    let (status, error) = match &result {
+        Ok(outcome) if outcome.cancelled => ("cancelled", Some("已取消".to_string())),
+        Ok(outcome) if outcome.failed_count > 0 => ("failed", Some(tasks.iter()
+            .find_map(|task| task.error.clone()).unwrap_or_else(|| format!("有 {} 个文件下载失败", outcome.failed_count)))),
+        Ok(_) if save_id.is_some() => ("saving", None),
+        Ok(_) => ("succeeded", None),
+        Err(error) => ("failed", Some(error.clone())),
     };
+    let persisted = records::finish(&state.downloader.app, &account, &request_id, status, error, Some(tasks));
     state.downloader.release_call(&request_id, None);
+    persisted?;
     result
 }
 
@@ -865,6 +913,18 @@ pub(crate) async fn download_entry(
 pub(crate) fn cancel_entry_download_call(state: State<'_, AppState>, request_id: String, session_id: String) -> Result<(), String> {
     state.downloader.call_cancel_receiver(&request_id, &session_id)?;
     state.downloader.release_call(&request_id, Some("已取消"));
+    Ok(())
+}
+
+/// History rows identify a whole invocation, including calls owned by another window.
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) fn cancel_download_record(state: State<'_, AppState>, record_id: String, session_id: String) -> Result<(), String> {
+    let account = state.account(&session_id)?;
+    let allowed = {
+        let inner = state.downloader.inner.lock().map_err(|error| error.to_string())?;
+        inner.calls.get(&record_id).is_some_and(|call| call.account_key == account.key)
+    };
+    if allowed { state.downloader.release_call(&record_id, Some("已取消")); }
     Ok(())
 }
 

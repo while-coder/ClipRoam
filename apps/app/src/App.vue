@@ -12,6 +12,7 @@ import {
   CloudUpload,
   Download,
   LoaderCircle,
+  MonitorSmartphone,
   Upload,
 } from "lucide-vue-next";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
@@ -30,6 +31,7 @@ import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
 import HistoryView from "./features/history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
+import DevicesView from "./features/devices/DevicesView.vue";
 import UploadsView from "./features/uploads/UploadsView.vue";
 import PendingUploadsView from "./features/pending-upload/PendingUploadsView.vue";
 import SetupWizard from "./features/setup/SetupWizard.vue";
@@ -91,9 +93,10 @@ import {
 } from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
-  downloadTasks,
+  downloadRecords,
+  cancelDownloadRecord,
+  removeDownloadRecords,
   refreshDownloadTasks,
-  cancelDownload,
   stopAllDownloads,
   ensureLocalFiles,
 } from "./features/downloads/useDownloads";
@@ -115,6 +118,7 @@ const mobilePages = computed(() => [
   { view: "pending-upload" as const, label: "待上传", icon: CloudUpload, count: pendingCount.value },
   { view: "uploads" as const, label: "上传", icon: Upload, count: activeUploadCount.value },
   { view: "downloads" as const, label: "下载", icon: Download, count: activeDownloadCount.value },
+  { view: "devices" as const, label: "设备", icon: MonitorSmartphone, count: 0 },
 ]);
 
 const { initUpdaterVersion } = useUpdater();
@@ -571,6 +575,16 @@ onBeforeUnmount(() => {
           <span>下载</span>
           <span v-if="activeDownloadCount" class="nav-count">{{ activeDownloadCount }}</span>
         </button>
+        <button
+          class="nav-item"
+          :class="{ active: activeView === 'devices' }"
+          type="button"
+          :aria-current="activeView === 'devices' ? 'page' : undefined"
+          @click="activeView = 'devices'"
+        >
+          <MonitorSmartphone :size="17" aria-hidden="true" />
+          <span>设备</span>
+        </button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -612,11 +626,18 @@ onBeforeUnmount(() => {
       :serve-tasks="uploadTasks"
     />
 
+    <DevicesView
+      v-else-if="activeView === 'devices'"
+      :current-time="currentTime"
+    />
+
     <DownloadsView
       v-else
-      :download-tasks="downloadTasks"
-      @cancel-download="cancelDownload($event)"
-      @cancel-all-downloads="stopAllDownloads()"
+      :records="downloadRecords"
+      @cancel-record="cancelDownloadRecord($event)"
+      @cancel-all="stopAllDownloads()"
+      @remove-record="removeDownloadRecords($event)"
+      @clear-finished="removeDownloadRecords()"
     />
 
     <EntryDownloadToasts v-if="isMobile && !isPasteWindow" mobile />

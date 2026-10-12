@@ -81,7 +81,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       if (!preparation) return;
       saveId = preparation.saveId;
 
-      await downloadEntry(entry.id, session);
+      await downloadEntry(entry.id, session, preparation.saveId);
 
       const saved = await session.invoke<number>("finish_save_entry", { saveId: preparation.saveId });
       saveId = undefined;

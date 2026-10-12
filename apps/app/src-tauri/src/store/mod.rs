@@ -106,6 +106,7 @@ pub fn open_history_database(path: &Path) -> Result<Connection, String> {
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .map_err(|error| error.to_string())?;
     init_tables(&connection)?;
+    crate::downloads::records::initialize(&connection)?;
     Ok(connection)
 }
 

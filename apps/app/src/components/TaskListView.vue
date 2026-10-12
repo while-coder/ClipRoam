@@ -50,11 +50,11 @@ function inProgress(task: TaskRow): boolean {
 
 <template>
   <WorkspacePage :title="title">
+    <template #status>
+      <span role="status">{{ activeCount ? `${activeCount} 个进行中` : `共 ${tasks.length} 个任务` }}</span>
+    </template>
     <template #actions>
       <SButton v-if="cancellable && activeCount" type="error" @click="emit('cancel-all')">全部取消</SButton>
-      <span class="pending-total" role="status">
-        {{ activeCount ? `${activeCount} 个进行中` : `共 ${tasks.length} 个任务` }}
-      </span>
     </template>
 
     <section class="history-list downloads-list" :aria-label="listLabel">

@@ -5,6 +5,7 @@ import { refreshHistory } from "../history/useHistorySync";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
 import { isMobile } from "../../composables/usePlatform";
+import { showToast } from "../toast/useToast";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
@@ -27,6 +28,33 @@ export type DownloadTaskSnapshot = {
   receivedBytes: number;
   error?: string;
 };
+
+export type DownloadRecord = {
+  id: string;
+  entryId: string;
+  label: string;
+  size: number;
+  fileCount: number;
+  status: "queued" | "downloading" | "saving" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  createdMs: number;
+  finishedMs: number | null;
+  receivedBytes: number;
+  destination: string;
+  error: string | null;
+  files: DownloadTaskSnapshot[];
+};
+
+const storedDownloadRecords = accountStateRef("downloadRecords");
+export const downloadRecords = computed<DownloadRecord[]>(() => storedDownloadRecords.value.map((record) => {
+  if (record.finishedMs !== null || record.status === "saving") return record;
+  const files = downloadTasks.value.filter((task) => task.requestIds.includes(record.id));
+  if (!files.length) return record;
+  return {
+    ...record, files,
+    status: files.every((file) => file.status === "queued") ? "queued" : "downloading",
+    receivedBytes: files.reduce((sum, file) => sum + file.receivedBytes, 0),
+  };
+}));
 
 export type EntryDownloadToast = {
   id: string;
@@ -52,11 +80,11 @@ export const downloadTasks = accountStateRef("downloadTasks");
 export const entryDownloadToasts = accountStateRef("entryDownloadToasts");
 
 /** Enqueue each fileId and resolve only when all content is locally available. */
-export async function downloadEntry(entryId: string, session = getAccountSession()): Promise<void> {
+export async function downloadEntry(entryId: string, session = getAccountSession(), saveId?: string): Promise<void> {
   if (!session) throw new DownloadCancelledError("账号会话已结束");
   const entry = await session.client!.history.getEntry(entryId) as LocalClipboardEntry;
   // getEntry refreshes previewPath from disk, rather than the history list's stale summary.
-  if (entry.kind === "image" && entry.summary.previewPath) return;
+  if (!saveId && entry.kind === "image" && entry.summary.previewPath) return;
   const files = entryContents(entry);
   if (!files.length) return;
   const call: EntryDownloadToast = {
@@ -70,7 +98,7 @@ export async function downloadEntry(entryId: string, session = getAccountSession
       item.id === call.id ? { ...item, ...patch } : item);
   };
   try {
-    const outcome = await session.invoke<BatchOutcome>("download_entry", { entryId, requestId: call.id });
+    const outcome = await session.invoke<BatchOutcome>("download_entry", { entryId, requestId: call.id, saveId });
     if (outcome.cancelled) throw new DownloadCancelledError("已取消");
     if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
     update({ status: "succeeded" });
@@ -120,6 +148,36 @@ export async function refreshDownloadTasks(): Promise<void> {
   if (!session) return;
   const tasks = await session.invoke<DownloadTaskSnapshot[]>("download_tasks");
   applyDownloadSnapshot(tasks);
+  await refreshDownloadRecords();
+}
+
+export async function refreshDownloadRecords(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const revision = ++session.state.downloadRecordsRevision;
+  const records = await session.invoke<DownloadRecord[]>("download_records");
+  if (revision === session.state.downloadRecordsRevision) session.state.downloadRecords.value = records;
+}
+
+export async function removeDownloadRecords(recordId?: string): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  try {
+    await session.invoke("remove_download_records", { recordId: recordId ?? null });
+    await refreshDownloadRecords();
+  } catch (error) {
+    if (!session.signal.aborted) showToast(`清理下载记录失败：${errorMessage(error)}`, "error");
+  }
+}
+
+export async function cancelDownloadRecord(recordId: string): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  try {
+    await session.invoke("cancel_download_record", { recordId });
+  } catch (error) {
+    if (!session.signal.aborted) showToast(`取消下载失败：${errorMessage(error)}`, "error");
+  }
 }
 
 export function applyDownloadSnapshot(payload: DownloadTaskSnapshot[]): void {
@@ -135,9 +193,9 @@ export function applyDownloadSnapshot(payload: DownloadTaskSnapshot[]): void {
   });
 }
 
-/** 侧边栏「下载」入口的角标：排队 + 下载中的任务数。 */
+/** 侧边栏「下载」入口的角标：未结束的下载批次数（包含保存阶段）。 */
 export const activeDownloadCount = computed(() =>
-  downloadTasks.value.filter((task) => task.status === "queued" || task.status === "downloading").length);
+  downloadRecords.value.filter((record) => record.finishedMs === null).length);
 
 /** Download content then re-read the entry's local availability summary. */
 export async function ensureLocalFiles(entry: LocalClipboardEntry, session = getAccountSession()): Promise<LocalClipboardEntry> {

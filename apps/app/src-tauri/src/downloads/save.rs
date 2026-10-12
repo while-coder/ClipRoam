@@ -26,6 +26,7 @@ pub(crate) struct SaveSession {
     destination: PathBuf,
     single_file: bool,
     document_tree: Option<String>,
+    download_record_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -88,9 +89,23 @@ pub(crate) async fn prepare_save_entry(
                 destination,
                 single_file,
                 document_tree,
+                download_record_id: None,
             },
         );
     Ok(Some(SavePreparation { save_id }))
+}
+
+pub(crate) fn attach_download_record(
+    state: &AppState, save_id: &str, account: &crate::account::AccountContext,
+    entry_id: &str, record_id: &str,
+) -> Result<String, String> {
+    let mut sessions = state.save_sessions.lock().map_err(|error| error.to_string())?;
+    let session = sessions.get_mut(save_id).ok_or("另存为任务不存在或已结束")?;
+    if session.account.key != account.key || session.entry_id != entry_id {
+        return Err("另存为任务与下载记录不匹配".into());
+    }
+    session.download_record_id = Some(record_id.into());
+    Ok(session.document_tree.clone().unwrap_or_else(|| session.destination.to_string_lossy().into_owned()))
 }
 
 #[tauri::command(rename_all = "camelCase", async)]
@@ -101,6 +116,9 @@ pub(crate) fn cancel_save_entry(state: State<'_, AppState>, save_id: String) -> 
         .map_err(|error| error.to_string())?
         .remove(&save_id);
     if let Some(session) = session {
+        if let Some(record_id) = &session.download_record_id {
+            super::records::finish(&state.downloader.app, &session.account, record_id, "cancelled", Some("已取消保存".into()), None)?;
+        }
         if session.document_tree.is_some() {
             let root = if session.single_file {
                 session.destination.parent().expect("single-file destination has a parent")
@@ -187,6 +205,13 @@ pub(crate) fn finish_save_entry(app: AppHandle, state: State<'_, AppState>, save
             result = crate::platforms::export_saved_directory(&app, export_root, uri);
         }
         let _ = fs::remove_dir_all(export_root);
+    }
+    if let Some(record_id) = &session.download_record_id {
+        let (status, error) = match &result {
+            Ok(_) => ("succeeded", None),
+            Err(error) => ("failed", Some(error.clone())),
+        };
+        super::records::finish(&app, &session.account, record_id, status, error, None)?;
     }
     result
 }

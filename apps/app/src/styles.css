@@ -543,6 +543,7 @@ button.image-thumbnail { cursor: zoom-in; }
   background: #10192e;
 }
 .pending-content { grid-template-rows: 52px minmax(0, 1fr); }
+.pending-content.has-footer { grid-template-rows: 52px minmax(0, 1fr) 36px; }
 /* grid item 默认 min-width:auto，会把筛选行的 min-content（最宽 479px）
    反向撑成整列宽度；窄视口下内容列因此横向溢出，聚焦输入框时还会把
    overflow:hidden 的容器滚偏。归零后溢出收敛到 filter-scroll 自己的横向滚动。 */
@@ -578,11 +579,12 @@ button.image-thumbnail { cursor: zoom-in; }
     radial-gradient(circle at 15% -10%, rgba(30, 58, 95, 0.5), transparent 32%),
     var(--color-background);
 }
-.workspace-titlebar { padding-inline: 20px; }
+.workspace-titlebar { gap: 12px; padding-inline: 20px; }
 .workspace-titlebar .titlebar-actions { min-width: 0; }
 .workspace-titlebar .pending-total { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-titlebar .titlebar-actions > .s-button { flex-shrink: 0; }
-.page-title { display: grid; gap: 1px; }
+.workspace-titlebar .titlebar-actions > .s-button { flex-shrink: 0; min-height: 44px; padding-inline: 10px; font-size: 12px; }
+.page-title { display: grid; gap: 1px; min-width: 0; }
+.workspace-titlebar .page-title > .workspace-page-status { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: normal; text-transform: none; }
 .page-title > span {
   color: #64748b;
   font-size: 10px;
@@ -815,7 +817,7 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-navigation {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   grid-row: 3;
   gap: 8px;
   padding: 4px 8px;
@@ -857,6 +859,7 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-app .history-content { grid-template-rows: 60px auto minmax(0, 1fr) 48px; }
 .mobile-app .pending-content { grid-template-rows: 60px minmax(0, 1fr); }
+.mobile-app .pending-content.has-footer { grid-template-rows: 60px minmax(0, 1fr) 48px; }
 .mobile-app .workspace-titlebar { padding-inline: 16px; }
 .mobile-app .page-title > span { display: none; }
 .mobile-app .page-title h1 { font-size: 18px; }
@@ -942,5 +945,6 @@ button:focus-visible, [role="button"]:focus-visible {
 @media (orientation: landscape) and (max-height: 520px) {
   .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr) 48px; }
   .mobile-app .pending-content { grid-template-rows: 52px minmax(0, 1fr); }
+  .mobile-app .pending-content.has-footer { grid-template-rows: 52px minmax(0, 1fr) 48px; }
   .mobile-app .workspace-titlebar { min-height: 52px; }
 }
