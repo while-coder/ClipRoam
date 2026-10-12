@@ -133,8 +133,9 @@ async function reloadPasteSession(): Promise<void> {
   currentUsername.value = "";
   hasSavedSyncConfig.value = false;
   setupVisible.value = false;
-  const config = await loadSyncConfig();
+  const config = await invoke<SyncConfig | null>("get_authenticated_sync_config");
   if (revision !== pasteSessionReloadRevision) return;
+  if (!config?.sessionToken) return;
   const preferences = await loadAccountPreferences();
   if (revision !== pasteSessionReloadRevision) return;
   setActiveConfig(config ?? undefined);
@@ -152,6 +153,7 @@ const currentTime = ref(Date.now());
 const initializing = ref(true);
 const setupVisible = ref(false);
 const setupError = ref("");
+const accountRuntimeError = ref("");
 const testingConnection = ref(false);
 const verifyingSession = ref(false);
 const savedSessionConfig = ref<SyncConfig>();
@@ -253,6 +255,7 @@ function closeSetup(): void {
 
 async function connectAndSave(draft: SetupDraft): Promise<void> {
   if (testingConnection.value) return;
+  if (accountRuntimeError.value) { setupError.value = accountRuntimeError.value; return; }
   setupError.value = "";
   const { serverAddress, username, password, serverProtocol } = draft;
 
@@ -271,6 +274,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       device,
       controller.signal,
     );
+    controller.signal.throwIfAborted();
     accountCreated = draft.authMode === "register";
     // 推送通道不设登录门槛：连不上只影响实时推送，登录后的常驻连接会自行
     // 重连并以 toast 报告状态。
@@ -282,6 +286,11 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     };
     // 重登同一账号档案保留它的偏好；换账号从默认开始，避免跨账号污染。
     const sameArchive = archiveKeyFor(getActiveConfig()) === archiveKeyFor(config);
+    await persistSyncConfig(config);
+    setActiveConfig(config);
+    currentUsername.value = config.username;
+    await invoke("activate_account");
+    const accountPreferences = await loadAccountPreferences();
     const preferences: AccountPreferences = {
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
       autoUploadLimitMb: Math.min(
@@ -289,25 +298,24 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
         Math.max(0, session.settings.maxStoredFileMb),
       ),
       autoReceiveClipboard: sameArchive
-        ? getActivePreferences().autoReceiveClipboard
+        ? accountPreferences.autoReceiveClipboard
         : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
       watchClipboard: sameArchive
-        ? getActivePreferences().watchClipboard
+        ? accountPreferences.watchClipboard
         : DEFAULT_WATCH_CLIPBOARD,
       excludePatterns: sameArchive
-        ? getActivePreferences().excludePatterns
+        ? accountPreferences.excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
       serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
       // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
       maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
-    await persistSyncConfig(config);
-    setActiveConfig(config);
-    currentUsername.value = config.username;
     await persistAccountPreferences(preferences);
     refreshPending();
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
     await startSync(config);
+    await enableAccountShortcuts();
+    controller.signal.throwIfAborted();
     savedSessionConfig.value = undefined;
     hasSavedSyncConfig.value = true;
     setupVisible.value = false;
@@ -315,6 +323,9 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await nextTick();
     await focusSearchInput();
   } catch (error) {
+    await stopSyncClient();
+    hasSavedSyncConfig.value = false;
+    if (controller.signal.aborted) return;
     const message = errorMessage(error);
     if (accountCreated) {
       setupWizard.value?.setAuthMode("login");
@@ -329,6 +340,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
 }
 
 async function restoreSavedSession(): Promise<void> {
+  if (accountRuntimeError.value) { setupError.value = accountRuntimeError.value; return; }
   const config = savedSessionConfig.value;
   if (!config || testingConnection.value) return;
   setupError.value = "";
@@ -339,7 +351,10 @@ async function restoreSavedSession(): Promise<void> {
   try {
     await verifyAccountSession(config, await getDevice(), controller.signal);
     controller.signal.throwIfAborted();
+    await invoke("activate_account");
+    setActivePreferences(await loadAccountPreferences());
     await startSync(config);
+    await enableAccountShortcuts();
     controller.signal.throwIfAborted();
     savedSessionConfig.value = undefined;
     hasSavedSyncConfig.value = true;
@@ -348,6 +363,8 @@ async function restoreSavedSession(): Promise<void> {
     await nextTick();
     await focusSearchInput();
   } catch (error) {
+    await stopSyncClient();
+    hasSavedSyncConfig.value = false;
     if (controller.signal.aborted) return;
     const message = errorMessage(error);
     setupError.value = message;
@@ -401,6 +418,9 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
 
 function readableStartupError(error: unknown): string {
   const message = errorMessage(error);
+  if (/deactivate_account.*not found|unknown command.*deactivate_account/i.test(message)) {
+    return "原生程序尚未更新，请重新编译并重启 ClipRoam";
+  }
   if (message.includes("state not managed for field `state`")) {
     return "应用初始化尚未完成，请从托盘退出 ClipRoam 后重新启动";
   }
@@ -432,10 +452,6 @@ async function initializeTauriServices(): Promise<void> {
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
   await refreshDownloadTasks().catch(() => undefined);
-  if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
-    const registered = await initializeQuickPasteShortcut();
-    if (!registered) showToast(quickPasteShortcutStatus.value.message, "error");
-  }
 
   if (!isPasteWindow && platformCapabilities.value.shareReceiver) {
     try {
@@ -457,10 +473,27 @@ async function initializeTauriServices(): Promise<void> {
   }
 }
 
+async function enableAccountShortcuts(): Promise<void> {
+  if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
+    const registered = await initializeQuickPasteShortcut();
+    if (!registered) showToast(quickPasteShortcutStatus.value.message, "error");
+  }
+}
+
 onMounted(async () => {
   if (isToastWindow) {
     unlisteners = [await startToastWindowListener()];
     return;
+  }
+  // 主窗口重载也必须重新登录，不能继承上一个 WebView 启用的账号服务。
+  if (!isPasteWindow) {
+    try {
+      await withStartupTimeout(invoke("deactivate_account"), "停止旧账号服务超时，请重启 ClipRoam");
+    } catch (error) {
+      accountRuntimeError.value = readableStartupError(error);
+      setupError.value = accountRuntimeError.value;
+      console.error("账号服务初始化失败", error);
+    }
   }
 
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
@@ -492,7 +525,6 @@ onMounted(async () => {
     if (!isPasteWindow) setupVisible.value = true;
   } else {
     setActiveConfig(config);
-    setActivePreferences(await loadAccountPreferences());
     currentUsername.value = config.username;
     // 保存的 token 必须经服务器验证，才能进入主界面。
     hasSavedSyncConfig.value = false;
@@ -506,12 +538,12 @@ onMounted(async () => {
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
-  void initializeTauriServices();
+  if (!accountRuntimeError.value) void initializeTauriServices();
 
   if (setupVisible.value) {
     await nextTick();
     setupWizard.value?.setFields(config ?? undefined);
-    if (savedSessionConfig.value) await restoreSavedSession();
+    if (savedSessionConfig.value && !accountRuntimeError.value) await restoreSavedSession();
     else setupWizard.value?.focusServerInput();
   } else if (config?.username && config.sessionToken) {
     try {
@@ -534,7 +566,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();
-  stopSyncClient({ activeOnly: true });
+  void stopSyncClient({ activeOnly: isPasteWindow });
   if (!isPasteWindow) void disposeQuickPasteShortcut();
 });
 </script>

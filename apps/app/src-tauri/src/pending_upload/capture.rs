@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::{
     io::Cursor,
     path::PathBuf,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     thread,
     time::Duration,
 };
@@ -503,7 +504,14 @@ pub(crate) fn decode_image_as_bmp(image: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn start_clipboard_monitor(app: AppHandle) {
-    thread::spawn(move || {
+    let state = app.state::<AppState>();
+    let mut monitor = state.clipboard_monitor.lock().unwrap();
+    if monitor.is_some() { return; }
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let monitor_app = app.clone();
+    let handle = thread::spawn(move || {
+        let app = monitor_app;
         // Every pass reads the full clipboard and re-decodes its contents for
         // the signatures (a bitmap can be tens of megabytes), so Windows gates
         // each pass on the clipboard sequence number (see
@@ -511,7 +519,18 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
         // screenshot sitting idle for hours, for example — is skipped without
         // even opening it.
         let mut last_clipboard_sequence = 0u32;
-        loop {
+        // 以登录成功时的当前内容为基线，不把登录页期间留下的内容加入队列。
+        let signature = if let Some(paths) = crate::platforms::read_clipboard_files(&app).filter(|paths| !paths.is_empty()) {
+            Some(CapturedSignature::File(file_signature(&paths)))
+        } else if let Some(text) = crate::platforms::read_clipboard_text(&app) {
+            Some(CapturedSignature::Clipboard(rich_text_signature(&text)))
+        } else {
+            crate::platforms::read_clipboard_image(&app).map(|image| CapturedSignature::Image(image_signature(&image)))
+        };
+        if let Some(signature) = signature {
+            if let Ok(mut history) = app.state::<AppState>().history.lock() { signature.record(&mut history); }
+        }
+        while !stopped.load(Ordering::Acquire) {
             // 监听开关（设置页「监听剪贴板」）关闭时只空转等待：本机复制不再
             // 捕获，远程同步的接收与激活不受影响。锁中毒时保持默认监听。
             let watching = app
@@ -537,6 +556,19 @@ pub(crate) fn start_clipboard_monitor(app: AppHandle) {
             thread::sleep(Duration::from_millis(350));
         }
     });
+    *monitor = Some(ClipboardMonitor { stop, handle });
+}
+
+pub(crate) struct ClipboardMonitor {
+    stop: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
+}
+
+pub(crate) fn stop_clipboard_monitor(state: &AppState) {
+    if let Some(monitor) = state.clipboard_monitor.lock().unwrap().take() {
+        monitor.stop.store(true, Ordering::Release);
+        let _ = monitor.handle.join();
+    }
 }
 
 // ---------------------------------------------------------------------------

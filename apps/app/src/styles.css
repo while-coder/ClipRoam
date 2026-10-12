@@ -83,7 +83,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   z-index: 1;
 }
 .setup-loading {
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   color: var(--color-secondary-text);
   font-size: 12px;
 }
@@ -92,6 +92,8 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   place-items: center;
   align-content: center;
   gap: 9px;
+  min-height: 0;
+  padding: 24px;
 }
 .setup-loading-content strong { color: var(--color-foreground); font-size: 15px; }
 .setup-loading.mobile-shell { grid-template-rows: minmax(0, 1fr); }

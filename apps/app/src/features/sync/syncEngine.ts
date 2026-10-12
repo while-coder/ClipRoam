@@ -1,4 +1,6 @@
 import { computed, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import { disposeQuickPasteShortcut } from "../quick-paste/quickPasteShortcut";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { isPasteWindow } from "../../composables/usePlatform";
 import { activeView } from "../../composables/useActiveView";
@@ -31,11 +33,15 @@ function setConnectionState(session: AccountSession, value: boolean): void {
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
 }
 
-export function stopSyncClient(options: { activeOnly?: boolean } = {}): void {
+export async function stopSyncClient(options: { activeOnly?: boolean } = {}): Promise<void> {
   const session = getAccountSession();
   if (!options.activeOnly && session?.state.connected.value) showToast("同步连接已断开", "error");
   session?.dispose({ stopNativeTasks: !options.activeOnly });
   replaceAccountSession();
+  if (!isPasteWindow && !options.activeOnly) {
+    await invoke("deactivate_account").catch(() => undefined);
+    await disposeQuickPasteShortcut();
+  }
 }
 
 export const connectionStatus = computed(() => connected.value
@@ -116,7 +122,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onServeTasksChanged: guard(() => { session.state.uploadTasks.value = [...client.uploads.serveTasksSnapshot()]; }),
       resolveEntryLabel: (entryId) => client.history.getEntry(entryId).then((entry) => entry.content).catch(() => undefined),
       onAuthenticationFailed: guard((message) => {
-        stopSyncClient(); engineDeps.onAuthenticationFailed(message, config);
+        void stopSyncClient(); engineDeps.onAuthenticationFailed(message, config);
       }),
     }, session.preferences.autoUploadLimitMb * 1024 * 1024, session);
     session.client = client;
@@ -126,7 +132,7 @@ export async function startSync(config: SyncConfig): Promise<void> {
     if (!isPasteWindow) { void client.pullDevices(); client.connect(); }
   } catch (error) {
     if (session.signal.aborted) return;
-    stopSyncClient();
+    await stopSyncClient();
     throw error;
   }
 }

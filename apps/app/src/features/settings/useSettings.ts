@@ -29,7 +29,7 @@ export type SettingsBridge = {
   /** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，经此运行期下发。 */
   applyAutoUploadLimit(limitMb: number): void;
   /** 断开当前同步客户端。 */
-  disconnect(): void;
+  disconnect(): Promise<void>;
   /** 退出账号后清除「已保存过配置」标记，登录页不再提供返回主界面的入口。 */
   markSignedOut(): void;
   openSetup(o: { config?: SyncConfig; message?: string; focus?: "server" | "password" }): void;
@@ -304,7 +304,7 @@ async function changePassword(): Promise<void> {
     await session.start(() => requireBridge().persistSyncConfig(config));
     requireBridge().setActiveConfig(config);
     requireBridge().setUsername(config.username);
-    requireBridge().disconnect();
+    await requireBridge().disconnect();
     settingsVisible.value = false;
     clearPasswordChangeFields();
     requireBridge().openSetup({
@@ -336,7 +336,7 @@ async function signOut(switchingServer = false): Promise<void> {
     await session.start(() => requireBridge().persistSyncConfig(signedOutConfig));
     requireBridge().setActiveConfig(undefined);
     requireBridge().setUsername("");
-    requireBridge().disconnect();
+    await requireBridge().disconnect();
     // 退出即回到登录页；清掉「已保存配置」标记，登录页因此不提供
     // 返回主界面的入口。
     requireBridge().markSignedOut();

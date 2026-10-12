@@ -22,7 +22,7 @@ use tauri::Manager;
 
 use file::collect_local_garbage;
 use store::{
-    cache_dir_for, history_path_for_key, load_history, preferences_path_for, DatabasePool,
+    cache_dir_for, history_path_for_key, DatabasePool,
     HistoryData,
 };
 use sync::SyncConfig;
@@ -49,6 +49,7 @@ struct AppState {
     /// 全局下载管理器：队列/并发/去重/拉流都在这里（main 与 paste 共享）。
     downloader: Downloader,
     share_import: Mutex<()>,
+    clipboard_monitor: Mutex<Option<pending_upload::capture::ClipboardMonitor>>,
 }
 
 impl AppState {
@@ -118,23 +119,9 @@ pub fn run() {
             let sync_config_path = app_data_dir.join("sync-config.json");
             let device_config_path = app_data_dir.join("device.json");
             let sync_config = sync::load_sync_config(&sync_config_path);
-            // 登出只清 token、保留配置；无 token 即未登录，没有活动档案。
-            let history_key = sync_config
-                .as_ref()
-                .and_then(sync::signed_in_config)
-                .map(sync::history_key_for_config);
-            // 登录态决定活动档案：未登录时没有档案，捕获与查询都不可用。
-            let (history, account_preferences) = match &history_key {
-                Some(key) => {
-                    let history_path = history_path_for_key(&histories_dir, key);
-                    let history = load_history(&history_path, key);
-                    // 偏好跟随活动档案：缺失或损坏时回落默认值。
-                    let preferences_path = preferences_path_for(&histories_dir, key);
-                    let account_preferences = sync::load_preferences(&preferences_path);
-                    (history, account_preferences)
-                }
-                None => (HistoryData::default(), sync::AccountPreferences::default()),
-            };
+            // 保存的 token 仅用于缓存登录；login/verify 成功前不启用账号档案。
+            let history = HistoryData::default();
+            let account_preferences = sync::AccountPreferences::default();
             app.manage(AppState {
                 account_sessions: Mutex::new(HashMap::new()),
                 history: Mutex::new(history),
@@ -148,6 +135,7 @@ pub fn run() {
                 save_sessions: Mutex::new(HashMap::new()),
                 downloader: Downloader::new(app.handle().clone()),
                 share_import: Mutex::new(()),
+                clipboard_monitor: Mutex::new(None),
             });
             platforms::manage_platform_state(app.handle())?;
 
@@ -157,7 +145,6 @@ pub fn run() {
             // duplicate label.
             platforms::create_windows(app.handle())?;
             platforms::setup_desktop_shell(app.handle())?;
-            platforms::start_clipboard_monitor(app.handle().clone());
 
             // Entry rows live in SQLite alone, so startup only frees disk:
             // blobs and share requests no entry references go away.
@@ -185,6 +172,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             account::open_account_session,
             account::close_account_session,
+            account::activate_account,
+            account::deactivate_account,
+            account::get_authenticated_sync_config,
             app_shell::get_platform_capabilities,
             pending_upload::capture::capture_current_clipboard_text,
             pending_upload::capture::capture_files_from_picker,

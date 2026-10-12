@@ -5,11 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::store::{
-    history_path_for_key, load_history, preferences_path_for, save_metadata, HistoryData,
-};
 use crate::utils::write_file_atomic;
 use crate::AppState;
 
@@ -97,8 +94,8 @@ fn default_max_capture_file_count() -> u64 {
     1000
 }
 
-/// 已登录的配置：登出只是清空 token，配置（服务器地址、用户名）保留供
-/// 登录页回填；无 token 即未登录，等价于没有配置。
+/// 含已保存凭证的配置，用于缓存登录；不代表运行时已通过 login/verify。
+/// 登出清空 token，保留服务器地址和用户名供登录页回填。
 pub(crate) fn signed_in_config(config: &SyncConfig) -> Option<&SyncConfig> {
     (!config.session_token.trim().is_empty()).then_some(config)
 }
@@ -193,6 +190,8 @@ pub(crate) fn get_sync_config(state: State<'_, AppState>) -> Result<Option<SyncC
 pub(crate) fn get_account_preferences(
     state: State<'_, AppState>,
 ) -> Result<AccountPreferences, String> {
+    let history = state.history.lock().map_err(|error| error.to_string())?;
+    if history.active_history.is_none() { return Err("同步账号未登录".to_string()); }
     Ok(state
         .account_preferences
         .lock()
@@ -218,62 +217,17 @@ pub(crate) fn save_account_preferences(
     Ok(())
 }
 
-/// 保存配置；键变化时切换到新档案的历史库。设备身份是机器级的
-/// （`device.json`），不随档案切换。session_token 为空（退出账号）或传 None
-/// 都视为未登录：停用档案——没有活动历史库，捕获与查询都不可用；但配置
-/// 本身保留，登录页靠它回填上次的服务器地址与用户名。
-/// 顺序很讲究：先持久化旧档案元数据，再原子写配置文件，最后才切换内存
-/// 档案。配置写失败时直接返回，内存档案原封不动——不会出现「内存已切到
-/// 账号档案、磁盘配置还是旧档案」的分裂状态。
+/// 保存登录配置不代表登录成功。停用旧账号后，等待 login/verify 的启用步骤。
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn save_sync_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: Option<SyncConfig>,
 ) -> Result<(), String> {
-    let history_key = config
-        .as_ref()
-        .and_then(signed_in_config)
-        .map(history_key_for_config);
-    let mut history = state.history.lock().map_err(|error| error.to_string())?;
-    if history.active_history != history_key {
-        // Persist the outgoing profile's metadata before leaving it.
-        if let Some(old_key) = history.active_history.clone() {
-            let current_path = history_path_for_key(&state.histories_dir, &old_key);
-            state.with_database(&current_path, |connection| save_metadata(connection, &history))?;
-        }
-    }
     write_sync_config(&state.sync_config_path, &config)?;
-    if history.active_history != history_key {
-        match &history_key {
-            Some(key) => {
-                let next_path = history_path_for_key(&state.histories_dir, key);
-                *history = load_history(&next_path, key);
-                // 偏好跟随档案：切到新档案后加载它的 preferences.json。
-                let preferences_path = preferences_path_for(&state.histories_dir, key);
-                let preferences = load_preferences(&preferences_path);
-                *state
-                    .account_preferences
-                    .lock()
-                    .map_err(|error| error.to_string())? = preferences;
-            }
-            None => {
-                *history = HistoryData::default();
-                *state
-                    .account_preferences
-                    .lock()
-                    .map_err(|error| error.to_string())? = AccountPreferences::default();
-            }
-        }
-    }
-    if let Some(key) = history.active_history.clone() {
-        let active_path = history_path_for_key(&state.histories_dir, &key);
-        state.with_database(&active_path, |connection| save_metadata(connection, &history))?;
-    }
-    state.downloader.stop_all("同步账号已变更");
+    state.deactivate_account()?;
     *state.sync_config.lock().map_err(|error| error.to_string())? = config;
-    drop(history);
-    // Main applies its explicit login/logout flow; paste reloads Rust state.
+    if let Some(paste) = app.get_webview_window("paste") { let _ = paste.hide(); }
     let _ = app.emit_to("paste", "cliproam://sync-config-changed", ());
     Ok(())
 }

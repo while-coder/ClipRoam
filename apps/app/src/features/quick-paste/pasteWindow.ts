@@ -9,6 +9,7 @@ import {
 import { isMobile, isPasteWindow } from "../../composables/usePlatform";
 import { requestProxyDevices } from "../sync/bridge";
 import { focusSearch } from "../history/useHistorySync";
+import { getAccountSession } from "../sync/accountSession";
 
 // Mirrors the former Rust-side paste positioning: center the window below the
 // cursor and clamp it inside the monitor's work area. All values are physical
@@ -36,7 +37,8 @@ function calculatePasteWindowPosition(
 }
 
 export async function showPasteWindow(): Promise<void> {
-  if (!isPasteWindow) return;
+  if (!isPasteWindow || !getAccountSession()) return;
+  if (!await invoke("get_authenticated_sync_config")) return;
   // 每次弹出时向主窗口要一次设备名，兜住错过广播的启动竞态；失败静默。
   requestProxyDevices();
   // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
