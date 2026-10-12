@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Clipboard, FilePlus, FolderPlus, Menu, Settings2 } from "lucide-vue-next";
+import { FilePlus, FolderPlus, Menu, Settings2 } from "lucide-vue-next";
 import { isMobile } from "../composables/usePlatform";
 import { openSettings } from "../features/settings/useSettings";
 import { connectionStatus } from "../features/sync/syncEngine";
-import { capturingClipboard, uploadingFiles, captureCurrentClipboard, captureFilesFromPicker } from "../features/pending-upload/useClipboardCapture";
+import { uploadingFiles, captureFilesFromPicker } from "../features/pending-upload/useClipboardCapture";
 
 const root = ref<HTMLElement>();
 const trigger = ref<HTMLButtonElement>();
@@ -62,7 +62,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
   <div ref="root" class="workspace-menu" @keydown.stop>
     <button ref="trigger" class="workspace-menu-trigger" type="button" aria-label="工作区菜单"
       aria-haspopup="menu" :aria-expanded="open" @click="toggle" @keydown.down.prevent="!open && toggle()">
-      <span v-if="capturingClipboard || uploadingFiles" class="s-spinner" aria-label="正在导入内容" />
+      <span v-if="uploadingFiles" class="s-spinner" aria-label="正在导入内容" />
       <Menu v-else :size="20" aria-hidden="true" />
     </button>
     <div v-if="open" ref="menu" class="workspace-menu-popover" role="menu" aria-label="工作区操作" @keydown="handleKeydown">
@@ -72,9 +72,6 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
       </button>
       <button type="button" role="menuitem" :disabled="uploadingFiles || isMobile" :title="isMobile ? '移动端暂不支持上传文件夹' : undefined" @click="run(() => captureFilesFromPicker('folder'))">
         <FolderPlus :size="18" aria-hidden="true" /><span>上传文件夹<small v-if="isMobile">当前设备不支持</small></span>
-      </button>
-      <button type="button" role="menuitem" :disabled="capturingClipboard" @click="run(captureCurrentClipboard)">
-        <Clipboard :size="18" aria-hidden="true" /><span>读取当前剪贴板</span>
       </button>
       <button type="button" role="menuitem" @click="run(openSettings)">
         <Settings2 :size="18" aria-hidden="true" /><span>设置</span>

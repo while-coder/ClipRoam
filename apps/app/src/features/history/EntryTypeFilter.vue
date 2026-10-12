@@ -14,3 +14,7 @@ function update(value: string[]): void {
 <template>
   <STagFilter class="entry-type-filter" :value="[labels[model]]" :options="options" :multiple="false" @update:value="update" />
 </template>
+
+<style scoped>
+.entry-type-filter :deep(.s-tag-filter-clear) { display: none; }
+</style>

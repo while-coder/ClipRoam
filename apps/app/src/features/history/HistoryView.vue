@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Clipboard,
   Image,
   Search,
 } from "lucide-vue-next";
@@ -18,6 +19,7 @@ import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { isPasteWindow, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
+import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/useClipboardCapture";
 import {
   parseLocalDate,
   TIME_FILTER_LABELS,
@@ -338,6 +340,22 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
     <template v-if="isPasteWindow" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
+    <template v-if="!isPasteWindow" #actions>
+      <button
+        class="capture-clipboard-button"
+        type="button"
+        aria-label="读取当前剪贴板"
+        title="读取当前剪贴板"
+        :aria-busy="capturingClipboard"
+        :disabled="capturingClipboard"
+        @click="captureCurrentClipboard"
+        @keydown.stop
+      >
+        <span v-if="capturingClipboard" class="s-spinner" aria-hidden="true" />
+        <Clipboard v-else :size="18" aria-hidden="true" />
+        <span>读取当前剪贴板</span>
+      </button>
+    </template>
     <template #toolbar>
     <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
       <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
@@ -502,6 +520,16 @@ defineExpose({ handleKeydown, focusSearch, focusSearchInput, currentPage });
 </template>
 
 <style scoped>
+.capture-clipboard-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  align-self: center; flex-shrink: 0; min-width: 44px; min-height: 44px; padding: 0 10px;
+  color: var(--color-secondary-text); background: transparent; border: 0; border-radius: 8px;
+  font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; touch-action: manipulation;
+}
+.capture-clipboard-button:hover:not(:disabled) { color: var(--color-foreground); background: var(--sui-bg-hover); }
+.capture-clipboard-button:active:not(:disabled) { background: var(--sui-bg-active); }
+.capture-clipboard-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.capture-clipboard-button:disabled { opacity: 0.5; cursor: default; }
 .file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .file-preview-trigger:hover { background: var(--sui-bg-hover); }
 @media (max-width: 640px) {

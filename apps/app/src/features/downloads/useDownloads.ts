@@ -54,7 +54,9 @@ export const entryDownloadToasts = accountStateRef("entryDownloadToasts");
 /** Enqueue each fileId and resolve only when all content is locally available. */
 export async function downloadEntry(entryId: string, session = getAccountSession()): Promise<void> {
   if (!session) throw new DownloadCancelledError("账号会话已结束");
-  const entry = await session.client!.history.getEntry(entryId);
+  const entry = await session.client!.history.getEntry(entryId) as LocalClipboardEntry;
+  // getEntry refreshes previewPath from disk, rather than the history list's stale summary.
+  if (entry.kind === "image" && entry.summary.previewPath) return;
   const files = entryContents(entry);
   if (!files.length) return;
   const call: EntryDownloadToast = {
