@@ -141,10 +141,12 @@ onBeforeUnmount(() => {
     <div
       ref="menu"
       class="entry-context-menu"
+      :class="{ 'mobile-entry-context-menu': isMobile }"
       role="menu"
       :aria-label="`条目操作：${entry.content}`"
       :style="menuStyle"
       @keydown="handleMenuKeydown"
+      @contextmenu="isMobile && $event.preventDefault()"
     >
       <SButton v-if="canCopy" type="text" block role="menuitem" :disabled="activating" @click="onActivate(entry)">
         <span v-if="activating" class="s-spinner" aria-hidden="true" />
@@ -165,6 +167,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.mobile-entry-context-menu,
+.mobile-entry-context-menu :deep(*) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .entry-context-menu { position: fixed; z-index: 60; display: grid; gap: 2px; padding: 5px; background: #111c31; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 8px; box-shadow: 0 14px 36px rgba(2, 6, 23, 0.62); }
 /* 菜单项都是 SButton text：选择器带 .text 保证压过 kit 的 (0,3,0) 变体规则，
    恢复原菜单的左对齐格子布局与色相；block 由 kit 提供（width 100%）。 */

@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Clipboard,
-  CircleHelp,
   Image,
   Search,
 } from "lucide-vue-next";
@@ -65,7 +64,6 @@ const emit = defineEmits<{
 const { isMobile } = usePlatform();
 
 const query = ref("");
-const showMobileHint = ref(false);
 const filter = ref<EntryFilter>("all");
 const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
@@ -235,11 +233,12 @@ function handleEntryClick(entry: LocalClipboardEntry): void {
     longPressFired = false;
     return;
   }
-  openEntryPreview(entry);
+  if (entry.kind === "text") emit("activate", entry, false);
+  else openEntryPreview(entry);
 }
 
 function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
-  if (isPasteWindow || longPressFired) return;
+  if (isPasteWindow || isMobile.value || longPressFired) return;
   if (entry.kind === "text") emit("activate", entry, false);
   else if (!isMobile.value) openEntryPreview(entry);
 }
@@ -354,17 +353,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           />
           <kbd>Enter</kbd>
         </label>
-        <button
-          v-if="isMobile"
-          class="history-help-button"
-          type="button"
-          aria-label="历史记录操作说明"
-          aria-controls="mobile-history-hint"
-          :aria-expanded="showMobileHint"
-          @click="showMobileHint = !showMobileHint"
-        >
-          <CircleHelp :size="18" aria-hidden="true" />
-        </button>
       </div>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
@@ -385,7 +373,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
-      <p v-if="isMobile && showMobileHint" id="mobile-history-hint" class="mobile-history-hint">单击图片或文件预览，双击文字复制，长按打开菜单</p>
+      <p v-if="isMobile" class="mobile-history-hint">单击文字复制，单击图片或文件预览，长按打开菜单</p>
     </section>
     </template>
 

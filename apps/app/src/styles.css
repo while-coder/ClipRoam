@@ -230,21 +230,6 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .toolbar { position: relative; padding-top: 12px; padding-bottom: 9px; }
 .history-search-row { display: flex; align-items: center; gap: 4px; }
 .history-search-row .search-field { flex: 1; min-width: 0; }
-.history-help-button {
-  display: grid;
-  place-items: center;
-  flex: 0 0 44px;
-  height: 44px;
-  padding: 0;
-  color: var(--color-secondary-text);
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.history-help-button:active,
-.history-help-button[aria-expanded="true"] { background: var(--sui-bg-active); color: var(--color-foreground); }
-.history-help-button:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: -2px; }
 .search-field {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -559,7 +544,7 @@ button.image-thumbnail { cursor: zoom-in; }
 .pagination-button:hover:not(:disabled) { color: #e2e8f0; background: rgba(255, 255, 255, 0.09); }
 .pagination-button:disabled { opacity: 0.4; cursor: default; }
 .pagination-status { color: #94a3b8; white-space: nowrap; }
-.mobile-app .pagination-button { min-height: 44px; padding: 0 12px; }
+.mobile-app .pagination-button { justify-content: center; width: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
 
 .app-shell {
   position: relative;
@@ -852,6 +837,7 @@ button:focus-visible, [role="button"]:focus-visible {
   border-radius: 0;
   overscroll-behavior: contain;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .mobile-navigation {
   display: grid;
@@ -895,15 +881,19 @@ button:focus-visible, [role="button"]:focus-visible {
   font-size: 10px;
   line-height: 1.4;
 }
-.mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr) 44px; }
-.mobile-app .pending-content { grid-template-rows: 60px minmax(0, 1fr); }
-.mobile-app .pending-content.has-footer { grid-template-rows: 60px minmax(0, 1fr) 48px; }
-.mobile-app .workspace-titlebar { padding-inline: 16px; }
+.mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 36px; }
+.mobile-app .pending-content { grid-template-rows: 40px minmax(0, 1fr); }
+.mobile-app .pending-content.has-footer { grid-template-rows: 40px minmax(0, 1fr) 36px; }
+.mobile-app .workspace-titlebar { padding-inline: 12px; }
 .mobile-app .page-title > span { display: none; }
-.mobile-app .page-title h1 { font-size: 18px; }
-.mobile-app .titlebar-actions { gap: 10px; }
-.mobile-app .toolbar { padding: 6px 12px 4px; }
-.mobile-app .search-field { height: 44px; min-height: 44px; }
+.mobile-app .page-title h1 { font-size: 17px; }
+.mobile-app .titlebar-actions { align-self: center; gap: 6px; }
+.mobile-app .s-button { min-height: 32px; padding: 4px 8px; gap: 5px; border-radius: 5px; font-size: 12px; line-height: 1.4; }
+.mobile-app .workspace-titlebar .titlebar-actions > .s-button { box-sizing: border-box; height: 32px; min-height: 32px; max-height: 32px; padding-block: 0; flex: none; }
+.mobile-app .workspace-menu-trigger { width: 32px; height: 32px; border-radius: 5px; }
+.mobile-app .workspace-menu-popover > button { min-height: 36px; gap: 8px; padding: 5px 8px; font-size: 13px; }
+.mobile-app .toolbar { padding: 4px 12px; }
+.mobile-app .search-field { height: 36px; min-height: 36px; padding-inline: 8px; border-radius: 6px; gap: 5px; }
 .mobile-app .search-field input { min-width: 0; font-size: 16px; }
 .mobile-app .search-field kbd { display: none; }
 .mobile-share-status {
@@ -931,22 +921,24 @@ button:focus-visible, [role="button"]:focus-visible {
   gap: 0;
   margin-top: 4px;
 }
-.mobile-app .filter-scroll { gap: 8px; }
+.mobile-app .filter-scroll { gap: 6px; }
 .mobile-app .filter-scroll > * { flex: 1 1 0; min-width: 0; }
 .mobile-app .filter-scroll .time-filter-label,
 .mobile-app .filter-scroll .device-filter-label { display: none; }
 .mobile-app .filter-scroll .time-filter-control,
-.mobile-app .filter-scroll .device-filter-control { height: 44px; margin-left: 0; padding-left: 0; border-left: 0; }
+.mobile-app .filter-scroll .device-filter-control { height: 32px; margin-left: 0; padding-left: 0; border-left: 0; }
 .mobile-app .filter-scroll .entry-type-trigger,
 .mobile-app .filter-scroll .time-filter-trigger,
-.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 44px; gap: 4px; padding-inline: 8px; font-size: 13px; }
+.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 32px; gap: 4px; padding-inline: 7px; font-size: 12px; border-radius: 5px; }
+.mobile-app .filter-scroll button:active,
+.mobile-app .filter-scroll button[aria-expanded="true"] { color: var(--color-foreground); background: var(--sui-bg-active); border-color: var(--sui-border-strong); }
 .mobile-app .filter-scroll button > svg { flex-shrink: 0; }
 .mobile-app .filter-scroll .entry-type-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mobile-app .entry-type-filter { flex-wrap: nowrap; gap: 8px; }
-.mobile-app .entry-type-filter button { min-width: 44px; min-height: 44px; flex-shrink: 0; }
+.mobile-app .entry-type-filter button { min-width: 32px; min-height: 32px; flex-shrink: 0; }
 .mobile-app .filter-actions { display: none; }
 .mobile-app .result-summary { max-width: 92px; }
-.mobile-app .empty-filter-reset { min-height: 44px; padding-inline: 14px; font-size: 13px; }
+.mobile-app .empty-filter-reset { min-height: 32px; padding-inline: 10px; font-size: 12px; }
 .mobile-app .history-list { padding: 0 8px 4px; }
 .mobile-app .history-item,
 .mobile-app .history-item.image-entry {
@@ -964,6 +956,12 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-app .history-item .entry-meta > * { flex-shrink: 0; }
 .mobile-app .history-item .entry-meta .entry-device-name { flex-shrink: 1; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-app .history-item:active { background: var(--sui-bg-active); }
+.mobile-app .history-item,
+.mobile-app .history-item * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 .mobile-app .kind-icon { width: 44px; height: 44px; }
 .mobile-app .entry-content { font-size: 14px; line-height: 1.45; }
 .mobile-app .entry-meta { flex-wrap: wrap; gap: 4px; font-size: 11px; line-height: 1.45; }
@@ -974,15 +972,15 @@ button:focus-visible, [role="button"]:focus-visible {
   padding-top: 2px;
   opacity: 1;
 }
-.mobile-app .item-action { width: 44px; height: 44px; border-radius: 10px; }
+.mobile-app .item-action { width: 32px; height: 32px; border-radius: 5px; }
 .mobile-app .download-row,
 .mobile-app .pending-item { grid-template-columns: 44px minmax(0, 1fr) auto; }
 .mobile-app .pending-content .entry-actions { grid-column: auto; padding-top: 0; }
 .mobile-app .download-status { overflow-wrap: anywhere; }
-.mobile-app .pending-content .titlebar-actions .s-button { min-height: 44px; }
-/* SIconButton 尺寸是 inline style（:size 生成），移动端 44px 触达规则必须 !important。 */
-.mobile-app .s-icon-button { width: 44px !important; height: 44px !important; border-radius: 10px !important; }
-.mobile-app .footer-hint { padding-inline: 14px; font-size: 11px; }
+.mobile-app .pending-content .titlebar-actions .s-button { min-height: 32px; }
+/* SIconButton 的尺寸由 inline style 生成，移动端紧凑尺寸需要显式覆盖。 */
+.mobile-app .s-icon-button { width: 32px !important; height: 32px !important; border-radius: 5px !important; }
+.mobile-app .footer-hint { padding-inline: 12px; font-size: 11px; }
 .mobile-app .pagination-control { width: 100%; justify-content: space-between; }
 /* SModal teleport 到 body 后脱离 .mobile-app 祖先，表单触达规则改用媒体查询兜底。 */
 @media (max-width: 640px) {
@@ -993,8 +991,5 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
-  .mobile-app .history-content { grid-template-rows: 52px auto minmax(0, 1fr) 44px; }
-  .mobile-app .pending-content { grid-template-rows: 52px minmax(0, 1fr); }
-  .mobile-app .pending-content.has-footer { grid-template-rows: 52px minmax(0, 1fr) 48px; }
-  .mobile-app .workspace-titlebar { min-height: 52px; }
+  .mobile-app .workspace-titlebar { min-height: 40px; }
 }

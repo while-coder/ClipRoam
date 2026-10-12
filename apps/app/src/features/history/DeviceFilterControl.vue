@@ -111,6 +111,6 @@ function toggleOption(value: string): void {
   .device-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .device-filter-label { font-size: 13px; }
   .device-filter-trigger { min-width: 126px; height: 44px; padding-inline: 12px 9px; font-size: 13px; }
-  .device-filter-menu button { min-height: 44px; font-size: 14px; }
+  .device-filter-menu button { min-height: 36px; font-size: 13px; }
 }
 </style>

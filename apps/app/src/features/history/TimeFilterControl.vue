@@ -275,7 +275,7 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
   .time-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .time-filter-label { font-size: 13px; }
   .time-filter-trigger { min-width: 126px; height: 44px; padding-inline: 12px 9px; font-size: 13px; }
-  .time-filter-menu button { min-height: 44px; font-size: 14px; }
+  .time-filter-menu button { min-height: 36px; font-size: 13px; }
   .time-calendar-grid button { height: 40px; font-size: 13px; }
 }
 </style>
