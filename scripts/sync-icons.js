@@ -7,6 +7,8 @@ const path = require("node:path");
 const rootDirectory = path.resolve(__dirname, "..");
 const appDirectory = path.join(rootDirectory, "apps", "app");
 const sourceIcon = path.join(rootDirectory, "apps", "icon", "icon.png");
+const iconManifest = path.join(rootDirectory, "apps", "icon", "icons.json");
+const androidIcon = path.join(rootDirectory, "apps", "icon", "icon-android.png");
 const tauriIconsDirectory = path.join(appDirectory, "src-tauri", "icons");
 const favicon = path.join(appDirectory, "public", "cliproam-icon.png");
 const androidResourcesDirectory = path.join(
@@ -20,9 +22,11 @@ const androidResourcesDirectory = path.join(
   "res",
 );
 
-if (!fs.existsSync(sourceIcon)) {
-  console.error(`源图标不存在：${sourceIcon}`);
-  process.exit(1);
+for (const input of [sourceIcon, iconManifest, androidIcon]) {
+  if (!fs.existsSync(input)) {
+    console.error(`图标输入不存在：${input}`);
+    process.exit(1);
+  }
 }
 
 const tauriCli = require.resolve("@tauri-apps/cli/tauri.js", {
@@ -33,7 +37,7 @@ execFileSync(
   [
     tauriCli,
     "icon",
-    sourceIcon,
+    iconManifest,
     "--output",
     tauriIconsDirectory,
     "--ios-color",
@@ -46,28 +50,8 @@ fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), favicon);
 console.log(`已更新 Web 图标：${path.relative(rootDirectory, favicon)}`);
 
 if (fs.existsSync(androidResourcesDirectory)) {
-  // Adaptive layers are 108dp, but launchers show only the central 72dp.
-  // Fit the complete source into that viewport to avoid enlarging/cropping it.
-  // Tauri's android_fg_scale only affects legacy icons, so inset the drawable.
-  const adaptiveIcon = path.join(
-    androidResourcesDirectory,
-    "mipmap-anydpi-v26",
-    "ic_launcher.xml",
-  );
-  const adaptiveIconXml = fs.readFileSync(adaptiveIcon, "utf8");
-  const foreground = '<foreground android:drawable="@mipmap/ic_launcher_foreground"/>';
-  if (!adaptiveIconXml.includes(foreground)) {
-    throw new Error("Android 自适应图标前景格式已变化，请检查缩放配置");
-  }
-  fs.writeFileSync(
-    adaptiveIcon,
-    adaptiveIconXml.replace(
-      foreground,
-      `<foreground>
-    <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.67%"/>
-  </foreground>`,
-    ),
-  );
+  // The Android source fills the adaptive layer and keeps its artwork inside
+  // the central viewport. Let the launcher apply its own mask without insets.
   console.log(
     `Tauri 已更新 Android 图标：${path.relative(rootDirectory, androidResourcesDirectory)}`,
   );
