@@ -15,7 +15,7 @@
     "./errors": "./src/utils/error.ts",
     "./settings-dialog": "./src/features/settings/SettingsDialog.vue",
     "./settings": "./src/features/settings/useSettings.ts",
-    "./platform": "./src/platform/usePlatform.ts"
+    "./platform": "./src/platform/runtime.ts"
   },
   "scripts": {
     "check": "vue-tsc --noEmit"

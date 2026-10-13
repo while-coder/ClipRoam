@@ -2,7 +2,7 @@
 import { Check } from "lucide-vue-next";
 import { computed } from "vue";
 import type { SettingsPage } from "../../types";
-import { useAppVersion } from "./useAppVersion";
+import { useAppVersion } from "../../platform/runtime";
 import productIcon from "../../assets/cliproam-icon.png";
 import {
   deviceAliasInput,

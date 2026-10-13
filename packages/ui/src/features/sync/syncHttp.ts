@@ -1,4 +1,4 @@
-import type { AccountSession } from "./accountSession";
+import type { AccountSession } from "../../core/accountSession";
 import { errorMessage } from "../../utils/error";
 import { anyAbortSignal } from "../../utils/abort";
 

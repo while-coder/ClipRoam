@@ -4,7 +4,7 @@ import { showToast } from "../../core/toast";
 import { getDevice } from "../../platform/storage";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
-import { AccountSession, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
+import { AccountSession, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../core/accountSession";
 import { activateRemoteClipboard } from "../history/remoteClipboard";
 import { getActivePreferences } from "./syncSession";
 import { errorMessage } from "../../utils/error";

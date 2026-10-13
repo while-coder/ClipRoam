@@ -2,7 +2,7 @@
 import { ChevronDown, ChevronUp, Download, X } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { cancelEntryDownloadCall, dismissEntryDownloadToast, entryDownloadToasts } from "./useDownloads";
-import type { EntryDownloadToast } from "./types";
+import type { EntryDownloadToast } from "./downloadManager";
 import { formatFileSize, percentOf } from "../../utils/format";
 import TransferProgress from "../../components/TransferProgress.vue";
 

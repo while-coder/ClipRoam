@@ -5,7 +5,7 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
 import { formatExactDateTime, formatFileSize, percentOf } from "../../utils/format";
-import type { DownloadRecord, DownloadTaskSnapshot } from "./types";
+import type { DownloadRecord, DownloadTaskSnapshot } from "./downloadManager";
 
 const props = defineProps<{ records: readonly DownloadRecord[] }>();
 const emit = defineEmits<{

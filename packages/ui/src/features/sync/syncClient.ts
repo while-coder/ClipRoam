@@ -2,7 +2,7 @@ import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type
 import { DEFAULT_AUTO_UPLOAD_LIMIT } from "../../config";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
-import type { AccountSession } from "./accountSession";
+import type { AccountSession } from "../../core/accountSession";
 import { PendingUploader } from "../pending-upload/pendingUploader";
 import { RelayUploader } from "../uploads/relayUploader";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;

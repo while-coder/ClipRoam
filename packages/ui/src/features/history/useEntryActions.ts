@@ -1,11 +1,11 @@
-import { accountStateRef, getAccountSession } from "../sync/accountSession";
+import { accountStateRef, getAccountSession } from "../../core/accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isQuickPaste, usePlatform } from "../../platform/usePlatform";
+import { isMobile, isQuickPaste, usePlatform } from "../../platform/runtime";
 import { showToast } from "../../core/toast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
 import { downloadEntry } from "../downloads/useDownloads";
-import { DownloadCancelledError } from "../downloads/types";
+import { DownloadCancelledError } from "../downloads/downloadManager";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry } from "../../types";
 

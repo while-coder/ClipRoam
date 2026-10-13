@@ -6,7 +6,6 @@ import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
-import { useAppVersion } from "./features/settings/useAppVersion";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
@@ -29,9 +28,8 @@ import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import { displayToast, showToast } from "./core/toast";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./platform/storage";
-import { isNative } from "./platform/runtime";
-import { isQuickPaste, usePlatform } from "./platform/usePlatform";
-import { activeView, activeAccountSession, getAccountSession } from "./features/sync/accountSession";
+import { isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
+import { activeView, activeAccountSession, getAccountSession } from "./core/accountSession";
 import {
   archiveKeyFor,
   currentUsername,

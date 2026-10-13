@@ -1,10 +1,10 @@
 import { computed } from "vue";
-import { getAccountSession } from "../sync/accountSession";
+import { getAccountSession } from "../../core/accountSession";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
-import { isMobile } from "../../platform/usePlatform";
+import { isMobile } from "../../platform/runtime";
 import { showToast } from "../../core/toast";
-import { DownloadCancelledError } from "./types";
+import { DownloadCancelledError } from "./downloadManager";
 
 export const downloadRecords = computed(() => getAccountSession()?.downloads.downloadRecords.value ?? []);
 export const entryDownloadToasts = computed(() => getAccountSession()?.downloads.entryToasts.value ?? []);

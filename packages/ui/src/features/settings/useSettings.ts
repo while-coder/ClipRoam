@@ -1,6 +1,6 @@
 import { getDevice, getDeviceIdentity, saveDeviceAlias } from "../../platform/storage";
 import { nextTick } from "vue";
-import { accountStateRef, getAccountSession } from "../sync/accountSession";
+import { accountStateRef, getAccountSession } from "../../core/accountSession";
 import { errorMessage } from "../../utils/error";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";

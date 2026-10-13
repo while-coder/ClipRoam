@@ -24,12 +24,34 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 - `*Manager.ts` 拥有列表状态和业务操作，不依赖页面组件或 `use*` 页面绑定。
 - `use*.ts` 绑定当前账号的响应式状态，处理界面提示、焦点及页面交互。
 - `.vue` 文件负责布局、显示和用户事件。历史页的筛选、选中项与页码属于视图状态，不共享给其他历史视图。
-- `HistoryClient` 负责历史 HTTP 请求及详情回填，`HistoryCache` 负责记录的本地缓存；两者统一通过 `HistoryManager` 使用。
+- `HistoryClient` 负责历史 HTTP 请求及详情回填，`HistoryManager` 直接管理记录的本地缓存和刷新通知。
 - `CaptureService` 捕获和解析剪贴板；`PendingUploader` 发布待上传记录；`RelayUploader` 传输中继文件。它们通过对应 Manager 读写队列或任务列表。
-- `sync/AccountSession` 装配 Manager，管理账号生命周期、取消信号和定时任务；`SyncClient` 管理连接与传输 worker。
+- `core/AccountSession` 装配 Manager，创建账号与设置状态，管理账号生命周期、取消信号和定时任务；`SyncClient` 管理连接与传输 worker。
 - `src/core` 保留共享数据库、内容处理、哈希和提示；`src/platform` 封装平台操作与能力状态；`src/components` 放置跨功能的展示组件。
 - `src/config.ts` 统一平台能力、服务器地址、分页和账号偏好的默认配置；登录表单与认证逻辑放在 `features/sync`。
 - `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；包主入口导出的布局默认不带业务菜单。
+- `platform/runtime.ts` 统一窗口模式、平台能力和版本信息；`usePendingUploads.ts` 统一手动捕获与待上传列表交互；下载快照类型和取消异常由 `downloadManager.ts` 导出。
+
+目录保持按职责和业务功能划分，不再为单个类型、状态绑定或简单分页标记创建独立文件：
+
+```text
+src/
+  App.vue, config.ts, types.ts, styles.css
+  index.ts, host.ts                 # 包公开入口
+  assets/                          # 图片资源
+  components/                      # 跨功能布局和展示组件
+  core/                            # 账号生命周期、数据库、内容、哈希、提示
+  platform/                        # 平台接口、适配器、运行信息、文件与存储
+  utils/                           # 共享纯函数
+  features/
+    sync/                          # 登录、配置持久化、连接和 HTTP
+    history/                       # 历史缓存、分页查询、筛选和预览
+    pending-upload/                # 捕获、持久队列、发布和文件上传
+    uploads/                       # 中继上传任务
+    downloads/                     # 下载与另存为任务
+    settings/                      # 设置交互和桌面、移动端弹窗
+    devices/                       # 设备页面
+```
 
 新增列表操作应放到所属 Manager，页面绑定只调用 Manager，不直接读写数据库或维护另一份业务列表。
 

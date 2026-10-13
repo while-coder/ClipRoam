@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { native } from "../../platform/native";
 import {
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   Image,
   Search,
@@ -14,13 +16,12 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
-import PaginationControl from "./PaginationControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { usePlatform } from "../../platform/usePlatform";
+import { usePlatform } from "../../platform/runtime";
 import { showToast } from "../../core/toast";
-import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/useClipboardCapture";
+import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
 import {
   parseLocalDate,
   TIME_FILTER_LABELS,
@@ -463,12 +464,29 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       <span v-if="isQuickPaste">单击条目粘贴，点击图片或文件图标预览</span>
       <span v-else-if="!isMobile">双击图片或文件预览，双击文字复制，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
-      <PaginationControl
-        :page="currentPage"
-        :page-count="pageCount"
-        :total="manifestTotal"
-        @update:page="changePage"
-      />
+      <nav class="pagination-control" aria-label="历史记录分页">
+        <button
+          class="pagination-button"
+          type="button"
+          title="上一页"
+          aria-label="上一页"
+          :disabled="currentPage <= 1"
+          @click="changePage(currentPage - 1)"
+        >
+          <ChevronLeft :size="15" aria-hidden="true" />
+        </button>
+        <span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条 · 第 {{ currentPage }} / {{ pageCount }} 页</span>
+        <button
+          class="pagination-button"
+          type="button"
+          title="下一页"
+          aria-label="下一页"
+          :disabled="currentPage >= pageCount"
+          @click="changePage(currentPage + 1)"
+        >
+          <ChevronRight :size="15" aria-hidden="true" />
+        </button>
+      </nav>
     </template>
 
     <EntryContextMenu

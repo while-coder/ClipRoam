@@ -1,6 +1,6 @@
 import { ref } from "vue";
-import { archiveKeyFor, getAccountSession, replaceAccountSession } from "./accountSession";
-export { archiveKeyFor } from "./accountSession";
+import { archiveKeyFor, getAccountSession, replaceAccountSession } from "../../core/accountSession";
+export { archiveKeyFor } from "../../core/accountSession";
 import { AccountDatabase } from "../../core/database";
 import { readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";

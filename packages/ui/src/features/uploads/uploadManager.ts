@@ -1,6 +1,6 @@
 import { computed, ref } from "vue";
 import type { FileRelayRequest } from "@cliproam/protocol";
-import type { AccountSession } from "../sync/accountSession";
+import type { AccountSession } from "../../core/accountSession";
 type ServeTaskStatus = "pending" | "serving" | "succeeded" | "skipped" | "failed";
 
 export type ServeTaskSnapshot = {

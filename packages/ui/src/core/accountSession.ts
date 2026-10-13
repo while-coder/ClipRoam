@@ -1,17 +1,34 @@
 import { computed, effectScope, ref, shallowRef, type Ref, type WritableComputedRef } from "vue";
-import { AccountDatabase } from "../../core/database";
-import { HistoryManager } from "../history/historyManager";
-import { PendingUploadManager } from "../pending-upload/pendingUploadManager";
-import { UploadManager } from "../uploads/uploadManager";
-import { DownloadManager } from "../downloads/downloadManager";
-import { CaptureService } from "../pending-upload/captureService";
-import { AccountFiles } from "../../platform/files";
-import { clipboardPlatform } from "../../platform/clipboard";
-import { profileName } from "../../core/hash";
-import { showToast } from "../../core/toast";
-import { createSettingsState } from "../settings/settingsState";
-import type { SyncClient } from "./syncClient";
-import type { SyncConfig, AccountPreferences, Device } from "../../types";
+import { AccountDatabase } from "./database";
+import { HistoryManager } from "../features/history/historyManager";
+import { PendingUploadManager } from "../features/pending-upload/pendingUploadManager";
+import { UploadManager } from "../features/uploads/uploadManager";
+import { DownloadManager } from "../features/downloads/downloadManager";
+import { CaptureService } from "../features/pending-upload/captureService";
+import { AccountFiles } from "../platform/files";
+import { clipboardPlatform } from "../platform/clipboard";
+import { profileName } from "./hash";
+import { showToast } from "./toast";
+import type { SyncClient } from "../features/sync/syncClient";
+import type { SyncConfig, AccountPreferences, Device, SettingsPage } from "../types";
+
+function createSettingsState() {
+  const settingsVisible = ref(false);
+  const settingsPage = ref<SettingsPage>("general");
+  /** 设备别名草稿；空串表示未设置，展示回退到系统机器名。 */
+  const deviceAliasInput = ref("");
+  const savedDeviceAlias = ref("");
+  /** 系统机器名，作别名输入框的 placeholder。 */
+  const systemDeviceName = ref("");
+  const savingSettings = ref(false);
+  const changingPassword = ref(false);
+  const settingsError = ref("");
+  const passwordChangeError = ref("");
+  const currentPassword = ref("");
+  const newPassword = ref("");
+  const confirmNewPassword = ref("");
+  return { settingsVisible, settingsPage, deviceAliasInput, savedDeviceAlias, systemDeviceName, savingSettings, changingPassword, settingsError, passwordChangeError, currentPassword, newPassword, confirmNewPassword };
+}
 
 function createAccountState() {
   return {
