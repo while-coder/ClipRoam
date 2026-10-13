@@ -2,9 +2,17 @@ html.paste-window-root,
 html.paste-window-root body,
 html.paste-window-root #app,
 html.paste-window-root .app-shell { overflow: clip; }
-.paste-app .history-item { grid-template-columns: 30px minmax(0, 1fr); }
-.paste-app .history-item.image-entry { grid-template-columns: 48px minmax(0, 1fr); }
-.app-shell.paste-app:not(.mobile-app) .history-item { grid-template-columns: 48px minmax(0, 1fr); }
+.app-shell.paste-app:not(.mobile-app) .history-list .history-item {
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 52px;
+  margin-bottom: 2px;
+  padding: 6px 8px;
+}
+.app-shell.paste-app:not(.mobile-app) .history-list .history-item .kind-icon,
+.app-shell.paste-app:not(.mobile-app) .history-list .history-item .image-thumbnail { width: 32px; height: 32px; }
+.app-shell.paste-app:not(.mobile-app) .history-list .history-item .kind-icon > svg { width: 18px; height: 18px; }
+.app-shell.paste-app:not(.mobile-app) .history-list .entry-body { gap: 3px; }
 .paste-app { display: block; }
 .paste-app .toolbar { cursor: grab; user-select: none; }
 .paste-app .toolbar:active { cursor: grabbing; }

@@ -29,6 +29,10 @@ export class NativeRust implements NativePlatform {
   };
   get windowLabel(): string { return getCurrentWindow().label; }
   getAppVersion(): Promise<string> { return getVersion(); }
+  async openExternalUrl(url: string): Promise<void> {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  }
   async initializeWindowMode(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).initializeWindowMode(); }
   async showMainWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showMainWindow(); }
   async showPasteWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showPasteWindow(); }

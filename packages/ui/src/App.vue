@@ -368,7 +368,7 @@ async function restoreSavedSession(): Promise<void> {
 }
 
 function handleContextMenu(event: MouseEvent): void {
-  if (isQuickPaste.value) event.preventDefault();
+  event.preventDefault();
 }
 
 function handleKeys(event: KeyboardEvent): void {

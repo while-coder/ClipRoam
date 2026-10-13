@@ -27,6 +27,7 @@ export interface NativePlatform {
   readonly windowLabel: string;
   readonly quickPasteShortcut?: QuickPasteShortcutState;
   getAppVersion(): Promise<string>;
+  openExternalUrl(url: string): Promise<void>;
   initializeWindowMode(): Promise<void>;
   showMainWindow(): Promise<void>;
   showPasteWindow(): Promise<void>;

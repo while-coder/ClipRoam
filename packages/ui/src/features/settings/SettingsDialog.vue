@@ -2,8 +2,7 @@
 import { Check } from "lucide-vue-next";
 import { computed } from "vue";
 import type { SettingsPage } from "../../types";
-import { useAppVersion } from "../../platform/runtime";
-import productIcon from "../../assets/cliproam-icon.png";
+import AboutPanel from "./AboutPanel.vue";
 import {
   deviceAliasInput,
   systemDeviceName,
@@ -33,8 +32,6 @@ const submitSettings = () => props.save ? props.save() : saveSettings();
 
 /** 保存或改密进行中：禁止关闭弹窗、禁止重复提交。 */
 const busy = computed(() => savingSettings.value || changingPassword.value);
-
-const { appVersion } = useAppVersion();
 </script>
 
 <template>
@@ -145,19 +142,12 @@ const { appVersion } = useAppVersion();
             <div class="settings-page">
               <header class="settings-page-header">
                 <h3>关于</h3>
-                <p>查看应用信息和版本。</p>
+                <p>了解 ClipRoam，获取帮助与参与改进。</p>
               </header>
 
-              <SCard class="about-product">
-                <img class="about-product-mark" :src="productIcon" alt="" />
-                <div class="about-product-copy">
-                  <h4>ClipRoam</h4>
-                  <p>让剪贴板内容在你的设备之间安全漫游。</p>
-                </div>
-                <span class="about-version">v{{ appVersion || "…" }}</span>
-              </SCard>
-
-              <slot name="about" />
+              <AboutPanel>
+                <slot name="about" />
+              </AboutPanel>
             </div>
           </STabPane>
         </STabs>

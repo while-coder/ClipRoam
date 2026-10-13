@@ -12,6 +12,7 @@ pub fn run() {
     let builder = builder
         .plugin(logging_plugin())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .plugin(tauri_plugin_dialog::init());
     let builder = platform::register_plugins(builder);
     let builder = tauri_updater_kit::attach_updater(builder);
