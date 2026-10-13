@@ -1,16 +1,16 @@
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { DESKTOP_CAPABILITIES } from "../utils/constants";
+import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../utils/constants";
+import { isNative } from "../platform/runtime";
 import type { PlatformCapabilities } from "../types";
 
-/** Window identity and platform capabilities, shared by all window roots. */
+/** Window mode and platform capabilities, shared by the application. */
 
-export const isPasteWindow = getCurrentWindow().label === "paste";
-export const isToastWindow = getCurrentWindow().label === "toast";
-if (isPasteWindow) document.documentElement.classList.add("paste-window-root");
+export const isQuickPaste = ref(false);
+export const isToastWindow = isNative && getCurrentWindow().label === "toast";
 if (isToastWindow) document.documentElement.classList.add("toast-window-root");
 
-const platformCapabilities = ref<PlatformCapabilities>(DESKTOP_CAPABILITIES);
+const platformCapabilities = ref<PlatformCapabilities>(isNative ? DESKTOP_CAPABILITIES : BROWSER_CAPABILITIES);
 /** 模块级单例：后台模块（引擎、条目动作）不经过 usePlatform() 也要读移动端分支。 */
 export const isMobile = computed(() => platformCapabilities.value.mobile);
 

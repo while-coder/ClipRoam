@@ -12,10 +12,8 @@ pub(crate) use super::arboard_clipboard::{
     write_clipboard_image, write_clipboard_text,
 };
 pub(crate) use super::{
-    begin_window_drag, consume_pending_shares, create_windows, on_paste_window_focus,
-    on_window_event, prompt_save_destination, register_plugins, requires_paste_window,
-    setup_desktop_shell, should_ignore_paste_focus_loss, should_skip_clipboard_poll,
-    show_detached_toast, supports_native_file_export,
+    create_windows, on_paste_window_focus, on_window_event, register_plugins, setup_desktop_shell,
+    should_ignore_paste_focus_loss, show_detached_toast,
 };
 
 /// 快捷粘贴窗口弹出前的最前台应用（unix pid）。隐藏粘贴窗口后 macOS 会把
@@ -125,9 +123,10 @@ fn next_paste_target(
 /// 在快捷粘贴窗口显示前调用：此刻前台仍是用户正在操作的应用。
 pub(crate) fn capture_paste_target(app: &AppHandle) -> Result<(), String> {
     let paste_window_visible = app
-        .get_webview_window("paste")
+        .get_webview_window("main")
         .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && crate::app_shell::quick_paste_enabled(app);
     if let Some(state) = app.try_state::<PasteTarget>() {
         if let Ok(mut guard) = state.0.lock() {
             *guard = next_paste_target(
@@ -196,19 +195,14 @@ pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> 
     }
     // 目标是 ClipRoam 自己时没有可自动粘贴的外部输入处；合成 Cmd+V 只会把
     // 内容送进主窗口搜索框并把主界面带到前台。此时仅复制到剪贴板，收起
-    // 粘贴窗口与主界面，用户可在真正的目标应用里手动 Cmd+V。
+    // 快速粘贴界面，用户可在真正的目标应用里手动 Cmd+V。
     if paste_target_is_self(window.app_handle()) {
         window.hide().map_err(|error| error.to_string())?;
-        if let Some(main) = window.app_handle().get_webview_window("main") {
-            let _ = main.hide();
-        }
         return Ok(());
     }
     ensure_accessibility_access()?;
     // 先把前台还给弹出粘贴窗口之前的应用，Cmd+V 才会落到用户原本输入的
-    // 地方；否则主界面可见时会被粘贴进主界面的搜索框。必须先切前台再隐藏
-    // 粘贴窗口：反过来时 macOS 会把焦点落给应用内下一个可见窗口（主界面），
-    // 主界面会闪现一下。
+    // 地方。先恢复目标应用焦点，再隐藏当前快速粘贴界面。
     reactivate_paste_target(window.app_handle())?;
     std::thread::sleep(std::time::Duration::from_millis(120));
     window.hide().map_err(|error| error.to_string())?;
@@ -282,3 +276,9 @@ mod tests {
         assert_eq!(next_paste_target(Some(42), None, 7, false), None);
     }
 }
+
+pub(crate) use super::files::{ack_share, pending_shares, pick_files, save_dialog};
+pub(crate) use super::show_main_window;
+pub(crate) use super::{begin_window_drag, should_skip_clipboard_poll};
+
+pub(crate) use crate::platforms::files::{copy_file, create_directory, remove_file};

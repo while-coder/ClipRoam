@@ -19,14 +19,14 @@ export function cancelPendingRefresh(): void { getAccountSession()?.cancelSchedu
 export async function removePendingEntry(entry: LocalClipboardEntry): Promise<void> {
   const session = getAccountSession();
   if (!session || !/^p\d+$/.test(entry.id)) return;
-  try { await session.invoke("dequeue_pending_entry", { seq: Number(entry.id.slice(1)) }); }
+  try { await session.database.delete("pending", entry.id.slice(1)); await session.refreshPending(); }
   catch (error) { if (!session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error"); }
 }
 
 export async function retryPendingEntry(entry: LocalClipboardEntry): Promise<void> {
   const session = getAccountSession();
   if (!session || !/^p\d+$/.test(entry.id)) return;
-  try { await session.invoke("retry_pending_entry", { seq: Number(entry.id.slice(1)) }); }
+  try { await session.cache.setPendingStatus(Number(entry.id.slice(1)), "wait"); await session.capture.resume(); await session.refreshPending(); }
   catch (error) { if (!session.signal.aborted) showToast(`重试失败：${errorMessage(error)}`, "error"); }
 }
 
@@ -34,7 +34,7 @@ export async function refreshPendingEntries(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   try {
-    const entries = await session.invoke<LocalClipboardEntry[]>("list_pending_entries");
+    const entries = await session.cache.pendingDisplay();
     session.state.pendingEntries.value = entries;
     session.state.pendingCount.value = entries.length;
   } catch (error) {
@@ -44,7 +44,7 @@ export async function refreshPendingEntries(): Promise<void> {
 export async function refreshPendingCount(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
-  try { session.state.pendingCount.value = await session.invoke<number>("count_pending_entries"); }
+  try { session.state.pendingCount.value = (await session.cache.pendingRows()).length; }
   catch { /* Keep the existing badge on a transient read failure. */ }
 }
 

@@ -1,3 +1,5 @@
+import { nativeCall } from "../../platform/runtime";
+import { saveDeviceAlias } from "../../utils/device";
 import { nextTick } from "vue";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { usePlatform } from "../../composables/usePlatform";
@@ -197,7 +199,7 @@ async function openAppDataDirectory(): Promise<void> {
 
   settingsError.value = "";
   try {
-    await session.invoke("open_app_data_dir");
+    await nativeCall("native_open_app_data_dir");
   } catch (error) {
     settingsError.value = `无法打开应用数据目录：${errorMessage(error)}`;
   }
@@ -232,7 +234,7 @@ async function saveSettings(): Promise<void> {
     // 别名变化先落 device.json，再走 HTTP 立即上报服务器。
     const deviceAlias = deviceAliasInput.value.trim();
     if (deviceAlias !== savedDeviceAlias.value) {
-      await session.invoke("save_device_alias", { alias: deviceAlias });
+      await saveDeviceAlias(deviceAlias);
       savedDeviceAlias.value = deviceAlias;
       try {
         await pushDeviceInfo(activeConfig.serverAddress, activeConfig.serverProtocol, activeConfig.sessionToken, await session.start(() => getDevice()), controller.signal);

@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { getAccountSession } from "../sync/accountSession";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 
@@ -11,7 +11,7 @@ export async function captureCurrentClipboard(): Promise<void> {
   if (capturingClipboard.value) return;
   capturingClipboard.value = true;
   try {
-    const captured = await invoke<boolean>("capture_current_clipboard_text");
+    const captured = await getAccountSession()?.capture.readCurrentText();
     showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
   } catch (error) {
     showToast(`读取剪贴板失败：${errorMessage(error)}`, "error");
@@ -24,7 +24,7 @@ export async function captureFilesFromPicker(mode: "file" | "folder"): Promise<v
   if (uploadingFiles.value) return;
   uploadingFiles.value = true;
   try {
-    const captured = await invoke<boolean>("capture_files_from_picker", { mode });
+    const captured = await getAccountSession()?.capture.pickFiles(mode);
     showToast(captured ? "已加入上传队列" : "未选择文件", captured ? "success" : "info");
   } catch (error) {
     showToast(`选择文件失败：${errorMessage(error)}`, "error");

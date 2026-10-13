@@ -17,7 +17,7 @@ import PaginationControl from "./PaginationControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { isPasteWindow, usePlatform } from "../../composables/usePlatform";
+import { usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/useClipboardCapture";
 import {
@@ -47,6 +47,7 @@ const props = defineProps<{
   ) => Promise<EntriesManifestPage>;
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
+  quickPaste?: boolean;
   devicesById: Record<string, Device>;
   currentTime: number;
   importingShare: boolean;
@@ -62,6 +63,7 @@ const emit = defineEmits<{
 }>();
 
 const { isMobile } = usePlatform();
+const isQuickPaste = computed(() => props.quickPaste === true);
 
 const query = ref("");
 const filter = ref<EntryFilter>("all");
@@ -190,13 +192,13 @@ async function startWindowDrag(event: MouseEvent): Promise<void> {
   if (isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, select, textarea, kbd, [role='button']")) return;
-  await invoke("start_window_drag");
+  await invoke("native_start_window_drag");
 }
 
 async function focusSearch(): Promise<void> {
   query.value = "";
   committedQuery.value = "";
-  if (isPasteWindow) {
+  if (isQuickPaste.value) {
     filter.value = "all";
     timeFilter.value = "all";
   }
@@ -222,7 +224,7 @@ function closeEntryPreview(): void {
 }
 
 function handleEntryMouseDown(entry: LocalClipboardEntry): void {
-  if (!isPasteWindow) return;
+  if (!isQuickPaste.value) return;
   selectedEntryId.value = entry.id;
   emit("activate", entry, true);
 }
@@ -238,7 +240,7 @@ function handleEntryClick(entry: LocalClipboardEntry): void {
 }
 
 function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
-  if (isPasteWindow || isMobile.value || longPressFired) return;
+  if (isQuickPaste.value || isMobile.value || longPressFired) return;
   if (entry.kind === "text") emit("activate", entry, false);
   else if (!isMobile.value) openEntryPreview(entry);
 }
@@ -253,7 +255,7 @@ let longPressX = 0;
 let longPressY = 0;
 
 function openEntryMenu(entry: LocalClipboardEntry, x: number, y: number): void {
-  if (isPasteWindow) return;
+  if (isQuickPaste.value) return;
   if (isMobile.value) longPressFired = true;
   const now = Date.now();
   if (now - lastMenuOpenedAt < 600 && menuEntry.value?.id === entry.id) return;
@@ -314,10 +316,10 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
 <template>
   <WorkspacePage title="剪贴板历史" layout="history">
-    <template v-if="isPasteWindow" #header>
+    <template v-if="isQuickPaste" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
-    <template v-if="!isPasteWindow" #actions>
+    <template v-if="!isQuickPaste" #actions>
       <SButton
         aria-label="读取当前剪贴板"
         title="读取当前剪贴板"
@@ -332,7 +334,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </SButton>
     </template>
     <template #toolbar>
-    <section class="toolbar" @mousedown.left="isPasteWindow && startWindowDrag($event)">
+    <section class="toolbar" @mousedown.left="isQuickPaste && startWindowDrag($event)">
       <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
         <span class="s-spinner" aria-hidden="true" />
         <span>正在接收系统分享…</span>
@@ -397,7 +399,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         @touchcancel="handleEntryTouchEnd"
       >
         <button
-          v-if="entry.kind === 'image' && isPasteWindow"
+          v-if="entry.kind === 'image' && isQuickPaste"
           class="image-thumbnail"
           type="button"
           :aria-label="`预览${entry.content}`"
@@ -416,7 +418,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <Image v-else :size="18" />
         </span>
         <button
-          v-else-if="entry.kind === 'files' && isPasteWindow"
+          v-else-if="entry.kind === 'files' && isQuickPaste"
           class="file-preview-trigger"
           type="button"
           :aria-label="`预览${entry.content}`"
@@ -456,7 +458,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     </section>
 
     <template #footer>
-      <span v-if="isPasteWindow">单击条目粘贴，点击图片或文件图标预览</span>
+      <span v-if="isQuickPaste">单击条目粘贴，点击图片或文件图标预览</span>
       <span v-else-if="!isMobile">双击图片或文件预览，双击文字复制，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
       <PaginationControl

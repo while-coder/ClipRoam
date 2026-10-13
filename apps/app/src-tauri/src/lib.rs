@@ -1,231 +1,93 @@
 mod app_shell;
-mod account;
-mod content;
-mod history;
-mod file;
-mod logging;
-mod pending_upload;
+mod clipboard;
+mod files;
+mod platform;
 mod platforms;
-mod store;
-mod sync;
-mod downloads;
-mod utils;
-
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread,
-};
-use rusqlite::Connection;
 use tauri::Manager;
-
-use file::collect_local_garbage;
-use store::{
-    cache_dir_for, history_path_for_key, DatabasePool,
-    HistoryData,
-};
-use sync::SyncConfig;
-use downloads::{DownloadState, Downloader};
-use downloads::save::SaveSession;
-
-struct AppState {
-    account_sessions: Mutex<HashMap<String, std::sync::Arc<account::AccountContext>>>,
-    history: Mutex<HistoryData>,
-    /// Machine-level device identity file (`device.json`), shared by every
-    /// history profile; resolved lazily by `get_device_id`.
-    device_config_path: PathBuf,
-    histories_dir: PathBuf,
-    /// One SQLite connection per history database; opening one re-runs the
-    /// schema migration, so writes share these instead of reopening.
-    database_pool: Mutex<DatabasePool>,
-    sync_config: Mutex<Option<SyncConfig>>,
-    /// 串行化凭据读取与登录/退出持久化，避免授权返回后覆盖较新的退出状态。
-    sync_config_io: Mutex<()>,
-    sync_config_path: PathBuf,
-    /// Preferences of the active history profile (`preferences.json` next to
-    /// its SQLite); reloaded whenever the active profile changes.
-    account_preferences: Mutex<sync::AccountPreferences>,
-    downloads: Mutex<HashMap<String, DownloadState>>,
-    save_sessions: Mutex<HashMap<String, SaveSession>>,
-    /// 全局下载管理器：队列/并发/去重/拉流都在这里（main 与 paste 共享）。
-    downloader: Downloader,
-    share_import: Mutex<()>,
-    clipboard_monitor: Mutex<Option<pending_upload::capture::ClipboardMonitor>>,
-}
-
-impl AppState {
-    fn database_connection(&self, path: &Path) -> Result<Arc<Mutex<Connection>>, String> {
-        self.database_pool.lock().map_err(|error| error.to_string())?.connection(path)
-    }
-
-    /// Resolve the pool briefly, then lock only this account's connection.
-    /// When both locks are needed, take `history` before the connection.
-    fn with_database<T>(
-        &self,
-        path: &Path,
-        write: impl FnOnce(&mut Connection) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let database = self.database_connection(path)?;
-        let mut connection = database.lock().map_err(|error| error.to_string())?;
-        write(&mut connection)
-    }
-
-    /// 活动档案的数据库路径；未登录时没有档案可用。
-    pub(crate) fn active_history_path(&self, history: &HistoryData) -> Result<PathBuf, String> {
-        let key = history
-            .active_history
-            .as_deref()
-            .ok_or("同步账号未登录，历史档案不可用")?;
-        Ok(history_path_for_key(&self.histories_dir, key))
-    }
-
-    /// 活动档案的内容缓存目录；未登录时没有档案可用。
-    pub(crate) fn active_cache_dir(&self, history: &HistoryData) -> Result<PathBuf, String> {
-        let key = history
-            .active_history
-            .as_deref()
-            .ok_or("同步账号未登录，历史档案不可用")?;
-        Ok(cache_dir_for(&self.histories_dir, key))
-    }
-
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // reqwest uses rustls-no-provider, so register ring before any HTTP client is created.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // 单实例最先注册：第二次启动会自行退出，并唤醒已运行实例的主窗口。
-    // 移动端由系统保证单实例，插件也仅支持桌面端。
-    #[cfg(desktop)]
-    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        platforms::show_main_window(app);
-    }));
-    #[cfg(not(desktop))]
     let builder = tauri::Builder::default();
-
-    // 日志插件随后注册，尽量覆盖后续插件与 setup 阶段的日志
     let builder = builder
-        .plugin(logging::logging_plugin())
+        .plugin(logging_plugin())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init());
-    let builder = platforms::register_plugins(builder);
+    let builder = platform::register_plugins(builder);
     let builder = tauri_updater_kit::attach_updater(builder);
-
-    let builder = builder
+    builder
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-            let histories_dir = app_data_dir.join("histories");
-            // 数据目录不预建的话，首次登录写 sync-config.json 会直接 ENOENT。
-            std::fs::create_dir_all(&histories_dir).map_err(|error| error.to_string())?;
-            let sync_config_path = app_data_dir.join("sync-config.json");
-            let device_config_path = app_data_dir.join("device.json");
-            let sync_config = sync::load_sync_config(&sync_config_path);
-            // 保存的 token 仅用于缓存登录；login/verify 成功前不启用账号档案。
-            let history = HistoryData::default();
-            let account_preferences = sync::AccountPreferences::default();
-            app.manage(AppState {
-                account_sessions: Mutex::new(HashMap::new()),
-                history: Mutex::new(history),
-                device_config_path,
-                histories_dir,
-                database_pool: Mutex::new(DatabasePool::default()),
-                sync_config: Mutex::new(sync_config),
-                sync_config_io: Mutex::new(()),
-                sync_config_path,
-                account_preferences: Mutex::new(account_preferences),
-                downloads: Mutex::new(HashMap::new()),
-                save_sessions: Mutex::new(HashMap::new()),
-                downloader: Downloader::new(app.handle().clone()),
-                share_import: Mutex::new(()),
-                clipboard_monitor: Mutex::new(None),
-            });
-            platforms::manage_platform_state(app.handle())?;
-
-            // Desktop windows use `create: false`, so create them after managed
-            // state exists. Mobile is a no-op: the system creates the main
-            // webview before this hook and rebuilding it would fail with a
-            // duplicate label.
-            platforms::create_windows(app.handle())?;
-            platforms::setup_desktop_shell(app.handle())?;
-
-            // Entry rows live in SQLite alone, so startup only frees disk:
-            // blobs and share requests no entry references go away.
-            let handle = app.handle().clone();
-            thread::spawn(move || {
-                let state = handle.state::<AppState>();
-                let Ok(history) = state.history.lock() else {
-                    return;
-                };
-                // 未登录时没有活动档案，也没有可回收的引用。
-                let Some(key) = history.active_history.clone() else {
-                    return;
-                };
-                let path = history_path_for_key(&state.histories_dir, &key);
-                let cache_dir = cache_dir_for(&state.histories_dir, &key);
-                let _ = state.with_database(&path, |connection| {
-                    collect_local_garbage(connection, &cache_dir)
-                });
-            });
+            std::fs::create_dir_all(app.path().app_data_dir()?)?;
+            app.manage(app_shell::QuickPasteMode::default());
+            app.manage(clipboard::ClipboardState::default());
+            platform::manage_platform_state(app.handle())?;
+            platform::create_windows(app.handle())?;
+            #[cfg(desktop)]
+            platform::setup_desktop_shell(app.handle())?;
             Ok(())
         })
-        .on_window_event(platforms::on_window_event);
-
-    builder
+        .on_window_event(|window, event| {
+            platform::on_window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
-            account::open_account_session,
-            account::close_account_session,
-            account::activate_account,
-            account::deactivate_account,
-            account::get_authenticated_sync_config,
-            app_shell::get_platform_capabilities,
-            pending_upload::capture::capture_current_clipboard_text,
-            pending_upload::capture::capture_files_from_picker,
-            pending_upload::capture::consume_mobile_shares,
-            history::query::get_cached_entries_for_display,
-            history::query::find_stale_entry_ids,
-            history::query::get_entry,
-            file::store::find_unknown_file_ids,
-            file::store::upsert_server_files,
-            downloads::list_entry_files,
-            app_shell::get_device_identity,
-            app_shell::save_device_alias,
-            app_shell::get_device_info,
-            sync::get_sync_config,
-            sync::get_account_preferences,
-            app_shell::open_app_data_dir,
-            sync::save_sync_config,
-            sync::save_account_preferences,
-            history::mutate::upsert_server_entries,
-            history::mutate::remove_server_entry,
-            pending_upload::peek_pending_entry,
-            pending_upload::fail_pending_entry,
-            pending_upload::retry_pending_entry,
-            pending_upload::dequeue_pending_entry,
-            pending_upload::count_pending_entries,
-            pending_upload::list_pending_entries,
-            app_shell::start_window_drag,
-            app_shell::hide_paste,
-            app_shell::capture_paste_target,
-            app_shell::hide_main,
-            app_shell::show_toast,
-            app_shell::hide_toast,
-            downloads::save::prepare_save_entry,
-            file::read::read_upload_chunk,
-            downloads::download_entry,
-            downloads::cancel_entry_download_call,
-            downloads::cancel_download_record,
-            downloads::cancel_download,
-            downloads::stop_all_downloads,
-            downloads::download_tasks,
-            downloads::records::download_records,
-            downloads::records::remove_download_records,
-            downloads::save::cancel_save_entry,
-            downloads::save::finish_save_entry,
-            history::clipboard::activate_remote_entry,
-            history::clipboard::copy_entry,
-            history::clipboard::paste_entry
+            app_shell::native_get_platform_capabilities,
+            app_shell::native_get_device_info,
+            app_shell::native_open_app_data_dir,
+            app_shell::native_start_window_drag,
+            app_shell::native_set_quick_paste_mode,
+            app_shell::native_capture_paste_target,
+            app_shell::native_show_toast,
+            app_shell::native_hide_toast,
+            clipboard::native_read_clipboard,
+            clipboard::native_write_clipboard,
+            clipboard::native_watch_clipboard,
+            clipboard::native_clipboard_inbox,
+            clipboard::native_clipboard_ack,
+            files::native_paths,
+            files::native_fs_stat,
+            files::native_fs_list,
+            files::native_read_image,
+            files::native_fs_read,
+            files::native_fs_write,
+            files::native_fs_move,
+            files::native_fs_copy,
+            files::native_fs_mkdir,
+            files::native_fs_remove,
+            files::native_save_dialog,
+            files::native_pick_files,
+            files::native_pending_shares,
+            files::native_ack_share,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ClipRoam");
+}
+
+/// 构建日志插件：
+/// - 三路输出：stdout（dev 控制台）、webview（前端 devtools console）、文件（系统日志目录）；
+/// - dev 记到 Debug，release 记到 Info，并压低三方库噪声；
+/// - 本地时区时间戳，单文件超 10 MB 轮转，保留最近 3 份历史归档（外加当前活动文件，最多 4 个），避免无限增长。
+///   日志文件位置（Windows）：%LOCALAPPDATA%/<bundle-id>/logs/。
+fn logging_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
+
+    let level = if cfg!(debug_assertions) {
+        tauri_plugin_log::log::LevelFilter::Debug
+    } else {
+        tauri_plugin_log::log::LevelFilter::Info
+    };
+
+    tauri_plugin_log::Builder::new()
+        .level(level)
+        // 三方库默认只在出问题时才需要，压到 Warn 减少噪声
+        .level_for("tao", tauri_plugin_log::log::LevelFilter::Warn)
+        .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Warn)
+        .targets([
+            Target::new(TargetKind::Stdout),
+            Target::new(TargetKind::Webview),
+            Target::new(TargetKind::LogDir { file_name: None }),
+        ])
+        .timezone_strategy(TimezoneStrategy::UseLocal)
+        .max_file_size(10_000_000)
+        .rotation_strategy(RotationStrategy::KeepSome(3))
+        .build()
 }

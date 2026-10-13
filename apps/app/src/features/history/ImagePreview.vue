@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { previewSource } from "../../platform/runtime";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
 
@@ -12,18 +12,15 @@ const emit = defineEmits<{ close: [] }>();
 const previewImage = ref<LocalClipboardEntry>();
 const loading = ref(true);
 const error = ref("");
+const previewUrl = ref("");
 let disposed = false;
-
-function imageSource(entry: LocalClipboardEntry): string | undefined {
-  const path = entry.summary.previewPath;
-  return path ? convertFileSrc(path) : undefined;
-}
 
 onMounted(async () => {
   try {
     const entry = await props.ensureLocalFiles(props.entry);
     if (disposed) return;
-    if (!imageSource(entry)) throw new Error("图片文件不可用");
+    if (!entry.summary.previewPath) throw new Error("图片文件不可用");
+    previewUrl.value = await previewSource(entry.summary.previewPath);
     previewImage.value = entry;
   } catch (cause) {
     if (!disposed) error.value = `无法预览图片：${errorMessage(cause)}`;
@@ -194,7 +191,7 @@ function onPreviewPointerUp(event: PointerEvent): void {
       >
         <img
           ref="previewImageElement"
-          :src="imageSource(previewImage)"
+          :src="previewUrl"
           :alt="previewImage.content"
           :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})` }"
           draggable="false"

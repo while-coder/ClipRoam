@@ -69,13 +69,7 @@ export type EntryDownloadToast = {
   files: Record<string, DownloadTaskSnapshot>;
 };
 
-type BatchOutcome = {
-  cancelled: boolean;
-  failedCount: number;
-  total: number;
-};
-
-/** All windows share the Rust download queue; this is the current window's snapshot. */
+/** Account-owned TS download queue snapshots. */
 export const downloadTasks = accountStateRef("downloadTasks");
 export const entryDownloadToasts = accountStateRef("entryDownloadToasts");
 
@@ -98,7 +92,7 @@ export async function downloadEntry(entryId: string, session = getAccountSession
       item.id === call.id ? { ...item, ...patch } : item);
   };
   try {
-    const outcome = await session.invoke<BatchOutcome>("download_entry", { entryId, requestId: call.id, saveId });
+    const outcome = await session.downloads.batch(entryId, call.id, saveId);
     if (outcome.cancelled) throw new DownloadCancelledError("已取消");
     if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
     update({ status: "succeeded" });
@@ -122,7 +116,7 @@ export async function cancelEntryDownloadCall(requestId: string): Promise<void> 
   if (!session || !call || call.status !== "downloading" || !call.ready || call.cancelling) return;
   session.state.entryDownloadToasts.value = session.state.entryDownloadToasts.value.map((item) => item.id === requestId ? { ...item, cancelling: true } : item);
   try {
-    await session.invoke("cancel_entry_download_call", { requestId });
+    session.downloads.cancelRequest(requestId);
   } catch (error) {
     if (!session.signal.aborted) session.state.entryDownloadToasts.value = session.state.entryDownloadToasts.value.map((item) =>
       item.id === requestId && item.status === "downloading" ? { ...item, cancelling: false, error: errorMessage(error) } : item);
@@ -136,17 +130,17 @@ export function dismissEntryDownloadToast(requestId: string): void {
 }
 
 export function cancelDownload(taskId: string): void {
-  void getAccountSession()?.invoke("cancel_download", { taskId }).catch(() => undefined);
+  getAccountSession()?.downloads.cancelTask(taskId);
 }
 
 export function stopAllDownloads(reason?: string): void {
-  void getAccountSession()?.invoke("stop_all_downloads", { reason }).catch(() => undefined);
+  void reason; getAccountSession()?.downloads.stop();
 }
 
 export async function refreshDownloadTasks(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
-  const tasks = await session.invoke<DownloadTaskSnapshot[]>("download_tasks");
+  const tasks = session.downloads.tasks();
   applyDownloadSnapshot(tasks);
   await refreshDownloadRecords();
 }
@@ -155,7 +149,7 @@ export async function refreshDownloadRecords(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   const revision = ++session.state.downloadRecordsRevision;
-  const records = await session.invoke<DownloadRecord[]>("download_records");
+  const records = session.downloads.records();
   if (revision === session.state.downloadRecordsRevision) session.state.downloadRecords.value = records;
 }
 
@@ -163,7 +157,7 @@ export async function removeDownloadRecords(recordId?: string): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   try {
-    await session.invoke("remove_download_records", { recordId: recordId ?? null });
+    await session.downloads.removeRecords(recordId);
     await refreshDownloadRecords();
   } catch (error) {
     if (!session.signal.aborted) showToast(`清理下载记录失败：${errorMessage(error)}`, "error");
@@ -174,7 +168,7 @@ export async function cancelDownloadRecord(recordId: string): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   try {
-    await session.invoke("cancel_download_record", { recordId });
+    await session.downloads.cancelRecord(recordId);
   } catch (error) {
     if (!session.signal.aborted) showToast(`取消下载失败：${errorMessage(error)}`, "error");
   }

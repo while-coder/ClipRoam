@@ -1,14 +1,13 @@
-import { invoke as nativeInvoke } from "@tauri-apps/api/core";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isPasteWindow, usePlatform } from "../../composables/usePlatform";
+import { isMobile, isQuickPaste, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
 import { getSyncClient } from "../sync/syncEngine";
 import { DownloadCancelledError, downloadEntry } from "../downloads/useDownloads";
 import { refreshHistory } from "./useHistorySync";
-import type { LocalClipboardEntry, SavePreparation } from "../../types";
+import type { LocalClipboardEntry } from "../../types";
 
 /**
  * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块与 Rust 命令，历史失效走 refreshHistory。
@@ -16,7 +15,6 @@ import type { LocalClipboardEntry, SavePreparation } from "../../types";
 export const activatingEntryIds = accountStateRef("activatingEntryIds");
 export const savingEntryId = accountStateRef("savingEntryId");
 const { platformCapabilities } = usePlatform();
-const cancelSave = (saveId: string) => nativeInvoke("cancel_save_entry", { saveId }).catch(() => undefined);
 async function activateEntry(
   entry: LocalClipboardEntry | undefined,
   command: "copy_entry" | "paste_entry",
@@ -34,7 +32,7 @@ async function activateEntry(
     // Wait for all missing content before copying or pasting the entry.
     await downloadEntry(entry.id, session);
     // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
-    const write = session.state.clipboardWriteChain.then(() => session.invoke(command, { entryId: entry.id }));
+    const write = session.state.clipboardWriteChain.then(() => session.capture.writeEntry(entry.id, command === "paste_entry"));
     session.state.clipboardWriteChain = write.catch(() => undefined);
     await write;
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
@@ -74,22 +72,21 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
       showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
     } else {
       await session.start(() => session.ready);
-      const preparation = await session.acquire(nativeInvoke<SavePreparation | null>("prepare_save_entry", {
-        entryId: entry.id,
-        sessionId: session.sessionId,
-      }), (value) => { if (value) void cancelSave(value.saveId); });
+      const preparation = await session.acquire(session.downloads.prepareSave(entry.id), (value) => {
+        if (value) void session.downloads.cancelSave(value.saveId);
+      });
       if (!preparation) return;
       saveId = preparation.saveId;
 
       await downloadEntry(entry.id, session, preparation.saveId);
 
-      const saved = await session.invoke<number>("finish_save_entry", { saveId: preparation.saveId });
+      const saved = await session.downloads.finishSave(preparation.saveId);
       saveId = undefined;
       if (isMobile.value) showToast("已保存到所选目录", "success");
       else if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
     }
   } catch (error) {
-    if (saveId) await cancelSave(saveId);
+    if (saveId) await session.downloads.cancelSave(saveId);
     if (session.signal.aborted || error instanceof DownloadCancelledError) return;
     showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
   } finally {
@@ -98,15 +95,15 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 }
 
 /**
- * 快捷粘贴窗口单击条目触发粘贴；其他窗口双击文字或菜单操作触发复制。
+ * 快速粘贴模式单击条目触发粘贴；主界面双击文字或菜单操作触发复制。
  */
 export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   if (viaClick) {
-    if (isPasteWindow) void pasteEntry(entry);
+    if (isQuickPaste.value) void pasteEntry(entry);
     else if (isMobile.value) void copyEntry(entry);
     return;
   }
-  if (isPasteWindow) void pasteEntry(entry);
+  if (isQuickPaste.value) void pasteEntry(entry);
   else if (entry.kind === "files") {
     showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“下载”手动下载", "info");
   } else {

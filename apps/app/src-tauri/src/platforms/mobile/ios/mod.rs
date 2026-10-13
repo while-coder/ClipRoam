@@ -1,7 +1,14 @@
-//! iOS 平台实现：除插件注册外与 Android 共享全部移动端桩。
+//! iOS 平台实现。
+pub(crate) use super::{
+    open_data_directory, read_clipboard_files, read_clipboard_image, read_clipboard_text,
+    show_detached_toast, write_clipboard_files, write_clipboard_image, write_clipboard_text,
+};
 
-pub(crate) use super::*;
+mod files;
+pub(crate) use super::{
+    begin_window_drag, capture_paste_target, create_windows, deliver_paste, manage_platform_state,
+    on_paste_window_focus, on_window_event, register_plugins, should_skip_clipboard_poll,
+};
+pub(crate) use files::{ack_share, pending_shares, pick_files, save_dialog};
 
-pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    builder
-}
+pub(crate) use crate::platforms::files::{copy_file, create_directory, remove_file};

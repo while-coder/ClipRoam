@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,13 +17,12 @@ import {
 } from "lucide-vue-next";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
-import { startPasteBridge } from "./features/sync/bridge";
 import {
   disposeQuickPasteShortcut,
   initializeQuickPasteShortcut,
   quickPasteShortcutStatus,
 } from "./features/quick-paste/quickPasteShortcut";
-import { showPasteWindow, hideWindow } from "./features/quick-paste/pasteWindow";
+import { showPasteWindow, showMainWindow, initializeWindowMode, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
@@ -48,9 +47,11 @@ import ToastLayer from "./features/toast/ToastLayer.vue";
 import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
-import { isToastWindow, isPasteWindow, usePlatform } from "./composables/usePlatform";
+import { isNative } from "./platform/runtime";
+import { BROWSER_CAPABILITIES } from "./utils/constants";
+import { isToastWindow, isQuickPaste, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
-import { activeAccountSession } from "./features/sync/accountSession";
+import { activeAccountSession, getAccountSession } from "./features/sync/accountSession";
 import {
   archiveKeyFor,
   currentUsername,
@@ -62,7 +63,6 @@ import {
   persistAccountPreferences,
   persistSyncConfig,
   setActiveConfig,
-  setActivePreferences,
 } from "./features/sync/syncSession";
 import {
   connected,
@@ -70,7 +70,6 @@ import {
   devicesById,
   getSyncClient,
   initSyncEngine,
-  rememberDevices,
   setSyncAutoUploadLimit,
   startSync,
   stopSyncClient,
@@ -125,30 +124,8 @@ const mobilePages = computed(() => [
 const { initUpdaterVersion } = useUpdater();
 
 const historyView = ref<InstanceType<typeof HistoryView>>();
-let pasteSessionReloadRevision = 0;
+const quickHistoryView = ref<InstanceType<typeof HistoryView>>();
 
-async function reloadPasteSession(): Promise<void> {
-  const revision = ++pasteSessionReloadRevision;
-  stopSyncClient({ activeOnly: true });
-  setActiveConfig(undefined);
-  currentUsername.value = "";
-  hasSavedSyncConfig.value = false;
-  setupVisible.value = false;
-  const config = await invoke<SyncConfig | null>("get_authenticated_sync_config");
-  if (revision !== pasteSessionReloadRevision) return;
-  if (!config?.sessionToken) return;
-  const preferences = await loadAccountPreferences();
-  if (revision !== pasteSessionReloadRevision) return;
-  setActiveConfig(config ?? undefined);
-  setActivePreferences(preferences);
-  currentUsername.value = config?.username ?? "";
-  hasSavedSyncConfig.value = Boolean(config?.sessionToken);
-  if (config?.sessionToken) await startSync(config);
-}
-
-function reloadPasteSessionFromEvent(): void {
-  void reloadPasteSession().catch((error) => showToast(`同步会话读取失败：${errorMessage(error)}`, "error"));
-}
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
 const currentTime = ref(Date.now());
 const initializing = ref(true);
@@ -170,7 +147,7 @@ let shareConsumeRequested = false;
 // 历史视图 ref 留在本组件，经注入读取。
 initHistorySync({
   getSyncClient,
-  getHistoryView: () => historyView.value,
+  getHistoryView: () => isQuickPaste.value ? quickHistoryView.value : historyView.value,
 });
 
 // token 失效后的登录页处理留在本组件（setupVisible/setupError/setupWizard）；
@@ -221,6 +198,12 @@ initSettings({
   focusSearchInput,
 });
 
+watch(setupVisible, (visible) => {
+  if (visible && isQuickPaste.value) {
+    void showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+  }
+});
+
 function shareImportMessage(summary: ShareImportSummary): string {
   const parts = [
     summary.texts ? `${summary.texts} 条文字` : "",
@@ -240,7 +223,7 @@ async function consumeMobileShares(): Promise<void> {
     // 导入期间又收到分享时再拉一次，避免 received 事件被并发保护丢掉。
     while (shareConsumeRequested && getActiveConfig()?.sessionToken) {
       shareConsumeRequested = false;
-      const summary = await invoke<ShareImportSummary>("consume_mobile_shares");
+      const summary = await getAccountSession()!.capture.consumeShares();
       if (summary.shares) showToast(shareImportMessage(summary), "success");
     }
   } catch (error) {
@@ -294,7 +277,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await persistSyncConfig(config);
     setActiveConfig(config);
     currentUsername.value = config.username;
-    await invoke("activate_account");
     const accountPreferences = await loadAccountPreferences();
     const preferences: AccountPreferences = {
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
@@ -379,7 +361,6 @@ async function restoreSavedSession(): Promise<void> {
   try {
     const verified = await verifyAccountSession(config, await getDevice(), controller.signal);
     controller.signal.throwIfAborted();
-    await invoke("activate_account");
     const preferences = await loadAccountPreferences();
     await persistAccountPreferences({
       ...preferences,
@@ -456,9 +437,6 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
 
 function readableStartupError(error: unknown): string {
   const message = errorMessage(error);
-  if (/deactivate_account.*not found|unknown command.*deactivate_account/i.test(message)) {
-    return "原生程序尚未更新，请重新编译并重启 ClipRoam";
-  }
   if (message.includes("state not managed for field `state`")) {
     return "应用初始化尚未完成，请从托盘退出 ClipRoam 后重新启动";
   }
@@ -466,12 +444,16 @@ function readableStartupError(error: unknown): string {
 }
 
 async function initializeTauriServices(): Promise<void> {
+  if (!isNative) return;
   const listenerResults = await Promise.allSettled([
     startToastWindowListener(),
-    listen("cliproam://show-paste", () => { void showPasteWindow(); }),
-    isPasteWindow
-      ? startPasteBridge({ onDevices: rememberDevices, onSessionChanged: reloadPasteSessionFromEvent })
-      : Promise.resolve(() => undefined),
+    listen("cliproam://show-paste", () => {
+      if (setupVisible.value || openModalCount.value > 0) return;
+      void showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
+    }),
+    listen("cliproam://show-main", () => {
+      void showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+    }),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
     // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
@@ -485,13 +467,11 @@ async function initializeTauriServices(): Promise<void> {
   if (listenerError?.status === "rejected") {
     showToast(`部分后台事件监听初始化失败：${String(listenerError.reason)}`, "error");
   }
-  // Read after subscribing so a login during startup cannot be missed.
-  if (isPasteWindow) await reloadPasteSession();
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
   await refreshDownloadTasks().catch(() => undefined);
 
-  if (!isPasteWindow && platformCapabilities.value.shareReceiver) {
+  if (platformCapabilities.value.shareReceiver) {
     try {
       shareReceiverListener = await addPluginListener<ShareReceiverEvent>(
         "cliproam-share-receiver",
@@ -512,7 +492,7 @@ async function initializeTauriServices(): Promise<void> {
 }
 
 async function enableAccountShortcuts(): Promise<void> {
-  if (!isPasteWindow && platformCapabilities.value.globalShortcut) {
+  if (platformCapabilities.value.globalShortcut) {
     const registered = await initializeQuickPasteShortcut();
     if (!registered) showToast(quickPasteShortcutStatus.value.message, "error");
   }
@@ -523,26 +503,15 @@ onMounted(async () => {
     unlisteners = [await startToastWindowListener()];
     return;
   }
-  // 主窗口重载也必须重新登录，不能继承上一个 WebView 启用的账号服务。
-  if (!isPasteWindow) {
-    try {
-      await withStartupTimeout(invoke("deactivate_account"), "停止旧账号服务超时，请重启 ClipRoam");
-    } catch (error) {
-      accountRuntimeError.value = readableStartupError(error);
-      setupError.value = accountRuntimeError.value;
-      console.error("账号服务初始化失败", error);
-    }
-  }
-
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
 
   let config: SyncConfig | null = null;
   let startupWarning = "";
-  const platformPromise = withStartupTimeout(
-    invoke<PlatformCapabilities>("get_platform_capabilities"),
+  const platformPromise = isNative ? withStartupTimeout(
+    invoke<PlatformCapabilities>("native_get_platform_capabilities"),
     "读取平台能力超时",
-  );
+  ) : Promise.resolve(BROWSER_CAPABILITIES);
   const [capabilitiesResult, configResult] = await Promise.allSettled([
     platformPromise,
     withStartupTimeout(loadSyncConfig(), "读取连接配置超时"),
@@ -552,6 +521,13 @@ onMounted(async () => {
   } else {
     startupWarning = `平台能力读取失败：${readableStartupError(capabilitiesResult.reason)}`;
   }
+  if (capabilitiesResult.status === "fulfilled") {
+    try {
+      await initializeWindowMode();
+    } catch (error) {
+      startupWarning = `恢复主窗口失败：${errorMessage(error)}`;
+    }
+  }
   if (configResult.status === "fulfilled") {
     config = configResult.value;
   } else {
@@ -560,44 +536,32 @@ onMounted(async () => {
     startupWarning = setupError.value;
   }
 
-  if (!config) {
-    if (!isPasteWindow) setupVisible.value = true;
-  } else {
+  if (config) {
     setActiveConfig(config);
     currentUsername.value = config.username;
     // 保存的 token 必须经服务器验证，才能进入主界面。
     hasSavedSyncConfig.value = false;
-    if (config.username && config.sessionToken && !isPasteWindow) savedSessionConfig.value = config;
+    if (config.username && config.sessionToken) savedSessionConfig.value = config;
   }
-  if (!isPasteWindow) setupVisible.value = true;
+  setupVisible.value = true;
   initializing.value = false;
 
   if (startupWarning) showToast(startupWarning, "error");
-  if (!isPasteWindow) void initUpdaterVersion();
+  void initUpdaterVersion();
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
   if (!accountRuntimeError.value) void initializeTauriServices();
 
-  if (setupVisible.value) {
-    await nextTick();
-    setupWizard.value?.setFields(config ?? undefined);
-    if (savedSessionConfig.value && !accountRuntimeError.value) await restoreSavedSession();
-    else setupWizard.value?.focusServerInput();
-  } else if (config?.username && config.sessionToken) {
-    try {
-      if (!isPasteWindow) await startSync(config);
-    } catch (error) {
-      showToast(`同步初始化失败：${errorMessage(error)}`, "error");
-    }
-    await focusSearchInput();
-  }
+  await nextTick();
+  setupWizard.value?.setFields(config ?? undefined);
+  if (savedSessionConfig.value && !accountRuntimeError.value) await restoreSavedSession();
+  else setupWizard.value?.focusServerInput();
 });
 
 onBeforeUnmount(() => {
   authenticationController?.abort();
   cancelSettingsRequests();
-  pasteSessionReloadRevision += 1;
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
   disposeToast();
   cancelPendingRefresh();
@@ -605,8 +569,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   if (shareReceiverListener) void shareReceiverListener.unregister();
-  void stopSyncClient({ activeOnly: isPasteWindow });
-  if (!isPasteWindow) void disposeQuickPasteShortcut();
+  void stopSyncClient();
+  void disposeQuickPasteShortcut();
 });
 </script>
 
@@ -638,8 +602,8 @@ onBeforeUnmount(() => {
     />
   </main>
 
-  <main v-else :key="activeAccountSession?.id ?? 'signed-out'" class="app-shell" :class="{ 'paste-app': isPasteWindow, 'mobile-app': isMobile }">
-    <aside v-if="!isPasteWindow && !isMobile" class="sidebar" aria-label="主导航">
+  <main v-else :key="activeAccountSession?.id ?? 'signed-out'" class="app-shell" :class="{ 'paste-app': isQuickPaste, 'mobile-app': isMobile }">
+    <aside v-if="!isMobile" v-show="!isQuickPaste" class="sidebar" aria-label="主导航">
       <header class="sidebar-brand">
         <span class="brand-mark"><Clipboard :size="17" /></span>
         <span>
@@ -716,6 +680,7 @@ onBeforeUnmount(() => {
 
     <HistoryView
       v-if="activeView === 'history'"
+      v-show="!isQuickPaste"
       ref="historyView"
       :fetch-history-page="fetchHistoryPage"
       :revision="historyRevision"
@@ -732,6 +697,7 @@ onBeforeUnmount(() => {
 
     <PendingUploadsView
       v-else-if="activeView === 'pending-upload'"
+      v-show="!isQuickPaste"
       :entries="pendingEntries"
       :devices-by-id="devicesById"
       :current-time="currentTime"
@@ -742,16 +708,19 @@ onBeforeUnmount(() => {
 
     <UploadsView
       v-else-if="activeView === 'uploads'"
+      v-show="!isQuickPaste"
       :serve-tasks="uploadTasks"
     />
 
     <DevicesView
       v-else-if="activeView === 'devices'"
+      v-show="!isQuickPaste"
       :current-time="currentTime"
     />
 
     <DownloadsView
       v-else
+      v-show="!isQuickPaste"
       :records="downloadRecords"
       @cancel-record="cancelDownloadRecord($event)"
       @cancel-all="stopAllDownloads()"
@@ -759,9 +728,26 @@ onBeforeUnmount(() => {
       @clear-finished="removeDownloadRecords()"
     />
 
-    <EntryDownloadToasts v-if="isMobile && !isPasteWindow" mobile />
+    <HistoryView
+      v-if="isQuickPaste"
+      ref="quickHistoryView"
+      quick-paste
+      :fetch-history-page="fetchHistoryPage"
+      :revision="historyRevision"
+      :devices-by-id="devicesById"
+      :current-time="currentTime"
+      :importing-share="false"
+      :activating-entry-ids="activatingEntryIds"
+      :saving-entry-id="savingEntryId"
+      :ensure-local-files="ensureLocalFiles"
+      @activate="activateFromView"
+      @remove="removeEntry"
+      @save="saveEntry"
+    />
 
-    <nav v-if="isMobile && !isPasteWindow" class="mobile-navigation" aria-label="主导航">
+    <EntryDownloadToasts v-if="isMobile && !isQuickPaste" mobile />
+
+    <nav v-if="isMobile && !isQuickPaste" class="mobile-navigation" aria-label="主导航">
       <button
         v-for="page in mobilePages"
         :key="page.view"
@@ -780,17 +766,17 @@ onBeforeUnmount(() => {
     </nav>
 
     <SettingsDialog
-      v-if="!isPasteWindow && !isMobile && settingsVisible"
+      v-if="!isQuickPaste && !isMobile && settingsVisible"
       :current-username="currentUsername"
     />
     <MobileSettingsDialog
-      v-if="!isPasteWindow && isMobile && settingsVisible"
+      v-if="!isQuickPaste && isMobile && settingsVisible"
       :current-username="currentUsername"
     />
 
   </main>
 
-  <UpdaterDialog v-if="!isPasteWindow && !isToastWindow" locale="zh-CN" />
+  <UpdaterDialog v-if="isNative && !isQuickPaste && !isToastWindow" locale="zh-CN" />
 
   <ToastLayer />
   <EntryDownloadToasts v-if="!isToastWindow && !isMobile" />

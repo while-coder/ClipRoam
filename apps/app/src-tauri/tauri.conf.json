@@ -26,20 +26,6 @@
         "decorations": true
       },
       {
-        "label": "paste",
-        "create": false,
-        "title": "ClipRoam - 快速粘贴",
-        "width": 560,
-        "height": 640,
-        "minWidth": 480,
-        "minHeight": 520,
-        "resizable": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false,
-        "decorations": false
-      },
-      {
         "label": "toast",
         "create": false,
         "title": "ClipRoam",

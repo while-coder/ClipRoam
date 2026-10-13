@@ -1,18 +1,17 @@
 //! Windows/macOS/Linux 三个桌面平台共享的外壳与粘贴投递逻辑。
 //! 个别系统差异（粘贴合成、打开数据目录的命令）由各系统目录覆盖。
 
-// `run_paste_command` 与 `begin_window_drag` 只被 macOS/Linux 路径使用，
-// Windows 构建下它们由 platforms/desktop/windows 覆盖，因此是预期中的死代码。
+// 非 Windows 的桌面实现也在测试构建中检查。
 #![cfg_attr(target_os = "windows", allow(dead_code))]
 
 // 各桌面系统目录；macos/linux 额外在 Windows 测试构建下编译以保持类型检查
 // （见 platforms/mod.rs 顶部说明）。
-#[cfg(target_os = "windows")]
-pub(crate) mod windows;
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
-pub(crate) mod macos;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) mod linux;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) mod macos;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;
 // arboard_clipboard 由 macos/linux 使用，跟随它们一起编译。
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) mod arboard_clipboard;
@@ -21,13 +20,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size, Window, WindowEvent};
 
-use crate::pending_upload::capture::ShareImportSummary;
-
 const TRAY_SHOW_MAIN: &str = "show-main";
 const TRAY_QUIT: &str = "quit";
 
 pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let _ = crate::platform::show_main_window(app);
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_process::init())
 }
@@ -58,7 +58,7 @@ pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> 
     }
     window.hide().map_err(|error| error.to_string())?;
     thread::sleep(Duration::from_millis(90));
-    if let Err(error) = crate::platforms::synthesize_paste() {
+    if let Err(error) = crate::platform::synthesize_paste() {
         // The clipboard content is still valid, but the user needs to see why
         // automatic delivery failed (for example missing Linux helpers or
         // macOS Accessibility permission).
@@ -66,19 +66,6 @@ pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> 
         return Err(error);
     }
     Ok(())
-}
-
-pub(crate) fn requires_paste_window() -> bool {
-    true
-}
-
-/// 各桌面系统默认不按剪贴板序列号跳过轮询；Windows 有快速路径覆盖。
-pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
-    false
-}
-
-pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
-    window.start_dragging().map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -93,15 +80,21 @@ pub(crate) fn on_paste_window_focus(app: AppHandle, focused: bool) {
 }
 
 pub(crate) fn spawn_paste_focus_loss_check(app: AppHandle) {
+    let mode = app.state::<crate::app_shell::QuickPasteMode>().snapshot();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(100));
-        let Some(window) = app.get_webview_window("paste") else {
-            return;
-        };
-        if crate::platforms::should_ignore_paste_focus_loss(&app) {
+        if !mode.0 || app.state::<crate::app_shell::QuickPasteMode>().snapshot() != mode {
             return;
         }
-        if matches!(window.is_focused(), Ok(false)) {
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        if crate::platform::should_ignore_paste_focus_loss(&app) {
+            return;
+        }
+        if matches!(window.is_focused(), Ok(false))
+            && app.state::<crate::app_shell::QuickPasteMode>().snapshot() == mode
+        {
             let _ = window.hide();
         }
     });
@@ -117,8 +110,11 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
             api.prevent_close();
             let _ = window.hide();
         }
-        WindowEvent::Focused(focused) if window.label() == "paste" => {
-            crate::platforms::on_paste_window_focus(window.app_handle().clone(), *focused);
+        WindowEvent::Focused(focused)
+            if window.label() == "main"
+                && crate::app_shell::quick_paste_enabled(window.app_handle()) =>
+        {
+            crate::platform::on_paste_window_focus(window.app_handle().clone(), *focused);
         }
         _ => {}
     }
@@ -133,7 +129,7 @@ pub(crate) fn create_windows(app: &AppHandle) -> Result<(), Box<dyn std::error::
         let builder = tauri::WebviewWindowBuilder::from_config(app, &window_config)?;
         // 粘贴窗口弹出时应用通常在后台，macOS 默认把第一次点击用于激活窗口，
         // 用户就得点两次才能粘贴；允许首次点击直接穿透到 webview。
-        let builder = if window_config.label == "paste" {
+        let builder = if window_config.label == "main" {
             builder.accept_first_mouse(true)
         } else {
             builder
@@ -155,6 +151,13 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;
+    window
+        .emit("cliproam://show-main", ())
+        .map_err(|error| error.to_string())?;
+    if crate::app_shell::quick_paste_enabled(app) {
+        // The existing webview restores the main layout and geometry before showing.
+        return Ok(());
+    }
     window.show().map_err(|error| error.to_string())?;
     window.unminimize().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
@@ -225,7 +228,11 @@ pub(crate) fn show_detached_toast(
     let generation = TOAST_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     let hide_app = app.clone();
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(if tone == "error" { 6_000 } else { 4_200 }));
+        thread::sleep(Duration::from_millis(if tone == "error" {
+            6_000
+        } else {
+            4_200
+        }));
         if TOAST_GENERATION.load(Ordering::Relaxed) == generation {
             if let Some(window) = hide_app.get_webview_window("toast") {
                 let _ = window.hide();
@@ -259,7 +266,9 @@ fn position_toast_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Resu
                 f64::from(position.y) + f64::from(size.height) / 2.0,
             )
             .map_err(|error| error.to_string())?
-            .or(window.primary_monitor().map_err(|error| error.to_string())?)
+            .or(window
+                .primary_monitor()
+                .map_err(|error| error.to_string())?)
             .ok_or_else(|| "monitor is unavailable".to_string())?;
         (position, size, monitor)
     } else {
@@ -350,7 +359,10 @@ fn calculate_toast_position(
 pub(crate) fn open_data_directory_with(app: &AppHandle, command: &str) -> Result<(), String> {
     use std::{fs, process::Command};
 
-    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
     Command::new(command)
         .arg(&app_data_dir)
@@ -359,21 +371,19 @@ pub(crate) fn open_data_directory_with(app: &AppHandle, command: &str) -> Result
     Ok(())
 }
 
-pub(crate) fn supports_native_file_export() -> bool {
-    true
+mod files;
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|error| error.to_string())
 }
 
-/// 命令在 tokio 工作线程上执行，而阻塞版 `FileDialog` 的 macOS 面板要求
-/// 主线程——异步版由 rfd 负责派发，两端都能安全等待。
-pub(crate) async fn prompt_save_destination(_app: &AppHandle, single_file: bool, file_name: &str) -> Result<Option<crate::downloads::save::SaveDestination>, String> {
-    let handle = if single_file {
-        rfd::AsyncFileDialog::new().set_file_name(file_name).save_file().await
-    } else {
-        rfd::AsyncFileDialog::new().pick_folder().await
-    };
-    Ok(handle.map(|handle| crate::downloads::save::SaveDestination::Path(handle.path().to_path_buf())))
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+pub(crate) fn capture_paste_target(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
 }
 
-pub(crate) fn consume_pending_shares(_app: &AppHandle) -> Result<ShareImportSummary, String> {
-    Ok(ShareImportSummary::default())
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
+    false
 }

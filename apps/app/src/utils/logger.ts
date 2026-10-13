@@ -10,6 +10,7 @@
  * 在 main.ts 启动时调用一次 setupLogger()。
  */
 import { debug, info, warn, error } from '@tauri-apps/plugin-log'
+import { isNative } from '../platform/runtime'
 
 type ConsoleMethod = 'log' | 'debug' | 'info' | 'warn' | 'error'
 type Logger = (message: string) => Promise<void>
@@ -37,6 +38,7 @@ function forward(method: ConsoleMethod, logger: Logger): void {
 
 /** 安装 console -> 日志文件 的转发。幂等性由调用方保证（仅在 main.ts 调一次）。 */
 export function setupLogger(): void {
+  if (!isNative) return
   forward('log', debug)
   forward('debug', debug)
   forward('info', info)

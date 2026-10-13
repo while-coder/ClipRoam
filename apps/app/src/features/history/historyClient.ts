@@ -52,19 +52,19 @@ export class HistoryClient {
     const entryIds = manifest.map((entry) => entry.id);
     if (!entryIds.length) return [];
     try {
-      const missing = await this.session.invoke<string[]>("find_stale_entry_ids", { manifest });
+      const missing = await this.session.cache.stale(manifest);
       if (missing.length) {
         const entries = await this.#fetchEntries(missing);
-        await this.session.invoke("upsert_server_entries", { entries });
+        await this.session.cache.upsert(entries);
       }
       // Only this page's details supply file identities; unknown/unstored files
       // are re-queried before computing the list's cached summaries.
-      const fileIds = await this.session.invoke<string[]>("find_unknown_file_ids", { entryIds });
+      const fileIds = await this.session.cache.unknownFileIds(entryIds);
       if (fileIds.length) {
         const statuses = await this.#fetchFiles(fileIds);
-        await this.session.invoke("upsert_server_files", { statuses });
+        await this.session.cache.upsertFiles(statuses);
       }
-      return await this.session.invoke<LocalClipboardEntry[]>("get_cached_entries_for_display", { entryIds });
+      return await this.session.cache.display(entryIds);
     } catch (error) {
       if (this.session.signal.aborted) return [];
       throw error;
@@ -103,7 +103,7 @@ export class HistoryClient {
   }
 
   async getEntry(entryId: string): Promise<ClipboardEntry> {
-    return this.session.invoke<ClipboardEntry>("get_entry", { entryId });
+    return (await this.session.cache.display([entryId], false))[0]!;
   }
 
   // A 404 is not a failure: another device may have deleted the entry first,
@@ -117,6 +117,7 @@ export class HistoryClient {
       "",
       true,
     );
+    await this.session.database.delete("entries", entryId);
   }
 
 }

@@ -1,20 +1,14 @@
-import type { ClipboardEntry, Device, EntryPublishInput, EntryPublishRequest } from "@cliproam/protocol";
+import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
 import type { SyncRequester } from "../sync/syncHttp";
 import { errorMessage } from "../../utils/error";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
+import type { PendingRow } from "../../core/content";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
 type PendingUploaderDeps = FileUploaderDeps & {
   onPublished(): void;
 };
-type PendingQueueRow = {
-  seq: number;
-  kind: ClipboardEntry["kind"];
-  content: string;
-  extra: Partial<Pick<ClipboardEntry, "html" | "rtf" | "fileInfo" | "imageInfo">>;
-};
-
-/** Captures stay durable in Rust; one row is published at a time. */
+/** Captures stay durable in IndexedDB; one row is published at a time. */
 export class PendingUploader {
   #files: FileUploader;
   constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly deps: PendingUploaderDeps, private autoUploadLimit: number) {
@@ -29,7 +23,10 @@ export class PendingUploader {
   async #drainLoop(): Promise<void> {
     while (!this.deps.session.signal.aborted) {
       await this.deps.session.delay(DRAIN_POLL_INTERVAL_MS);
-      const row = await this.deps.session.invoke<PendingQueueRow | null>("peek_pending_entry").catch((error) => {
+      const row = await this.deps.session.cache.pendingRows().then((rows) => {
+        const first = rows.find((row) => row.status === "wait");
+        return first?.resolving ? undefined : first;
+      }).catch((error) => {
         if (!this.deps.session.signal.aborted) this.deps.onError(`待同步记录读取失败：${errorMessage(error)}`);
         return null;
       });
@@ -38,9 +35,10 @@ export class PendingUploader {
         await this.#publishQueueRow(row);
       } catch (error) {
         if (this.deps.session.signal.aborted) return;
-        console.warn(`Pending upload failed: seq=${row.seq} kind=${row.kind}`, error);
+        console.warn(`Pending upload failed: seq=${row.seq} kind=${row.entry.kind}`, error);
         try {
-          await this.deps.session.invoke("fail_pending_entry", { seq: row.seq });
+          await this.deps.session.cache.setPendingStatus(row.seq, "failed");
+          void this.deps.session.refreshPending();
         } catch (statusError) {
           if (!this.deps.session.signal.aborted) this.deps.onError(`同步失败状态保存失败：${errorMessage(statusError)}`);
           return;
@@ -54,20 +52,24 @@ export class PendingUploader {
   // pending without creating or updating the server entry. Content-addressed
   // uploads need no entry id and are reused if publishing must be retried.
   // Only a confirmed publish refreshes history and lets the row leave the queue.
-  async #publishQueueRow(row: PendingQueueRow): Promise<void> {
+  async #publishQueueRow(row: PendingRow): Promise<void> {
     const payload: EntryPublishInput = {
-      kind: row.kind,
-      content: row.content,
-      html: row.extra.html ?? undefined,
-      rtf: row.extra.rtf ?? undefined,
-      fileInfo: row.extra.fileInfo ?? undefined,
-      imageInfo: row.extra.imageInfo ?? undefined,
+      kind: row.entry.kind,
+      content: row.entry.content,
+      html: row.entry.html ?? undefined,
+      rtf: row.entry.rtf ?? undefined,
+      fileInfo: row.entry.fileInfo ?? undefined,
+      imageInfo: row.entry.imageInfo ?? undefined,
       sourceDeviceId: this.device.id,
     };
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
-    await this.#publishEntry(payload);
+    const entryId = await this.#publishEntry(payload);
+    await this.deps.session.database.update("entries", entryId, (previous: import("../../core/content").StoredEntry | undefined) => ({
+      ...previous ?? row.entry, id: entryId, sources: row.entry.sources,
+    }));
     this.deps.onPublished();
-    await this.deps.session.invoke("dequeue_pending_entry", { seq: row.seq });
+    await this.deps.session.database.delete("pending", String(row.seq));
+    void this.deps.session.refreshPending();
   }
 
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {
@@ -81,17 +83,18 @@ export class PendingUploader {
   // The HTTP response is the confirmation the socket echo used to be. The
   // queue-row payload carries no id and no createdAt: identity and timestamp
   // belong to the server, which dedupes by content either way.
-  async #publishEntry(entry: EntryPublishInput): Promise<void> {
+  async #publishEntry(entry: EntryPublishInput): Promise<string> {
     const request: EntryPublishRequest = {
       entry,
     };
-    await this.http.request(
+    const result = await this.http.request(
       "POST",
       "/entries",
       this.#jsonInit(request, ENTRY_HTTP_TIMEOUT_MS),
-      null,
-      "",
+      EntryPublishResponseSchema,
+      "服务器返回了不兼容的发布响应",
     );
+    return result!.entry.id;
   }
 
 }

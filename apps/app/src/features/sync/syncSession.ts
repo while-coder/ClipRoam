@@ -1,7 +1,8 @@
 import { ref } from "vue";
-import { AccountSession, getAccountSession, replaceAccountSession } from "./accountSession";
+import { archiveKeyFor, getAccountSession, replaceAccountSession } from "./accountSession";
 export { archiveKeyFor } from "./accountSession";
-import { invoke } from "@tauri-apps/api/core";
+import { AccountDatabase } from "../../core/database";
+import { readLoginConfig, writeLoginConfig } from "../../platform/loginStorage";
 import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
 import type { AccountPreferences, SyncConfig } from "../../types";
@@ -11,7 +12,7 @@ export const hasSavedSyncConfig = ref(false);
 export const currentUsername = ref("");
 
 let activeSyncConfig: SyncConfig | undefined;
-/** 活动档案的偏好；跟随档案切换与保存更新（Rust 侧持久化到档案目录）。 */
+/** 活动档案的偏好；跟随账号切换与保存更新（IndexedDB 持久化）。 */
 let activePreferences: AccountPreferences = defaultAccountPreferences();
 
 // 引用恒等是 stale check 的依据（activateRemoteClipboard），访问器不做任何拷贝。
@@ -34,43 +35,34 @@ export function setActivePreferences(preferences: AccountPreferences): void {
   if (session) session.preferences = preferences;
 }
 
+let configurationQueue: Promise<unknown> = Promise.resolve();
+
 export async function loadSyncConfig(): Promise<SyncConfig | null> {
-  const raw = await invoke<unknown>("get_sync_config");
-  if (!raw || typeof raw !== "object") return null;
-  const value = raw as Record<string, unknown>;
-  return {
-    serverAddress: typeof value.serverAddress === "string" && value.serverAddress
-      ? value.serverAddress
-      : DEFAULT_SERVER_ADDRESS,
-    serverProtocol: value.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL,
-    username: typeof value.username === "string" ? value.username : "",
-    sessionToken: typeof value.sessionToken === "string" ? value.sessionToken : "",
-  };
+  const stored = await readLoginConfig();
+  if (!stored) return null;
+  return { ...stored, serverAddress:stored.serverAddress || DEFAULT_SERVER_ADDRESS,
+    serverProtocol:stored.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL };
 }
 
-export async function persistSyncConfig(config: SyncConfig | null): Promise<void> {
-  await invoke("save_sync_config", { config });
-  // 不在这里重读偏好：登录路径紧接着写入显式构造的偏好；token 失效/退出
-  // 账号后保留内存中的偏好，让「重登同一账号档案保留偏好」的语义成立。
+export function persistSyncConfig(config: SyncConfig | null): Promise<void> {
+  const work = configurationQueue.then(() => writeLoginConfig(config));
+  configurationQueue = work.catch(() => undefined);
+  return work;
 }
 
 export async function loadAccountPreferences(): Promise<AccountPreferences> {
-  try {
-    return await invoke<AccountPreferences>("get_account_preferences");
-  } catch {
-    return defaultAccountPreferences();
-  }
+  const config = getActiveConfig();
+  if (!config?.username) return defaultAccountPreferences();
+  const key = archiveKeyFor(config);
+  const stored = await new AccountDatabase(key).get<Partial<AccountPreferences>>("meta", "preferences");
+  return { ...defaultAccountPreferences(), ...stored };
 }
 
 export async function persistAccountPreferences(preferences: AccountPreferences): Promise<void> {
+  const config = getActiveConfig();
+  if (!config?.username) throw new Error("同步账号未登录");
   const session = getAccountSession();
-  if (session) await session.invoke("save_account_preferences", { preferences });
-  else {
-    if (!activeSyncConfig) throw new Error("同步账号未登录");
-    const temporarySession = new AccountSession(activeSyncConfig, preferences);
-    try { await temporarySession.invoke("save_account_preferences", { preferences }); }
-    finally { temporarySession.dispose(); }
-  }
-  if (session) session.preferences = preferences;
-  if (!session || getAccountSession() === session) activePreferences = preferences;
+  await new AccountDatabase(archiveKeyFor(config)).put("meta", "preferences", preferences);
+  if (session) { session.preferences = preferences; await session.capture.updateWatch(); }
+  activePreferences = preferences;
 }

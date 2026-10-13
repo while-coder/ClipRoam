@@ -1,11 +1,13 @@
 import { getAccountSession } from "../sync/accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
-import { isMobile } from "../../composables/usePlatform";
+import { isMobile, usePlatform } from "../../composables/usePlatform";
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { getSyncClient } from "../sync/syncEngine";
 import { getActiveConfig, getActivePreferences } from "../sync/syncSession";
 import { ensureLocalFiles } from "../downloads/useDownloads";
+
+const { platformCapabilities } = usePlatform();
 
 /** 本机捕获落库计数；远端激活靠它识别「用户刚复制过」的竞态。 */
 export function bumpLocalClipboardRevision(): void {
@@ -19,6 +21,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
   const client = getSyncClient();
   if (
     isMobile.value
+    || !platformCapabilities.value.automaticPaste
     || !getActivePreferences().autoReceiveClipboard
     || !session
     || !client
@@ -42,7 +45,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
       || getActiveConfig() !== config
       || !getActivePreferences().autoReceiveClipboard
     ) return;
-    await session.invoke("activate_remote_entry", { entryId: localEntry.id });
+    await session.capture.writeEntry(localEntry.id);
   } catch (error) {
     if (
       !session.signal.aborted

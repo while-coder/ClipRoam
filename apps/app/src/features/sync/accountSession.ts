@@ -1,5 +1,12 @@
 import { computed, effectScope, ref, shallowRef, type Ref, type WritableComputedRef } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { AccountDatabase } from "../../core/database";
+import { HistoryCache } from "../../core/historyCache";
+import { DownloadManager } from "../../core/downloadManager";
+import { CaptureService } from "../../core/captureService";
+import { AccountFiles } from "../../platform/files";
+import { clipboardPlatform } from "../../platform/clipboard";
+import { profileName } from "../../core/hash";
+import { showToast } from "../toast/useToast";
 import { createSettingsState } from "../settings/settingsState";
 import type { SyncClient } from "./syncClient";
 import type { SyncConfig, AccountPreferences, Device, LocalClipboardEntry, UploadProgress } from "../../types";
@@ -68,18 +75,30 @@ export class AccountSession {
   readonly state = createAccountState();
   readonly scope = effectScope(true);
   readonly id = ++sessionSequence;
-  readonly sessionId = crypto.randomUUID();
   readonly ready: Promise<void>;
-  #stopNativeTasks = true;
+  readonly database: AccountDatabase;
+  readonly files: AccountFiles;
+  readonly cache: HistoryCache;
+  readonly downloads: DownloadManager;
+  readonly capture: CaptureService;
   client?: SyncClient;
   #cleanups = new Set<() => void>();
   #timers = new Map<string, number>();
 
   constructor(readonly config: SyncConfig, public preferences: AccountPreferences) {
-    this.ready = invoke<void>("open_account_session", { sessionId: this.sessionId, config }).then(() => {
-      this.own(() => {
-        void invoke("close_account_session", { sessionId: this.sessionId, stopDownloads: this.#stopNativeTasks }).catch(() => undefined);
-      });
+    this.database = new AccountDatabase(this.accountKey);
+    this.files = new AccountFiles(this.accountKey);
+    this.cache = new HistoryCache(this.files);
+    this.downloads = new DownloadManager(this);
+    this.capture = new CaptureService(this, () => {
+      if (this.signal.aborted) return;
+      this.state.historyRevision.value++;
+      void this.refreshPending();
+    }, (message) => { if (!this.signal.aborted) showToast(message, "error"); });
+    this.ready = this.downloads.restore();
+    this.own(() => { this.downloads.stop(); this.files.dispose(); });
+    this.own(() => {
+      void clipboardPlatform.watch(profileName(this.accountKey),false).catch(() => undefined);
     });
   }
 
@@ -142,13 +161,10 @@ export class AccountSession {
     }
   }
 
-  /** IPC cannot be revoked, so it always targets this session's archive. */
-  invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-    return this.start(async () => {
-      await this.ready;
-      this.signal.throwIfAborted();
-      return invoke<T>(command, { ...args, sessionId: this.sessionId });
-    });
+  async refreshPending(): Promise<void> {
+    await this.ready;
+    const entries = await this.cache.pendingDisplay();
+    if (!this.signal.aborted) { this.state.pendingEntries.value = entries; this.state.pendingCount.value = entries.length; }
   }
 
   delay(milliseconds: number): Promise<void> {
@@ -160,9 +176,8 @@ export class AccountSession {
     }));
   }
 
-  dispose(options: { stopNativeTasks?: boolean } = {}): void {
+  dispose(): void {
     if (this.signal.aborted) return;
-    this.#stopNativeTasks = options.stopNativeTasks !== false;
     this.#controller.abort();
     for (const timer of this.#timers.values()) window.clearTimeout(timer);
     this.#timers.clear();

@@ -39,7 +39,7 @@ export function resetQuickPasteShortcutDraft(): void {
 async function registerShortcut(shortcut: string): Promise<void> {
   shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
   await shortcutApi.register(shortcut, (event) => {
-    if (event.state === "Pressed") void emitTo("paste", "cliproam://show-paste");
+    if (event.state === "Pressed") void emitTo("main", "cliproam://show-paste");
   });
 }
 

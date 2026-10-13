@@ -1,0 +1,231 @@
+import { isFileNode, type FileInfo } from "@cliproam/protocol";
+import type { AccountSession } from "../features/sync/accountSession";
+import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../platform/clipboard";
+import { base64ToBytes } from "../utils/bytes";
+import { nameMatches, safeName, type LocalSources, type PendingRow, type StoredEntry } from "./content";
+import { profileName, Sha256 } from "./hash";
+import type { FileStat } from "../platform/files";
+
+/** All filtering, limits, hashing, queue persistence and retries are portable. */
+export class CaptureService {
+  #work: Promise<void> = Promise.resolve();
+  #draining = false;
+  constructor(private readonly session: AccountSession, private readonly changed: () => void, private readonly error: (message: string) => void) {}
+
+  async start(): Promise<void> {
+    if (clipboardPlatform.monitoringAvailable) {
+      await this.session.ownAsync(clipboardPlatform.subscribe(() => {
+        this.session.state.localClipboardRevision++; void this.drain();
+      }));
+      await this.updateWatch();
+      this.session.interval(() => { void this.drain(); }, 2000);
+    }
+    void this.resume().catch((error) => { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); });
+  }
+
+  async updateWatch(): Promise<void> {
+    await clipboardPlatform.watch(profileName(this.session.accountKey),this.session.preferences.watchClipboard);
+  }
+
+  async drain(): Promise<void> {
+    if (this.#draining || this.session.signal.aborted) return;
+    this.#draining = true;
+    try {
+      const scope = profileName(this.session.accountKey);
+      const captures = await clipboardPlatform.inbox(scope);
+      for (const capture of captures) {
+        this.session.signal.throwIfAborted();
+        await this.capture(capture.data, capture.id);
+        await clipboardPlatform.acknowledge(scope,capture.id);
+        await this.session.database.delete("meta", `capture:${capture.id}`);
+      }
+      await this.resume();
+    } catch (error) { if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`); }
+    finally { this.#draining = false; }
+  }
+
+  capture(data: ClipboardData, captureId?: string): Promise<void> {
+    const work = this.#work.then(() => this.#capture(data, captureId));
+    this.#work = work.catch(() => undefined);
+    return work;
+  }
+
+  async #capture(data: ClipboardData, captureId?: string): Promise<void> {
+    this.session.signal.throwIfAborted();
+    if (captureId && await this.session.database.get("meta", `capture:${captureId}`)) return;
+    this.session.state.localClipboardRevision++;
+    const entry: StoredEntry = { id: "", version: 0, kind: data.kind, content: "",
+      sourceDeviceId: "", createdAt: new Date().toISOString() };
+    if (data.kind === "text") {
+      if (!data.text.trim()) return;
+      Object.assign(entry, { content: data.text, html: data.html, rtf: data.rtf });
+    } else if (data.kind === "image") {
+      const bytes = base64ToBytes(data.data);
+      const fileId = await this.session.files.putBlob(bytes);
+      entry.content = `截图（${data.width} × ${data.height}）`;
+      entry.imageInfo = { fileId, size: bytes.length, thumbnail: data.thumbnail };
+    } else {
+      const collected = await this.#collect(data.paths);
+      entry.fileInfo = collected.info; entry.sources = collected.sources;
+      entry.content = Object.keys(collected.info).join("、");
+    }
+    const seq = await this.session.cache.enqueue(entry, captureId, data.kind === "files");
+    this.changed();
+    if (data.kind === "files") await this.#resolve(seq);
+  }
+
+  async #collect(paths: string[]): Promise<{ info: FileInfo; sources: LocalSources }> {
+    const info: FileInfo = Object.create(null);
+    const sources: LocalSources = { roots: [], files: [] };
+    const preferences = this.session.preferences;
+    const collect = async (stat: FileStat, parent: FileInfo, name: string, relative: string): Promise<void> => {
+      this.session.signal.throwIfAborted();
+      if (stat.symlink || nameMatches(stat.name, preferences.excludePatterns)) return;
+      if (stat.directory) {
+        const children: FileInfo = Object.create(null); parent[name] = children;
+        for (const child of (await this.session.files.list(stat.path)).sort((a,b) => a.name.localeCompare(b.name))) {
+          const childName = safeName(child.name);
+          if (Object.prototype.hasOwnProperty.call(children, childName)) throw new Error("过滤后的文件名称重复");
+          await collect(child, children, childName, `${relative}/${childName}`);
+        }
+      } else {
+        if (sources.files.length >= preferences.maxCaptureFileCount) throw new Error(`单次复制文件数量超过上限 ${preferences.maxCaptureFileCount}`);
+        parent[name] = { f: "", s: stat.size };
+        sources.files.push({ path: relative, source: stat.path, size: stat.size, modifiedAt: stat.modifiedAt });
+      }
+    };
+    const stats = await this.session.files.stats(paths);
+    for (const stat of stats) {
+      if (!stat || stat.symlink || nameMatches(stat.name, preferences.excludePatterns)) continue;
+      const base = safeName(stat.name); let name = base, n = 2;
+      while (Object.prototype.hasOwnProperty.call(info, name)) { const dot = base.lastIndexOf("."); name = dot > 0 ? `${base.slice(0,dot)} (${n++})${base.slice(dot)}` : `${base} (${n++})`; }
+      sources.roots.push(stat.path); await collect(stat, info, name, name);
+    }
+    if (!Object.keys(info).length) throw new Error("没有可用的文件");
+    return { info, sources };
+  }
+
+  async #resolve(seq: number): Promise<void> {
+    const row = await this.session.database.get<PendingRow>("pending", String(seq));
+    if (!row?.resolving) return;
+    try {
+      for (const source of row.entry.sources?.files ?? []) {
+        this.session.signal.throwIfAborted();
+        const [before] = await this.session.files.stats([source.source]);
+        if (!before || before.directory || before.symlink || before.size !== source.size || (source.modifiedAt != null && before.modifiedAt !== source.modifiedAt)) throw new Error(`源文件已修改或不可用：${source.path}`);
+        const cacheKey = `hash:${source.source}:${source.size}:${source.modifiedAt ?? -1}`;
+        let fileId = await this.session.database.get<string>("meta", cacheKey);
+        if (!fileId) {
+          const hash = new Sha256();
+          for (let offset = 0; offset < source.size;) {
+            this.session.signal.throwIfAborted();
+            const bytes = await this.session.files.readPath(source.source, offset, Math.min(128 * 1024, source.size - offset));
+            if (!bytes.length) throw new Error("文件读取不完整");
+            hash.update(bytes); offset += bytes.length;
+          }
+          fileId = hash.digest();
+          const [after] = await this.session.files.stats([source.source]);
+          if (!after || after.size !== before.size || after.modifiedAt !== before.modifiedAt) throw new Error(`读取期间源文件发生变化：${source.path}`);
+          await this.session.database.put("meta", cacheKey, fileId);
+        }
+        source.fileId = fileId; await this.session.files.rememberSource(source);
+        const segments = source.path.split("/"); let parent = row.entry.fileInfo!;
+        for (const part of segments.slice(0,-1)) { const node = parent[part]!; if (isFileNode(node)) throw new Error("文件树结构不合法"); parent = node; }
+        const node = parent[segments[segments.length - 1]!]!;
+        if (!isFileNode(node)) throw new Error("文件树结构不合法");
+        node.f = fileId;
+      }
+      row.resolving = false;
+      await this.session.database.update<PendingRow>("pending", String(seq), (current) => current ? { ...row, status: current.status } : undefined);
+    } catch (error) {
+      if (!this.session.signal.aborted) await this.session.database.update<PendingRow>("pending", String(seq), (current) => current ? { ...row, status: "failed" } : undefined);
+      throw error;
+    } finally { this.changed(); }
+  }
+
+  async resume(): Promise<void> {
+    for (const row of await this.session.cache.pendingRows()) if (row.resolving && row.status === "wait") {
+      const work = this.#work.then(() => this.#resolve(row.seq));
+      this.#work = work.catch(() => undefined);
+      try { await work; } catch (error) { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); }
+    }
+  }
+
+  async readCurrentText(): Promise<boolean> {
+    const data = await clipboardPlatform.readText();
+    if (!data) return false; await this.capture(data); return true;
+  }
+
+  async pickFiles(mode: string): Promise<boolean> {
+    const picked = await clipboardPlatform.pickFiles(mode,profileName(this.session.accountKey));
+    if (picked.files?.length) { await this.captureFiles(picked.files); return true; }
+    if (picked.paths?.length) { await this.capture({kind:"files",paths:picked.paths}); return true; }
+    return false;
+  }
+
+  /** Browser/extension callers can pass File objects without any native bridge. */
+  async captureFiles(files: File[]): Promise<void> {
+    const info: FileInfo = Object.create(null);
+    let count = 0;
+    for (const file of files) {
+      this.session.signal.throwIfAborted();
+      const names = (file.webkitRelativePath || file.name).split("/").map(safeName);
+      if (names.some((name) => nameMatches(name, this.session.preferences.excludePatterns))) continue;
+      if (++count > this.session.preferences.maxCaptureFileCount) throw new Error("单次复制文件数量超过上限");
+      let parent = info;
+      for (const name of names.slice(0,-1)) {
+        let node = parent[name];
+        if (!node) { node = Object.create(null) as FileInfo; parent[name] = node; }
+        if (isFileNode(node)) throw new Error("文件目录名称冲突"); parent = node;
+      }
+      let name = names[names.length - 1]!;
+      const base = name; let n = 2;
+      while (Object.prototype.hasOwnProperty.call(parent,name)) name = `${base} (${n++})`;
+      const hash = new Sha256();
+      for (let offset = 0; offset < file.size; offset += 128 * 1024) {
+        this.session.signal.throwIfAborted(); hash.update(new Uint8Array(await file.slice(offset,offset + 128 * 1024).arrayBuffer()));
+      }
+      const fileId = hash.digest();
+      await this.session.database.batch([
+        {name:"blobs",id:fileId,value:file},
+        {name:"meta",id:`blob:${fileId}`,value:{createdMs:Date.now(),captured:true}},
+      ]);
+      parent[name] = { f: fileId, s: file.size };
+    }
+    if (!count) throw new Error("没有可用的文件");
+    this.session.state.localClipboardRevision++;
+    await this.session.cache.enqueue({ id: "", version: 0, kind: "files", content: Object.keys(info).join("、"),
+      fileInfo: info, sourceDeviceId: "", createdAt: new Date().toISOString() });
+    this.changed();
+  }
+
+  async consumeShares(): Promise<{ shares: number; texts: number; images: number; files: number }> {
+    const result = { shares: 0, texts: 0, images: 0, files: 0 };
+    const shares = await clipboardPlatform.shares(profileName(this.session.accountKey));
+    for (const share of shares) {
+      try {
+        if (share.text) { await this.capture({ kind: "text", text: share.text, html: share.html }, `${share.id}:text`); result.texts++; }
+        for (let i = 0; i < share.images.length; i++) {
+          const image = await this.session.files.readImage(share.images[i]!);
+          await this.capture(image, `${share.id}:image:${i}`); result.images++;
+        }
+        if (share.paths.length) { await this.capture({ kind: "files", paths: share.paths }, `${share.id}:files`); result.files += share.paths.length; }
+        result.shares++;
+      } catch (error) { this.error(`分享导入失败：${String(error)}`); continue; }
+      this.session.signal.throwIfAborted();
+      await clipboardPlatform.acknowledgeShare(share.id);
+    }
+    return result;
+  }
+
+  async writeEntry(entryId: string, synthesize = false): Promise<void> {
+    const entry = await this.session.cache.get(entryId);
+    this.session.signal.throwIfAborted();
+    let payload: ClipboardWrite;
+    if (entry.kind === "text") payload = {kind:"text",text:entry.content,html:entry.html,rtf:entry.rtf};
+    else if (entry.kind === "files") payload = {kind:"files",paths:await this.session.files.materialize(entry,undefined,this.session.signal)};
+    else payload = {kind:"image",bytes:await this.session.files.read(entry.imageInfo!.fileId,0,entry.imageInfo!.size)};
+    this.session.signal.throwIfAborted();
+    await clipboardPlatform.write(payload,synthesize);
+  }
+}

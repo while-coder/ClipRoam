@@ -32,8 +32,18 @@ class AcknowledgeArgs {
 }
 
 @InvokeArg
-class ExportDirectoryArgs {
+class CopyFileArgs {
     lateinit var source: String
+    lateinit var parent: String
+    lateinit var name: String
+}
+@InvokeArg
+class CreateDirectoryArgs {
+    lateinit var parent: String
+    lateinit var name: String
+}
+@InvokeArg
+class RemoveDocumentArgs {
     lateinit var uri: String
 }
 
@@ -116,49 +126,70 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    private fun parentDocument(value: String): Uri {
+        val uri = Uri.parse(value)
+        require(uri.scheme == "content" && DocumentsContract.isTreeUri(uri)) { "不支持的目录地址" }
+        return if (DocumentsContract.isDocumentUri(activity, uri)) uri else
+            DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+    }
+
+    private fun createDocument(parent: String, name: String, mime: String): Uri {
+        require(name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')) { "文件名称不合法" }
+        return DocumentsContract.createDocument(activity.contentResolver, parentDocument(parent), mime, name)
+            ?: throw IllegalStateException("无法创建文件：$name")
+    }
+
     @Command
-    fun exportDirectory(invoke: Invoke) {
-        val args = invoke.parseArgs(ExportDirectoryArgs::class.java)
+    fun copyFile(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyFileArgs::class.java)
         scope.launch {
-            val createdRoots = mutableListOf<Uri>()
+            var target: Uri? = null
             try {
                 val source = File(args.source)
-                require(source.isDirectory) { "导出文件尚未准备完成" }
-                val tree = Uri.parse(args.uri)
-                val destination = DocumentsContract.buildDocumentUriUsingTree(
-                    tree, DocumentsContract.getTreeDocumentId(tree)
-                )
-                val files = source.listFiles()?.sumOf { file ->
-                    copyDocument(file, destination, createdRoots)
-                } ?: throw IllegalStateException("无法读取导出目录")
-                invoke.resolveObject(mapOf("files" to files))
-            } catch (error: Exception) {
-                // Only newly created documents are rolled back; pre-existing
-                // documents in the user's directory are never overwritten.
-                createdRoots.forEach { uri ->
-                    try { DocumentsContract.deleteDocument(activity.contentResolver, uri) } catch (_: Exception) {}
+                require(source.isFile) { "复制源必须是文件" }
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(args.name.substringAfterLast('.', "").lowercase())
+                    ?: "application/octet-stream"
+                val document = createDocument(args.parent, args.name, mime)
+                target = document
+                activity.contentResolver.openOutputStream(document, "w").use { output ->
+                    requireNotNull(output) { "无法写入文件：${args.name}" }
+                    source.inputStream().use { input -> input.copyTo(output) }
                 }
-                invoke.reject(error.message ?: "无法保存到所选目录")
+                invoke.resolveObject(mapOf("uri" to document.toString()))
+            } catch (error: Exception) {
+                target?.let { try { DocumentsContract.deleteDocument(activity.contentResolver, it) } catch (_: Exception) {} }
+                invoke.reject(error.message ?: "无法复制文件")
             }
         }
     }
 
-    private fun copyDocument(source: File, parent: Uri, createdRoots: MutableList<Uri>? = null): Int {
-        val mime = if (source.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase())
-                ?: "application/octet-stream"
-        val target = DocumentsContract.createDocument(activity.contentResolver, parent, mime, source.name)
-            ?: throw IllegalStateException("无法创建文件：${source.name}")
-        createdRoots?.add(target)
-        if (source.isDirectory) {
-            return source.listFiles()?.sumOf { copyDocument(it, target) }
-                ?: throw IllegalStateException("无法读取目录：${source.name}")
+    @Command
+    fun createDirectory(invoke: Invoke) {
+        val args = invoke.parseArgs(CreateDirectoryArgs::class.java)
+        scope.launch {
+            try {
+                val uri = createDocument(args.parent, args.name, DocumentsContract.Document.MIME_TYPE_DIR)
+                invoke.resolveObject(mapOf("uri" to uri.toString()))
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: "无法创建目录")
+            }
         }
-        activity.contentResolver.openOutputStream(target, "w").use { output ->
-            if (output == null) throw IllegalStateException("无法写入文件：${source.name}")
-            source.inputStream().use { input -> input.copyTo(output) }
+    }
+
+    @Command
+    fun removeDocument(invoke: Invoke) {
+        val args = invoke.parseArgs(RemoveDocumentArgs::class.java)
+        scope.launch {
+            try {
+                val uri = Uri.parse(args.uri)
+                require(uri.scheme == "content" && DocumentsContract.isTreeUri(uri) && DocumentsContract.isDocumentUri(activity, uri)
+                    && DocumentsContract.getDocumentId(uri) != DocumentsContract.getTreeDocumentId(uri)) { "只能清理系统目录中的子项" }
+                require(DocumentsContract.deleteDocument(activity.contentResolver, uri)) { "无法删除文件" }
+                invoke.resolve()
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: "无法删除文件")
+            }
         }
-        return 1
     }
 
     @Command

@@ -1,11 +1,8 @@
 import { nextTick } from "vue";
-import { emitTo } from "@tauri-apps/api/event";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { getActiveConfig } from "../sync/syncSession";
 import type { SyncClient } from "../sync/syncClient";
-import { SYNC_BRIDGE_HISTORY_EVENT } from "../sync/bridge";
-import { isPasteWindow } from "../../composables/usePlatform";
 import type {
   EntriesManifestFilter,
   EntriesManifestPage,
@@ -34,8 +31,7 @@ export const historyRevision = accountStateRef("historyRevision");
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
 ): Promise<EntriesManifestPage> {
-  // 未登录没有活动档案；隐藏的 paste 窗口启动时也会来查，这里返回空页，
-  // 不让「同步账号未登录」的错误以 toast 形式盖到主窗口的登录页上。
+  // 未登录时没有活动档案，不查询历史缓存。
   if (!getActiveConfig()?.sessionToken) {
     return { total: 0, entries: [] };
   }
@@ -49,9 +45,6 @@ export function refreshHistory(): void {
   const session = getAccountSession();
   if (!session) return;
   session.state.historyRevision.value += 1;
-  void emitTo(isPasteWindow ? "main" : "paste", SYNC_BRIDGE_HISTORY_EVENT, {
-    accountKey: session.accountKey,
-  }).catch(() => undefined);
 }
 
 export function focusSearch(): void {

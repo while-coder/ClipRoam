@@ -1,60 +1,18 @@
-//! 平台适配层：共享代码通过这里的门面调用各系统的特有能力，
-//! 所有 `cfg` 都被限制在本模块内部。
-//!
-//! - `desktop/`：Windows/macOS/Linux 共享实现与各桌面系统目录
-//! - `mobile/`：Android/iOS 共享实现与各移动系统目录
-//!
-//! 模块门上的 `test` 分支让 Windows 的 `cargo test` 也会编译 macOS/Linux
-//! 实现（arboard 为 dev-dependency），防止这些代码在类型漂移后静默烂掉。
-
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+//! 测试构建额外编译 macOS/Linux 适配代码，检查其类型和 API。
+//! 系统具体实现。统一函数入口位于 ../platform.rs，Tauri 命令位于 src 根目录各功能模块。
+#[cfg(desktop)]
 mod desktop;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(mobile)]
 mod mobile;
-
-#[cfg(target_os = "windows")]
-pub(crate) use desktop::windows::*;
-#[cfg(target_os = "macos")]
-pub(crate) use desktop::macos::*;
 #[cfg(target_os = "linux")]
-pub(crate) use desktop::linux::*;
+pub(crate) use desktop::linux as implementation;
+#[cfg(target_os = "macos")]
+pub(crate) use desktop::macos as implementation;
+#[cfg(target_os = "windows")]
+pub(crate) use desktop::windows as implementation;
 #[cfg(target_os = "android")]
-pub(crate) use mobile::android::*;
+pub(crate) use mobile::android as implementation;
 #[cfg(target_os = "ios")]
-pub(crate) use mobile::ios::*;
+pub(crate) use mobile::ios as implementation;
 
-/// 单实例插件回调：第二次启动时唤醒已运行实例的主窗口。移动端由系统保证
-/// 单实例，没有这个场景。
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-pub(crate) fn show_main_window(app: &tauri::AppHandle) {
-    let _ = desktop::show_main_window(app);
-}
-
-/// 桌面平台在后台线程轮询系统剪贴板；移动端不轮询（Android 通过分享
-/// 接收导入），这里把差异收敛成统一入口。
-pub(crate) fn start_clipboard_monitor(app: tauri::AppHandle) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    crate::pending_upload::capture::start_clipboard_monitor(app);
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let _ = app;
-    }
-}
-
-pub(crate) fn resolve_picker_paths(
-    app: &tauri::AppHandle,
-    paths: Vec<tauri_plugin_dialog::FilePath>,
-) -> Result<Vec<std::path::PathBuf>, String> {
-    #[cfg(target_os = "android")]
-    { mobile::android::resolve_picker_paths(app, paths) }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        paths.into_iter().map(|path| path.into_path().map_err(|error| error.to_string())).collect()
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-pub(crate) fn export_saved_directory(_app: &tauri::AppHandle, _source: &std::path::Path, _uri: &str) -> Result<usize, String> {
-    Err("当前平台不支持系统目录导出".to_string())
-}
+mod files;

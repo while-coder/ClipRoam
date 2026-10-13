@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "@qingfeng346/ui-kit";
 import { isToastWindow } from "../../composables/usePlatform";
+import { isNative } from "../../platform/runtime";
 import type { ToastPayload, ToastTone } from "../../types";
 
 /** 模块级单例（对齐 usePlatform 风格）：所有窗口内组件共享同一个 toast 状态。 */
@@ -20,7 +21,7 @@ function clearTimers(): void {
 function scheduleToastWindowHide(): void {
   if (!isToastWindow) return;
   toastWindowHideTimer = window.setTimeout(() => {
-    void invoke("hide_toast").catch(() => {});
+    void invoke("native_hide_toast").catch(() => {});
     toastWindowHideTimer = undefined;
   }, 180);
 }
@@ -37,7 +38,7 @@ function displayToast(payload: ToastPayload): void {
     }, payload.tone === "error" ? 5_000 : 3_200);
     return;
   }
-  // 主窗口 / paste 窗口：走 ui-kit toast（3.5s 自动消失，无需手动计时）。
+  // 主窗口：走 ui-kit toast（3.5s 自动消失，无需手动计时）。
   toast.show(payload.tone, payload.message);
 }
 
@@ -53,7 +54,8 @@ function showToast(message: string, tone: ToastTone = "info"): void {
   const normalized = message.trim();
   if (!normalized) return;
   const payload = { message: normalized, tone };
-  void invoke("show_toast", payload).catch(() => displayToast(payload));
+  if (!isNative) { displayToast(payload); return; }
+  void invoke("native_show_toast", payload).catch(() => displayToast(payload));
 }
 
 /** 清理 toast 相关 timer（组件卸载时调用）。 */

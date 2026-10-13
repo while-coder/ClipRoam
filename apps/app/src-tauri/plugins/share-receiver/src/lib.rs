@@ -45,14 +45,23 @@ pub struct DirectorySelection {
 }
 
 #[derive(Serialize)]
-struct ExportDirectoryRequest<'a> {
+struct CopyFileRequest<'a> {
     source: &'a str,
+    parent: &'a str,
+    name: &'a str,
+}
+#[derive(Serialize)]
+struct CreateDirectoryRequest<'a> {
+    parent: &'a str,
+    name: &'a str,
+}
+#[derive(Serialize)]
+struct RemoveDocumentRequest<'a> {
     uri: &'a str,
 }
-
 #[derive(Deserialize)]
-pub struct ExportResult {
-    pub files: usize,
+pub struct DocumentResult {
+    pub uri: String,
 }
 
 #[derive(Serialize)]
@@ -80,14 +89,37 @@ pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
     pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
-        self.0.run_mobile_plugin("copyDocuments", CopyDocumentsRequest { uris, directory }).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("copyDocuments", CopyDocumentsRequest { uris, directory })
+            .map_err(Into::into)
     }
     pub fn pick_directory(&self) -> Result<DirectorySelection> {
-        self.0.run_mobile_plugin("pickDirectory", ()).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("pickDirectory", ())
+            .map_err(Into::into)
     }
 
-    pub fn export_directory(&self, source: &str, uri: &str) -> Result<ExportResult> {
-        self.0.run_mobile_plugin("exportDirectory", ExportDirectoryRequest { source, uri }).map_err(Into::into)
+    pub fn copy_file(&self, source: &str, parent: &str, name: &str) -> Result<DocumentResult> {
+        self.0
+            .run_mobile_plugin(
+                "copyFile",
+                CopyFileRequest {
+                    source,
+                    parent,
+                    name,
+                },
+            )
+            .map_err(Into::into)
+    }
+    pub fn create_directory(&self, parent: &str, name: &str) -> Result<DocumentResult> {
+        self.0
+            .run_mobile_plugin("createDirectory", CreateDirectoryRequest { parent, name })
+            .map_err(Into::into)
+    }
+    pub fn remove_document(&self, uri: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin("removeDocument", RemoveDocumentRequest { uri })
+            .map_err(Into::into)
     }
 
     pub fn pending(&self) -> Result<Vec<PendingShare>> {

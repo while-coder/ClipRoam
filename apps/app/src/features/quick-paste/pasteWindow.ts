@@ -1,80 +1,161 @@
+import { nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   cursorPosition,
   getCurrentWindow,
+  LogicalSize,
   monitorFromPoint,
   PhysicalPosition,
-  type Monitor,
+  type PhysicalSize,
 } from "@tauri-apps/api/window";
-import { isMobile, isPasteWindow } from "../../composables/usePlatform";
-import { requestProxyDevices } from "../sync/bridge";
-import { focusSearch } from "../history/useHistorySync";
+import { isMobile, isQuickPaste, isToastWindow } from "../../composables/usePlatform";
 import { getAccountSession } from "../sync/accountSession";
+import { focusSearch, focusSearchInput } from "../history/useHistorySync";
+import { isNative } from "../../platform/runtime";
 
-// Mirrors the former Rust-side paste positioning: center the window below the
-// cursor and clamp it inside the monitor's work area. All values are physical
-// pixels.
-function calculatePasteWindowPosition(
-  cursorX: number,
-  cursorY: number,
-  workX: number,
-  workY: number,
-  workWidth: number,
-  workHeight: number,
-  windowWidth: number,
-  windowHeight: number,
-): { x: number; y: number } {
-  const CURSOR_GAP = 12;
-  const SCREEN_MARGIN = 8;
-  const minX = workX + SCREEN_MARGIN;
-  const minY = workY + SCREEN_MARGIN;
-  const maxX = Math.max(workX + workWidth - windowWidth - SCREEN_MARGIN, minX);
-  const maxY = Math.max(workY + workHeight - windowHeight - SCREEN_MARGIN, minY);
-  const x = Math.min(Math.max(cursorX - Math.floor(windowWidth / 2), minX), maxX);
-  const belowCursor = cursorY + CURSOR_GAP;
-  const preferredY = belowCursor <= maxY ? belowCursor : cursorY - windowHeight - CURSOR_GAP;
-  return { x, y: Math.min(Math.max(preferredY, minY), maxY) };
+type MainWindowState = {
+  size: PhysicalSize;
+  position: PhysicalPosition;
+  maximized: boolean;
+  fullscreen: boolean;
+};
+
+let mainState: MainWindowState | undefined;
+let quickPasteSize: PhysicalSize | undefined;
+let transitionQueue: Promise<void> = Promise.resolve();
+
+// Serialize tray/shortcut requests so quick geometry cannot replace main geometry.
+function transition(action: () => Promise<void>): Promise<void> {
+  const result = transitionQueue.then(action);
+  transitionQueue = result.catch(() => undefined);
+  return result;
 }
 
-export async function showPasteWindow(): Promise<void> {
-  if (!isPasteWindow || !getAccountSession()) return;
-  if (!await invoke("get_authenticated_sync_config")) return;
-  // 每次弹出时向主窗口要一次设备名，兜住错过广播的启动竞态；失败静默。
-  requestProxyDevices();
-  // 必须在窗口获得焦点前记录前台应用；macOS 合成粘贴后靠它恢复焦点。
-  await invoke("capture_paste_target").catch(() => undefined);
-  // 主窗口可见时会参与焦点竞争：应用被点击激活时主窗口作为 key 窗口
-  // 会吞掉对粘贴窗口的第一次点击。快速粘贴期间把主窗口收起，单击才能直达。
-  await invoke("hide_main").catch(() => undefined);
-  const pasteWindow = getCurrentWindow();
-  try {
-    const cursor = await cursorPosition();
-    const monitor: Monitor | null = await monitorFromPoint(cursor.x, cursor.y);
-    if (monitor) {
-      const windowSize = await pasteWindow.outerSize();
-      const workArea = monitor.workArea;
-      const position = calculatePasteWindowPosition(
-        Math.round(cursor.x),
-        Math.round(cursor.y),
-        workArea.position.x,
-        workArea.position.y,
-        workArea.size.width,
-        workArea.size.height,
-        windowSize.width,
-        windowSize.height,
-      );
-      await pasteWindow.setPosition(new PhysicalPosition(position.x, position.y));
-    }
-  } catch (error) {
-    // The window still opens even if positioning is unavailable.
-    console.error("定位快捷粘贴窗口失败：", error);
+function setQuickPasteView(enabled: boolean): void {
+  isQuickPaste.value = enabled;
+  document.documentElement.classList.toggle("paste-window-root", enabled);
+}
+
+async function setSkipTaskbar(skip: boolean): Promise<void> {
+  // Tauri's taskbar visibility API is unsupported on macOS.
+  if (!/Mac/i.test(navigator.platform)) await getCurrentWindow().setSkipTaskbar(skip);
+}
+
+async function restoreMainWindow(): Promise<void> {
+  const window = getCurrentWindow();
+  await invoke("native_set_quick_paste_mode", { enabled: false });
+  await window.hide();
+  if (isQuickPaste.value) quickPasteSize = await window.innerSize();
+  setQuickPasteView(false);
+  await window.setDecorations(true);
+  await window.setAlwaysOnTop(false);
+  await setSkipTaskbar(false);
+  await window.setTitle("ClipRoam");
+  await window.setMinSize(new LogicalSize(760, 600));
+  if (mainState) {
+    await window.setSize(mainState.size);
+    await window.setPosition(mainState.position);
+    if (mainState.maximized) await window.maximize();
+    if (mainState.fullscreen) await window.setFullscreen(true);
+    mainState = undefined;
   }
-  await pasteWindow.show();
-  await pasteWindow.unminimize();
-  await pasteWindow.setFocus();
-  focusSearch();
+  await nextTick();
 }
 
-export async function hideWindow(): Promise<void> {
-  if (!isMobile.value) await invoke(isPasteWindow ? "hide_paste" : "hide_main");
+export function showMainWindow(): Promise<void> {
+  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  return transition(async () => {
+    const window = getCurrentWindow();
+    if (isQuickPaste.value || mainState) await restoreMainWindow();
+    await window.show();
+    await window.unminimize();
+    await window.setFocus();
+    focusSearchInput();
+  });
+}
+
+/** A webview reload loses TS geometry but must not leave login in quick mode. */
+export function initializeWindowMode(): Promise<void> {
+  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  return transition(async () => {
+    const wasQuickPaste = await invoke<boolean>("native_set_quick_paste_mode", { enabled: false });
+    if (!wasQuickPaste) return;
+    await restoreMainWindow();
+    const window = getCurrentWindow();
+    await window.setSize(new LogicalSize(960, 700));
+    await window.center();
+    await window.show();
+  });
+}
+
+export function showPasteWindow(): Promise<void> {
+  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  return transition(async () => {
+    const session = getAccountSession();
+    if (!session) return;
+    const window = getCurrentWindow();
+    // Capture before hiding/focusing our window. Repeated shortcuts while
+    // quick mode is visible preserve the original external target on macOS.
+    await invoke("native_capture_paste_target");
+    try {
+      await invoke("native_set_quick_paste_mode", { enabled: false });
+      await window.hide();
+      if (!isQuickPaste.value) {
+        const maximized = await window.isMaximized();
+        const fullscreen = await window.isFullscreen();
+        if (fullscreen) await window.setFullscreen(false);
+        if (maximized) await window.unmaximize();
+        mainState = {
+          size: await window.innerSize(),
+          position: await window.outerPosition(),
+          maximized,
+          fullscreen,
+        };
+        await window.setMinSize(new LogicalSize(480, 520));
+        await window.setDecorations(false);
+        await window.setAlwaysOnTop(true);
+        await setSkipTaskbar(true);
+        await window.setTitle("ClipRoam - 快速粘贴");
+        await window.setSize(quickPasteSize ?? new LogicalSize(560, 640));
+      }
+      setQuickPasteView(true);
+      await nextTick();
+      try {
+        const cursor = await cursorPosition();
+        const monitor = await monitorFromPoint(cursor.x, cursor.y);
+        if (monitor) {
+          const size = await window.outerSize();
+          const work = monitor.workArea;
+          const minX = work.position.x + 8;
+          const minY = work.position.y + 8;
+          const maxX = Math.max(minX, work.position.x + work.size.width - size.width - 8);
+          const maxY = Math.max(minY, work.position.y + work.size.height - size.height - 8);
+          const below = cursor.y + 12;
+          await window.setPosition(new PhysicalPosition(
+            Math.round(Math.min(Math.max(cursor.x - size.width / 2, minX), maxX)),
+            Math.round(Math.min(Math.max(below <= maxY ? below : cursor.y - size.height - 12, minY), maxY)),
+          ));
+        }
+      } catch (error) {
+        console.error("定位快捷粘贴窗口失败：", error);
+      }
+      session.signal.throwIfAborted();
+      await window.show();
+      await window.unminimize();
+      await window.setFocus();
+      // Enable native blur hiding only after the window has gained focus.
+      await invoke("native_set_quick_paste_mode", { enabled: true });
+      focusSearch();
+    } catch (error) {
+      await restoreMainWindow();
+      await window.show();
+      await window.setFocus();
+      throw error;
+    }
+  });
+}
+
+export function hideWindow(): Promise<void> {
+  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  return transition(() => getCurrentWindow().hide());
 }

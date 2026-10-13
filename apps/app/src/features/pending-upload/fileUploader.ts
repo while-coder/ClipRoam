@@ -106,13 +106,11 @@ export class FileUploader {
         const index = missing[Math.floor(Math.random() * missing.length)]!;
         const offset = index * FILE_CHUNK_SIZE;
         const length = Math.min(FILE_CHUNK_SIZE, file.size - offset);
-        const data = await this.deps.session.invoke<string>("read_upload_chunk", {
-          fileId: file.fileId, offset, length,
-        });
-        if (!data) throw new Error("本机文件内容不可用");
+        const data = await this.deps.session.files.read(file.fileId, offset, length);
+        if (!data.length) throw new Error("本机文件内容不可用");
         // A concurrent upload may store the same content mid-transfer; the
         // chunk response then reports `stored` and the remaining bytes are done.
-        const chunk = await this.#uploadChunk(file.fileId, index, base64ToBytes(data));
+        const chunk = await this.#uploadChunk(file.fileId, index, data);
         if (chunk === undefined) {
           retired = true;
           break;

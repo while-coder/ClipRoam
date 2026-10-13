@@ -42,7 +42,7 @@ export type PlatformCapabilities = {
 };
 
 /**
- * Aggregates computed by the backend. A folder can hold thousands of nodes, so
+ * Aggregates computed by the TS cache. A folder can hold thousands of nodes, so
  * the list never receives the tree itself — only these counters.
  */
 export type EntrySummary = {
@@ -65,7 +65,7 @@ export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary; pend
 
 /**
  * History page filters. Page numbers start at 1 in the app, HTTP and local
- * SQLite queries.
+ * cache queries.
  */
 export type EntriesManifestFilter = {
   query?: string;

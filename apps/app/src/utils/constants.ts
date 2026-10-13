@@ -15,3 +15,8 @@ export const DESKTOP_CAPABILITIES: PlatformCapabilities = {
   openDataDirectory: true,
   shareReceiver: false,
 };
+
+export const BROWSER_CAPABILITIES: PlatformCapabilities = {
+  mobile: false, clipboardMonitoring: false, globalShortcut: false, automaticPaste: false,
+  fileClipboard: false, imageClipboard: true, nativeFileExport: true, openDataDirectory: false, shareReceiver: false,
+};

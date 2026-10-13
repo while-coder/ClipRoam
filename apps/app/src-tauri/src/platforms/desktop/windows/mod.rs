@@ -1,7 +1,6 @@
 //! Windows 平台实现：clipboard-win 剪贴板读写、SendInput 合成 Ctrl+V、
 //! 以及拖拽焦点守卫。
 
-
 use std::{
     path::PathBuf,
     sync::Mutex,
@@ -10,12 +9,11 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 use super::{open_data_directory_with, spawn_paste_focus_loss_check};
-use crate::pending_upload::capture::{decode_image_as_bmp, RichText};
+use crate::clipboard::{decode_image_as_bmp, RichText};
 
 pub(crate) use super::{
-    consume_pending_shares, create_windows, deliver_paste, on_window_event,
-    prompt_save_destination, register_plugins, requires_paste_window, setup_desktop_shell,
-    show_detached_toast, supports_native_file_export,
+    create_windows, deliver_paste, on_window_event, register_plugins, setup_desktop_shell,
+    show_detached_toast,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,7 +157,10 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
     if sent == inputs.len() as u32 {
         Ok(())
     } else {
-        Err(format!("SendInput inserted {sent} of {} events", inputs.len()))
+        Err(format!(
+            "SendInput inserted {sent} of {} events",
+            inputs.len()
+        ))
     }
 }
 
@@ -168,9 +169,8 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn should_skip_clipboard_poll(sequence: &mut u32) -> bool {
-    let sequence_number = unsafe {
-        windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber()
-    };
+    let sequence_number =
+        unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() };
     if sequence_number != 0 && sequence_number == *sequence {
         std::thread::sleep(Duration::from_millis(350));
         return true;
@@ -225,7 +225,7 @@ pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), Str
             }
         }
     };
-    if window.label() == "paste" {
+    if window.label() == "main" && crate::app_shell::quick_paste_enabled(window.app_handle()) {
         set_guard(Some(Instant::now() + Duration::from_secs(5)));
     }
     if let Err(error) = window.start_dragging() {
@@ -247,3 +247,9 @@ pub(crate) fn manage_platform_state(app: &AppHandle) -> Result<(), String> {
     app.manage(PasteDragFocus::default());
     Ok(())
 }
+
+pub(crate) use super::capture_paste_target;
+pub(crate) use super::files::{ack_share, pending_shares, pick_files, save_dialog};
+pub(crate) use super::show_main_window;
+
+pub(crate) use crate::platforms::files::{copy_file, create_directory, remove_file};

@@ -1,7 +1,6 @@
 import { FILE_CHUNK_SIZE, type FileRelayRequest } from "@cliproam/protocol";
 import type { AccountSession } from "../sync/accountSession";
 import { errorMessageFromBody, type SyncRequester } from "../sync/syncHttp";
-import { base64ToBytes } from "../../utils/bytes";
 type RelayUploaderDeps = {
   session: AccountSession;
   onServeTasksChanged?: () => void;
@@ -50,24 +49,15 @@ export class RelayUploader {
       // Probe before claiming: a device without the bytes stays quiet so another
       // holder can serve the request. Empty files still need a local existence check.
       const remaining = request.size - startOffset;
-      const probe = await this.deps.session.invoke<string>("read_upload_chunk", {
-        fileId: request.fileId,
-        offset: startOffset,
-        length: remaining > 0 ? 1 : 0,
-      });
-      if (remaining > 0 && !probe) return;
+      const probe = await this.deps.session.files.read(request.fileId, startOffset, remaining > 0 ? 1 : 0);
+      if (remaining > 0 && !probe.length) return;
       task = this.#recordServeTask(request);
       this.#updateServeTask(task, { status: "serving" });
       let offset = startOffset;
       for (;;) {
         const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
-        const data = await this.deps.session.invoke<string>("read_upload_chunk", {
-          fileId: request.fileId,
-          offset,
-          length,
-        });
-        if (length > 0 && !data) throw new Error("本机文件内容不可用");
-        const bytes = base64ToBytes(data);
+        const bytes = await this.deps.session.files.read(request.fileId, offset, length);
+        if (length > 0 && !bytes.length) throw new Error("本机文件内容不可用");
         const last = offset + bytes.byteLength >= request.size;
         const put = await this.http.fetch(
           "PUT",
