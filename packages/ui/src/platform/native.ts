@@ -1,8 +1,6 @@
 import type { PlatformCapabilities, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import { NativeRust } from "./native_rust";
-import { NativeWeb } from "./native_web";
 
 export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
 export type PickedFiles = { paths?: string[]; files?: File[] };
@@ -43,5 +41,12 @@ export interface NativePlatform {
   exportDirectory(target: SaveTarget, entries: AsyncIterable<DirectoryEntry>, signal: AbortSignal): Promise<number>;
 }
 
-export const native: NativePlatform = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
-  ? new NativeRust() : new NativeWeb();
+export let native: NativePlatform;
+
+export function configureNative(platform: NativePlatform): void {
+  native = platform;
+}
+
+export type { PlatformCapabilities, ToastPayload, ShareReceiverEvent } from "../types";
+export type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
+export type { FileStat, SaveTarget } from "./files";

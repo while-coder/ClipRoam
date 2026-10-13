@@ -1,21 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { addPluginListener, type PluginListener } from "@tauri-apps/api/core";
-import { native } from "./platform/native";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { native, type Unlisten } from "./platform/native";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
-import {
-  Clipboard,
-  Cloud,
-  CloudOff,
-  CloudUpload,
-  Download,
-  LoaderCircle,
-  MonitorSmartphone,
-  Upload,
-} from "lucide-vue-next";
+import { LoaderCircle } from "lucide-vue-next";
+import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
 import {
@@ -23,7 +11,6 @@ import {
   initializeQuickPasteShortcut,
   quickPasteShortcutStatus,
 } from "./features/quick-paste/quickPasteShortcut";
-import { showPasteWindow, showMainWindow, initializeWindowMode, hideWindow } from "./features/quick-paste/pasteWindow";
 import { useUpdater } from "./features/settings/useUpdater";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
@@ -107,23 +94,17 @@ import {
 import type {
   AccountPreferences,
   ShareImportSummary,
-  ShareReceiverEvent,
   SyncConfig,
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
-const mobilePages = computed(() => [
-  { view: "history" as const, label: "历史", icon: Clipboard, count: 0 },
-  { view: "pending-upload" as const, label: "待上传", icon: CloudUpload, count: pendingCount.value },
-  { view: "uploads" as const, label: "上传", icon: Upload, count: activeUploadCount.value },
-  { view: "downloads" as const, label: "下载", icon: Download, count: activeDownloadCount.value },
-  { view: "devices" as const, label: "设备", icon: MonitorSmartphone, count: 0 },
-]);
-
 const { initUpdaterVersion } = useUpdater();
 
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const quickHistoryView = ref<InstanceType<typeof HistoryView>>();
+function registerQuickHistoryView(view: unknown): void {
+  quickHistoryView.value = (view ?? undefined) as InstanceType<typeof HistoryView> | undefined;
+}
 
 const setupWizard = ref<InstanceType<typeof SetupWizard>>();
 const currentTime = ref(Date.now());
@@ -137,9 +118,9 @@ const savedSessionConfig = ref<SyncConfig>();
 const savedConfigReadFailed = ref(false);
 let authenticationController: AbortController | undefined;
 const importingShare = ref(false);
-let unlisteners: UnlistenFn[] = [];
+let unlisteners: Unlisten[] = [];
 let ageRefreshTimer: number | undefined;
-let shareReceiverListener: PluginListener | undefined;
+let shareReceiverListener: Unlisten | undefined;
 let shareConsumeRequested = false;
 
 // 历史同步视图（useHistorySync 单例）的装配：引擎客户端经 engine 导出触达，
@@ -199,7 +180,7 @@ initSettings({
 
 watch(setupVisible, (visible) => {
   if (visible && isQuickPaste.value) {
-    void showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+    void native.showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
   }
 });
 
@@ -414,7 +395,7 @@ function handleKeys(event: KeyboardEvent): void {
   }
   if (event.key === "Escape") {
     event.preventDefault();
-    void hideWindow();
+    void native.hideWindow();
   }
 }
 
@@ -442,20 +423,20 @@ function readableStartupError(error: unknown): string {
   return message || "未知错误";
 }
 
-async function initializeTauriServices(): Promise<void> {
+async function initializeNativeServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
     startToastWindowListener(),
     native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
-      void showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
+      void native.showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
     }),
     native.listen("cliproam://show-main", () => {
-      void showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+      void native.showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
     }),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
     // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
-    getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+    native.onFocusChanged((focused) => {
       if (focused) {
         void refreshDownloadTasks().catch(() => undefined);
       }
@@ -472,9 +453,7 @@ async function initializeTauriServices(): Promise<void> {
 
   if (platformCapabilities.value.shareReceiver) {
     try {
-      shareReceiverListener = await addPluginListener<ShareReceiverEvent>(
-        "cliproam-share-receiver",
-        "received",
+      shareReceiverListener = await native.listenShares(
         (payload) => {
           if (payload.error) {
             showToast(`接收系统分享失败：${payload.error}，请重新分享`, "error");
@@ -519,7 +498,7 @@ onMounted(async () => {
   }
   if (capabilitiesResult.status === "fulfilled") {
     try {
-      await initializeWindowMode();
+      await native.initializeWindowMode();
     } catch (error) {
       startupWarning = `恢复主窗口失败：${errorMessage(error)}`;
     }
@@ -547,7 +526,7 @@ onMounted(async () => {
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
-  if (!accountRuntimeError.value) void initializeTauriServices();
+  if (!accountRuntimeError.value) void initializeNativeServices();
 
   await nextTick();
   setupWizard.value?.setFields(config ?? undefined);
@@ -564,7 +543,7 @@ onBeforeUnmount(() => {
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
-  if (shareReceiverListener) void shareReceiverListener.unregister();
+  shareReceiverListener?.();
   void stopSyncClient();
   void disposeQuickPasteShortcut();
 });
@@ -598,82 +577,16 @@ onBeforeUnmount(() => {
     />
   </main>
 
-  <main v-else :key="activeAccountSession?.id ?? 'signed-out'" class="app-shell" :class="{ 'paste-app': isQuickPaste, 'mobile-app': isMobile }">
-    <aside v-if="!isMobile" v-show="!isQuickPaste" class="sidebar" aria-label="主导航">
-      <header class="sidebar-brand">
-        <span class="brand-mark"><Clipboard :size="17" /></span>
-        <span>
-          <strong>ClipRoam</strong>
-          <small>剪贴板工作区</small>
-        </span>
-      </header>
-
-      <nav class="sidebar-nav" aria-label="功能模块">
-        <span class="nav-section-label">工作区</span>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'history' }"
-          type="button"
-          :aria-current="activeView === 'history' ? 'page' : undefined"
-          @click="activeView = 'history'"
-        >
-          <Clipboard :size="17" aria-hidden="true" />
-          <span>剪贴板历史</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'pending-upload' }"
-          type="button"
-          :aria-current="activeView === 'pending-upload' ? 'page' : undefined"
-          @click="activeView = 'pending-upload'"
-        >
-          <CloudUpload :size="17" aria-hidden="true" />
-          <span>待上传</span>
-          <span v-if="pendingCount" class="nav-count">{{ pendingCount }}</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'uploads' }"
-          type="button"
-          :aria-current="activeView === 'uploads' ? 'page' : undefined"
-          @click="activeView = 'uploads'"
-        >
-          <Upload :size="17" aria-hidden="true" />
-          <span>上传</span>
-          <span v-if="activeUploadCount" class="nav-count">{{ activeUploadCount }}</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'downloads' }"
-          type="button"
-          :aria-current="activeView === 'downloads' ? 'page' : undefined"
-          @click="activeView = 'downloads'"
-        >
-          <Download :size="17" aria-hidden="true" />
-          <span>下载</span>
-          <span v-if="activeDownloadCount" class="nav-count">{{ activeDownloadCount }}</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'devices' }"
-          type="button"
-          :aria-current="activeView === 'devices' ? 'page' : undefined"
-          @click="activeView = 'devices'"
-        >
-          <MonitorSmartphone :size="17" aria-hidden="true" />
-          <span>设备</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-bottom">
-        <div class="sidebar-status" :class="connectionStatus.tone" :title="connectionStatus.title">
-          <Cloud v-if="connected" :size="15" aria-hidden="true" />
-          <CloudOff v-else :size="15" aria-hidden="true" />
-          <span>{{ connectionStatus.label }}</span>
-        </div>
-      </div>
-    </aside>
-
+  <WorkspaceLayout v-else :key="activeAccountSession?.id ?? 'signed-out'"
+    v-model:active-view="activeView"
+    :mobile="isMobile"
+    :quick-paste="isQuickPaste"
+    :pending-count="pendingCount"
+    :active-upload-count="activeUploadCount"
+    :active-download-count="activeDownloadCount"
+    :connected="connected"
+    :connection-status="connectionStatus"
+  >
     <HistoryView
       v-if="activeView === 'history'"
       v-show="!isQuickPaste"
@@ -724,55 +637,30 @@ onBeforeUnmount(() => {
       @clear-finished="removeDownloadRecords()"
     />
 
-    <HistoryView
-      v-if="isQuickPaste"
-      ref="quickHistoryView"
-      quick-paste
-      :fetch-history-page="fetchHistoryPage"
-      :revision="historyRevision"
-      :devices-by-id="devicesById"
-      :current-time="currentTime"
-      :importing-share="false"
-      :activating-entry-ids="activatingEntryIds"
-      :saving-entry-id="savingEntryId"
-      :ensure-local-files="ensureLocalFiles"
-      @activate="activateFromView"
-      @remove="removeEntry"
-      @save="saveEntry"
+    <slot v-if="isQuickPaste" name="quick-paste"
+      :register="registerQuickHistoryView"
+      :bindings="{
+        fetchHistoryPage, revision: historyRevision, devicesById, currentTime, importingShare: false,
+        activatingEntryIds, savingEntryId, ensureLocalFiles,
+        onActivate: activateFromView, onRemove: removeEntry, onSave: saveEntry,
+      }"
     />
 
     <EntryDownloadToasts v-if="isMobile && !isQuickPaste" mobile />
 
-    <nav v-if="isMobile && !isQuickPaste" class="mobile-navigation" aria-label="主导航">
-      <button
-        v-for="page in mobilePages"
-        :key="page.view"
-        type="button"
-        class="mobile-nav-item"
-        :class="{ active: activeView === page.view }"
-        :aria-current="activeView === page.view ? 'page' : undefined"
-        @click="activeView = page.view"
-      >
-        <span class="mobile-nav-icon">
-          <component :is="page.icon" :size="18" aria-hidden="true" />
-          <span v-if="page.count" class="mobile-nav-count" :aria-label="`${page.count} 个任务`">{{ page.count > 99 ? '99+' : page.count }}</span>
-        </span>
-        <span>{{ page.label }}</span>
-      </button>
-    </nav>
+    <template #overlays>
+      <SettingsDialog
+        v-if="!isQuickPaste && !isMobile && settingsVisible"
+        :current-username="currentUsername"
+      />
+      <MobileSettingsDialog
+        v-if="!isQuickPaste && isMobile && settingsVisible"
+        :current-username="currentUsername"
+      />
+    </template>
+  </WorkspaceLayout>
 
-    <SettingsDialog
-      v-if="!isQuickPaste && !isMobile && settingsVisible"
-      :current-username="currentUsername"
-    />
-    <MobileSettingsDialog
-      v-if="!isQuickPaste && isMobile && settingsVisible"
-      :current-username="currentUsername"
-    />
-
-  </main>
-
-  <UpdaterDialog v-if="isNative && !isQuickPaste && !isToastWindow" locale="zh-CN" />
+  <slot name="native-overlays" />
 
   <ToastLayer />
   <EntryDownloadToasts v-if="!isToastWindow && !isMobile" />

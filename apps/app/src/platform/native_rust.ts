@@ -1,8 +1,10 @@
-import type { PlatformCapabilities, ToastPayload } from "../types";
-import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
-import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
-import { base64ToBytes, bytesToBase64 } from "../utils/bytes";
+import type { PlatformCapabilities, ToastPayload, ClipboardData, ClipboardWrite, SharedContent,
+  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent } from "@cliproam/ui/native";
+import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
+import { addPluginListener } from "@tauri-apps/api/core";
+import { useTauriUpdater } from "@while-coder/tauri-updater-vue";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = <T>(event: string, handler: (payload: T) => void) => Promise<Unlisten>;

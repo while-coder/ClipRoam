@@ -1,0 +1,28 @@
+{
+  "name": "@cliproam/ui",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "check": "vue-tsc --noEmit"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.43"
+  },
+  "dependencies": {
+    "@qingfeng346/ui-kit": "link:../../../ui-kit/ui-kit",
+    "lucide-vue-next": "^0.468.0"
+  },
+  "ciDependencies": {
+    "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
+  },
+  "devDependencies": {
+    "vue": "^3.5.43",
+    "typescript": "~5.6.2",
+    "vue-tsc": "^2.1.10"
+  }
+}

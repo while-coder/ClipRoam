@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { emitTo } from "@tauri-apps/api/event";
+import { native } from "../../platform/native";
 import { errorMessage } from "../../utils/error";
 
 const STORAGE_KEY = "cliproam.quickPasteShortcut";
@@ -20,7 +20,6 @@ function readSavedShortcut(): string {
 
 let savedShortcut = readSavedShortcut();
 let registeredShortcut = "";
-let shortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
 let refreshQueue: Promise<void> = Promise.resolve();
 
 export const quickPasteShortcut = ref(savedShortcut);
@@ -37,10 +36,7 @@ export function resetQuickPasteShortcutDraft(): void {
 }
 
 async function registerShortcut(shortcut: string): Promise<void> {
-  shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
-  await shortcutApi.register(shortcut, (event) => {
-    if (event.state === "Pressed") void emitTo("main", "cliproam://show-paste");
-  });
+  await native.registerQuickPasteShortcut(shortcut);
 }
 
 async function applyShortcut(shortcut: string, persist: boolean): Promise<boolean> {
@@ -56,12 +52,11 @@ async function applyShortcut(shortcut: string, persist: boolean): Promise<boolea
     }
 
     try {
-      shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
-      if (registeredShortcut === normalized && await shortcutApi.isRegistered(normalized)) {
+      if (registeredShortcut === normalized && await native.isShortcutRegistered(normalized)) {
         applied = true;
       } else {
         const previous = registeredShortcut;
-        if (previous) await shortcutApi.unregister(previous).catch(() => undefined);
+        if (previous) await native.unregisterShortcut(previous).catch(() => undefined);
         try {
           await registerShortcut(normalized);
           registeredShortcut = normalized;
@@ -69,7 +64,7 @@ async function applyShortcut(shortcut: string, persist: boolean): Promise<boolea
         } catch (error) {
           // A repeated registration by this process can report an error on
           // Windows even though the shortcut remains active.
-          if (await shortcutApi.isRegistered(normalized).catch(() => false)) {
+          if (await native.isShortcutRegistered(normalized).catch(() => false)) {
             registeredShortcut = normalized;
             applied = true;
           } else {
@@ -126,8 +121,8 @@ export function saveQuickPasteShortcut(): Promise<boolean> {
 
 export async function disposeQuickPasteShortcut(): Promise<void> {
   await refreshQueue;
-  if (shortcutApi && registeredShortcut) {
-    await shortcutApi.unregister(registeredShortcut).catch(() => undefined);
+  if (registeredShortcut) {
+    await native.unregisterShortcut(registeredShortcut).catch(() => undefined);
   }
   registeredShortcut = "";
 }

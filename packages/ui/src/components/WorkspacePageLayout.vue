@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import WorkspaceMenu from "./WorkspaceMenu.vue";
 withDefaults(defineProps<{
   title: string;
   layout?: "history" | "list";
@@ -14,7 +13,7 @@ withDefaults(defineProps<{
           <span :class="{ 'workspace-page-status': !!$slots.status }"><slot name="status">工作区</slot></span>
           <h1>{{ title }}</h1>
         </div>
-        <div class="titlebar-actions"><slot name="actions" /><WorkspaceMenu /></div>
+        <div class="titlebar-actions"><slot name="actions" /><slot name="menu" /></div>
       </header>
     </slot>
     <slot name="toolbar" />

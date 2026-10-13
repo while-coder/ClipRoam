@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { Clipboard, File, FileText, FolderOpen, Image } from "lucide-vue-next";
-import type { LocalClipboardEntry } from "../types";
 
 /**
  * 条目的 kind 图标（HistoryView / PendingUploadsView 共用）；激活或哈希进行中
  * 时转圈。外壳 class 沿用全局 .kind-icon（styles.css）。
  */
 defineProps<{
-  kind: LocalClipboardEntry["kind"];
+  kind: "text" | "files" | "image";
   rootKind?: string;
   loading?: boolean;
 }>();

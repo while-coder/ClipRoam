@@ -90,3 +90,5 @@ export type ToastTone = "success" | "error" | "info";
 export type ToastPayload = { message: string; tone: ToastTone };
 export type ShareReceiverEvent = { id?: string; error?: string };
 export type ShareImportSummary = { shares: number; texts: number; images: number; files: number };
+
+export type WorkspaceView = "history" | "pending-upload" | "uploads" | "downloads" | "devices";

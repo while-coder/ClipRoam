@@ -1,5 +1,5 @@
 import { nextTick } from "vue";
-import { native } from "../../platform/native";
+import { native, isMobile, isQuickPaste, isToastWindow, isNative, getAccountSession, focusSearch, focusSearchInput } from "@cliproam/ui/runtime";
 import {
   cursorPosition,
   getCurrentWindow,
@@ -8,10 +8,6 @@ import {
   PhysicalPosition,
   type PhysicalSize,
 } from "@tauri-apps/api/window";
-import { isMobile, isQuickPaste, isToastWindow } from "../../composables/usePlatform";
-import { getAccountSession } from "../sync/accountSession";
-import { focusSearch, focusSearchInput } from "../history/useHistorySync";
-import { isNative } from "../../platform/runtime";
 
 type MainWindowState = {
   size: PhysicalSize;

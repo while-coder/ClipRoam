@@ -1,5 +1,5 @@
 import { computed, ref } from "vue";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { native } from "../platform/native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../utils/constants";
 import { isNative } from "../platform/runtime";
 import type { PlatformCapabilities } from "../types";
@@ -7,7 +7,7 @@ import type { PlatformCapabilities } from "../types";
 /** Window mode and platform capabilities, shared by the application. */
 
 export const isQuickPaste = ref(false);
-export const isToastWindow = isNative && getCurrentWindow().label === "toast";
+export const isToastWindow = native.windowLabel === "toast";
 if (isToastWindow) document.documentElement.classList.add("toast-window-root");
 
 const platformCapabilities = ref<PlatformCapabilities>(isNative ? DESKTOP_CAPABILITIES : BROWSER_CAPABILITIES);
