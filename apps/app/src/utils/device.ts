@@ -1,8 +1,7 @@
 import { applicationDatabase } from "../core/database";
-import { isNative, nativeCall } from "../platform/runtime";
+import { native } from "../platform/native";
 import type { Device } from "../types";
 
-type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
 type StoredDeviceIdentity = { deviceId: string; deviceAlias: string | null };
 
 type DeviceIdentity = {
@@ -22,9 +21,7 @@ export async function getDeviceIdentity(): Promise<DeviceIdentity> {
     identity = { deviceId: crypto.randomUUID(), deviceAlias: null };
     await applicationDatabase.put("meta", "device", identity);
   }
-  const info: DeviceInfo = isNative ? await nativeCall<DeviceInfo>("native_get_device_info") : {
-    deviceName: "浏览器", cpu: "", osType: "browser", osVersion: navigator.userAgent, appVersion: "web",
-  };
+  const info = await native.getDeviceInfo();
   return {
     deviceId: identity.deviceId,
     deviceAlias: identity.deviceAlias?.trim() ?? "",

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { addPluginListener, type PluginListener } from "@tauri-apps/api/core";
+import { native } from "./platform/native";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
@@ -48,7 +49,6 @@ import { disposeToast, showToast, startToastWindowListener } from "./features/to
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
 import { isNative } from "./platform/runtime";
-import { BROWSER_CAPABILITIES } from "./utils/constants";
 import { isToastWindow, isQuickPaste, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
 import { activeAccountSession, getAccountSession } from "./features/sync/accountSession";
@@ -106,7 +106,6 @@ import {
 } from "./features/uploads/useUploads";
 import type {
   AccountPreferences,
-  PlatformCapabilities,
   ShareImportSummary,
   ShareReceiverEvent,
   SyncConfig,
@@ -447,11 +446,11 @@ async function initializeTauriServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
     startToastWindowListener(),
-    listen("cliproam://show-paste", () => {
+    native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
       void showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
     }),
-    listen("cliproam://show-main", () => {
+    native.listen("cliproam://show-main", () => {
       void showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
     }),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
@@ -508,10 +507,7 @@ onMounted(async () => {
 
   let config: SyncConfig | null = null;
   let startupWarning = "";
-  const platformPromise = isNative ? withStartupTimeout(
-    invoke<PlatformCapabilities>("native_get_platform_capabilities"),
-    "读取平台能力超时",
-  ) : Promise.resolve(BROWSER_CAPABILITIES);
+  const platformPromise = withStartupTimeout(native.getCapabilities(), "读取平台能力超时");
   const [capabilitiesResult, configResult] = await Promise.allSettled([
     platformPromise,
     withStartupTimeout(loadSyncConfig(), "读取连接配置超时"),

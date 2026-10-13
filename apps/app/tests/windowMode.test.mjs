@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
+import { sourceLoader } from "./loadSource.mjs";
+
+const { NativeRust } = sourceLoader()("platform/native_rust");
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -58,13 +61,13 @@ function harness({ signedIn = true, maximized = false, fullscreen = false, nativ
   const mocks = {
     "../../platform/runtime": { isNative: true },
     vue: { nextTick: async () => {} },
-    "@tauri-apps/api/core": { invoke: async (command, args) => {
+    "../../platform/native": { native: new NativeRust(async (command, args) => {
       if (command === "native_capture_paste_target") { captures++; return; }
       assert.equal(command, "native_set_quick_paste_mode");
       const previous = state.nativeQuick;
       state.nativeQuick = args.enabled;
       return previous;
-    } },
+    }) },
     "@tauri-apps/api/window": {
       getCurrentWindow: () => window, LogicalSize: Size, PhysicalPosition: Position,
       cursorPosition: async () => ({ x: 1900, y: 1000 }),

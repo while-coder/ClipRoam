@@ -1,5 +1,5 @@
 import { nextTick } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { native } from "../../platform/native";
 import {
   cursorPosition,
   getCurrentWindow,
@@ -43,7 +43,7 @@ async function setSkipTaskbar(skip: boolean): Promise<void> {
 
 async function restoreMainWindow(): Promise<void> {
   const window = getCurrentWindow();
-  await invoke("native_set_quick_paste_mode", { enabled: false });
+  await native.setQuickPasteMode(false);
   await window.hide();
   if (isQuickPaste.value) quickPasteSize = await window.innerSize();
   setQuickPasteView(false);
@@ -78,7 +78,7 @@ export function showMainWindow(): Promise<void> {
 export function initializeWindowMode(): Promise<void> {
   if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
   return transition(async () => {
-    const wasQuickPaste = await invoke<boolean>("native_set_quick_paste_mode", { enabled: false });
+    const wasQuickPaste = await native.setQuickPasteMode(false);
     if (!wasQuickPaste) return;
     await restoreMainWindow();
     const window = getCurrentWindow();
@@ -96,9 +96,9 @@ export function showPasteWindow(): Promise<void> {
     const window = getCurrentWindow();
     // Capture before hiding/focusing our window. Repeated shortcuts while
     // quick mode is visible preserve the original external target on macOS.
-    await invoke("native_capture_paste_target");
+    await native.capturePasteTarget();
     try {
-      await invoke("native_set_quick_paste_mode", { enabled: false });
+      await native.setQuickPasteMode(false);
       await window.hide();
       if (!isQuickPaste.value) {
         const maximized = await window.isMaximized();
@@ -144,7 +144,7 @@ export function showPasteWindow(): Promise<void> {
       await window.unminimize();
       await window.setFocus();
       // Enable native blur hiding only after the window has gained focus.
-      await invoke("native_set_quick_paste_mode", { enabled: true });
+      await native.setQuickPasteMode(true);
       focusSearch();
     } catch (error) {
       await restoreMainWindow();

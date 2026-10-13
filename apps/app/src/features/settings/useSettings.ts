@@ -1,4 +1,4 @@
-import { nativeCall } from "../../platform/runtime";
+import { native } from "../../platform/native";
 import { saveDeviceAlias } from "../../utils/device";
 import { nextTick } from "vue";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
@@ -199,7 +199,7 @@ async function openAppDataDirectory(): Promise<void> {
 
   settingsError.value = "";
   try {
-    await nativeCall("native_open_app_data_dir");
+    await native.openAppDataDir();
   } catch (error) {
     settingsError.value = `无法打开应用数据目录：${errorMessage(error)}`;
   }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { native } from "../../platform/native";
 import {
   Clipboard,
   Image,
@@ -192,7 +192,7 @@ async function startWindowDrag(event: MouseEvent): Promise<void> {
   if (isMobile.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, select, textarea, kbd, [role='button']")) return;
-  await invoke("native_start_window_drag");
+  await native.startWindowDrag();
 }
 
 async function focusSearch(): Promise<void> {

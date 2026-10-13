@@ -1,0 +1,45 @@
+import type { PlatformCapabilities, ToastPayload } from "../types";
+import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
+import type { FileStat, SaveTarget } from "./files";
+import { NativeRust } from "./native_rust";
+import { NativeWeb } from "./native_web";
+
+export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
+export type PickedFiles = { paths?: string[]; files?: File[] };
+export type Unlisten = () => void;
+
+/** Platform operations independent of Rust command names and wire formats. */
+export interface NativePlatform {
+  readonly kind: "rust" | "web";
+  readonly clipboardMonitoring: boolean;
+  getCapabilities(): Promise<PlatformCapabilities>;
+  getDeviceInfo(): Promise<DeviceInfo>;
+  openAppDataDir(): Promise<void>;
+  startWindowDrag(): Promise<void>;
+  setQuickPasteMode(enabled: boolean): Promise<boolean>;
+  capturePasteTarget(): Promise<void>;
+  showToast(payload: ToastPayload): Promise<void>;
+  hideToast(): Promise<void>;
+  listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
+  previewSource(path: string): Promise<string>;
+  readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
+  writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void>;
+  watchClipboard(scope: string, enabled: boolean): Promise<void>;
+  pendingShares(scope: string): Promise<SharedContent[]>;
+  acknowledgeShare(id: string): Promise<void>;
+  pickFiles(mode: string, scope: string): Promise<PickedFiles>;
+  getPaths(): Promise<{ appDir: string }>;
+  statFiles(paths: string[]): Promise<(FileStat | null)[]>;
+  listFiles(path: string): Promise<FileStat[]>;
+  readImage(path: string): Promise<ClipboardData>;
+  readFile(path: string, offset: number, length: number): Promise<Uint8Array>;
+  writeFile(path: string, bytes: Uint8Array, append: boolean): Promise<void>;
+  moveFile(source: string, destination: string): Promise<void>;
+  copyFile(source: string, destination: string, name?: string): Promise<string>;
+  createDirectory(path: string, name?: string): Promise<string>;
+  removeFile(path: string): Promise<void>;
+  selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null>;
+}
+
+export const native: NativePlatform = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+  ? new NativeRust() : new NativeWeb();

@@ -10,11 +10,13 @@ const root = fileURLToPath(new URL("../src/", import.meta.url));
 /** Load the actual TS services with explicit platform substitutes, without bundling Vue UI. */
 export function sourceLoader({ native = false, call = async () => { throw new Error("Unexpected native call"); }, listen = async () => () => {} } = {}) {
   const cache = new Map();
-  const runtime = { isNative: native, nativeCall: call, nativeListen: listen };
   function load(path) {
     let file = resolve(root,path);
     if (!existsSync(file)) file += ".ts";
-    if (file === resolve(root,"platform/runtime.ts")) return runtime;
+    if (file === resolve(root,"platform/native.ts")) {
+      return { native: native ? new (load("platform/native_rust").NativeRust)(call, listen)
+        : new (load("platform/native_web").NativeWeb)() };
+    }
     if (file === resolve(root,"features/toast/useToast.ts")) return { showToast: () => {} };
     if (cache.has(file)) return cache.get(file).exports;
     const module = { exports: {} }; cache.set(file,module);

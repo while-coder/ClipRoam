@@ -2,8 +2,8 @@ import { entryContents, isFileNode, type FileInfo } from "@cliproam/protocol";
 import { AccountDatabase } from "../core/database";
 import { profileName, Sha256 } from "../core/hash";
 import { safeName, type LocalSource, type StoredEntry } from "../core/content";
-import { base64ToBytes, bytesToBase64 } from "../utils/bytes";
-import { isNative, nativeCall } from "./runtime";
+import { isNative } from "./runtime";
+import { native } from "./native";
 import { zipFiles } from "../core/zip";
 import type { ClipboardData } from "./clipboard";
 
@@ -16,7 +16,7 @@ export interface ContentWriter {
 }
 
 let paths: Promise<{ appDir: string }> | undefined;
-export const appPaths = () => paths ??= nativeCall<{ appDir: string }>("native_paths");
+export const appPaths = () => paths ??= native.getPaths();
 const contentId = (id: string) => { if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("内容标识不合法"); return id; };
 
 /** Platform byte access only. Scheduling, hashing and records stay in TS. */
@@ -28,15 +28,15 @@ export class AccountFiles {
   root(): Promise<string> { return this.#root ??= appPaths().then((paths) => `${paths.appDir}/histories/${profileName(this.account)}/files`); }
 
   async stats(paths: string[]): Promise<(FileStat | null)[]> {
-    return nativeCall("native_fs_stat", { paths });
+    return native.statFiles(paths);
   }
-  async list(path: string): Promise<FileStat[]> { return nativeCall("native_fs_list", { path }); }
-  async readImage(path: string): Promise<ClipboardData> { return nativeCall("native_read_image", { path }); }
+  async list(path: string): Promise<FileStat[]> { return native.listFiles(path); }
+  async readImage(path: string): Promise<ClipboardData> { return native.readImage(path); }
   async selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null> {
-    return isNative ? nativeCall("native_save_dialog",{single,fileName}) : {kind:"browser",value:fileName};
+    return native.selectSaveTarget(single, fileName);
   }
   async readPath(path: string, offset: number, length: number): Promise<Uint8Array> {
-    if (length <= 8 * 1024 * 1024) return base64ToBytes(await nativeCall<string>("native_fs_read", { path, offset, length }));
+    if (length <= 8 * 1024 * 1024) return native.readFile(path, offset, length);
     const bytes = new Uint8Array(length);
     let received = 0;
     while (received < length) {
@@ -107,18 +107,18 @@ export class AccountFiles {
     const partial = `partial:${crypto.randomUUID()}`;
     const final = isNative ? `${await this.root()}/${captured ? "upload/images" : "download"}/${fileId}` : "";
     const temp = `${final}.${crypto.randomUUID()}.part`;
-    if (isNative) await nativeCall("native_fs_write", { path: temp, data: "", append: false });
+    if (isNative) await native.writeFile(temp, new Uint8Array(), false);
     return {
       append: async (bytes) => {
         size += bytes.length;
         if (size > expectedSize) throw new Error("下载内容超过声明大小");
         hash.update(bytes);
-        if (isNative) await nativeCall("native_fs_write", { path: temp, data: bytesToBase64(bytes), append: true });
+        if (isNative) await native.writeFile(temp, bytes, true);
         else { const id = `${partial}:${chunks.length}`; await this.database.put("blobs",id,new Blob([bytes])); chunks.push(id); }
       },
       commit: async () => {
         if (size !== expectedSize || hash.digest() !== fileId) throw new Error("文件大小或内容校验失败");
-        if (isNative) await nativeCall("native_fs_move", { source: temp, destination: final });
+        if (isNative) await native.moveFile(temp, final);
         else {
           const blobs = await this.database.getMany<Blob>("blobs",chunks);
           if (blobs.some((blob) => !blob)) throw new Error("下载缓存不完整");
@@ -130,7 +130,7 @@ export class AccountFiles {
         }
       },
       abort: async () => {
-        if (isNative) await nativeCall("native_fs_remove", { path: temp });
+        if (isNative) await native.removeFile(temp);
         else await this.database.batch(chunks.map((id) => ({name:"blobs",id})));
       },
     };
@@ -154,7 +154,7 @@ export class AccountFiles {
       })) return entry.sources.roots;
     }
     const root = destination ?? `${await this.root()}/views/${safeName(entry.id)}`;
-    if (!destination && (await this.stats([root]))[0]) await nativeCall("native_fs_remove", {path:root});
+    if (!destination && (await this.stats([root]))[0]) await native.removeFile(root);
     const paths: string[] = [];
     const walk = async (info: FileInfo, parent: string): Promise<void> => {
       const used = new Set<string>();
@@ -167,10 +167,10 @@ export class AccountFiles {
           const source = await this.resolve(node.f);
           if (!source) throw new Error(`文件内容不可用：${name}`);
           signal?.throwIfAborted();
-          path = await nativeCall<string>("native_fs_copy", { source, destination: parent, name });
+          path = await native.copyFile(source, parent, name);
           if (parent === root) { paths.push(path); createdRoots.push(path); }
         } else {
-          path = await nativeCall<string>("native_fs_mkdir", { path: parent, name });
+          path = await native.createDirectory(parent, name);
           if (parent === root) { paths.push(path); createdRoots.push(path); }
           await walk(node, path);
         }
@@ -219,18 +219,18 @@ export class AccountFiles {
         const source = await this.resolve(contents[0]!.fileId);
         if (!source) throw new Error("文件内容不可用");
         signal.throwIfAborted();
-        await nativeCall("native_fs_copy", { source, destination });
+        await native.copyFile(source, destination);
       } else if (entry.kind === "image") {
         const source = await this.resolve(contents[0]!.fileId);
         if (!source) throw new Error("图片内容不可用");
         signal.throwIfAborted();
-        createdRoots.push(await nativeCall<string>("native_fs_copy", { source, destination, name: `${safeName(entry.content)}.webp` }));
+        createdRoots.push(await native.copyFile(source, destination, `${safeName(entry.content)}.webp`));
       } else await this.materialize(entry, destination, signal, createdRoots);
       signal.throwIfAborted();
       return entry.fileInfo ? countLeaves(entry.fileInfo) : 1;
     } catch (error) {
       if (target.kind === "documentTree") {
-        for (const path of createdRoots.reverse()) await nativeCall("native_fs_remove", { path }).catch(() => undefined);
+        for (const path of createdRoots.reverse()) await native.removeFile(path).catch(() => undefined);
       }
       throw error;
     }

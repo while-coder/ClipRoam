@@ -1,6 +1,5 @@
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { native, type Unlisten } from "../../platform/native";
 import { toast } from "@qingfeng346/ui-kit";
 import { isToastWindow } from "../../composables/usePlatform";
 import { isNative } from "../../platform/runtime";
@@ -21,7 +20,7 @@ function clearTimers(): void {
 function scheduleToastWindowHide(): void {
   if (!isToastWindow) return;
   toastWindowHideTimer = window.setTimeout(() => {
-    void invoke("native_hide_toast").catch(() => {});
+    void native.hideToast().catch(() => {});
     toastWindowHideTimer = undefined;
   }, 180);
 }
@@ -55,7 +54,7 @@ function showToast(message: string, tone: ToastTone = "info"): void {
   if (!normalized) return;
   const payload = { message: normalized, tone };
   if (!isNative) { displayToast(payload); return; }
-  void invoke("native_show_toast", payload).catch(() => displayToast(payload));
+  void native.showToast(payload).catch(() => displayToast(payload));
 }
 
 /** 清理 toast 相关 timer（组件卸载时调用）。 */
@@ -64,8 +63,8 @@ function disposeToast(): void {
 }
 
 /** toast 专用窗口（tray 旁的通知窗口）只监听 toast 事件，不初始化其他服务。 */
-function startToastWindowListener(): Promise<UnlistenFn> {
-  return listen<ToastPayload>("cliproam://toast", ({ payload }) => {
+function startToastWindowListener(): Promise<Unlisten> {
+  return native.listen<ToastPayload>("cliproam://toast", (payload) => {
     displayToast(payload);
   });
 }
