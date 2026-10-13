@@ -142,9 +142,10 @@ async function saveSettings(options: {preferences?: AccountPreferences; beforeSa
       }
     }
     await options.beforeSave?.();
-    if (options.preferences) {
-      await session.start(() => requireBridge().persistAccountPreferences(options.preferences!));
-      requireBridge().applyAutoUploadLimit(options.preferences.autoUploadLimitMb);
+    const preferences = options.preferences;
+    if (preferences) {
+      await session.start(() => requireBridge().persistAccountPreferences(preferences));
+      requireBridge().applyAutoUploadLimit(preferences.autoUploadLimitMb);
     }
     settingsVisible.value = false;
     await nextTick();

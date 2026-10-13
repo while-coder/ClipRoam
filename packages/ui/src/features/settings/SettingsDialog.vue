@@ -31,7 +31,6 @@ const props = withDefaults(defineProps<{
 }>(), { savePages: () => ["general"] });
 const submitSettings = () => props.save ? props.save() : saveSettings();
 
-
 /** 保存或改密进行中：禁止关闭弹窗、禁止重复提交。 */
 const busy = computed(() => savingSettings.value || changingPassword.value);
 
