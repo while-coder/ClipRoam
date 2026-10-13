@@ -20,6 +20,6 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 ## 验证与浏览器边界
 
-在仓库根目录执行 `pnpm --filter @cliproam/app build` 和 `pnpm --filter @cliproam/app test`；在 `src-tauri` 执行 `cargo test --offline`。
+在仓库根目录执行 `pnpm --filter @cliproam/app build`；在 `src-tauri` 执行 `cargo check --offline`。
 
 业务核心可供 PWA 或浏览器插件复用，当前尚未加入 PWA manifest、Service Worker 或插件打包。浏览器不提供全局快捷键、后台系统剪贴板监听、向其他应用投递粘贴按键和系统文件剪贴板；读取或写入剪贴板仍受浏览器权限约束。

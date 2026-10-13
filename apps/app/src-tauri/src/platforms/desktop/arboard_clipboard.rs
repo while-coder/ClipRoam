@@ -4,8 +4,6 @@
 //! arboard 的原生 X11/Wayland 后端发布 `text/uri-list`。图片在内存中以
 //! RGBA 表示，在现有的 WebP/BMP 存储边界完成转换。
 
-#![cfg_attr(all(test, target_os = "windows"), allow(dead_code))]
-
 use arboard::{Clipboard, ImageData};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::{borrow::Cow, io::Cursor, path::PathBuf, sync::Mutex};

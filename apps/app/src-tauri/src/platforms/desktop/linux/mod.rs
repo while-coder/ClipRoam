@@ -1,7 +1,4 @@
 //! Linux 平台实现：arboard 剪贴板 + wtype/ydotool/xdotool 合成 Ctrl+V。
-//! Windows 测试构建会编译本模块以保持类型检查（见 platforms/mod.rs）。
-
-#![cfg_attr(all(test, target_os = "windows"), allow(dead_code, unused_imports))]
 
 use tauri::{AppHandle, Manager};
 

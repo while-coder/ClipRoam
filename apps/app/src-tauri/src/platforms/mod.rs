@@ -1,4 +1,3 @@
-//! 测试构建额外编译 macOS/Linux 适配代码，检查其类型和 API。
 //! 系统具体实现。统一函数入口位于 ../platform.rs，Tauri 命令位于 src 根目录各功能模块。
 #[cfg(desktop)]
 mod desktop;

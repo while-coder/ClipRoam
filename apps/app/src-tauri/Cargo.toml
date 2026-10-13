@@ -26,11 +26,6 @@ base64 = "0.22"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 
-[dev-dependencies]
-# Compiles the shared macOS/Linux clipboard wrapper during Windows tests too,
-# catching arboard API drift even when native SDKs are unavailable.
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
-
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 

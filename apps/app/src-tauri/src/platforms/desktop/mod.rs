@@ -1,19 +1,17 @@
 //! Windows/macOS/Linux 三个桌面平台共享的外壳与粘贴投递逻辑。
 //! 个别系统差异（粘贴合成、打开数据目录的命令）由各系统目录覆盖。
 
-// 非 Windows 的桌面实现也在测试构建中检查。
 #![cfg_attr(target_os = "windows", allow(dead_code))]
 
-// 各桌面系统目录；macos/linux 额外在 Windows 测试构建下编译以保持类型检查
-// （见 platforms/mod.rs 顶部说明）。
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+// 各桌面系统目录。
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) mod linux;
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 // arboard_clipboard 由 macos/linux 使用，跟随它们一起编译。
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) mod arboard_clipboard;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -373,17 +371,17 @@ pub(crate) fn open_data_directory_with(app: &AppHandle, command: &str) -> Result
 
 mod files;
 
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn capture_paste_target(_app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
     false
 }

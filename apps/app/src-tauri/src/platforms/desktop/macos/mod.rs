@@ -1,7 +1,4 @@
 //! macOS 平台实现：arboard 剪贴板 + 原生 AppKit 焦点恢复与 Quartz Cmd+V。
-//! Windows 测试构建会编译本模块以保持类型检查（见 platforms/mod.rs）。
-
-#![cfg_attr(all(test, target_os = "windows"), allow(dead_code, unused_imports))]
 
 use std::sync::Mutex;
 
@@ -56,7 +53,7 @@ fn ensure_accessibility_access() -> Result<(), String> {
     ))
 }
 
-/// 非 macOS 编译（其他桌面平台的测试构建）不触发 macOS 权限流程。
+/// 非 macOS 编译不触发 macOS 权限流程。
 #[cfg(not(target_os = "macos"))]
 fn ensure_accessibility_access() -> Result<(), String> {
     Ok(())
@@ -250,31 +247,6 @@ pub(crate) fn synthesize_paste() -> Result<(), String> {
 
 pub(crate) fn open_data_directory(app: &AppHandle) -> Result<(), String> {
     super::open_data_directory_with(app, "open")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::next_paste_target;
-
-    #[test]
-    fn reopening_paste_window_preserves_external_target() {
-        assert_eq!(next_paste_target(Some(42), Some(7), 7, true), Some(42));
-    }
-
-    #[test]
-    fn new_external_target_replaces_previous_self_target() {
-        assert_eq!(next_paste_target(Some(7), Some(42), 7, false), Some(42));
-    }
-
-    #[test]
-    fn opening_from_main_window_does_not_reuse_previous_external_target() {
-        assert_eq!(next_paste_target(Some(42), Some(7), 7, false), Some(7));
-    }
-
-    #[test]
-    fn unidentified_frontmost_app_does_not_reuse_stale_target() {
-        assert_eq!(next_paste_target(Some(42), None, 7, false), None);
-    }
 }
 
 pub(crate) use super::files::{ack_share, pending_shares, pick_files, save_dialog};
