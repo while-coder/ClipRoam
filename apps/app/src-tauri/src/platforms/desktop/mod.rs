@@ -4,9 +4,9 @@
 #![cfg_attr(target_os = "windows", allow(dead_code))]
 
 // 各桌面系统目录。
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub(crate) mod linux;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
