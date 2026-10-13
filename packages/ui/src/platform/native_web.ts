@@ -1,5 +1,5 @@
 import { BROWSER_CAPABILITIES } from "../utils/constants";
-import type { PlatformCapabilities, ToastPayload } from "../types";
+import type { PlatformCapabilities, ShareReceiverEvent, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
@@ -8,6 +8,21 @@ import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten 
 export class NativeWeb implements NativePlatform {
   readonly kind = "web";
   readonly clipboardMonitoring = false;
+  readonly windowLabel = "main";
+  async getAppVersion(): Promise<string> { return "web"; }
+  async initializeWindowMode(): Promise<void> {}
+  async showMainWindow(): Promise<void> {}
+  async showPasteWindow(): Promise<void> {}
+  async hideWindow(): Promise<void> {}
+  async onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
+    const focus = () => handler(true), blur = () => handler(false);
+    window.addEventListener("focus", focus); window.addEventListener("blur", blur);
+    return () => { window.removeEventListener("focus", focus); window.removeEventListener("blur", blur); };
+  }
+  async listenShares(_handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> { return () => {}; }
+  async registerQuickPasteShortcut(_shortcut: string): Promise<void> { this.unavailable(); }
+  async isShortcutRegistered(_shortcut: string): Promise<boolean> { return false; }
+  async unregisterShortcut(_shortcut: string): Promise<void> {}
   async getCapabilities(): Promise<PlatformCapabilities> { return {...BROWSER_CAPABILITIES}; }
   async getDeviceInfo(): Promise<DeviceInfo> { return {deviceName:"浏览器",cpu:"",osType:"browser",osVersion:navigator.userAgent,appVersion:"web"}; }
   private unavailable(): never { throw new Error("此操作需要桌面或手机客户端"); }

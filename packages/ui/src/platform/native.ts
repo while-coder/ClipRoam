@@ -1,16 +1,36 @@
 import type { PlatformCapabilities, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
+import type { ShareReceiverEvent } from "../types";
+import type { Ref } from "vue";
 
 export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
+export type UpdaterState = {
+  updaterSupported: boolean;
+  updateStatus: Readonly<Ref<string>>;
+  updateStatusText: Readonly<Ref<string>>;
+  checkForUpdate(options?: {silent?: boolean}): Promise<unknown>;
+};
 
 /** Platform operations independent of Rust command names and wire formats. */
 export interface NativePlatform {
   readonly kind: "rust" | "web";
   readonly clipboardMonitoring: boolean;
+  readonly windowLabel: string;
+  readonly updater?: UpdaterState;
+  getAppVersion(): Promise<string>;
+  initializeWindowMode(): Promise<void>;
+  showMainWindow(): Promise<void>;
+  showPasteWindow(): Promise<void>;
+  hideWindow(): Promise<void>;
+  onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
+  listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
+  registerQuickPasteShortcut(shortcut: string): Promise<void>;
+  isShortcutRegistered(shortcut: string): Promise<boolean>;
+  unregisterShortcut(shortcut: string): Promise<void>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;

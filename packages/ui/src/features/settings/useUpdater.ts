@@ -1,9 +1,13 @@
 import { ref } from "vue";
-import { getVersion } from "@tauri-apps/api/app";
-import { useTauriUpdater } from "@while-coder/tauri-updater-vue";
+import { native, type UpdaterState } from "../../platform/native";
 import packageInfo from "../../../package.json";
 
-const updater = useTauriUpdater();
+const updater: UpdaterState = native.updater ?? {
+  updaterSupported: false,
+  updateStatus: ref("idle"),
+  updateStatusText: ref("当前平台不支持应用内更新"),
+  checkForUpdate: async () => "unsupported",
+};
 const fallbackAppVersion = packageInfo.version;
 const appVersion = ref("");
 let versionInitialized = false;
@@ -13,7 +17,7 @@ async function initUpdaterVersion(): Promise<void> {
   versionInitialized = true;
 
   try {
-    appVersion.value = (await getVersion()) || fallbackAppVersion;
+    appVersion.value = (await native.getAppVersion()) || fallbackAppVersion;
   } catch {
     appVersion.value = fallbackAppVersion;
   }

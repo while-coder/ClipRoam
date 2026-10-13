@@ -35,9 +35,6 @@ importers:
 
   apps/app:
     dependencies:
-      '@cliproam/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
       '@cliproam/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -62,9 +59,6 @@ importers:
       '@while-coder/tauri-updater-vue':
         specifier: git+https://github.com/while-coder/tauri-updater-kit.git#main&path:packages/vue
         version: https://codeload.github.com/while-coder/tauri-updater-kit/tar.gz/9728f9a9eb6b9ed6eb5620cb42e34bbce1100fb6#path:packages/vue(@tauri-apps/api@2.11.1)(@tauri-apps/plugin-process@2.3.1)(@tauri-apps/plugin-updater@2.10.1)(vue@3.5.43(typescript@5.6.3))
-      lucide-vue-next:
-        specifier: ^0.468.0
-        version: 0.468.0(vue@3.5.43(typescript@5.6.3))
       vue:
         specifier: ^3.5.43
         version: 3.5.43(typescript@5.6.3)
@@ -181,6 +175,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@cliproam/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@qingfeng346/ui-kit':
         specifier: link:../../../ui-kit/ui-kit
         version: link:../../../ui-kit/ui-kit

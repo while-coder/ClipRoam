@@ -17,6 +17,32 @@ async function listenRust<T>(event: string, handler: (payload: T) => void): Prom
 export class NativeRust implements NativePlatform {
   readonly kind = "rust";
   readonly clipboardMonitoring = true;
+  readonly updater = useTauriUpdater();
+  get windowLabel(): string { return getCurrentWindow().label; }
+  getAppVersion(): Promise<string> { return getVersion(); }
+  async initializeWindowMode(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).initializeWindowMode(); }
+  async showMainWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showMainWindow(); }
+  async showPasteWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showPasteWindow(); }
+  async hideWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).hideWindow(); }
+  onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
+    return getCurrentWindow().onFocusChanged(({payload}) => handler(payload));
+  }
+  async listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> {
+    const listener = await addPluginListener("cliproam-share-receiver", "received", handler);
+    return () => { void listener.unregister(); };
+  }
+  async registerQuickPasteShortcut(shortcut: string): Promise<void> {
+    const { register } = await import("@tauri-apps/plugin-global-shortcut");
+    await register(shortcut, (event) => {
+      if (event.state === "Pressed") void import("@tauri-apps/api/event").then(({emitTo}) => emitTo("main", "cliproam://show-paste"));
+    });
+  }
+  async isShortcutRegistered(shortcut: string): Promise<boolean> {
+    return (await import("@tauri-apps/plugin-global-shortcut")).isRegistered(shortcut);
+  }
+  async unregisterShortcut(shortcut: string): Promise<void> {
+    return (await import("@tauri-apps/plugin-global-shortcut")).unregister(shortcut);
+  }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
   getDeviceInfo(): Promise<DeviceInfo> { return this.invoke("native_get_device_info"); }
