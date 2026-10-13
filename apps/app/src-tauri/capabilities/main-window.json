@@ -16,6 +16,7 @@
     "core:window:allow-set-skip-taskbar",
     "core:window:allow-set-title",
     "core:window:allow-set-min-size",
+    "core:window:allow-set-size-constraints",
     "core:window:allow-set-size",
     "core:window:allow-maximize",
     "core:window:allow-unmaximize",

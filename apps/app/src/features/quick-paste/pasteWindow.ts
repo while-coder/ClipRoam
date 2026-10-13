@@ -17,8 +17,9 @@ type MainWindowState = {
   fullscreen: boolean;
 };
 
+const QUICK_PASTE_WIDTH = 520;
 let mainState: MainWindowState | undefined;
-let quickPasteSize: PhysicalSize | undefined;
+let quickPasteHeight: number | undefined;
 let transitionQueue: Promise<void> = Promise.resolve();
 
 // Serialize tray/shortcut requests so quick geometry cannot replace main geometry.
@@ -42,13 +43,15 @@ async function restoreMainWindow(): Promise<void> {
   const window = getCurrentWindow();
   await native.setQuickPasteMode(false);
   await window.hide();
-  if (isQuickPaste.value) quickPasteSize = await window.innerSize();
+  if (isQuickPaste.value) {
+    quickPasteHeight = (await window.innerSize()).toLogical(await window.scaleFactor()).height;
+  }
   setQuickPasteView(false);
   await window.setDecorations(true);
   await window.setAlwaysOnTop(false);
   await setSkipTaskbar(false);
   await window.setTitle("ClipRoam");
-  await window.setMinSize(new LogicalSize(760, 600));
+  await window.setSizeConstraints({ minWidth: 760, minHeight: 600 });
   if (mainState) {
     await window.setSize(mainState.size);
     await window.setPosition(mainState.position);
@@ -108,12 +111,12 @@ export function showPasteWindow(): Promise<void> {
           maximized,
           fullscreen,
         };
-        await window.setMinSize(new LogicalSize(480, 520));
+        await window.setSizeConstraints({ minWidth: QUICK_PASTE_WIDTH, maxWidth: QUICK_PASTE_WIDTH, minHeight: 520 });
         await window.setDecorations(false);
         await window.setAlwaysOnTop(true);
         await setSkipTaskbar(true);
         await window.setTitle("ClipRoam - 快速粘贴");
-        await window.setSize(quickPasteSize ?? new LogicalSize(560, 640));
+        await window.setSize(new LogicalSize(QUICK_PASTE_WIDTH, quickPasteHeight ?? 640));
       }
       setQuickPasteView(true);
       await nextTick();

@@ -352,7 +352,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </div>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll">
-          <EntryTypeFilter v-model="filter" />
+          <EntryTypeFilter v-model="filter" :dropdown="isQuickPaste" />
           <TimeFilterControl
             v-model="timeFilter"
             v-model:start-date="startDate"

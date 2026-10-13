@@ -5,10 +5,12 @@ import { isMobile } from "../../platform/runtime";
 import { usePopoverMenu } from "./usePopoverMenu";
 import type { EntryFilter } from "../../types";
 
+defineProps<{ dropdown?: boolean }>();
 const model = defineModel<EntryFilter>({ required: true });
 const labels: Record<EntryFilter, string> = { all: "全部", text: "文本", files: "文件", image: "图片" };
 const options = Object.values(labels);
 const typeOptions = Object.entries(labels) as [EntryFilter, string][];
+const dropdownOptions = typeOptions.map(([value, label]) => ({ value, label: value === "all" ? "全部类型" : label }));
 const trigger = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const { menuOpen, menuStyle, toggleMenu, openMenuFromKeyboard, handleMenuKeydown } = usePopoverMenu({
@@ -31,8 +33,17 @@ function update(value: string[]): void {
 </script>
 
 <template>
+  <SSelect
+    v-if="dropdown"
+    v-model:value="model"
+    class="entry-type-select"
+    :options="dropdownOptions"
+    :menu-width="152"
+    aria-label="类型筛选"
+    :title="`类型筛选：${labels[model]}`"
+  />
   <button
-    v-if="isMobile"
+    v-else-if="isMobile"
     ref="trigger"
     class="entry-type-trigger"
     type="button"
@@ -50,7 +61,7 @@ function update(value: string[]): void {
   <STagFilter v-else class="entry-type-filter" :value="[labels[model]]" :options="options" :multiple="false" @update:value="update" />
   <Teleport to="body">
     <div
-      v-if="isMobile && menuOpen"
+      v-if="isMobile && !dropdown && menuOpen"
       ref="menu"
       class="entry-type-menu"
       role="listbox"
@@ -75,6 +86,10 @@ function update(value: string[]): void {
 </template>
 
 <style scoped>
+.entry-type-select.s-single-select { flex: 0 0 auto; width: 106px; min-width: 0; }
+.entry-type-select :deep(.s-select) { min-height: 27px; height: 27px; gap: 8px; padding: 0 7px 0 9px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 11px; }
+.entry-type-select :deep(.s-select:hover) { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
+.entry-type-select :deep(.s-select:focus-visible) { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
 .entry-type-filter.s-tag-filter { flex: 0 0 auto; flex-wrap: nowrap; }
 .entry-type-filter :deep(.s-tag-filter-clear) { display: none; }
 .entry-type-trigger { display: flex; align-items: center; justify-content: space-between; min-width: 96px; height: 44px; gap: 8px; padding: 0 9px 0 12px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
