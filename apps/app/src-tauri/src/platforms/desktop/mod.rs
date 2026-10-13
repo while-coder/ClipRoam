@@ -80,10 +80,10 @@ pub(crate) fn on_paste_window_focus(app: AppHandle, focused: bool) {
 }
 
 pub(crate) fn spawn_paste_focus_loss_check(app: AppHandle) {
-    let mode = app.state::<crate::app_shell::QuickPasteMode>().snapshot();
+    let mode = app.state::<crate::app::QuickPasteMode>().snapshot();
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(100));
-        if !mode.0 || app.state::<crate::app_shell::QuickPasteMode>().snapshot() != mode {
+        if !mode.0 || app.state::<crate::app::QuickPasteMode>().snapshot() != mode {
             return;
         }
         let Some(window) = app.get_webview_window("main") else {
@@ -93,7 +93,7 @@ pub(crate) fn spawn_paste_focus_loss_check(app: AppHandle) {
             return;
         }
         if matches!(window.is_focused(), Ok(false))
-            && app.state::<crate::app_shell::QuickPasteMode>().snapshot() == mode
+            && app.state::<crate::app::QuickPasteMode>().snapshot() == mode
         {
             let _ = window.hide();
         }
@@ -112,7 +112,7 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
         }
         WindowEvent::Focused(focused)
             if window.label() == "main"
-                && crate::app_shell::quick_paste_enabled(window.app_handle()) =>
+                && crate::app::quick_paste_enabled(window.app_handle()) =>
         {
             crate::platform::on_paste_window_focus(window.app_handle().clone(), *focused);
         }
@@ -154,7 +154,7 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
     window
         .emit("cliproam://show-main", ())
         .map_err(|error| error.to_string())?;
-    if crate::app_shell::quick_paste_enabled(app) {
+    if crate::app::quick_paste_enabled(app) {
         // The existing webview restores the main layout and geometry before showing.
         return Ok(());
     }
@@ -212,7 +212,7 @@ static TOAST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn show_detached_toast(
     app: &AppHandle,
-    payload: crate::app_shell::ToastPayload,
+    payload: crate::app::ToastPayload,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("toast")

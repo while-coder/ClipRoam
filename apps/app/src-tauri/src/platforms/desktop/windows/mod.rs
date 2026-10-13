@@ -225,7 +225,7 @@ pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), Str
             }
         }
     };
-    if window.label() == "main" && crate::app_shell::quick_paste_enabled(window.app_handle()) {
+    if window.label() == "main" && crate::app::quick_paste_enabled(window.app_handle()) {
         set_guard(Some(Instant::now() + Duration::from_secs(5)));
     }
     if let Err(error) = window.start_dragging() {

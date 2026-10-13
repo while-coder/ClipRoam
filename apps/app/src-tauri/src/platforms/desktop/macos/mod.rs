@@ -126,7 +126,7 @@ pub(crate) fn capture_paste_target(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false)
-        && crate::app_shell::quick_paste_enabled(app);
+        && crate::app::quick_paste_enabled(app);
     if let Some(state) = app.try_state::<PasteTarget>() {
         if let Ok(mut guard) = state.0.lock() {
             *guard = next_paste_target(

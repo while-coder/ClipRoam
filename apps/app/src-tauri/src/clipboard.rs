@@ -412,7 +412,7 @@ pub(crate) fn native_write_clipboard(
     synthesize: bool,
 ) -> Result<(), String> {
     #[cfg(desktop)]
-    if synthesize && (window.label() != "main" || !crate::app_shell::quick_paste_enabled(&app)) {
+    if synthesize && (window.label() != "main" || !crate::app::quick_paste_enabled(&app)) {
         return Err("只有快速粘贴模式可以执行自动粘贴".into());
     }
     let _io = state.io.lock().map_err(|e| e.to_string())?;

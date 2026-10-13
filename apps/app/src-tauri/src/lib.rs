@@ -1,4 +1,4 @@
-mod app_shell;
+mod app;
 mod clipboard;
 mod files;
 mod platform;
@@ -18,7 +18,7 @@ pub fn run() {
     builder
         .setup(|app| {
             std::fs::create_dir_all(app.path().app_data_dir()?)?;
-            app.manage(app_shell::QuickPasteMode::default());
+            app.manage(app::QuickPasteMode::default());
             app.manage(clipboard::ClipboardState::default());
             platform::manage_platform_state(app.handle())?;
             platform::create_windows(app.handle())?;
@@ -30,14 +30,14 @@ pub fn run() {
             platform::on_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
-            app_shell::native_get_platform_capabilities,
-            app_shell::native_get_device_info,
-            app_shell::native_open_app_data_dir,
-            app_shell::native_start_window_drag,
-            app_shell::native_set_quick_paste_mode,
-            app_shell::native_capture_paste_target,
-            app_shell::native_show_toast,
-            app_shell::native_hide_toast,
+            app::native_get_platform_capabilities,
+            app::native_get_device_info,
+            app::native_open_app_data_dir,
+            app::native_start_window_drag,
+            app::native_set_quick_paste_mode,
+            app::native_capture_paste_target,
+            app::native_show_toast,
+            app::native_hide_toast,
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,
             clipboard::native_watch_clipboard,

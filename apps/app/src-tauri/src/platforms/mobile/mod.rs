@@ -53,7 +53,7 @@ pub(crate) fn open_data_directory(_app: &AppHandle) -> Result<(), String> {
 
 pub(crate) fn show_detached_toast(
     app: &AppHandle,
-    payload: crate::app_shell::ToastPayload,
+    payload: crate::app::ToastPayload,
 ) -> Result<(), String> {
     app.get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?
