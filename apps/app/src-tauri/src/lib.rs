@@ -36,6 +36,8 @@ pub fn run() {
             app::native_start_window_drag,
             app::native_set_quick_paste_mode,
             app::native_capture_paste_target,
+            app::native_register_quick_paste_shortcut,
+            app::native_focus_quick_paste_window,
             app::native_show_toast,
             app::native_hide_toast,
             clipboard::native_read_clipboard,

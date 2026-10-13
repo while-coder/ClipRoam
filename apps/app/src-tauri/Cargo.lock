@@ -588,6 +588,7 @@ dependencies = [
  "core-graphics",
  "image",
  "log",
+ "objc2",
  "objc2-app-kit",
  "rfd 0.15.4",
  "rustls",

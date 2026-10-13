@@ -44,6 +44,11 @@ pub(crate) fn capture_paste_target(app: &AppHandle) -> Result<(), String> {
     implementation::capture_paste_target(app)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn position_quick_paste_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    implementation::position_quick_paste_window(window)
+}
+
 pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> Result<(), String> {
     implementation::deliver_paste(window, synthesize)
 }

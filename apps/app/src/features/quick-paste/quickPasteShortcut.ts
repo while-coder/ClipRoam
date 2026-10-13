@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { emitTo } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "@cliproam/ui/errors";
 
 const STORAGE_KEY = "cliproam.quickPasteShortcut";
@@ -37,10 +37,8 @@ export function resetQuickPasteShortcutDraft(): void {
 }
 
 async function registerShortcut(shortcut: string): Promise<void> {
-  shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
-  await shortcutApi.register(shortcut, (event) => {
-    if (event.state === "Pressed") void emitTo("main", "cliproam://show-paste");
-  });
+  // 唤起由原生全局处理器转发，不依赖后台或重载前的 webview 回调。
+  await invoke("native_register_quick_paste_shortcut", { shortcut });
 }
 
 async function applyShortcut(shortcut: string, persist: boolean): Promise<boolean> {

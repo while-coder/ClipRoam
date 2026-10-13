@@ -137,6 +137,54 @@ pub(crate) fn capture_paste_target(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// AppKit 的鼠标、屏幕与窗口坐标均为逻辑点，避免跨屏缩放换算产生偏移。
+pub(crate) fn position_quick_paste_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = (|| {
+                use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
+                let marker = objc2::MainThreadMarker::new().ok_or("窗口定位必须在主线程执行")?;
+                let mut point = NSEvent::mouseLocation();
+                let screens = NSScreen::screens(marker);
+                let screen = screens
+                    .iter()
+                    .find(|screen| {
+                        let frame = screen.frame();
+                        point.x >= frame.origin.x
+                            && point.x < frame.origin.x + frame.size.width
+                            && point.y >= frame.origin.y
+                            && point.y < frame.origin.y + frame.size.height
+                    })
+                    .or_else(|| screens.firstObject())
+                    .ok_or("找不到鼠标所在屏幕")?;
+                let work = screen.visibleFrame();
+                // target 保持窗口存活；只在 AppKit 主线程访问原生 NSWindow。
+                let native = unsafe {
+                    &*target
+                        .ns_window()
+                        .map_err(|error| error.to_string())?
+                        .cast::<NSWindow>()
+                };
+                let size = native.frame().size;
+                let (x, y) = super::paste_position::calculate_position(
+                    (point.x, -point.y),
+                    (size.width, size.height),
+                    (work.origin.x, -(work.origin.y + work.size.height)),
+                    (work.size.width, work.size.height),
+                );
+                point.x = x;
+                point.y = -y;
+                native.setFrameTopLeftPoint(point);
+                Ok::<(), String>(())
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    receiver.recv().map_err(|error| error.to_string())?
+}
+
 #[cfg(target_os = "macos")]
 fn reactivate_paste_target(app: &AppHandle) -> Result<(), String> {
     let Some(pid) = app

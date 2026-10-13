@@ -1,4 +1,5 @@
 import { nextTick } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { native, isMobile, isQuickPaste, isNative, getAccountSession, focusSearch, focusSearchInput } from "@cliproam/ui/runtime";
 import {
   cursorPosition,
@@ -116,29 +117,42 @@ export function showPasteWindow(): Promise<void> {
       }
       setQuickPasteView(true);
       await nextTick();
-      try {
-        const cursor = await cursorPosition();
-        const monitor = await monitorFromPoint(cursor.x, cursor.y);
-        if (monitor) {
-          const size = await window.outerSize();
-          const work = monitor.workArea;
-          const minX = work.position.x + 8;
-          const minY = work.position.y + 8;
-          const maxX = Math.max(minX, work.position.x + work.size.width - size.width - 8);
-          const maxY = Math.max(minY, work.position.y + work.size.height - size.height - 8);
-          const below = cursor.y + 12;
-          await window.setPosition(new PhysicalPosition(
-            Math.round(Math.min(Math.max(cursor.x - size.width / 2, minX), maxX)),
-            Math.round(Math.min(Math.max(below <= maxY ? below : cursor.y - size.height - 12, minY), maxY)),
-          ));
+      // macOS 在原生显示命令中用 AppKit 逻辑点定位，不混用 Retina 像素坐标。
+      if (!/Mac/i.test(navigator.platform)) {
+        try {
+          const cursor = await cursorPosition();
+          const monitor = await monitorFromPoint(cursor.x, cursor.y);
+          if (monitor) {
+            const size = await window.outerSize();
+            const work = monitor.workArea;
+            const margin = 8 * monitor.scaleFactor;
+            const gap = 12 * monitor.scaleFactor;
+            const minX = work.position.x + margin;
+            const minY = work.position.y + margin;
+            const maxX = Math.max(minX, work.position.x + work.size.width - size.width - margin);
+            const maxY = Math.max(minY, work.position.y + work.size.height - size.height - margin);
+            const right = cursor.x + gap;
+            const below = cursor.y + gap;
+            await window.setPosition(new PhysicalPosition(
+              Math.round(Math.min(Math.max(right <= maxX ? right : cursor.x - size.width - gap, minX), maxX)),
+              Math.round(Math.min(Math.max(below <= maxY ? below : cursor.y - size.height - gap, minY), maxY)),
+            ));
+          }
+        } catch (error) {
+          console.error("定位快捷粘贴窗口失败：", error);
         }
-      } catch (error) {
-        console.error("定位快捷粘贴窗口失败：", error);
       }
       session.signal.throwIfAborted();
-      await window.show();
-      await window.unminimize();
-      await window.setFocus();
+      await invoke("native_focus_quick_paste_window");
+      // macOS 激活应用是异步的；尚未获焦就开启失焦隐藏会把窗口立即收起。
+      if (/Mac/i.test(navigator.platform)) {
+        for (let attempt = 0; ; attempt++) {
+          session.signal.throwIfAborted();
+          if (await window.isFocused()) break;
+          if (attempt >= 20) throw new Error("快捷粘贴窗口未能获得焦点，请重试");
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+      }
       // Enable native blur hiding only after the window has gained focus.
       await native.setQuickPasteMode(true);
       focusSearch();

@@ -8,6 +8,8 @@
 pub(crate) mod linux;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(target_os = "macos")]
+mod paste_position;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 // arboard_clipboard 由 macos/linux 使用，跟随它们一起编译。
@@ -26,7 +28,21 @@ pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let _ = crate::platform::show_main_window(app);
         }))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        return;
+                    }
+                    log::debug!("[quick-paste] native shortcut pressed");
+                    if let Some(window) = app.get_webview_window("main") {
+                        if let Err(error) = window.emit("cliproam://show-paste", ()) {
+                            log::warn!("[quick-paste] failed to dispatch shortcut: {error}");
+                        }
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
 }
 
@@ -109,8 +125,7 @@ pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
             let _ = window.hide();
         }
         WindowEvent::Focused(focused)
-            if window.label() == "main"
-                && crate::app::quick_paste_enabled(window.app_handle()) =>
+            if window.label() == "main" && crate::app::quick_paste_enabled(window.app_handle()) =>
         {
             crate::platform::on_paste_window_focus(window.app_handle().clone(), *focused);
         }

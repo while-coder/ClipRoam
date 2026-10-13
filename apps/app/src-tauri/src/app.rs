@@ -93,6 +93,55 @@ pub(crate) fn native_capture_paste_target(app: AppHandle) -> Result<(), String> 
     platform::capture_paste_target(&app)
 }
 
+/// 注册不绑定 JS Channel 的快捷键，原生插件处理器负责唤起事件。
+#[tauri::command]
+pub(crate) async fn native_register_quick_paste_shortcut(
+    app: AppHandle,
+    shortcut: String,
+) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        app.global_shortcut()
+            .register(shortcut.as_str())
+            .map_err(|error| error.to_string())?;
+        log::debug!("[quick-paste] native shortcut registered");
+        Ok(())
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, shortcut);
+        Err("移动端不支持全局快捷键".to_string())
+    }
+}
+
+/// 前端配置好快速粘贴布局后再显示，避免主界面闪现。
+#[tauri::command]
+pub(crate) async fn native_focus_quick_paste_window(
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("仅主窗口可显示快速粘贴界面".to_string());
+    }
+    // macOS 的应用隐藏状态独立于窗口可见状态；先恢复应用再激活窗口。
+    #[cfg(target_os = "macos")]
+    {
+        let target = window.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            platform::position_quick_paste_window(&target)
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        window
+            .app_handle()
+            .show()
+            .map_err(|error| error.to_string())?;
+    }
+    window.show().map_err(|error| error.to_string())?;
+    window.unminimize().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Toast 通知窗口
 // ---------------------------------------------------------------------------
