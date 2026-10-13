@@ -4,7 +4,6 @@ import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { addPluginListener } from "@tauri-apps/api/core";
-import { useTauriUpdater } from "@while-coder/tauri-updater-vue";
 import * as shortcuts from "../features/quick-paste/quickPasteShortcut";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -18,7 +17,6 @@ async function listenRust<T>(event: string, handler: (payload: T) => void): Prom
 export class NativeRust implements NativePlatform {
   readonly kind = "rust";
   readonly clipboardMonitoring = true;
-  readonly updater = useTauriUpdater();
   readonly quickPasteShortcut = {
     shortcut: shortcuts.quickPasteShortcut,
     status: shortcuts.quickPasteShortcutStatus,

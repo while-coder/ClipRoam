@@ -1,18 +1,12 @@
 import { ref } from "vue";
-import { native, type UpdaterState } from "../../platform/native";
+import { native } from "../../platform/native";
 import packageInfo from "../../../package.json";
 
-const updater: UpdaterState = native.updater ?? {
-  updaterSupported: false,
-  updateStatus: ref("idle"),
-  updateStatusText: ref("当前平台不支持应用内更新"),
-  checkForUpdate: async () => "unsupported",
-};
 const fallbackAppVersion = packageInfo.version;
 const appVersion = ref("");
 let versionInitialized = false;
 
-async function initUpdaterVersion(): Promise<void> {
+async function initAppVersion(): Promise<void> {
   if (versionInitialized) return;
   versionInitialized = true;
 
@@ -23,10 +17,9 @@ async function initUpdaterVersion(): Promise<void> {
   }
 }
 
-export function useUpdater() {
+export function useAppVersion() {
   return {
-    ...updater,
     appVersion,
-    initUpdaterVersion,
+    initAppVersion,
   };
 }

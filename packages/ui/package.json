@@ -12,7 +12,10 @@
     "./runtime": "./src/host.ts",
     "./history": "./src/features/history/HistoryView.vue",
     "./bytes": "./src/utils/bytes.ts",
-    "./errors": "./src/utils/error.ts"
+    "./errors": "./src/utils/error.ts",
+    "./settings-dialog": "./src/features/settings/SettingsDialog.vue",
+    "./settings": "./src/features/settings/useSettings.ts",
+    "./platform": "./src/composables/usePlatform.ts"
   },
   "scripts": {
     "check": "vue-tsc --noEmit"

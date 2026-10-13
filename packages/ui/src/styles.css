@@ -586,48 +586,6 @@ button.image-thumbnail { cursor: zoom-in; }
 .settings-form .s-card-body { display: grid; gap: 8px; }
 /* 原 .settings-section p 的副标题样式随降级迁到这个类上。 */
 .settings-section-desc { margin: 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
-.shortcut-setting-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  min-height: 58px;
-  padding: 8px 10px;
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 8px;
-}
-.shortcut-setting-row > div { display: grid; gap: 3px; }
-.shortcut-setting-row strong { color: #e2e8f0; font-size: 12px; }
-.shortcut-setting-row small { color: #64748b; font-size: 11px; line-height: 1.45; }
-.shortcut-recorder {
-  min-width: 170px;
-  min-height: 40px;
-  padding: 0 12px;
-  color: #dbeafe;
-  background: #183152;
-  border: 1px solid rgba(96, 165, 250, 0.32);
-  border-radius: 7px;
-  cursor: pointer;
-}
-.shortcut-recorder:hover:not(:disabled) { background: #1e3a5f; border-color: rgba(96, 165, 250, 0.55); }
-.shortcut-recorder.recording { color: #bbf7d0; border-color: rgba(74, 222, 128, 0.62); }
-.shortcut-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.shortcut-presets > span { margin-right: 2px; color: #64748b; font-size: 11px; }
-.shortcut-presets button {
-  min-height: 32px;
-  padding: 0 10px;
-  color: #94a3b8;
-  background: transparent;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.shortcut-presets button:hover:not(:disabled),
-.shortcut-presets button.active { color: #dbeafe; background: rgba(37, 99, 235, 0.16); border-color: rgba(96, 165, 250, 0.42); }
-.shortcut-status { margin: 2px 0 0; color: #94a3b8; }
-.shortcut-status.ok { color: #86efac; }
-.shortcut-status.error { color: #fca5a5; }
 .about-product .s-card-body { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .about-product-mark {
   width: 46px;
@@ -647,27 +605,7 @@ button.image-thumbnail { cursor: zoom-in; }
   font-size: 11px;
   font-weight: 650;
 }
-.about-update-status { margin: 2px 0 0; color: #cbd5e1; }
-.about-update-status.update-error { color: #fca5a5; }
-.about-update-button { min-width: 126px; margin: 0; }
 .settings-form label { color: #cbd5e1; font-size: 12px; font-weight: 600; }
-.setting-switch {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 52px;
-  gap: 16px;
-  padding: 8px 10px;
-  background: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease;
-}
-.setting-switch:hover { background: #132039; border-color: rgba(96, 165, 250, 0.42); }
-.setting-switch-copy { display: grid; min-width: 0; gap: 3px; }
-.setting-switch-copy strong { color: #e2e8f0; font-size: 12px; }
-.setting-switch-copy small { color: #64748b; font-size: 11px; font-weight: 400; line-height: 1.45; }
 .password-change-fields { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 8px 10px; }
 .account-actions, .settings-actions { display: flex; gap: 8px; }
 .account-actions .s-button { flex: 1; }
@@ -695,8 +633,6 @@ button:focus-visible, [role="button"]:focus-visible {
   .password-change-fields { grid-template-columns: 1fr; gap: 5px; }
   .about-product .s-card-body { grid-template-columns: auto minmax(0, 1fr); }
   .about-version { grid-column: 2; justify-self: start; }
-  .about-update { grid-template-columns: 1fr; }
-  .about-update-button { width: 100%; }
 }
 @media (max-width: 640px) {
   .settings-form { padding: 18px; }

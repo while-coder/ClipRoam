@@ -8,12 +8,6 @@ export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVe
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
-export type UpdaterState = {
-  updaterSupported: boolean;
-  updateStatus: Readonly<Ref<string>>;
-  updateStatusText: Readonly<Ref<string>>;
-  checkForUpdate(options?: {silent?: boolean}): Promise<unknown>;
-};
 
 export type QuickPasteShortcutState = {
   shortcut: Ref<string>;
@@ -31,7 +25,6 @@ export interface NativePlatform {
   readonly kind: "rust" | "web";
   readonly clipboardMonitoring: boolean;
   readonly windowLabel: string;
-  readonly updater?: UpdaterState;
   readonly quickPasteShortcut?: QuickPasteShortcutState;
   getAppVersion(): Promise<string>;
   initializeWindowMode(): Promise<void>;

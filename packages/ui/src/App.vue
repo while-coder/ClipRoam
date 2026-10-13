@@ -6,7 +6,7 @@ import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
-import { useUpdater } from "./features/settings/useUpdater";
+import { useAppVersion } from "./features/settings/useAppVersion";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
@@ -92,7 +92,7 @@ import type {
 } from "./types";
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
-const { initUpdaterVersion } = useUpdater();
+const { initAppVersion } = useAppVersion();
 
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const quickHistoryView = ref<InstanceType<typeof HistoryView>>();
@@ -512,7 +512,7 @@ onMounted(async () => {
   initializing.value = false;
 
   if (startupWarning) showToast(startupWarning, "error");
-  void initUpdaterVersion();
+  void initAppVersion();
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
@@ -636,14 +636,10 @@ onBeforeUnmount(() => {
     <EntryDownloadToasts v-if="isMobile && !isQuickPaste" mobile />
 
     <template #overlays>
-      <SettingsDialog
-        v-if="!isQuickPaste && !isMobile && settingsVisible"
-        :current-username="currentUsername"
-      />
-      <MobileSettingsDialog
-        v-if="!isQuickPaste && isMobile && settingsVisible"
-        :current-username="currentUsername"
-      />
+      <slot v-if="!isQuickPaste && !isMobile && settingsVisible" name="settings" :current-username="currentUsername">
+        <SettingsDialog :current-username="currentUsername" />
+      </slot>
+      <MobileSettingsDialog v-if="!isQuickPaste && isMobile && settingsVisible" :current-username="currentUsername" />
     </template>
   </WorkspaceLayout>
 

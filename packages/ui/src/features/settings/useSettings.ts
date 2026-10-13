@@ -1,15 +1,7 @@
-import { native } from "../../platform/native";
 import { saveDeviceAlias } from "../../utils/device";
 import { nextTick } from "vue";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
-import { usePlatform } from "../../composables/usePlatform";
 import { errorMessage } from "../../utils/error";
-import {
-  quickPasteShortcut,
-  quickPasteShortcutStatus,
-  resetQuickPasteShortcutDraft,
-  saveQuickPasteShortcut,
-} from "./useQuickPasteShortcut";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
 import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
@@ -51,15 +43,9 @@ function requireBridge(): SettingsBridge {
 
 const settingsVisible = accountStateRef("settingsVisible");
 const settingsPage = accountStateRef("settingsPage");
-const autoUploadLimitMb = accountStateRef("autoUploadLimitMb");
-const autoReceiveClipboard = accountStateRef("autoReceiveClipboard");
-const watchClipboard = accountStateRef("watchClipboard");
-const excludePatternsInput = accountStateRef("excludePatternsInput");
-const serverMaxFileMb = accountStateRef("serverMaxFileMb");
 const deviceAliasInput = accountStateRef("deviceAliasInput");
 const systemDeviceName = accountStateRef("systemDeviceName");
 const savingSettings = accountStateRef("savingSettings");
-const recordingQuickPasteShortcut = accountStateRef("recordingQuickPasteShortcut");
 const changingPassword = accountStateRef("changingPassword");
 const settingsError = accountStateRef("settingsError");
 const passwordChangeError = accountStateRef("passwordChangeError");
@@ -74,19 +60,7 @@ function cancelSettingsRequests(): void {
 function openSettings(): void {
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig) return;
-  const preferences = requireBridge().getActivePreferences();
-  autoUploadLimitMb.value = preferences.autoUploadLimitMb;
-  autoReceiveClipboard.value = preferences.autoReceiveClipboard;
-  watchClipboard.value = preferences.watchClipboard;
-  excludePatternsInput.value = preferences.excludePatterns.join("\n");
-  serverMaxFileMb.value = preferences.serverMaxFileMb;
-  // 服务器上限被调低后，已保存的档位可能超出：打开设置时先压回去。
-  if (autoUploadLimitMb.value > serverMaxFileMb.value) {
-    autoUploadLimitMb.value = serverMaxFileMb.value;
-  }
   void loadDeviceIdentity();
-  resetQuickPasteShortcutDraft();
-  recordingQuickPasteShortcut.value = false;
   settingsPage.value = "general";
   clearPasswordChangeFields();
   settingsError.value = "";
@@ -95,60 +69,7 @@ function openSettings(): void {
 
 function selectSettingsPage(page: SettingsPage): void {
   settingsPage.value = page;
-  recordingQuickPasteShortcut.value = false;
   settingsError.value = "";
-}
-
-function shortcutKeyToken(event: KeyboardEvent): string {
-  const { code } = event;
-  if (code.startsWith("Key")) return code.slice(3);
-  if (code.startsWith("Digit")) return code.slice(5);
-  if (/^F\d{1,2}$/.test(code)) return code;
-  const tokens: Record<string, string> = {
-    Space: "Space",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backquote: "`",
-    Minus: "-",
-    Equal: "=",
-    ArrowUp: "Up",
-    ArrowDown: "Down",
-    ArrowLeft: "Left",
-    ArrowRight: "Right",
-  };
-  return tokens[code] ?? "";
-}
-
-function recordQuickPasteShortcut(event: KeyboardEvent): void {
-  if (!recordingQuickPasteShortcut.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  if (event.code === "Escape") {
-    recordingQuickPasteShortcut.value = false;
-    return;
-  }
-  const token = shortcutKeyToken(event);
-  if (!token) return;
-
-  const modifiers: string[] = [];
-  if (event.ctrlKey || event.metaKey) modifiers.push("CommandOrControl");
-  if (event.shiftKey) modifiers.push("Shift");
-  if (event.altKey) modifiers.push("Alt");
-  if (!modifiers.length && !/^F\d{1,2}$/.test(token)) {
-    quickPasteShortcutStatus.value = {
-      state: "error",
-      message: "请至少按住 Ctrl、Alt 或 Command，再按一个主键",
-    };
-    return;
-  }
-  quickPasteShortcut.value = [...modifiers, token].join("+");
-  quickPasteShortcutStatus.value = { state: "idle", message: "点击保存后生效" };
-  recordingQuickPasteShortcut.value = false;
-}
-
-function selectQuickPasteShortcut(shortcut: string): void {
-  quickPasteShortcut.value = shortcut;
-  quickPasteShortcutStatus.value = { state: "idle", message: "点击保存后生效" };
 }
 
 function closeSettings(): void {
@@ -192,44 +113,22 @@ async function loadDeviceIdentity(): Promise<void> {
   }
 }
 
-async function openAppDataDirectory(): Promise<void> {
-  const session = getAccountSession();
-  if (!session) return;
-  const { settingsError } = session.state;
-
-  settingsError.value = "";
-  try {
-    await native.openAppDataDir();
-  } catch (error) {
-    settingsError.value = `无法打开应用数据目录：${errorMessage(error)}`;
-  }
+export function getSettingsPreferences(): AccountPreferences {
+  return requireBridge().getActivePreferences();
 }
 
-async function saveSettings(): Promise<void> {
+async function saveSettings(options: {preferences?: AccountPreferences; beforeSave?: () => Promise<void>} = {}): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
-  const { settingsVisible, settingsPage, autoUploadLimitMb, autoReceiveClipboard, watchClipboard, excludePatternsInput, deviceAliasInput, savedDeviceAlias, savingSettings, changingPassword, settingsError } = session.state;
+  const { settingsVisible, deviceAliasInput, savedDeviceAlias, savingSettings, changingPassword, settingsError } = session.state;
 
   const activeConfig = requireBridge().getActiveConfig();
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
-  const { platformCapabilities } = usePlatform();
   savingSettings.value = true;
   const controller = new AbortController();
   session.state.settingsRequestController = controller;
   session.own(() => controller.abort());
   settingsError.value = "";
-  const activePreferences = requireBridge().getActivePreferences();
-  const preferences: AccountPreferences = {
-    autoUploadLimitMb: autoUploadLimitMb.value,
-    autoReceiveClipboard: autoReceiveClipboard.value,
-    watchClipboard: watchClipboard.value,
-    excludePatterns: excludePatternsInput.value
-      .split("\n")
-      .map((pattern) => pattern.trim())
-      .filter((pattern, index, all) => pattern !== "" && all.indexOf(pattern) === index),
-    serverMaxFileMb: activePreferences.serverMaxFileMb,
-    maxCaptureFileCount: activePreferences.maxCaptureFileCount,
-  };
   try {
     // 别名变化先落 device.json，再走 HTTP 立即上报服务器。
     const deviceAlias = deviceAliasInput.value.trim();
@@ -242,19 +141,11 @@ async function saveSettings(): Promise<void> {
         // 上报失败不阻塞保存：下次启动同步时的会话验证会重新读取并上报设备信息。
       }
     }
-    if (
-      platformCapabilities.value.globalShortcut
-      && settingsPage.value === "shortcuts"
-      && !(await saveQuickPasteShortcut())
-    ) {
-      settingsError.value = quickPasteShortcutStatus.value.message;
-      return;
+    await options.beforeSave?.();
+    if (options.preferences) {
+      await session.start(() => requireBridge().persistAccountPreferences(options.preferences!));
+      requireBridge().applyAutoUploadLimit(options.preferences.autoUploadLimitMb);
     }
-    // 偏好落当前活动档案。Rust 侧 save_account_preferences 即时更新内存，
-    // 捕获路径（过滤规则、复制上限）无需重连即生效；自动上传档位经 setter
-    // 下发给运行中的 SyncClient。均不需要断开重连 WS。
-    await session.start(() => requireBridge().persistAccountPreferences(preferences));
-    requireBridge().applyAutoUploadLimit(preferences.autoUploadLimitMb);
     settingsVisible.value = false;
     await nextTick();
     await requireBridge().focusSearchInput();
@@ -362,15 +253,9 @@ function switchServer(): Promise<void> {
 export {
   settingsVisible,
   settingsPage,
-  autoUploadLimitMb,
-  autoReceiveClipboard,
-  watchClipboard,
-  excludePatternsInput,
-  serverMaxFileMb,
   deviceAliasInput,
   systemDeviceName,
   savingSettings,
-  recordingQuickPasteShortcut,
   changingPassword,
   settingsError,
   passwordChangeError,
@@ -379,12 +264,9 @@ export {
   confirmNewPassword,
   openSettings,
   selectSettingsPage,
-  recordQuickPasteShortcut,
-  selectQuickPasteShortcut,
   closeSettings,
   validateNewPassword,
   validatePasswordConfirmation,
-  openAppDataDirectory,
   saveSettings,
   changePassword,
   signOut,
