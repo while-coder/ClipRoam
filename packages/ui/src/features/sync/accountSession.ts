@@ -1,17 +1,17 @@
 import { computed, effectScope, ref, shallowRef, type Ref, type WritableComputedRef } from "vue";
 import { AccountDatabase } from "../../core/database";
-import { HistoryCache } from "../../core/historyCache";
-import { DownloadManager } from "../../core/downloadManager";
-import { CaptureService } from "../../core/captureService";
+import { HistoryManager } from "../history/historyManager";
+import { PendingUploadManager } from "../pending-upload/pendingUploadManager";
+import { UploadManager } from "../uploads/uploadManager";
+import { DownloadManager } from "../downloads/downloadManager";
+import { CaptureService } from "../pending-upload/captureService";
 import { AccountFiles } from "../../platform/files";
 import { clipboardPlatform } from "../../platform/clipboard";
 import { profileName } from "../../core/hash";
 import { showToast } from "../toast/useToast";
 import { createSettingsState } from "../settings/settingsState";
 import type { SyncClient } from "./syncClient";
-import type { SyncConfig, AccountPreferences, Device, LocalClipboardEntry, UploadProgress } from "../../types";
-import type { ServeTaskSnapshot } from "../uploads/relayUploader";
-import type { DownloadRecord, DownloadTaskSnapshot, EntryDownloadToast } from "../downloads/useDownloads";
+import type { SyncConfig, AccountPreferences, Device } from "../../types";
 
 function createAccountState() {
   return {
@@ -20,16 +20,6 @@ function createAccountState() {
     connected: ref(false),
     devicesById: ref<Record<string, Device>>({}),
     activeView: ref<"history" | "pending-upload" | "uploads" | "downloads" | "devices">("history"),
-    historyRevision: ref(0),
-    pendingEntries: ref<LocalClipboardEntry[]>([]),
-    pendingCount: ref(0),
-    uploadTasks: ref<ServeTaskSnapshot[]>([]),
-    downloadTasks: ref<DownloadTaskSnapshot[]>([]),
-    downloadRecords: ref<DownloadRecord[]>([]),
-    downloadRecordsRevision: 0,
-    entryDownloadToasts: ref<EntryDownloadToast[]>([]),
-    uploadProgress: ref<Record<string, UploadProgress>>({}),
-    pendingUploadProgress: new Map<string, UploadProgress>(),
     activatingEntryIds: ref(new Set<string>()),
     savingEntryId: ref(""),
     clipboardWriteChain: Promise.resolve() as Promise<unknown>,
@@ -78,7 +68,9 @@ export class AccountSession {
   readonly ready: Promise<void>;
   readonly database: AccountDatabase;
   readonly files: AccountFiles;
-  readonly cache: HistoryCache;
+  readonly history: HistoryManager;
+  readonly pendingUploads: PendingUploadManager;
+  readonly uploads: UploadManager;
   readonly downloads: DownloadManager;
   readonly capture: CaptureService;
   client?: SyncClient;
@@ -88,12 +80,16 @@ export class AccountSession {
   constructor(readonly config: SyncConfig, public preferences: AccountPreferences) {
     this.database = new AccountDatabase(this.accountKey);
     this.files = new AccountFiles(this.accountKey);
-    this.cache = new HistoryCache(this.files);
+    this.history = new HistoryManager(this);
+    this.pendingUploads = new PendingUploadManager(this);
+    this.uploads = new UploadManager(this);
     this.downloads = new DownloadManager(this);
     this.capture = new CaptureService(this, () => {
       if (this.signal.aborted) return;
-      this.state.historyRevision.value++;
-      void this.refreshPending();
+      this.history.invalidate();
+      void this.pendingUploads.refresh().catch((error) => {
+        if (!this.signal.aborted) showToast(`待上传记录读取失败：${String(error)}`, "error");
+      });
     }, (message) => { if (!this.signal.aborted) showToast(message, "error"); });
     this.ready = this.downloads.restore();
     this.own(() => { this.downloads.stop(); this.files.dispose(); });
@@ -159,12 +155,6 @@ export class AccountSession {
     } finally {
       this.signal.removeEventListener("abort", cancel);
     }
-  }
-
-  async refreshPending(): Promise<void> {
-    await this.ready;
-    const entries = await this.cache.pendingDisplay();
-    if (!this.signal.aborted) { this.state.pendingEntries.value = entries; this.state.pendingCount.value = entries.length; }
   }
 
   delay(milliseconds: number): Promise<void> {

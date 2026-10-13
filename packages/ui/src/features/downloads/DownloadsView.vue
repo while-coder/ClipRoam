@@ -4,7 +4,7 @@ import { ChevronDown, Download, Trash2, X } from "lucide-vue-next";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
 import { formatExactDateTime, formatFileSize, percentOf } from "../../utils/format";
-import type { DownloadRecord, DownloadTaskSnapshot } from "./useDownloads";
+import type { DownloadRecord, DownloadTaskSnapshot } from "./types";
 
 const props = defineProps<{ records: readonly DownloadRecord[] }>();
 const emit = defineEmits<{

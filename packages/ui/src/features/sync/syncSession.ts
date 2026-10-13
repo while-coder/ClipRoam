@@ -2,7 +2,7 @@ import { ref } from "vue";
 import { archiveKeyFor, getAccountSession, replaceAccountSession } from "./accountSession";
 export { archiveKeyFor } from "./accountSession";
 import { AccountDatabase } from "../../core/database";
-import { readLoginConfig, writeLoginConfig } from "../../platform/loginStorage";
+import { readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
 import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
 import type { AccountPreferences, SyncConfig } from "../../types";

@@ -1,11 +1,15 @@
+import { computed, ref } from "vue";
+import { errorMessage } from "../../utils/error";
+import type { LocalClipboardEntry } from "../../types";
+import { DownloadCancelledError, type EntryDownloadToast } from "./types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
-import type { AccountSession } from "../features/sync/accountSession";
-import type { DownloadRecord, DownloadTaskSnapshot } from "../features/downloads/useDownloads";
-import { getServerUrls } from "../features/sync/syncSetup";
-import { createSyncRequester } from "../features/sync/syncHttp";
-import { anyAbortSignal } from "../utils/abort";
-import type { SaveTarget } from "../platform/files";
-import { safeName } from "./content";
+import type { AccountSession } from "../sync/accountSession";
+import type { DownloadRecord, DownloadTaskSnapshot } from "./types";
+import { getServerUrls } from "../sync/syncSetup";
+import { createSyncRequester } from "../sync/syncHttp";
+import { anyAbortSignal } from "../../utils/abort";
+import type { SaveTarget } from "../../platform/files";
+import { safeName } from "../../core/content";
 
 type Task = { snapshot: DownloadTaskSnapshot; controller: AbortController; done: Promise<void>; finish: (error?: unknown) => void };
 type Save = { entryId: string; target: SaveTarget; recordId?: string; controller: AbortController; savedCount?: number };
@@ -13,6 +17,19 @@ const terminal = (status: string) => ["succeeded", "failed", "cancelled", "inter
 
 /** One account-owned TS queue; no backend worker or second window state. */
 export class DownloadManager {
+  readonly taskSnapshots = ref<DownloadTaskSnapshot[]>([]);
+  readonly storedRecords = ref<DownloadRecord[]>([]);
+  readonly entryToasts = ref<EntryDownloadToast[]>([]);
+  readonly downloadRecords = computed<DownloadRecord[]>(() => this.storedRecords.value.map((record) => {
+    if (record.finishedMs !== null || record.status === "saving") return record;
+    const files = this.taskSnapshots.value.filter((task) => task.requestIds.includes(record.id));
+    if (!files.length) return record;
+    return { ...record, files,
+      status: files.every((file) => file.status === "queued") ? "queued" : "downloading",
+      receivedBytes: files.reduce((sum, file) => sum + file.receivedBytes, 0),
+    };
+  }));
+  readonly activeCount = computed(() => this.downloadRecords.value.filter((record) => record.finishedMs === null).length);
   #tasks = new Map<string, Task>();
   #queue: Task[] = [];
   #running = false;
@@ -20,6 +37,69 @@ export class DownloadManager {
   #records = new Map<string, DownloadRecord>();
   #saves = new Map<string, Save>();
   constructor(private readonly session: AccountSession) {}
+
+  async downloadEntry(entryId: string, saveId?: string, retainFailedToast = false): Promise<void> {
+    const session = this.session;
+    session.signal.throwIfAborted();
+    const entry = await session.history.getEntry(entryId);
+    session.signal.throwIfAborted();
+    // getEntry refreshes previewPath from disk, rather than the history list's stale summary.
+    if (!saveId && entry.kind === "image" && entry.summary.previewPath) return;
+    const files = entryContents(entry);
+    if (!files.length) return;
+    const call: EntryDownloadToast = {
+      id: crypto.randomUUID(), entryId, label: entry.content, status: "downloading",
+      total: files.length, totalBytes: files.reduce((sum, file) => sum + file.size, 0),
+      ready: false, cancelling: false, files: {},
+    };
+    this.entryToasts.value = [...this.entryToasts.value, call];
+    const update = (patch: Partial<EntryDownloadToast>) => {
+      this.entryToasts.value = this.entryToasts.value.map((item) =>
+        item.id === call.id ? { ...item, ...patch } : item);
+    };
+    try {
+      const outcome = await this.batch(entryId, call.id, saveId);
+      if (outcome.cancelled) throw new DownloadCancelledError("已取消");
+      if (outcome.failedCount > 0) throw new Error(`有 ${outcome.failedCount} 个文件下载失败（共 ${outcome.total} 个）`);
+      update({ status: "succeeded" });
+    } catch (error) {
+      update({ status: error instanceof DownloadCancelledError || session.signal.aborted ? "cancelled" : "failed", error: errorMessage(error) });
+      throw error;
+    } finally {
+      if (!session.signal.aborted) {
+        session.history.invalidate();
+        const current = this.entryToasts.value.find((item) => item.id === call.id);
+        if (!retainFailedToast || current?.status !== "failed") {
+          session.schedule(`entry-download-toast-${call.id}`, () => this.dismissEntryToast(call.id), 5000);
+        }
+      }
+    }
+  }
+
+  async cancelEntryCall(requestId: string): Promise<void> {
+    const session = this.session;
+    const call = this.entryToasts.value.find((item) => item.id === requestId);
+    if (!call || call.status !== "downloading" || !call.ready || call.cancelling) return;
+    this.entryToasts.value = this.entryToasts.value.map((item) => item.id === requestId ? { ...item, cancelling: true } : item);
+    try {
+      this.cancelRequest(requestId);
+    } catch (error) {
+      if (!session.signal.aborted) this.entryToasts.value = this.entryToasts.value.map((item) =>
+        item.id === requestId && item.status === "downloading" ? { ...item, cancelling: false, error: errorMessage(error) } : item);
+    }
+  }
+
+  dismissEntryToast(requestId: string): void {
+    this.entryToasts.value = this.entryToasts.value.filter((item) => item.id !== requestId || item.status === "downloading");
+  }
+
+  async ensureLocalFiles(entry: LocalClipboardEntry, retainFailedToast = false): Promise<LocalClipboardEntry> {
+    if (entry.kind !== "files" && entry.kind !== "image") return entry;
+    await this.downloadEntry(entry.id, undefined, retainFailedToast);
+    return this.session.history.getEntry(entry.id);
+  }
+
+  refresh(): void { this.#publish(); }
 
   async restore(): Promise<void> {
     const partials = (await this.session.database.ids("blobs")).filter((id) => id.startsWith("partial:"));
@@ -41,9 +121,9 @@ export class DownloadManager {
   #publish(): void {
     if (this.session.signal.aborted) return;
     const tasks = this.tasks();
-    this.session.state.downloadTasks.value = tasks;
-    this.session.state.downloadRecords.value = this.records();
-    this.session.state.entryDownloadToasts.value = this.session.state.entryDownloadToasts.value.map((call) => {
+    this.taskSnapshots.value = tasks;
+    this.storedRecords.value = this.records();
+    this.entryToasts.value = this.entryToasts.value.map((call) => {
       if (call.status !== "downloading") return call;
       const updates = tasks.filter((task) => task.requestIds.includes(call.id));
       return updates.length ? { ...call, ready: true, files: { ...call.files, ...Object.fromEntries(updates.map((task) => [task.fileId, task])) } } : call;
@@ -68,7 +148,7 @@ export class DownloadManager {
 
   async batch(entryId: string, requestId: string, saveId?: string): Promise<{ cancelled: boolean; failedCount: number; total: number }> {
     this.session.signal.throwIfAborted();
-    const entry = await this.session.cache.get(entryId);
+    const entry = await this.session.history.get(entryId);
     const files = entryContents(entry).filter((file) => file.fileId);
     const record: DownloadRecord = {
       id: requestId, entryId, label: entry.content, size: files.reduce((sum,file) => sum + file.size, 0), fileCount: files.length,
@@ -226,7 +306,7 @@ export class DownloadManager {
   }
 
   async prepareSave(entryId: string): Promise<{ saveId: string } | null> {
-    const entry = await this.session.cache.get(entryId);
+    const entry = await this.session.history.get(entryId);
     const nodes = Object.values(entry.fileInfo ?? {});
     const single = entry.kind === "image" || (nodes.length === 1 && isFileNode(nodes[0]!));
     const fileName = entry.kind === "image" ? `${safeName(entry.content)}.webp` : Object.keys(entry.fileInfo ?? {})[0] ?? "files";
@@ -250,7 +330,7 @@ export class DownloadManager {
     if (!save) throw new Error("另存为任务不存在或已结束");
     const record = save.recordId ? this.#records.get(save.recordId) : undefined;
     try {
-      const count = save.savedCount ?? await this.session.files.export(await this.session.cache.get(save.entryId), save.target, anyAbortSignal([save.controller.signal, this.session.signal]));
+      const count = save.savedCount ?? await this.session.files.export(await this.session.history.get(save.entryId), save.target, anyAbortSignal([save.controller.signal, this.session.signal]));
       if (record && record.finishedMs === null) {
         record.status = "succeeded"; record.finishedMs = Date.now(); record.receivedBytes = record.size; await this.#persist(record);
       }

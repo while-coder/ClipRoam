@@ -28,7 +28,7 @@ import {
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import { displayToast, showToast } from "./features/toast/useToast";
 import { errorMessage } from "./utils/error";
-import { getDevice } from "./utils/device";
+import { getDevice } from "./platform/storage";
 import { isNative } from "./platform/runtime";
 import { isQuickPaste, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
@@ -49,7 +49,6 @@ import {
   connected,
   connectionStatus,
   devicesById,
-  getSyncClient,
   initSyncEngine,
   setSyncAutoUploadLimit,
   startSync,
@@ -117,10 +116,8 @@ let ageRefreshTimer: number | undefined;
 let shareReceiverListener: Unlisten | undefined;
 let shareConsumeRequested = false;
 
-// 历史同步视图（useHistorySync 单例）的装配：引擎客户端经 engine 导出触达，
-// 历史视图 ref 留在本组件，经注入读取。
+// 搜索焦点操作通过当前历史视图执行。
 initHistorySync({
-  getSyncClient,
   getHistoryView: () => isQuickPaste.value ? quickHistoryView.value : historyView.value,
 });
 

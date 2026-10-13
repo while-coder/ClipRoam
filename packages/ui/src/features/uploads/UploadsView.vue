@@ -3,7 +3,7 @@ import { Upload } from "lucide-vue-next";
 import { computed } from "vue";
 import TaskListView, { type TaskRow } from "../../components/TaskListView.vue";
 import { percentOf } from "../../utils/format";
-import type { ServeTaskSnapshot } from "./relayUploader";
+import type { ServeTaskSnapshot } from "./types";
 
 /**
  * 主窗口侧边栏的「上传」页：收到 file.requested 且本机应答（中继发送）时的

@@ -1,9 +1,8 @@
-import { saveDeviceAlias } from "../../utils/device";
+import { getDevice, getDeviceIdentity, saveDeviceAlias } from "../../platform/storage";
 import { nextTick } from "vue";
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import { errorMessage } from "../../utils/error";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
-import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
 /**

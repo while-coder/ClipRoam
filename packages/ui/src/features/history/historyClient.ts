@@ -52,19 +52,19 @@ export class HistoryClient {
     const entryIds = manifest.map((entry) => entry.id);
     if (!entryIds.length) return [];
     try {
-      const missing = await this.session.cache.stale(manifest);
+      const missing = await this.session.history.stale(manifest);
       if (missing.length) {
         const entries = await this.#fetchEntries(missing);
-        await this.session.cache.upsert(entries);
+        await this.session.history.upsert(entries);
       }
       // Only this page's details supply file identities; unknown/unstored files
       // are re-queried before computing the list's cached summaries.
-      const fileIds = await this.session.cache.unknownFileIds(entryIds);
+      const fileIds = await this.session.history.unknownFileIds(entryIds);
       if (fileIds.length) {
         const statuses = await this.#fetchFiles(fileIds);
-        await this.session.cache.upsertFiles(statuses);
+        await this.session.history.upsertFiles(statuses);
       }
-      return await this.session.cache.display(entryIds);
+      return await this.session.history.display(entryIds);
     } catch (error) {
       if (this.session.signal.aborted) return [];
       throw error;
@@ -102,10 +102,6 @@ export class HistoryClient {
     return queried!.files;
   }
 
-  async getEntry(entryId: string): Promise<ClipboardEntry> {
-    return (await this.session.cache.display([entryId], false))[0]!;
-  }
-
   // A 404 is not a failure: another device may have deleted the entry first,
   // and the outcome every device converges on is the same.
   async delete(entryId: string): Promise<void> {
@@ -117,7 +113,6 @@ export class HistoryClient {
       "",
       true,
     );
-    await this.session.database.delete("entries", entryId);
   }
 
 }

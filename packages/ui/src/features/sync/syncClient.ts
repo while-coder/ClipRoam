@@ -3,7 +3,6 @@ import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import type { AccountSession } from "./accountSession";
-import { HistoryClient } from "../history/historyClient";
 import { PendingUploader } from "../pending-upload/pendingUploader";
 import { RelayUploader } from "../uploads/relayUploader";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
@@ -14,8 +13,6 @@ type SyncHandlers = {
   onDevices: (devices: Device[]) => void;
   onDevicePresence: (device: Device) => void;
   onEntry: () => void;
-  /** HTTP confirmation only invalidates the list; details come from cache backfill. */
-  onPublished: () => void;
   onActivation: (entry: ClipboardManifestEntry) => void;
   onDelete: (entryId: string) => void;
   onFileAvailable: (fileId: string) => void;
@@ -23,9 +20,6 @@ type SyncHandlers = {
   onUploadFinished: (entryId: string) => void;
   onError: (message: string) => void;
   onAuthenticationFailed: (message: string) => void;
-  /** 中继应答（file.requested）任务台账变化；「上传」页数据源。 */
-  onServeTasksChanged?: () => void;
-  resolveEntryLabel?: (entryId: string) => Promise<string | undefined>;
 };
 
 /** Session wiring and push notifications; business workers live in their systems. */
@@ -35,30 +29,26 @@ export class SyncClient {
   #pingTimer?: number;
   #awaitingPong = false;
   #http: SyncRequester;
-  readonly history: HistoryClient;
-  readonly pendingUploads: PendingUploader;
-  readonly uploads: RelayUploader;
+  readonly pendingUploader: PendingUploader;
+  readonly relayUploader: RelayUploader;
   constructor(httpUrl: string, private readonly webSocketUrl: string, private readonly token: string, device: Device, private readonly handlers: SyncHandlers, autoUploadLimit = DEFAULT_AUTO_UPLOAD_LIMIT, readonly session: AccountSession) {
     this.#http = createSyncRequester(httpUrl, token, this.session);
-    this.history = new HistoryClient(this.#http, this.session);
-    this.pendingUploads = new PendingUploader(this.#http, device, {
+    session.history.connect(this.#http);
+    this.pendingUploader = new PendingUploader(this.#http, device, {
       session: this.session,
-      onPublished: handlers.onPublished,
       onUploadProgress: handlers.onUploadProgress,
       onUploadFinished: handlers.onUploadFinished,
       onFileAvailable: handlers.onFileAvailable,
       onError: handlers.onError,
     }, autoUploadLimit);
     this.session.own(() => this.stop());
-    this.uploads = new RelayUploader(this.#http, {
+    this.relayUploader = new RelayUploader(this.#http, {
       session: this.session,
-      onServeTasksChanged: handlers.onServeTasksChanged,
-      resolveEntryLabel: handlers.resolveEntryLabel,
     });
   }
   connect(): void {
     this.#open();
-    this.pendingUploads.start();
+    this.pendingUploader.start();
   }
   stop(): void {
     if (this.#reconnectTimer) window.clearTimeout(this.#reconnectTimer);
@@ -163,7 +153,7 @@ export class SyncClient {
       case "file.requested":
         // Fire-and-forget: serving streams a whole file and must not block
         // the socket's message pump.
-        void this.uploads.serveRelayRequest(message).catch(() => undefined);
+        void this.relayUploader.serveRelayRequest(message).catch(() => undefined);
         return;
       case "auth.ack":
         this.handlers.onConnected(true);

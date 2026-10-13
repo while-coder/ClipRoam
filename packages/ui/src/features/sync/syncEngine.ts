@@ -2,15 +2,13 @@ import { computed, watch } from "vue";
 import { native } from "../../platform/native";
 import { activeView } from "../../composables/useActiveView";
 import { showToast } from "../toast/useToast";
-import { getDevice } from "../../utils/device";
+import { getDevice } from "../../platform/storage";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
 import { AccountSession, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
 import { activateRemoteClipboard } from "../history/remoteClipboard";
 import { getActivePreferences } from "./syncSession";
-import { refreshHistory } from "../history/useHistorySync";
-import { finishUploadProgress, queueUploadProgress, refreshPending, refreshPendingEntries } from "../pending-upload/usePendingUploads";
-import { refreshDownloadTasks } from "../downloads/useDownloads";
+import { errorMessage } from "../../utils/error";
 import type { Device, SyncConfig } from "../../types";
 
 export interface SyncEngineDeps {
@@ -25,7 +23,7 @@ export function getSyncClient(): SyncClient | undefined { return getAccountSessi
 function setConnectionState(session: AccountSession, value: boolean): void {
   if (session.state.connected.value === value) return;
   session.state.connected.value = value;
-  if (value) refreshHistory();
+  if (value) session.history.invalidate();
   showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
 }
 
@@ -48,18 +46,18 @@ function rememberSessionDevices(session: AccountSession, devices: Device[]): voi
   };
 }
 export function setSyncAutoUploadLimit(limitMb: number): void {
-  getSyncClient()?.pendingUploads.setAutoUploadLimit(limitMb * 1024 * 1024);
+  getSyncClient()?.pendingUploader.setAutoUploadLimit(limitMb * 1024 * 1024);
 }
 
 async function registerAccountEvents(session: AccountSession): Promise<void> {
   await session.capture.start();
   session.scope.run(() => watch(activeView, (view) => {
-    if (view === "pending-upload") void refreshPendingEntries();
+    if (view === "pending-upload") void session.pendingUploads.refresh().catch(session.guard((error) => showToast(`待上传记录读取失败：${errorMessage(error)}`, "error")));
   }));
   session.interval(() => {
-    if (session.state.activeView.value === "downloads") void refreshDownloadTasks().catch(() => undefined);
+    if (session.state.activeView.value === "downloads") session.downloads.refresh();
   }, 2000);
-  void refreshDownloadTasks().catch(() => undefined);
+  session.downloads.refresh();
 }
 
 export async function startSync(config: SyncConfig): Promise<void> {
@@ -74,18 +72,15 @@ export async function startSync(config: SyncConfig): Promise<void> {
       onConnected: guard((value) => setConnectionState(session, value)),
       onDevices: guard((devices) => rememberSessionDevices(session, devices)),
       onDevicePresence: guard((device) => rememberSessionDevices(session, [device])),
-      onEntry: guard(refreshHistory),
-      onPublished: guard(refreshHistory),
+      onEntry: guard(() => session.history.invalidate()),
       onActivation: guard((entry) => { void activateRemoteClipboard(entry); }),
       onDelete: guard((entryId) => {
-        void session.database.delete("entries",entryId).then(guard(refreshHistory)).catch(guard(() => showToast("历史缓存清理失败", "error")));
+        void session.history.removeLocal(entryId).catch(guard(() => showToast("历史缓存清理失败", "error")));
       }),
-      onFileAvailable: guard(refreshHistory),
-      onUploadProgress: guard(queueUploadProgress),
-      onUploadFinished: guard(finishUploadProgress),
+      onFileAvailable: guard(() => session.history.invalidate()),
+      onUploadProgress: guard((entryId, uploaded, total) => session.pendingUploads.queueProgress(entryId, uploaded, total)),
+      onUploadFinished: guard((entryId) => session.pendingUploads.finishProgress(entryId)),
       onError: guard((message) => showToast(message, "error")),
-      onServeTasksChanged: guard(() => { session.state.uploadTasks.value = [...client.uploads.serveTasksSnapshot()]; }),
-      resolveEntryLabel: (entryId) => client.history.getEntry(entryId).then((entry) => entry.content).catch(() => undefined),
       onAuthenticationFailed: guard((message) => {
         void stopSyncClient(); engineDeps.onAuthenticationFailed(message, config);
       }),
@@ -93,7 +88,8 @@ export async function startSync(config: SyncConfig): Promise<void> {
     session.client = client;
     await session.start(() => registerAccountEvents(session));
     session.signal.throwIfAborted();
-    refreshHistory(); refreshPending();
+    session.history.invalidate();
+    void session.pendingUploads.refresh().catch(guard((error) => showToast(`待上传记录读取失败：${errorMessage(error)}`, "error")));
     void client.pullDevices(); client.connect();
   } catch (error) {
     if (session.signal.aborted) return;

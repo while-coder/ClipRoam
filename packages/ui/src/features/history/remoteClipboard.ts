@@ -31,7 +31,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
   const startingLocalRevision = session.state.localClipboardRevision;
   try {
     // Push supplies the same identity/revision pair as a manifest page.
-    const [entry] = await client.history.fetchHistoryInfo([manifestEntry]);
+    const [entry] = await session.history.fetchHistoryInfo([manifestEntry]);
     if (!entry || entry.kind === "files") return;
     let localEntry = entry;
     if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;

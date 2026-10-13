@@ -1,8 +1,8 @@
 import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus } from "@cliproam/protocol";
-import { AccountDatabase } from "./database";
-import { summarize, type PendingRow, type StoredEntry } from "./content";
-import { AccountFiles } from "../platform/files";
-import type { LocalClipboardEntry } from "../types";
+import type { AccountDatabase } from "../../core/database";
+import { summarize, type PendingRow, type StoredEntry } from "../../core/content";
+import type { AccountFiles } from "../../platform/files";
+import type { LocalClipboardEntry } from "../../types";
 
 export class HistoryCache {
   readonly database: AccountDatabase;
@@ -49,32 +49,4 @@ export class HistoryCache {
     return results;
   }
 
-  async pendingRows(): Promise<PendingRow[]> {
-    return (await this.database.list<PendingRow>("pending")).sort((a, b) => a.seq - b.seq);
-  }
-
-  async pendingDisplay(): Promise<LocalClipboardEntry[]> {
-    const rows = await this.pendingRows();
-    const ids = [...new Set(rows.flatMap((row) => entryContents(row.entry).map((file) => file.fileId)).filter(Boolean))];
-    const available = await this.files.resolveMany(ids);
-    const entries: LocalClipboardEntry[] = [];
-    for (const row of rows) entries.push({ ...await summarize(row.entry, new Set(), async (id) => available.get(id), true), pendingStatus: row.status });
-    return entries;
-  }
-
-  async enqueue(entry: StoredEntry, captureId?: string, resolving = false): Promise<number> {
-    const existing = captureId ? await this.database.get<number>("meta", `capture:${captureId}`) : undefined;
-    if (existing !== undefined) return existing;
-    const seq = await this.database.nextSequence();
-    const row: PendingRow = { seq, status: "wait", entry: { ...entry, id: `p${seq}` }, captureId, resolving };
-    await this.database.batch([
-      { name: "pending", id: String(seq), value: row },
-      ...(captureId ? [{ name: "meta" as const, id: `capture:${captureId}`, value: seq }] : []),
-    ]);
-    return seq;
-  }
-
-  setPendingStatus(seq: number, status: "wait" | "failed"): Promise<void> {
-    return this.database.update<PendingRow>("pending", String(seq), (row) => row ? { ...row, status } : undefined);
-  }
 }

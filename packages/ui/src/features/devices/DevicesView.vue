@@ -4,7 +4,7 @@ import { Monitor, MonitorSmartphone, RefreshCw, Smartphone } from "lucide-vue-ne
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import { activeAccountSession } from "../sync/accountSession";
 import { connected, devicesById } from "../sync/syncEngine";
-import { getDeviceIdentity } from "../../utils/device";
+import { getDeviceIdentity } from "../../platform/storage";
 import { formatAge, formatExactDateTime } from "../../utils/format";
 import type { Device } from "../../types";
 

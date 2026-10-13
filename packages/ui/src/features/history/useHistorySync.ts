@@ -1,8 +1,6 @@
-import { nextTick } from "vue";
+import { computed, nextTick } from "vue";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { accountStateRef, getAccountSession } from "../sync/accountSession";
-import { getActiveConfig } from "../sync/syncSession";
-import type { SyncClient } from "../sync/syncClient";
+import { getAccountSession } from "../sync/accountSession";
 import type {
   EntriesManifestFilter,
   EntriesManifestPage,
@@ -15,7 +13,6 @@ interface HistorySyncViewRef {
 }
 
 interface HistorySyncDeps {
-  getSyncClient(): SyncClient | undefined;
   getHistoryView(): HistorySyncViewRef | undefined;
 }
 
@@ -26,25 +23,17 @@ export function initHistorySync(next: HistorySyncDeps): void {
 }
 
 /** Bumped whenever the history may have changed; the history view refetches its page on it. */
-export const historyRevision = accountStateRef("historyRevision");
+export const historyRevision = computed(() => getAccountSession()?.history.revision.value ?? 0);
 
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
 ): Promise<EntriesManifestPage> {
-  // 未登录时没有活动档案，不查询历史缓存。
-  if (!getActiveConfig()?.sessionToken) {
-    return { total: 0, entries: [] };
-  }
-  const client = deps.getSyncClient();
-  if (!client) return { total: 0, entries: [] };
-  return client.history.fetchHistoryPage(filter);
+  return getAccountSession()?.history.fetchHistoryPage(filter) ?? { total: 0, entries: [] };
 }
 
 /** Mark history changed immediately; only a mounted history view fetches it. */
 export function refreshHistory(): void {
-  const session = getAccountSession();
-  if (!session) return;
-  session.state.historyRevision.value += 1;
+  getAccountSession()?.history.invalidate();
 }
 
 export function focusSearch(): void {
@@ -60,7 +49,7 @@ export function focusSearchInput(): void {
  * Read full details already cached by backfill; rendered lists omit directory trees.
  */
 export async function fullEntry(entry: Pick<ClipboardEntry, "id">): Promise<ClipboardEntry> {
-  const client = deps.getSyncClient();
-  if (!client) throw new Error("同步账号未登录");
-  return client.history.getEntry(entry.id);
+  const session = getAccountSession();
+  if (!session) throw new Error("同步账号未登录");
+  return session.history.getEntry(entry.id);
 }

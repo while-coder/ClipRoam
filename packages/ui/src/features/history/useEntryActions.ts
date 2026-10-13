@@ -4,13 +4,13 @@ import { isMobile, isQuickPaste, usePlatform } from "../../composables/usePlatfo
 import { showToast } from "../toast/useToast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
-import { getSyncClient } from "../sync/syncEngine";
-import { DownloadCancelledError, downloadEntry } from "../downloads/useDownloads";
+import { downloadEntry } from "../downloads/useDownloads";
+import { DownloadCancelledError } from "../downloads/types";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry } from "../../types";
 
 /**
- * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块与 Rust 命令，历史失效走 refreshHistory。
+ * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块，历史失效走 refreshHistory。
  */
 export const activatingEntryIds = accountStateRef("activatingEntryIds");
 export const savingEntryId = accountStateRef("savingEntryId");
@@ -113,16 +113,15 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
 
 // Server-confirmed deletion only marks history changed; the view owns refetching.
 export async function removeEntry(entry: ClipboardEntry): Promise<void> {
-  const client = getSyncClient();
-  if (!client) {
+  const session = getAccountSession();
+  if (!session?.client) {
     showToast("网络异常，暂时无法删除，请检查同步连接", "error");
     return;
   }
   try {
-    await client.history.delete(entry.id);
-    if (!client.session.signal.aborted) refreshHistory();
+    await session.history.delete(entry.id);
   } catch (error) {
-    if (!client.session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error");
+    if (!session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error");
     return;
   }
 }

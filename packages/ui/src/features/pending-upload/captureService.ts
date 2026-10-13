@@ -1,10 +1,10 @@
 import { isFileNode, type FileInfo } from "@cliproam/protocol";
-import type { AccountSession } from "../features/sync/accountSession";
-import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../platform/clipboard";
-import { base64ToBytes } from "../utils/bytes";
-import { nameMatches, safeName, type LocalSources, type PendingRow, type StoredEntry } from "./content";
-import { profileName, Sha256 } from "./hash";
-import type { FileStat } from "../platform/files";
+import type { AccountSession } from "../sync/accountSession";
+import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
+import { base64ToBytes } from "../../utils/bytes";
+import { nameMatches, safeName, type LocalSources, type StoredEntry } from "../../core/content";
+import { profileName, Sha256 } from "../../core/hash";
+import type { FileStat } from "../../platform/files";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
@@ -53,7 +53,7 @@ export class CaptureService {
       entry.fileInfo = collected.info; entry.sources = collected.sources;
       entry.content = Object.keys(collected.info).join("、");
     }
-    const seq = await this.session.cache.enqueue(entry, captureId, data.kind === "files");
+    const seq = await this.session.pendingUploads.enqueue(entry, captureId, data.kind === "files");
     this.changed();
     if (data.kind === "files") await this.#resolve(seq);
   }
@@ -90,7 +90,7 @@ export class CaptureService {
   }
 
   async #resolve(seq: number): Promise<void> {
-    const row = await this.session.database.get<PendingRow>("pending", String(seq));
+    const row = await this.session.pendingUploads.get(seq);
     if (!row?.resolving) return;
     try {
       for (const source of row.entry.sources?.files ?? []) {
@@ -120,15 +120,15 @@ export class CaptureService {
         node.f = fileId;
       }
       row.resolving = false;
-      await this.session.database.update<PendingRow>("pending", String(seq), (current) => current ? { ...row, status: current.status } : undefined);
+      await this.session.pendingUploads.updateResolved(row);
     } catch (error) {
-      if (!this.session.signal.aborted) await this.session.database.update<PendingRow>("pending", String(seq), (current) => current ? { ...row, status: "failed" } : undefined);
+      if (!this.session.signal.aborted) await this.session.pendingUploads.updateResolved(row, true);
       throw error;
     } finally { this.changed(); }
   }
 
   async resume(): Promise<void> {
-    for (const row of await this.session.cache.pendingRows()) if (row.resolving && row.status === "wait") {
+    for (const row of await this.session.pendingUploads.rows()) if (row.resolving && row.status === "wait") {
       const work = this.#work.then(() => this.#resolve(row.seq));
       this.#work = work.catch(() => undefined);
       try { await work; } catch (error) { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); }
@@ -178,7 +178,7 @@ export class CaptureService {
     }
     if (!count) throw new Error("没有可用的文件");
     this.session.state.localClipboardRevision++;
-    await this.session.cache.enqueue({ id: "", version: 0, kind: "files", content: Object.keys(info).join("、"),
+    await this.session.pendingUploads.enqueue({ id: "", version: 0, kind: "files", content: Object.keys(info).join("、"),
       fileInfo: info, sourceDeviceId: "", createdAt: new Date().toISOString() });
     this.changed();
   }
@@ -203,7 +203,7 @@ export class CaptureService {
   }
 
   async writeEntry(entryId: string, synthesize = false): Promise<void> {
-    const entry = await this.session.cache.get(entryId);
+    const entry = await this.session.history.get(entryId);
     this.session.signal.throwIfAborted();
     let payload: ClipboardWrite;
     if (entry.kind === "text") payload = {kind:"text",text:entry.content,html:entry.html,rtf:entry.rtf};

@@ -5,13 +5,10 @@ import { FileUploader, type FileUploaderDeps } from "./fileUploader";
 import type { PendingRow } from "../../core/content";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
-type PendingUploaderDeps = FileUploaderDeps & {
-  onPublished(): void;
-};
 /** Captures stay durable in IndexedDB; one row is published at a time. */
 export class PendingUploader {
   #files: FileUploader;
-  constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly deps: PendingUploaderDeps, private autoUploadLimit: number) {
+  constructor(private readonly http: SyncRequester, private readonly device: Device, private readonly deps: FileUploaderDeps, private autoUploadLimit: number) {
     this.#files = new FileUploader(http, deps);
   }
   start(): void {
@@ -23,7 +20,7 @@ export class PendingUploader {
   async #drainLoop(): Promise<void> {
     while (!this.deps.session.signal.aborted) {
       await this.deps.session.delay(DRAIN_POLL_INTERVAL_MS);
-      const row = await this.deps.session.cache.pendingRows().then((rows) => {
+      const row = await this.deps.session.pendingUploads.rows().then((rows) => {
         const first = rows.find((row) => row.status === "wait");
         return first?.resolving ? undefined : first;
       }).catch((error) => {
@@ -37,8 +34,8 @@ export class PendingUploader {
         if (this.deps.session.signal.aborted) return;
         console.warn(`Pending upload failed: seq=${row.seq} kind=${row.entry.kind}`, error);
         try {
-          await this.deps.session.cache.setPendingStatus(row.seq, "failed");
-          void this.deps.session.refreshPending();
+          await this.deps.session.pendingUploads.setStatus(row.seq, "failed");
+          this.#refreshPending();
         } catch (statusError) {
           if (!this.deps.session.signal.aborted) this.deps.onError(`同步失败状态保存失败：${errorMessage(statusError)}`);
           return;
@@ -64,12 +61,15 @@ export class PendingUploader {
     };
     await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
     const entryId = await this.#publishEntry(payload);
-    await this.deps.session.database.update("entries", entryId, (previous: import("../../core/content").StoredEntry | undefined) => ({
-      ...previous ?? row.entry, id: entryId, sources: row.entry.sources,
-    }));
-    this.deps.onPublished();
-    await this.deps.session.database.delete("pending", String(row.seq));
-    void this.deps.session.refreshPending();
+    await this.deps.session.history.recordPublished(entryId, row.entry);
+    await this.deps.session.pendingUploads.complete(row.seq);
+    this.#refreshPending();
+  }
+
+  #refreshPending(): void {
+    void this.deps.session.pendingUploads.refresh().catch((error) => {
+      if (!this.deps.session.signal.aborted) this.deps.onError(`待上传记录读取失败：${errorMessage(error)}`);
+    });
   }
 
   #jsonInit(request: unknown, timeoutMs: number): RequestInit {
