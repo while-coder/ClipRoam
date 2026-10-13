@@ -117,7 +117,7 @@ const {
               </SCard>
               <SCard title="剪贴板漫游">
                 <p class="settings-section-desc">{{ isMobile
-                  ? "点击“读取当前剪贴板”导入文本；其他设备的内容同步到历史，点按文本即可复制。"
+                  ? "开启监听后自动记录本机剪贴板文本，也可点击“读取当前剪贴板”导入；其他设备的内容同步到历史，点按文本即可复制。"
                   : "本机复制的内容自动记入历史并同步；其他设备复制的内容可直接更新本机剪贴板。" }}</p>
                 <label v-if="platformCapabilities.clipboardMonitoring" class="setting-switch" for="watch-clipboard">
                   <span class="setting-switch-copy">

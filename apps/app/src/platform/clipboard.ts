@@ -6,6 +6,7 @@ export type ClipboardData =
   | { kind: "files"; paths: string[] }
   | { kind: "image"; data: string; width: number; height: number; thumbnail: string };
 export type ClipboardCapture = { id: string; signature: string; data: ClipboardData };
+export type ClipboardEvent = { scope: string; capture: ClipboardCapture };
 export type SharedContent = { id: string; text?: string; html?: string; images: string[]; paths: string[] };
 export type ClipboardWrite = { kind: "text"; text: string; html?: string; rtf?: string }
   | { kind: "files"; paths: string[] } | { kind: "image"; bytes: Uint8Array };
@@ -13,10 +14,8 @@ export type ClipboardWrite = { kind: "text"; text: string; html?: string; rtf?: 
 /** OS permissions and browser APIs are contained here, away from capture/queue logic. */
 export const clipboardPlatform = {
   monitoringAvailable: isNative,
-  subscribe: (changed: () => void) => nativeListen("cliproam://clipboard-changed", changed),
+  subscribe: (changed: (event: ClipboardEvent) => void) => nativeListen("cliproam://clipboard-changed", changed),
   watch: (scope: string, enabled: boolean): Promise<void> => isNative ? nativeCall("native_watch_clipboard", {scope,enabled}) : Promise.resolve(),
-  inbox: (scope: string): Promise<ClipboardCapture[]> => isNative ? nativeCall("native_clipboard_inbox", {scope}) : Promise.resolve([]),
-  acknowledge: (scope: string, id: string): Promise<void> => isNative ? nativeCall("native_clipboard_ack", {scope,id}) : Promise.resolve(),
   shares: (scope: string): Promise<SharedContent[]> => isNative ? nativeCall("native_pending_shares", {scope}) : Promise.resolve([]),
   acknowledgeShare: (id: string): Promise<void> => isNative ? nativeCall("native_ack_share", {id}) : Promise.resolve(),
   async readText(): Promise<ClipboardData | null> {

@@ -13,6 +13,37 @@ function setup(options) {
 const entry = (id="e",version=1) => ({ id,version,kind:"text",content:"hello",sourceDeviceId:"d",createdAt:"2026-10-13T00:00:00Z" });
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+test("clipboard events retain consecutive snapshots and ignore other or closed accounts", async () => {
+  let notify;
+  const calls = [];
+  const load = setup({ native: true,
+    call: async (command, args) => { calls.push({command,args}); },
+    listen: async (event, handler) => { assert.equal(event,"cliproam://clipboard-changed"); notify = handler; return () => {}; },
+  });
+  const { AccountFiles } = load("platform/files"), { HistoryCache } = load("core/historyCache");
+  const { CaptureService } = load("core/captureService"), { profileName } = load("core/hash");
+  const files = new AccountFiles("a"), cache = new HistoryCache(files), abort = new AbortController();
+  const session = { accountKey:"a",files,cache,database:files.database,signal:abort.signal,
+    preferences:{watchClipboard:true},state:{localClipboardRevision:0},ownAsync:async (value) => value,
+    interval:() => { throw new Error("Clipboard polling must stay in Rust"); },
+  };
+  let count = 0, complete;
+  const done = new Promise((resolve) => { complete = resolve; });
+  const errors = [];
+  const service = new CaptureService(session,() => { if (++count === 2) complete(); },(error) => errors.push(error));
+  await service.start();
+  const event = (scope,id,text) => ({scope,capture:{id,signature:id,data:{kind:"text",text}}});
+  notify(event("other-account","ignored","wrong"));
+  notify(event(profileName("a"),"first","A"));
+  notify(event(profileName("a"),"second","B"));
+  await done;
+  assert.deepEqual((await cache.pendingRows()).map((row) => row.entry.content),["A","B"]);
+  abort.abort(); notify(event(profileName("a"),"closed","C"));
+  assert.equal((await cache.pendingRows()).length,2);
+  assert.deepEqual(calls,[{command:"native_watch_clipboard",args:{scope:profileName("a"),enabled:true}}]);
+  assert.deepEqual(errors,[]);
+});
+
 test("incremental SHA-256 agrees with native crypto across padding/chunk boundaries", () => {
   const { Sha256 } = setup()("core/hash");
   for (const length of [0,1,55,56,63,64,65,127,128,129,65536,131073]) {

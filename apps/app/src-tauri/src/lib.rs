@@ -41,8 +41,6 @@ pub fn run() {
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,
             clipboard::native_watch_clipboard,
-            clipboard::native_clipboard_inbox,
-            clipboard::native_clipboard_ack,
             files::native_paths,
             files::native_fs_stat,
             files::native_fs_list,

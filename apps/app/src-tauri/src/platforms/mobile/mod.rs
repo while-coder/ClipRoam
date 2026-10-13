@@ -1,4 +1,4 @@
-//! Android/iOS 共享实现：没有桌面级的剪贴板轮询、自动粘贴、托盘和
+//! Android/iOS 共享实现：剪贴板由 clipboard 模块每 2 秒轮询，没有自动粘贴、托盘和
 //! 系统对话框。剪贴板读写通过 tauri clipboard-manager 插件，文件通过
 //! 系统分享接收（Android 的真实导入在 platforms/mobile/android 覆盖）。
 

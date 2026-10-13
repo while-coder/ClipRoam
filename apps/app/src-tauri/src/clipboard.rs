@@ -162,11 +162,16 @@ pub(crate) enum ClipboardData {
         thumbnail: String,
     },
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Capture {
     id: String,
     signature: String,
     data: ClipboardData,
+}
+#[derive(Clone, Serialize)]
+struct ClipboardEvent<'a> {
+    scope: &'a str,
+    capture: &'a Capture,
 }
 #[derive(Default)]
 pub(crate) struct ClipboardState {
@@ -269,7 +274,7 @@ pub(crate) fn native_watch_clipboard(
     if let Some((_, stop)) = monitor.take() {
         stop.store(true, Ordering::Relaxed);
     }
-    if !enabled || cfg!(any(target_os = "android", target_os = "ios")) {
+    if !enabled {
         return Ok(());
     }
     let mut previous_scope = state.scope.lock().map_err(|e| e.to_string())?;
@@ -280,13 +285,11 @@ pub(crate) fn native_watch_clipboard(
     let dir = scope_dir(&app, &scope)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
-    *monitor = Some((scope, stop.clone()));
+    *monitor = Some((scope.clone(), stop.clone()));
     thread::spawn(move || {
         let mut sequence = 0;
         while !stop.load(Ordering::Relaxed) {
-            if crate::platform::should_skip_clipboard_poll(&mut sequence) {
-                continue;
-            }
+            let skip = crate::platform::should_skip_clipboard_poll(&mut sequence);
             let state = app.state::<ClipboardState>();
             let _io = match state.io.lock() {
                 Ok(io) => io,
@@ -295,7 +298,7 @@ pub(crate) fn native_watch_clipboard(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            match read(&app, false) {
+            match if skip { Ok(None) } else { read(&app, false) } {
                 Ok(Some((data, signature))) => {
                     if let Ok(mut previous) = state.signature.lock() {
                         if *previous != signature {
@@ -315,7 +318,6 @@ pub(crate) fn native_watch_clipboard(
                                 });
                             if result.is_ok() {
                                 *previous = signature;
-                                let _ = app.emit_to("main", "cliproam://clipboard-changed", ());
                             } else if let Err(error) = result {
                                 tauri_plugin_log::log::error!(
                                     "Clipboard snapshot persistence failed: {error}"
@@ -327,18 +329,25 @@ pub(crate) fn native_watch_clipboard(
                 Err(error) => tauri_plugin_log::log::warn!("Clipboard read failed: {error}"),
                 _ => {}
             }
+            if let Err(error) = deliver_inbox(&app, &scope) {
+                tauri_plugin_log::log::warn!("Clipboard delivery failed: {error}");
+            }
             drop(_io);
-            thread::sleep(Duration::from_millis(350));
+            if !skip {
+                thread::sleep(Duration::from_millis(
+                    if cfg!(any(target_os = "android", target_os = "ios")) {
+                        2000
+                    } else {
+                        350
+                    },
+                ));
+            }
         }
     });
     Ok(())
 }
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn native_clipboard_inbox(
-    app: AppHandle,
-    scope: String,
-) -> Result<Vec<Capture>, String> {
-    let dir = scope_dir(&app, &scope)?;
+fn clipboard_inbox(app: &AppHandle, scope: &str) -> Result<Vec<Capture>, String> {
+    let dir = scope_dir(app, scope)?;
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -356,16 +365,26 @@ pub(crate) fn native_clipboard_inbox(
         })
         .collect()
 }
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn native_clipboard_ack(
-    app: AppHandle,
-    scope: String,
-    id: String,
-) -> Result<(), String> {
-    uuid::Uuid::parse_str(&id).map_err(|_| "Invalid capture id")?;
-    let path = scope_dir(&app, &scope)?.join(format!("{id}.json"));
+fn clipboard_ack(app: &AppHandle, scope: &str, id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(id).map_err(|_| "Invalid capture id")?;
+    let path = scope_dir(app, scope)?.join(format!("{id}.json"));
     if path.exists() {
         fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+fn deliver_inbox(app: &AppHandle, scope: &str) -> Result<(), String> {
+    for capture in clipboard_inbox(app, scope)? {
+        app.emit_to(
+            "main",
+            "cliproam://clipboard-changed",
+            ClipboardEvent {
+                scope,
+                capture: &capture,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        clipboard_ack(app, scope, &capture.id)?;
     }
     Ok(())
 }

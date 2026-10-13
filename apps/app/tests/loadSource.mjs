@@ -8,9 +8,9 @@ const ts = require("typescript");
 const root = fileURLToPath(new URL("../src/", import.meta.url));
 
 /** Load the actual TS services with explicit platform substitutes, without bundling Vue UI. */
-export function sourceLoader({ native = false, call = async () => { throw new Error("Unexpected native call"); } } = {}) {
+export function sourceLoader({ native = false, call = async () => { throw new Error("Unexpected native call"); }, listen = async () => () => {} } = {}) {
   const cache = new Map();
-  const runtime = { isNative: native, nativeCall: call, nativeListen: async () => () => {} };
+  const runtime = { isNative: native, nativeCall: call, nativeListen: listen };
   function load(path) {
     let file = resolve(root,path);
     if (!existsSync(file)) file += ".ts";

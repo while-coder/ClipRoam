@@ -9,39 +9,23 @@ import type { FileStat } from "../platform/files";
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
   #work: Promise<void> = Promise.resolve();
-  #draining = false;
   constructor(private readonly session: AccountSession, private readonly changed: () => void, private readonly error: (message: string) => void) {}
 
   async start(): Promise<void> {
     if (clipboardPlatform.monitoringAvailable) {
-      await this.session.ownAsync(clipboardPlatform.subscribe(() => {
-        this.session.state.localClipboardRevision++; void this.drain();
+      await this.session.ownAsync(clipboardPlatform.subscribe(({scope, capture}) => {
+        if (scope !== profileName(this.session.accountKey) || this.session.signal.aborted) return;
+        void this.capture(capture.data, capture.id).catch((error) => {
+          if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`);
+        });
       }));
       await this.updateWatch();
-      this.session.interval(() => { void this.drain(); }, 2000);
     }
     void this.resume().catch((error) => { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); });
   }
 
   async updateWatch(): Promise<void> {
     await clipboardPlatform.watch(profileName(this.session.accountKey),this.session.preferences.watchClipboard);
-  }
-
-  async drain(): Promise<void> {
-    if (this.#draining || this.session.signal.aborted) return;
-    this.#draining = true;
-    try {
-      const scope = profileName(this.session.accountKey);
-      const captures = await clipboardPlatform.inbox(scope);
-      for (const capture of captures) {
-        this.session.signal.throwIfAborted();
-        await this.capture(capture.data, capture.id);
-        await clipboardPlatform.acknowledge(scope,capture.id);
-        await this.session.database.delete("meta", `capture:${capture.id}`);
-      }
-      await this.resume();
-    } catch (error) { if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`); }
-    finally { this.#draining = false; }
   }
 
   capture(data: ClipboardData, captureId?: string): Promise<void> {

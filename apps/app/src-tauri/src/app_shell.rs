@@ -26,7 +26,7 @@ pub(crate) fn native_get_platform_capabilities() -> PlatformCapabilities {
     let mobile = cfg!(any(target_os = "android", target_os = "ios"));
     PlatformCapabilities {
         mobile,
-        clipboard_monitoring: !mobile,
+        clipboard_monitoring: true,
         global_shortcut: !mobile,
         automatic_paste: !mobile,
         file_clipboard: !mobile,
