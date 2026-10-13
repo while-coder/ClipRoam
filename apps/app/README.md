@@ -4,7 +4,7 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 ## 代码边界
 
-- `src/core`：账号数据、历史缓存、内容摘要、捕获过滤、文件哈希、待上传队列、下载调度、下载记录和 ZIP 导出。
+- `src/core`：账号数据、历史缓存、内容摘要、捕获过滤、文件哈希、待上传队列、下载调度和下载记录。
 - `src/features`：Vue 状态与业务服务接入、服务器 HTTP/WebSocket 同步、上传和设置。
 - `src/platform`：文件、剪贴板、登录存储等平台适配。浏览器使用 IndexedDB Blob、文件选择器、下载和剪贴板 API；桌面通过 Tauri 调用原生接口。
 - `src-tauri/src`：统一函数入口和所有 `native_` 前缀的 Tauri 命令；`platform.rs` 显式声明跨平台能力，`platforms/` 存放桌面、移动端及各系统的具体实现。
@@ -23,3 +23,5 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 在仓库根目录执行 `pnpm --filter @cliproam/app build`；在 `src-tauri` 执行 `cargo check --offline`。
 
 业务核心可供 PWA 或浏览器插件复用，当前尚未加入 PWA manifest、Service Worker 或插件打包。浏览器不提供全局快捷键、后台系统剪贴板监听、向其他应用投递粘贴按键和系统文件剪贴板；读取或写入剪贴板仍受浏览器权限约束。
+
+浏览器支持目录选择 API 时，多文件和文件夹可保存到用户选择的目录，保留嵌套目录和空目录；每个文件下载并校验后流式写入。不支持该 API 时只提供单文件下载，导出文件夹或多文件会明确提示不支持。取消或失败时停止当前文件写入，已保存的文件保留在所选目录。

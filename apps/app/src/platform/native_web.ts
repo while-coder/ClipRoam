@@ -2,7 +2,7 @@ import { BROWSER_CAPABILITIES } from "../utils/constants";
 import type { PlatformCapabilities, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, NativePlatform, PickedFiles, Unlisten } from "./native";
+import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
 
 /** Browser operations use Web APIs without loading Tauri. */
 export class NativeWeb implements NativePlatform {
@@ -60,5 +60,43 @@ export class NativeWeb implements NativePlatform {
   async copyFile(_source: string, _destination: string, _name?: string): Promise<string> { return this.unavailable(); }
   async createDirectory(_path: string, _name?: string): Promise<string> { return this.unavailable(); }
   async removeFile(_path: string): Promise<void> { this.unavailable(); }
-  async selectSaveTarget(_single: boolean, fileName: string): Promise<SaveTarget> { return {kind:"browser",value:fileName}; }
+  async selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null> {
+    const picker = (window as Window & {
+      showDirectoryPicker?: (options: {mode: "readwrite"}) => Promise<FileSystemDirectoryHandle>;
+    }).showDirectoryPicker;
+    if (!single && picker) {
+      try {
+        const directory = await picker.call(window, {mode:"readwrite"});
+        return {kind:"browserDirectory",value:directory.name,directory};
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return null;
+        throw error;
+      }
+    }
+    if (!single) throw new Error("当前浏览器不支持目录保存，无法导出文件夹或多文件");
+    return {kind:"browser",value:fileName};
+  }
+  async exportDirectory(target: SaveTarget, entries: AsyncIterable<DirectoryEntry>, signal: AbortSignal): Promise<number> {
+    if (target.kind !== "browserDirectory") throw new Error("未选择浏览器导出目录");
+    let count = 0;
+    for await (const entry of entries) {
+      signal.throwIfAborted();
+      if (!entry.path.length || entry.path.some((name) => !name || name === "." || name === ".." || /[/\\]/.test(name))) {
+        throw new Error("导出文件路径不合法");
+      }
+      let directory = target.directory;
+      const folders = entry.stream ? entry.path.slice(0, -1) : entry.path;
+      for (const name of folders) {
+        signal.throwIfAborted();
+        directory = await directory.getDirectoryHandle(name, {create:true});
+      }
+      if (entry.stream) {
+        const file = await directory.getFileHandle(entry.path[entry.path.length - 1]!, {create:true});
+        const writable = await file.createWritable();
+        await entry.stream.pipeTo(writable, {signal});
+        count++;
+      }
+    }
+    return count;
+  }
 }

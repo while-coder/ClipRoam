@@ -1,7 +1,7 @@
 import type { PlatformCapabilities, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, NativePlatform, PickedFiles, Unlisten } from "./native";
+import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
 import { base64ToBytes, bytesToBase64 } from "../utils/bytes";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -49,4 +49,7 @@ export class NativeRust implements NativePlatform {
   createDirectory(path: string, name?: string): Promise<string> { return this.invoke("native_fs_mkdir", name === undefined ? {path} : {path,name}); }
   removeFile(path: string): Promise<void> { return this.invoke("native_fs_remove", {path}); }
   selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null> { return this.invoke("native_save_dialog", {single,fileName}); }
+  async exportDirectory(_target: SaveTarget, _entries: AsyncIterable<DirectoryEntry>, _signal: AbortSignal): Promise<number> {
+    throw new Error("浏览器目录导出仅在 Web 平台可用");
+  }
 }

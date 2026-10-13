@@ -7,6 +7,7 @@ import { NativeWeb } from "./native_web";
 export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
+export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
 
 /** Platform operations independent of Rust command names and wire formats. */
 export interface NativePlatform {
@@ -39,6 +40,7 @@ export interface NativePlatform {
   createDirectory(path: string, name?: string): Promise<string>;
   removeFile(path: string): Promise<void>;
   selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null>;
+  exportDirectory(target: SaveTarget, entries: AsyncIterable<DirectoryEntry>, signal: AbortSignal): Promise<number>;
 }
 
 export const native: NativePlatform = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window

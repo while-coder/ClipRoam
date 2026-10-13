@@ -3,12 +3,12 @@ import { AccountDatabase } from "../core/database";
 import { profileName, Sha256 } from "../core/hash";
 import { safeName, type LocalSource, type StoredEntry } from "../core/content";
 import { isNative } from "./runtime";
-import { native } from "./native";
-import { zipFiles } from "../core/zip";
+import { native, type DirectoryEntry } from "./native";
 import type { ClipboardData } from "./clipboard";
 
 export type FileStat = { path: string; name: string; directory: boolean; symlink: boolean; size: number; modifiedAt?: number };
-export type SaveTarget = { kind: "path" | "documentTree" | "browser"; value: string };
+export type SaveTarget = { kind: "path" | "documentTree" | "browser"; value: string }
+  | { kind: "browserDirectory"; value: string; directory: FileSystemDirectoryHandle };
 export interface ContentWriter {
   append(bytes: Uint8Array): Promise<void>;
   commit(): Promise<void>;
@@ -181,32 +181,53 @@ export class AccountFiles {
     return paths;
   }
 
-  async export(entry: StoredEntry, target: SaveTarget, signal: AbortSignal): Promise<number> {
-    if (!isNative) {
-      const files: { name: string; blob: Blob }[] = [];
-      const addTree = async (info: FileInfo, prefix: string): Promise<void> => {
-        for (const [name,node] of Object.entries(info)) {
-          if (safeName(name) !== name) throw new Error("文件名称不合法");
-          const path = prefix ? `${prefix}/${name}` : name;
-          if (isFileNode(node)) {
-            const blob = await this.database.get<Blob>("blobs", node.f);
-            if (!blob) throw new Error(`文件内容不可用：${path}`);
-            files.push({ name: path, blob });
-          } else { files.push({ name: `${path}/`, blob: new Blob() }); await addTree(node,path); }
-        }
+  async export(entry: StoredEntry, target: SaveTarget, signal: AbortSignal, ensureFile?: (fileId: string) => Promise<void>): Promise<number> {
+    if (target.kind === "browserDirectory") {
+      const database = this.database;
+      const stream = async (fileId: string): Promise<ReadableStream<Uint8Array>> => {
+        signal.throwIfAborted();
+        await ensureFile?.(fileId);
+        signal.throwIfAborted();
+        const blob = await database.get<Blob>("blobs", fileId);
+        if (!blob) throw new Error("本机文件内容不可用");
+        return blob.stream();
       };
+      async function* walk(info: FileInfo, parent: string[]): AsyncGenerator<DirectoryEntry> {
+        const used = new Set<string>();
+        for (const [name, node] of Object.entries(info)) {
+          signal.throwIfAborted();
+          if (safeName(name) !== name || used.has(name.toLowerCase())) throw new Error(`文件名称不合法或重复：${name}`);
+          used.add(name.toLowerCase());
+          const path = [...parent, name];
+          if (isFileNode(node)) yield {path, stream: await stream(node.f)};
+          else { yield {path}; yield* walk(node, path); }
+        }
+      }
+      async function* contents(): AsyncGenerator<DirectoryEntry> {
+        if (entry.kind === "image") yield {path:[`${safeName(entry.content)}.webp`],stream:await stream(entry.imageInfo!.fileId)};
+        else yield* walk(entry.fileInfo ?? {}, []);
+      }
+      return native.exportDirectory(target, contents(), signal);
+    }
+    if (!isNative) {
+      let fileId: string, name: string;
       if (entry.kind === "image") {
-        const blob = await this.database.get<Blob>("blobs", entry.imageInfo!.fileId);
-        if (!blob) throw new Error("图片内容不可用");
-        files.push({ name: `${safeName(entry.content)}.webp`, blob });
-      } else await addTree(entry.fileInfo ?? {}, "");
-      const single = files.length === 1 && !files[0]!.name.endsWith("/");
-      const blob = single ? files[0]!.blob : await zipFiles(files,signal);
+        fileId = entry.imageInfo!.fileId;
+        name = `${safeName(entry.content)}.webp`;
+      } else {
+        const files = Object.entries(entry.fileInfo ?? {});
+        if (files.length !== 1 || !isFileNode(files[0]![1])) throw new Error("当前浏览器不支持目录保存，无法导出文件夹或多文件");
+        name = files[0]![0];
+        if (safeName(name) !== name) throw new Error("文件名称不合法");
+        fileId = files[0]![1].f;
+      }
+      const blob = await this.database.get<Blob>("blobs", fileId);
+      if (!blob) throw new Error("本机文件内容不可用");
       signal.throwIfAborted();
       const url = URL.createObjectURL(blob), link = document.createElement("a");
-      link.href = url; link.download = single ? files[0]!.name : `${safeName(entry.content)}.zip`;
+      link.href = url; link.download = name;
       document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),60000);
-      return files.filter((file) => !file.name.endsWith("/")).length;
+      return 1;
     }
     const contents = entryContents(entry);
     const singles = Object.values(entry.fileInfo ?? {});

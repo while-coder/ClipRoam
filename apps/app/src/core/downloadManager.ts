@@ -8,7 +8,7 @@ import type { SaveTarget } from "../platform/files";
 import { safeName } from "./content";
 
 type Task = { snapshot: DownloadTaskSnapshot; controller: AbortController; done: Promise<void>; finish: (error?: unknown) => void };
-type Save = { entryId: string; target: SaveTarget; recordId?: string; controller: AbortController };
+type Save = { entryId: string; target: SaveTarget; recordId?: string; controller: AbortController; savedCount?: number };
 const terminal = (status: string) => ["succeeded", "failed", "cancelled", "interrupted"].includes(status);
 
 /** One account-owned TS queue; no backend worker or second window state. */
@@ -106,6 +106,13 @@ export class DownloadManager {
       record.status = "downloading";
       this.#publish();
       void this.#drain();
+      if (save?.target.kind === "browserDirectory") {
+        const signal = anyAbortSignal([save.controller.signal, this.session.signal]);
+        save.savedCount = await this.session.files.export(entry, save.target, signal, async (fileId) => {
+          const task = requested.find((task) => task.snapshot.fileId === fileId);
+          if (task) await task.done;
+        });
+      }
       const results = await Promise.allSettled(requested.map((task) => task.done));
       record.files = requested.map((task) => ({ ...task.snapshot }));
       record.receivedBytes = record.files.reduce((sum,file) => sum + file.receivedBytes, 0);
@@ -122,7 +129,7 @@ export class DownloadManager {
     } catch (error) {
       this.cancelRequest(requestId);
       if (record.finishedMs === null) {
-        record.status = this.session.signal.aborted ? "cancelled" : "failed";
+        record.status = this.session.signal.aborted || save?.controller.signal.aborted ? "cancelled" : "failed";
         record.finishedMs = Date.now(); record.error = String(error);
         await this.#persist(record);
       }
@@ -243,7 +250,7 @@ export class DownloadManager {
     if (!save) throw new Error("另存为任务不存在或已结束");
     const record = save.recordId ? this.#records.get(save.recordId) : undefined;
     try {
-      const count = await this.session.files.export(await this.session.cache.get(save.entryId), save.target, anyAbortSignal([save.controller.signal, this.session.signal]));
+      const count = save.savedCount ?? await this.session.files.export(await this.session.cache.get(save.entryId), save.target, anyAbortSignal([save.controller.signal, this.session.signal]));
       if (record && record.finishedMs === null) {
         record.status = "succeeded"; record.finishedMs = Date.now(); record.receivedBytes = record.size; await this.#persist(record);
       }
