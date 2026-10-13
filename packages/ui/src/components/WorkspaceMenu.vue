@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { clientSessionManager } from "../features/sync/clientSessionManager";
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { FilePlus, FolderPlus, Menu, Settings2 } from "lucide-vue-next";
 import { isMobile } from "../platform/runtime";
 import { openSettings } from "../features/settings/useSettings";
-import { connectionStatus } from "../features/sync/syncEngine";
 import { uploadingFiles, captureFilesFromPicker } from "../features/pending-upload/usePendingUploads";
+
+const { connectionStatus } = clientSessionManager;
 
 const root = ref<HTMLElement>();
 const trigger = ref<HTMLButtonElement>();

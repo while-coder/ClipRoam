@@ -26,7 +26,8 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 - `.vue` 文件负责布局、显示和用户事件。历史页的筛选、选中项与页码属于视图状态，不共享给其他历史视图。
 - `HistoryClient` 负责历史 HTTP 请求及详情回填，`HistoryManager` 直接管理记录的本地缓存和刷新通知。
 - `CaptureService` 捕获和解析剪贴板；`PendingUploader` 发布待上传记录；`RelayUploader` 传输中继文件。它们通过对应 Manager 读写队列或任务列表。
-- `core/AccountSession` 装配 Manager，创建账号与设置状态，管理账号生命周期、取消信号和定时任务；`SyncClient` 管理连接与传输 worker。
+- `core/AccountSession` 装配业务 Manager，创建账号与设置状态，管理账号资源、取消信号和定时任务。`ClientSessionManager` 统一管理当前账号配置、偏好、连接状态、设备列表和会话启停；WebSocket、心跳、重连与传输 worker 装配收在同文件的私有连接类中。
+- `sync/httpClient.ts` 提供认证 HTTP 请求、取消与响应校验；每个账号连接持有一个请求器，历史、上传和下载通过所属会话复用它。`sync/authApi.ts` 保留登录、注册、会话验证、设备信息更新和改密 API。
 - `src/core` 保留共享数据库、内容处理、哈希和提示；`src/platform` 封装平台操作与能力状态；`src/components` 放置跨功能的展示组件。
 - `src/config.ts` 统一平台能力、服务器地址、分页和账号偏好的默认配置；登录表单与认证逻辑放在 `features/sync`。
 - `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；包主入口导出的布局默认不带业务菜单。
@@ -44,7 +45,7 @@ src/
   platform/                        # 平台接口、适配器、运行信息、文件与存储
   utils/                           # 共享纯函数
   features/
-    sync/                          # 登录、配置持久化、连接和 HTTP
+    sync/                          # ClientSessionManager、HTTP、认证 API、登录表单
     history/                       # 历史缓存、分页查询、筛选和预览
     pending-upload/                # 捕获、持久队列、发布和文件上传
     uploads/                       # 中继上传任务
@@ -54,5 +55,7 @@ src/
 ```
 
 新增列表操作应放到所属 Manager，页面绑定只调用 Manager，不直接读写数据库或维护另一份业务列表。
+
+客户端会话从 `clientSessionManager` 单例进入，`start` 创建账号资源与连接，`stop` 释放账号资源；配置与偏好持久化也由该入口提供。登录验证成功与 WebSocket 已连接是两个独立状态，连接暂时断开不会清除登录状态。后台任务持有自己的 `AccountSession`，通过 `session.http` 使用该账号的请求器；账号切换会取消旧会话，旧任务不能取得新账号的凭证。
 
 类型检查：`pnpm --filter @cliproam/ui check`。

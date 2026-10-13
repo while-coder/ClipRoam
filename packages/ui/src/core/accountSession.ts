@@ -9,7 +9,8 @@ import { AccountFiles } from "../platform/files";
 import { clipboardPlatform } from "../platform/clipboard";
 import { profileName } from "./hash";
 import { showToast } from "./toast";
-import type { SyncClient } from "../features/sync/syncClient";
+import type { ClientConnection } from "../features/sync/clientSessionManager";
+import type { SyncRequester } from "../features/sync/httpClient";
 import type { SyncConfig, AccountPreferences, Device, SettingsPage } from "../types";
 
 function createSettingsState() {
@@ -92,7 +93,7 @@ export class AccountSession {
   readonly uploads: UploadManager;
   readonly downloads: DownloadManager;
   readonly capture: CaptureService;
-  client?: SyncClient;
+  client?: ClientConnection;
   #cleanups = new Set<() => void>();
   #timers = new Map<string, number>();
 
@@ -115,6 +116,12 @@ export class AccountSession {
     this.own(() => {
       void clipboardPlatform.watch(profileName(this.accountKey),false).catch(() => undefined);
     });
+  }
+
+  get http(): SyncRequester {
+    this.signal.throwIfAborted();
+    if (!this.client) throw new Error("同步账号未登录");
+    return this.client.http;
   }
 
   get accountKey(): string { return archiveKeyFor(this.config); }

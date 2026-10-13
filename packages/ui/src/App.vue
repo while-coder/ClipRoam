@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { clientSessionManager, archiveKeyFor } from "./features/sync/clientSessionManager";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { native, type Unlisten } from "./platform/native";
 import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./config";
 import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
-import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
+import { authenticateAccount, verifyAccountSession } from "./features/sync/authApi";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
@@ -30,27 +31,6 @@ import { errorMessage } from "./utils/error";
 import { getDevice } from "./platform/storage";
 import { isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { activeView, activeAccountSession, getAccountSession } from "./core/accountSession";
-import {
-  archiveKeyFor,
-  currentUsername,
-  getActiveConfig,
-  getActivePreferences,
-  hasSavedSyncConfig,
-  loadAccountPreferences,
-  loadSyncConfig,
-  persistAccountPreferences,
-  persistSyncConfig,
-  setActiveConfig,
-} from "./features/sync/syncSession";
-import {
-  connected,
-  connectionStatus,
-  devicesById,
-  initSyncEngine,
-  setSyncAutoUploadLimit,
-  startSync,
-  stopSyncClient,
-} from "./features/sync/syncEngine";
 import {
   fetchHistoryPage,
   focusSearchInput,
@@ -82,6 +62,25 @@ import type {
   ShareImportSummary,
   SyncConfig,
 } from "./types";
+
+const {
+  currentUsername,
+  getActiveConfig,
+  getActivePreferences,
+  hasSavedSyncConfig,
+  loadAccountPreferences,
+  loadSyncConfig,
+  persistAccountPreferences,
+  persistSyncConfig,
+  setActiveConfig,
+  connected,
+  connectionStatus,
+  devicesById,
+  initialize,
+  setAutoUploadLimit,
+  start,
+  stop,
+} = clientSessionManager;
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
 const { initAppVersion } = useAppVersion();
@@ -117,8 +116,8 @@ initHistorySync({
 });
 
 // token 失效后的登录页处理留在本组件（setupVisible/setupError/setupWizard）；
-// 引擎只负责 stale 判断与停机，其余经回调交回。
-initSyncEngine({
+// 会话管理器负责旧会话判断与停机，其余经回调交回。
+initialize({
   onAuthenticationFailed: (message, config) => {
     const alreadyRelogging = setupVisible.value && !getActiveConfig()?.sessionToken;
     const expiredConfig = { ...config, sessionToken: "" };
@@ -137,7 +136,7 @@ initSyncEngine({
   },
 });
 
-// 设置弹窗（useSettings 单例）通过 bridge 触达同步引擎；引擎状态已下沉各模块。
+// 设置弹窗（useSettings 单例）通过 bridge 调用会话管理器；页面回调仍由 App 提供。
 initSettings({
   getActiveConfig,
   setActiveConfig,
@@ -145,9 +144,9 @@ initSettings({
   setUsername: (name) => { currentUsername.value = name; },
   persistSyncConfig,
   persistAccountPreferences,
-  // 偏好热更新：自动上传档位是 SyncClient 构造时固化的，运行期经此下发。
-  applyAutoUploadLimit: setSyncAutoUploadLimit,
-  disconnect: stopSyncClient,
+  // 偏好热更新：自动上传档位是 账号连接创建时固化的，运行期经此下发。
+  applyAutoUploadLimit: setAutoUploadLimit,
+  disconnect: stop,
   markSignedOut: () => {
     hasSavedSyncConfig.value = false;
   },
@@ -266,7 +265,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await persistAccountPreferences(preferences);
     refreshPending();
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
-    await startSync(config);
+    await start(config);
     await enableAccountShortcuts();
     controller.signal.throwIfAborted();
     savedSessionConfig.value = undefined;
@@ -276,7 +275,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     await nextTick();
     await focusSearchInput();
   } catch (error) {
-    await stopSyncClient();
+    await stop();
     hasSavedSyncConfig.value = false;
     if (controller.signal.aborted) return;
     const message = errorMessage(error);
@@ -334,7 +333,7 @@ async function restoreSavedSession(): Promise<void> {
       serverMaxFileMb: Math.max(1, Math.floor(verified.settings.maxStoredFileMb)),
       maxCaptureFileCount: Math.max(1, Math.floor(verified.settings.maxCaptureFileCount)),
     });
-    await startSync(config);
+    await start(config);
     await enableAccountShortcuts();
     controller.signal.throwIfAborted();
     savedSessionConfig.value = undefined;
@@ -344,7 +343,7 @@ async function restoreSavedSession(): Promise<void> {
     await nextTick();
     await focusSearchInput();
   } catch (error) {
-    await stopSyncClient();
+    await stop();
     hasSavedSyncConfig.value = false;
     if (controller.signal.aborted) return;
     const message = errorMessage(error);
@@ -525,7 +524,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   unlisteners.forEach((unlisten) => unlisten());
   shareReceiverListener?.();
-  void stopSyncClient();
+  void stop();
   void native.quickPasteShortcut?.dispose();
 });
 </script>

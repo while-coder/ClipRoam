@@ -3,8 +3,6 @@ import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
-import { getServerUrls } from "../sync/syncSetup";
-import { createSyncRequester } from "../sync/syncHttp";
 import { anyAbortSignal } from "../../utils/abort";
 import type { SaveTarget } from "../../platform/files";
 import { safeName } from "../../core/content";
@@ -288,8 +286,7 @@ export class DownloadManager {
   }
 
   async #transfer(task: Task): Promise<void> {
-    const { httpUrl } = getServerUrls(this.session.config.serverAddress, this.session.config.serverProtocol);
-    const http = createSyncRequester(httpUrl, this.session.config.sessionToken, this.session);
+    const http = this.session.http;
     const budget = AbortSignal.timeout(5 * 60000);
     const signal = anyAbortSignal([budget, task.controller.signal, this.session.signal]);
     while (!signal.aborted) {

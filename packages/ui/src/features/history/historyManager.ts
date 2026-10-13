@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
-import type { SyncRequester } from "../sync/syncHttp";
+import type { SyncRequester } from "../sync/httpClient";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 import { HistoryClient } from "./historyClient";
 import { summarize, type PendingRow, type StoredEntry } from "../../core/content";

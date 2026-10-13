@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed } from "vue";
-import { getActiveConfig } from "../sync/syncSession";
 import {
   changePassword, changingPassword, closeSettings, currentPassword, newPassword,
   confirmNewPassword, passwordChangeError, savingSettings, settingsError, signOut,
   switchServer, validateNewPassword, validatePasswordConfirmation,
 } from "./useSettings";
+
+const { getActiveConfig } = clientSessionManager;
 
 defineProps<{ currentUsername: string }>();
 const busy = computed(() => savingSettings.value || changingPassword.value);

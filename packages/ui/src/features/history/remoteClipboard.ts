@@ -1,10 +1,9 @@
+import { clientSessionManager } from "../sync/clientSessionManager";
 import { getAccountSession } from "../../core/accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
 import { isMobile, usePlatform } from "../../platform/runtime";
 import { showToast } from "../../core/toast";
 import { errorMessage } from "../../utils/error";
-import { getSyncClient } from "../sync/syncEngine";
-import { getActiveConfig, getActivePreferences } from "../sync/syncSession";
 import { ensureLocalFiles } from "../downloads/useDownloads";
 
 const { platformCapabilities } = usePlatform();
@@ -17,12 +16,12 @@ export function bumpLocalClipboardRevision(): void {
 
 export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEntry): Promise<void> {
   const session = getAccountSession();
-  const config = getActiveConfig();
-  const client = getSyncClient();
+  const config = clientSessionManager.getActiveConfig();
+  const client = clientSessionManager.getConnection();
   if (
     isMobile.value
     || !platformCapabilities.value.automaticPaste
-    || !getActivePreferences().autoReceiveClipboard
+    || !clientSessionManager.getActivePreferences().autoReceiveClipboard
     || !session
     || !client
   ) return;
@@ -34,7 +33,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
     const [entry] = await session.history.fetchHistoryInfo([manifestEntry]);
     if (!entry || entry.kind === "files") return;
     let localEntry = entry;
-    if (getActiveConfig() !== config || !getActivePreferences().autoReceiveClipboard) return;
+    if (clientSessionManager.getActiveConfig() !== config || !clientSessionManager.getActivePreferences().autoReceiveClipboard) return;
     if (entry.kind === "image") localEntry = await ensureLocalFiles(localEntry, session);
 
     // A newer remote activation or a real local copy wins while an image is
@@ -42,16 +41,16 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
     if (
       activationRevision !== session.state.remoteActivationRevision
       || startingLocalRevision !== session.state.localClipboardRevision
-      || getActiveConfig() !== config
-      || !getActivePreferences().autoReceiveClipboard
+      || clientSessionManager.getActiveConfig() !== config
+      || !clientSessionManager.getActivePreferences().autoReceiveClipboard
     ) return;
     await session.capture.writeEntry(localEntry.id);
   } catch (error) {
     if (
       !session.signal.aborted
       && activationRevision === session.state.remoteActivationRevision
-      && getActiveConfig() === config
-      && getActivePreferences().autoReceiveClipboard
+      && clientSessionManager.getActiveConfig() === config
+      && clientSessionManager.getActivePreferences().autoReceiveClipboard
     ) {
       showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
     }

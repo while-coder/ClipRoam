@@ -2,7 +2,7 @@ import { getDevice, getDeviceIdentity, saveDeviceAlias } from "../../platform/st
 import { nextTick } from "vue";
 import { accountStateRef, getAccountSession } from "../../core/accountSession";
 import { errorMessage } from "../../utils/error";
-import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
+import { changeAccountPassword, pushDeviceInfo } from "../sync/authApi";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 
 /**
@@ -19,7 +19,7 @@ export type SettingsBridge = {
   persistSyncConfig(config: SyncConfig | null): Promise<void>;
   /** 保存偏好到当前活动档案；偏好跟账号走，与全局会话配置分开持久化。 */
   persistAccountPreferences(preferences: AccountPreferences): Promise<void>;
-  /** 偏好热更新：自动上传档位是 SyncClient 构造时固化的，经此运行期下发。 */
+  /** 偏好热更新：自动上传档位是 账号连接创建时固化的，经此运行期下发。 */
   applyAutoUploadLimit(limitMb: number): void;
   /** 断开当前同步客户端。 */
   disconnect(): Promise<void>;

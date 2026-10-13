@@ -5,7 +5,7 @@ import {
 } from "@cliproam/protocol";
 
 
-import { errorMessageFromBody } from "./syncHttp";
+import { errorMessageFromBody } from "./httpClient";
 import { anyAbortSignal } from "../../utils/abort";
 
 export type AuthMode = "login" | "register";
