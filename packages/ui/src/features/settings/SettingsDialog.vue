@@ -10,6 +10,7 @@ import {
   quickPasteShortcutStatus,
 } from "../quick-paste/quickPasteShortcut";
 import { useUpdater } from "./useUpdater";
+import productIcon from "../../assets/cliproam-icon.png";
 import {
   autoReceiveClipboard,
   autoUploadLimitMb,
@@ -299,7 +300,7 @@ const {
               </header>
 
               <SCard class="about-product">
-                <img class="about-product-mark" src="/cliproam-icon.png" alt="" />
+                <img class="about-product-mark" :src="productIcon" alt="" />
                 <div class="about-product-copy">
                   <h4>ClipRoam</h4>
                   <p>让剪贴板内容在你的设备之间安全漫游。</p>

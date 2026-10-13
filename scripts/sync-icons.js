@@ -11,6 +11,7 @@ const iconManifest = path.join(rootDirectory, "apps", "icon", "icons.json");
 const androidIcon = path.join(rootDirectory, "apps", "icon", "icon-android.png");
 const tauriIconsDirectory = path.join(appDirectory, "src-tauri", "icons");
 const favicon = path.join(appDirectory, "public", "cliproam-icon.png");
+const sharedIcon = path.join(rootDirectory, "packages", "ui", "src", "assets", "cliproam-icon.png");
 const androidResourcesDirectory = path.join(
   appDirectory,
   "src-tauri",
@@ -47,6 +48,8 @@ execFileSync(
 );
 
 fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), favicon);
+fs.mkdirSync(path.dirname(sharedIcon), { recursive: true });
+fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), sharedIcon);
 console.log(`已更新 Web 图标：${path.relative(rootDirectory, favicon)}`);
 
 if (fs.existsSync(androidResourcesDirectory)) {

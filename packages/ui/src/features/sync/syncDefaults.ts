@@ -1,6 +1,4 @@
-// App 侧账号偏好的默认值。仅供本 app 使用，不进入三端共享的
-// @cliproam/protocol；Rust 侧的 serde 兜底（apps/app/src-tauri/src/sync/mod.rs）
-// 必须与这里的数值保持一致。
+// 三端共用的账号偏好默认值，由各客户端的 native 能力决定是否启用。
 import type { AccountPreferences } from "../../types";
 
 export const DEFAULT_SERVER_PROTOCOL = "http";

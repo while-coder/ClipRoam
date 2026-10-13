@@ -28,6 +28,7 @@ export interface NativePlatform {
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
   listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
+  listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten>;
   registerQuickPasteShortcut(shortcut: string): Promise<void>;
   isShortcutRegistered(shortcut: string): Promise<boolean>;
   unregisterShortcut(shortcut: string): Promise<void>;

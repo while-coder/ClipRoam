@@ -31,6 +31,9 @@ export class NativeRust implements NativePlatform {
     const listener = await addPluginListener("cliproam-share-receiver", "received", handler);
     return () => { void listener.unregister(); };
   }
+  listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten> {
+    return this.subscribe("cliproam://toast", handler);
+  }
   async registerQuickPasteShortcut(shortcut: string): Promise<void> {
     const { register } = await import("@tauri-apps/plugin-global-shortcut");
     await register(shortcut, (event) => {

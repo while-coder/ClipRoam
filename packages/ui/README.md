@@ -1,7 +1,9 @@
-# ClipRoam 共用 UI
+# ClipRoam 共用客户端
 
-`@cliproam/ui` 提供 `WorkspaceLayout`（主界面、桌面侧栏、移动导航、快捷粘贴布局）、`WorkspacePage`（页面骨架）、`EntryKindIcon`、`TransferProgress` 和共用样式。
+`@cliproam/ui` 包含登录、历史、设置、设备、上传与下载页面，以及账号状态、同步、捕获、缓存和传输业务。三个入口加载同一个 `App.vue`，通过 `NativePlatform` 调用各平台能力。
 
-三个客户端通过 props、事件和插槽接入页面与业务状态；本包不依赖客户端目录、Tauri、账号会话或网络同步。主入口导入组件，`@cliproam/ui/styles.css` 导入样式。Vue 与 ui-kit 插件由各客户端入口安装。
+客户端先调用 `configureNative`，再动态导入 `@cliproam/ui/app`，确保共享状态初始化时已取得正确适配器。`@cliproam/ui/native` 导出接口与初始化函数；`@cliproam/ui/native-web` 提供共用 Web API 实现，PWA 和 Chrome 各自扩展它。
 
-组件直接导出源码，由各客户端的 Vite 构建。`apps/app` 的工作区菜单通过 `menu` 插槽接入，设置弹窗通过布局的 `overlays` 插槽接入。
+Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口及其样式保留在 `apps/app`。快速粘贴视图和原生更新弹窗通过共享 App 的 `quick-paste`、`native-overlays` 插槽接入。独立 Toast 入口不加载共享业务 App。
+
+组件直接导出源码，由各入口的 Vite 构建。各入口安装 Vue 与 ui-kit 插件，并导入 `@cliproam/ui/styles.css`。工作区布局和展示组件仍可从包的主入口独立引用。

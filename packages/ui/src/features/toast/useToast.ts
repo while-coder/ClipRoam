@@ -1,72 +1,14 @@
-import { ref } from "vue";
-import { native, type Unlisten } from "../../platform/native";
+import { native } from "../../platform/native";
 import { toast } from "@qingfeng346/ui-kit";
-import { isToastWindow } from "../../composables/usePlatform";
-import { isNative } from "../../platform/runtime";
 import type { ToastPayload, ToastTone } from "../../types";
 
-/** 模块级单例（对齐 usePlatform 风格）：所有窗口内组件共享同一个 toast 状态。 */
-const toastPayload = ref<ToastPayload>();
-
-let toastTimer: number | undefined;
-let toastWindowHideTimer: number | undefined;
-
-function clearTimers(): void {
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
-  if (toastWindowHideTimer !== undefined) window.clearTimeout(toastWindowHideTimer);
-}
-
-/** toast 消失后延迟隐藏通知窗口，让收尾动画播完。 */
-function scheduleToastWindowHide(): void {
-  if (!isToastWindow) return;
-  toastWindowHideTimer = window.setTimeout(() => {
-    void native.hideToast().catch(() => {});
-    toastWindowHideTimer = undefined;
-  }, 180);
-}
-
-function displayToast(payload: ToastPayload): void {
-  // 托盘通知窗口：维持原逻辑，自己计时消失后再隐藏窗口。
-  if (isToastWindow) {
-    clearTimers();
-    toastPayload.value = payload;
-    toastTimer = window.setTimeout(() => {
-      toastPayload.value = undefined;
-      toastTimer = undefined;
-      scheduleToastWindowHide();
-    }, payload.tone === "error" ? 5_000 : 3_200);
-    return;
-  }
-  // 主窗口：走 ui-kit toast（3.5s 自动消失，无需手动计时）。
+export function displayToast(payload: ToastPayload): void {
   toast.show(payload.tone, payload.message);
 }
 
-/** 立即关闭 toast（托盘通知的关闭按钮）。 */
-function hideToastNow(): void {
-  clearTimers();
-  toastPayload.value = undefined;
-  toastTimer = undefined;
-  scheduleToastWindowHide();
-}
-
-function showToast(message: string, tone: ToastTone = "info"): void {
+export function showToast(message: string, tone: ToastTone = "info"): void {
   const normalized = message.trim();
   if (!normalized) return;
-  const payload = { message: normalized, tone };
-  if (!isNative) { displayToast(payload); return; }
+  const payload = {message:normalized,tone};
   void native.showToast(payload).catch(() => displayToast(payload));
 }
-
-/** 清理 toast 相关 timer（组件卸载时调用）。 */
-function disposeToast(): void {
-  clearTimers();
-}
-
-/** toast 专用窗口（tray 旁的通知窗口）只监听 toast 事件，不初始化其他服务。 */
-function startToastWindowListener(): Promise<Unlisten> {
-  return native.listen<ToastPayload>("cliproam://toast", (payload) => {
-    displayToast(payload);
-  });
-}
-
-export { toastPayload, showToast, hideToastNow, disposeToast, startToastWindowListener };

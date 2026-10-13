@@ -1,5 +1,5 @@
 import { nextTick } from "vue";
-import { native, isMobile, isQuickPaste, isToastWindow, isNative, getAccountSession, focusSearch, focusSearchInput } from "@cliproam/ui/runtime";
+import { native, isMobile, isQuickPaste, isNative, getAccountSession, focusSearch, focusSearchInput } from "@cliproam/ui/runtime";
 import {
   cursorPosition,
   getCurrentWindow,
@@ -59,7 +59,7 @@ async function restoreMainWindow(): Promise<void> {
 }
 
 export function showMainWindow(): Promise<void> {
-  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  if (!isNative || isMobile.value || native.windowLabel === "toast") return Promise.resolve();
   return transition(async () => {
     const window = getCurrentWindow();
     if (isQuickPaste.value || mainState) await restoreMainWindow();
@@ -72,7 +72,7 @@ export function showMainWindow(): Promise<void> {
 
 /** A webview reload loses TS geometry but must not leave login in quick mode. */
 export function initializeWindowMode(): Promise<void> {
-  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  if (!isNative || isMobile.value || native.windowLabel === "toast") return Promise.resolve();
   return transition(async () => {
     const wasQuickPaste = await native.setQuickPasteMode(false);
     if (!wasQuickPaste) return;
@@ -85,7 +85,7 @@ export function initializeWindowMode(): Promise<void> {
 }
 
 export function showPasteWindow(): Promise<void> {
-  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  if (!isNative || isMobile.value || native.windowLabel === "toast") return Promise.resolve();
   return transition(async () => {
     const session = getAccountSession();
     if (!session) return;
@@ -152,6 +152,6 @@ export function showPasteWindow(): Promise<void> {
 }
 
 export function hideWindow(): Promise<void> {
-  if (!isNative || isMobile.value || isToastWindow) return Promise.resolve();
+  if (!isNative || isMobile.value || native.windowLabel === "toast") return Promise.resolve();
   return transition(() => getCurrentWindow().hide());
 }

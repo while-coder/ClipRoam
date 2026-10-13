@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "check": "vue-tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predev": "pnpm --filter @cliproam/protocol build",
+    "prebuild": "pnpm --filter @cliproam/protocol build"
   },
   "dependencies": {
     "@cliproam/ui": "workspace:*",

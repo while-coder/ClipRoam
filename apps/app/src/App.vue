@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
-import { isNative, isQuickPaste, isToastWindow } from "@cliproam/ui/runtime";
+import { isNative, isQuickPaste } from "@cliproam/ui/runtime";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 </script>
 
@@ -11,7 +11,7 @@ import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
       <HistoryView :ref="register" v-bind="bindings" quick-paste />
     </template>
     <template #native-overlays>
-      <UpdaterDialog v-if="isNative && !isQuickPaste && !isToastWindow" locale="zh-CN" />
+      <UpdaterDialog v-if="isNative && !isQuickPaste" locale="zh-CN" />
     </template>
   </SharedApp>
 </template>

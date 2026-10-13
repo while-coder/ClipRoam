@@ -35,15 +35,7 @@
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 /* 隐藏的快捷粘贴窗口聚焦控件时，不允许浏览器滚动外壳，只让历史列表滚动。 */
-html.paste-window-root,
-html.paste-window-root body,
-html.paste-window-root #app,
-html.paste-window-root .app-shell { overflow: clip; }
-html.toast-window-root,
-html.toast-window-root body,
-html.toast-window-root #app {
-  background: transparent;
-}
+
 button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, [role="button"]:focus-visible, select:focus-visible {
@@ -310,107 +302,6 @@ kbd {
 /* 下拉 trigger 里的选中文案可能很长（如设备名），收不住会撑爆筛选行 */
 .time-filter-trigger > span,
 .device-filter-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.toast-window-shell { width: 100%; height: 100%; background: transparent; }
-.toast-layer {
-  position: fixed;
-  z-index: 30;
-  top: 72px;
-  left: 50%;
-  width: min(520px, calc(100vw - 32px));
-  pointer-events: none;
-  transform: translateX(-50%);
-}
-.toast-card {
-  display: flex;
-  align-items: flex-start;
-  width: fit-content;
-  max-width: 100%;
-  min-height: 40px;
-  gap: 8px;
-  margin: 0 auto;
-  padding: 10px 13px;
-  color: #f8fafc;
-  background: rgba(17, 28, 49, 0.97);
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 9px;
-  box-shadow: 0 12px 34px rgba(2, 6, 23, 0.46);
-  font-size: 12.5px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.toast-success .toast-card { border-color: rgba(74, 222, 128, 0.38); }
-.toast-error .toast-card { border-color: rgba(248, 113, 113, 0.42); }
-.toast-info .toast-card { border-color: rgba(96, 165, 250, 0.42); }
-.toast-enter-active { transition: opacity 180ms ease-out, transform 180ms ease-out; }
-.toast-leave-active { transition: opacity 140ms ease-in, transform 140ms ease-in; }
-.toast-enter-from,
-.toast-leave-to { opacity: 0; transform: translate(-50%, -6px); }
-.toast-layer.tray-toast {
-  inset: 0;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  padding: 8px;
-  transform: none;
-}
-/* Windows 11 系统通知样式：深色卡片 + 应用图标 + 标题/正文 + 关闭按钮 */
-.tray-toast .toast-card {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 11px;
-  align-items: start;
-  width: 100%;
-  max-height: 88px;
-  padding: 12px 12px 12px 15px;
-  background: #202020;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42);
-  overflow: hidden;
-  pointer-events: auto;
-}
-.tray-toast .toast-card::before {
-  content: "";
-  position: absolute;
-  inset-block: 8px;
-  left: 0;
-  width: 3px;
-  background: rgba(148, 163, 184, 0.55);
-}
-.toast-success.tray-toast .toast-card::before { background: #4ade80; }
-.toast-error.tray-toast .toast-card::before { background: #fca5a5; }
-.toast-info.tray-toast .toast-card::before { background: #93c5fd; }
-.toast-app-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-.toast-body {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.toast-title { font-size: 13px; font-weight: 600; }
-.toast-message { color: rgba(255, 255, 255, 0.78); }
-.toast-close {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  margin: -3px -3px 0 0;
-  padding: 0;
-  color: rgba(255, 255, 255, 0.6);
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.toast-close:hover { color: rgba(255, 255, 255, 0.92); background: rgba(255, 255, 255, 0.08); }
-.toast-enter-from.tray-toast,
-.toast-leave-to.tray-toast { transform: translateY(5px); }
 .history-list {
   min-height: 0;
   padding: 2px 8px 8px;
@@ -440,9 +331,9 @@ kbd {
 }
 .history-item.selected { box-shadow: inset 2px 0 #3b82f6; }
 .history-item[aria-disabled="true"] { opacity: 0.62; pointer-events: none; }
-.paste-app .history-item { grid-template-columns: 30px minmax(0, 1fr); }
+
 .history-item.image-entry { grid-template-columns: 48px minmax(0, 1fr) auto; min-height: 74px; }
-.paste-app .history-item.image-entry { grid-template-columns: 48px minmax(0, 1fr); }
+
 .kind-icon {
   display: grid;
   place-items: center;
@@ -469,7 +360,7 @@ button.image-thumbnail { cursor: zoom-in; }
 .image-thumbnail:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
 /* 桌面历史列表的图标与图片预览统一占位，含快捷粘贴窗口。 */
 .app-shell:not(.mobile-app) .history-item { grid-template-columns: 48px minmax(0, 1fr) auto; min-height: 74px; }
-.app-shell.paste-app:not(.mobile-app) .history-item { grid-template-columns: 48px minmax(0, 1fr); }
+
 .app-shell:not(.mobile-app) .history-item .kind-icon { width: 48px; height: 48px; }
 .app-shell:not(.mobile-app) .history-item .kind-icon > svg { width: 24px; height: 24px; }
 .entry-body { display: grid; gap: 6px; min-width: 0; }
@@ -571,37 +462,20 @@ button.image-thumbnail { cursor: zoom-in; }
    反向撑成整列宽度；窄视口下内容列因此横向溢出，聚焦输入框时还会把
    overflow:hidden 的容器滚偏。归零后溢出收敛到 filter-scroll 自己的横向滚动。 */
 .history-content > * { min-width: 0; }
-.paste-app { display: block; }
+
 /* 快捷粘贴窗口没有标题栏：搜索/筛选工具栏整体兼作拖拽区（控件除外） */
-.paste-app .toolbar { cursor: grab; user-select: none; }
-.paste-app .toolbar:active { cursor: grabbing; }
-.paste-app .footer-hint { gap: 8px; }
+
+
+
 /* 快速粘贴窗口宽度有限（默认 560，最小 480）：筛选下拉去掉“时间/设备”文字
    标签与固定最小宽，并把 trigger 压成和筛选按钮一致的轻量样式——原带边框
    底色的盒子在小窗里既占宽度又显突兀 */
-.paste-app .time-filter-label,
-.paste-app .device-filter-label { display: none; }
-.paste-app .time-filter-control,
-.paste-app .device-filter-control { margin-left: 0; padding-left: 0; border-left: 0; }
-.paste-app .time-filter-trigger,
-.paste-app .device-filter-trigger {
-  min-width: 0;
-  height: 27px;
-  padding: 0 9px;
-  background: transparent;
-  border-color: transparent;
-  font-size: 12px;
-}
-.paste-app .time-filter-trigger:hover,
-.paste-app .device-filter-trigger:hover { background: rgba(255, 255, 255, 0.05); }
-.paste-app .device-filter-trigger > span { max-width: 108px; }
-.paste-app .app-content {
-  height: 100%;
-  border: 0;
-  background:
-    radial-gradient(circle at 15% -10%, rgba(30, 58, 95, 0.5), transparent 32%),
-    var(--color-background);
-}
+
+
+
+
+
+
 .workspace-titlebar { gap: 12px; padding-inline: 20px; }
 .workspace-titlebar .titlebar-actions { min-width: 0; }
 .workspace-titlebar .pending-total { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { X } from "lucide-vue-next";
-import { isToastWindow } from "../../composables/usePlatform";
-import { hideToastNow, toastPayload } from "./useToast";
+import { hideToastNow, toastPayload } from "./useToastWindow";
 </script>
 
 <template>
   <!-- 收缩为托盘通知窗口专用；主窗口 toast 已改走 ui-kit（useToast displayToast）。 -->
   <Transition name="toast">
     <aside
-      v-if="isToastWindow && toastPayload"
+      v-if="toastPayload"
       class="toast-layer tray-toast"
       :class="`toast-${toastPayload.tone}`"
       :role="toastPayload.tone === 'error' ? 'alert' : 'status'"

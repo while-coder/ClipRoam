@@ -31,12 +31,11 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import ToastLayer from "./features/toast/ToastLayer.vue";
-import { disposeToast, showToast, startToastWindowListener } from "./features/toast/useToast";
+import { displayToast, showToast } from "./features/toast/useToast";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./utils/device";
 import { isNative } from "./platform/runtime";
-import { isToastWindow, isQuickPaste, usePlatform } from "./composables/usePlatform";
+import { isQuickPaste, usePlatform } from "./composables/usePlatform";
 import { activeView } from "./composables/useActiveView";
 import { activeAccountSession, getAccountSession } from "./features/sync/accountSession";
 import {
@@ -426,7 +425,7 @@ function readableStartupError(error: unknown): string {
 async function initializeNativeServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
-    startToastWindowListener(),
+    native.listenToast(displayToast),
     native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
       void native.showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
@@ -477,10 +476,6 @@ async function enableAccountShortcuts(): Promise<void> {
 }
 
 onMounted(async () => {
-  if (isToastWindow) {
-    unlisteners = [await startToastWindowListener()];
-    return;
-  }
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
 
@@ -538,7 +533,6 @@ onBeforeUnmount(() => {
   authenticationController?.abort();
   cancelSettingsRequests();
   if (ageRefreshTimer !== undefined) window.clearInterval(ageRefreshTimer);
-  disposeToast();
   cancelPendingRefresh();
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
@@ -550,9 +544,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main v-if="isToastWindow" class="toast-window-shell" aria-hidden="true"></main>
-
-  <main v-else-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
+  <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
     <section class="setup-loading-content" role="status" aria-live="polite">
       <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
       <strong>ClipRoam</strong>
@@ -662,7 +654,6 @@ onBeforeUnmount(() => {
 
   <slot name="native-overlays" />
 
-  <ToastLayer />
-  <EntryDownloadToasts v-if="!isToastWindow && !isMobile" />
+  <EntryDownloadToasts v-if="!isMobile" />
   <SMessageHost />
 </template>
