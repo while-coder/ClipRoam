@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Copy, Download, Trash2 } from "lucide-vue-next";
-import { canSaveEntry, saveEntryLabel } from "../../utils/entry";
 import type { LocalClipboardEntry } from "../../types";
 
 /**

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { errorMessage } from "./utils";
 import { clientSessionManager, archiveKeyFor } from "./features/sync/clientSessionManager";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { native, type Unlisten } from "./platform/native";
@@ -27,7 +28,6 @@ import {
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import { displayToast, showToast } from "./core/toast";
-import { errorMessage } from "./utils/error";
 import { getDevice } from "./platform/storage";
 import { isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { activeView, activeAccountSession, getAccountSession } from "./core/accountSession";

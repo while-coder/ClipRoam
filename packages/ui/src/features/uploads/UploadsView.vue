@@ -1,10 +1,10 @@
 <script setup lang="ts">
+import { formatFileSize, percentOf } from "../../utils";
 import { Upload } from "lucide-vue-next";
 import { computed } from "vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
-import { formatFileSize, percentOf } from "../../utils/format";
 import type { ServeTaskSnapshot } from "./uploadManager";
 
 /** 中继上传台账由账号的 UploadManager 管理，App.vue 将快照传给本页。 */

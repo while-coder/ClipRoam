@@ -1,6 +1,6 @@
+import { errorMessage } from "../../utils";
 import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
 import type { SyncRequester } from "../sync/httpClient";
-import { errorMessage } from "../../utils/error";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
 import type { PendingRow } from "../../core/content";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;

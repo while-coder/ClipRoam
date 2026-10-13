@@ -1,3 +1,4 @@
+import { errorMessage } from "../../utils";
 import { computed, ref, watch } from "vue";
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
 import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../core/accountSession";
@@ -6,7 +7,6 @@ import { native } from "../../platform/native";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
 import { showToast } from "../../core/toast";
-import { errorMessage } from "../../utils/error";
 import { getServerUrls } from "./authApi";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./httpClient";
 import { activateRemoteClipboard } from "../history/remoteClipboard";

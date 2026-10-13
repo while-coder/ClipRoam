@@ -1,3 +1,4 @@
+import { anyAbortSignal } from "../../utils";
 import {
   AuthResponseSchema,
   type AuthResponse,
@@ -6,7 +7,6 @@ import {
 
 
 import { errorMessageFromBody } from "./httpClient";
-import { anyAbortSignal } from "../../utils/abort";
 
 export type AuthMode = "login" | "register";
 export type ServerProtocol = "http" | "https";

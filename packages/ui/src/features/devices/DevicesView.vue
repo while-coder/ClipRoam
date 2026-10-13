@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatAge, formatExactDateTime } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Monitor, MonitorSmartphone, RefreshCw, Smartphone } from "lucide-vue-next";
@@ -6,7 +7,6 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { activeAccountSession } from "../../core/accountSession";
 import { getDeviceIdentity } from "../../platform/storage";
-import { formatAge, formatExactDateTime } from "../../utils/format";
 import type { Device } from "../../types";
 
 const { connected, devicesById } = clientSessionManager;

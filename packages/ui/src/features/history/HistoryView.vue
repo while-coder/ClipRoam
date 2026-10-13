@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { native } from "../../platform/native";
 import {
@@ -22,16 +23,6 @@ import { useHistoryManifest } from "./useHistoryManifest";
 import { usePlatform } from "../../platform/runtime";
 import { showToast } from "../../core/toast";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
-import {
-  parseLocalDate,
-  TIME_FILTER_LABELS,
-  validateDateRange,
-} from "../../utils/format";
-import {
-  deviceName as deviceDisplayName,
-  fileEntrySummary,
-  uploadStatus as uploadStatusOf,
-} from "../../utils/entry";
 import type {
   ClipboardEntry,
   Device,

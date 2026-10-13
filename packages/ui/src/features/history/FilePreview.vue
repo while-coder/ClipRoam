@@ -1,11 +1,9 @@
 <script setup lang="ts">
+import { errorMessage, formatFileSize, fileEntrySummary } from "../../utils";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { fullEntry } from "./useHistorySync";
 import { isFileNode, type FileInfo, type TreeNode } from "@cliproam/protocol";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-vue-next";
-import { errorMessage } from "../../utils/error";
-import { formatFileSize } from "../../utils/format";
-import { fileEntrySummary } from "../../utils/entry";
 import type { LocalClipboardEntry } from "../../types";
 
 const props = defineProps<{ entry: LocalClipboardEntry }>();

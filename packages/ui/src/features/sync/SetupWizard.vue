@@ -12,10 +12,10 @@ export type SetupDraft = {
 </script>
 
 <script setup lang="ts">
+import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
 import { ArrowLeft, Server, ShieldCheck } from "lucide-vue-next";
 import { normalizeServerAddress } from "./authApi";
-import { errorMessage } from "../../utils/error";
 import { DEFAULT_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../config";
 import type { SyncConfig } from "../../types";
 

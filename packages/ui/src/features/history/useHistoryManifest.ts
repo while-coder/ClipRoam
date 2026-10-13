@@ -1,6 +1,6 @@
+import { errorMessage } from "../../utils";
 import { computed, nextTick, onScopeDispose, ref, watch, type Ref, type WatchSource } from "vue";
 import { PAGE_SIZE } from "../../config";
-import { errorMessage } from "../../utils/error";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 
 type ManifestOptions = {

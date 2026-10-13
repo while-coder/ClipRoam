@@ -67,7 +67,7 @@ async function removeFile(file: AdminFile): Promise<void> {
   }
 }
 
-// 与 apps/app/src/utils/format.ts 的 formatFileSize 是同一实现，改动请同步。
+// 与 packages/ui/src/utils.ts 的 formatFileSize 是同一实现，改动请同步。
 function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;

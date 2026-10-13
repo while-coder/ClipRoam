@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { formatAge, formatExactDateTime } from "../utils";
 import { Monitor } from "lucide-vue-next";
-import { formatAge, formatExactDateTime } from "../utils/format";
 import type { ClipboardEntry } from "../types";
 
 defineProps<{

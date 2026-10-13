@@ -1,7 +1,7 @@
+import { base64ToBytes, bytesToBase64 } from "../utils";
 import { applicationDatabase } from "../core/database";
 import { native } from "./native";
 import type { Device, SyncConfig } from "../types";
-import { base64ToBytes, bytesToBase64 } from "../utils/bytes";
 
 /** Application storage for encrypted login configuration and device identity. */
 const CONFIG_KEY = "cliproam.connection.v1";

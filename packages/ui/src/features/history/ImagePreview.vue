@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { errorMessage } from "../../utils";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { previewSource } from "../../platform/runtime";
-import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
 
 const props = defineProps<{

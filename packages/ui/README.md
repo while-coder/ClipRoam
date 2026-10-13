@@ -43,7 +43,7 @@ src/
   components/                      # 跨功能布局和展示组件
   core/                            # 账号生命周期、数据库、内容、哈希、提示
   platform/                        # 平台接口、适配器、运行信息、文件与存储
-  utils/                           # 共享纯函数
+  utils.ts                         # 取消信号、字节转换、错误、格式化和条目展示纯函数
   features/
     sync/                          # ClientSessionManager、HTTP、认证 API、登录表单
     history/                       # 历史缓存、分页查询、筛选和预览
@@ -55,6 +55,8 @@ src/
 ```
 
 新增列表操作应放到所属 Manager，页面绑定只调用 Manager，不直接读写数据库或维护另一份业务列表。
+
+通用纯函数集中在 `src/utils.ts`，按用途分组并保留具名导出。`@cliproam/ui/bytes` 和 `@cliproam/ui/errors` 映射到该模块，原有客户端导入方式保持可用。账号、数据库、剪贴板内容处理、增量哈希和提示仍归各自模块管理。
 
 客户端会话从 `clientSessionManager` 单例进入，`start` 创建账号资源与连接，`stop` 释放账号资源；配置与偏好持久化也由该入口提供。登录验证成功与 WebSocket 已连接是两个独立状态，连接暂时断开不会清除登录状态。后台任务持有自己的 `AccountSession`，通过 `session.http` 使用该账号的请求器；账号切换会取消旧会话，旧任务不能取得新账号的凭证。
 
