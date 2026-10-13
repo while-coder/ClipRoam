@@ -75,10 +75,10 @@ pub(crate) fn deliver_paste(
 ) -> Result<(), String> {
     Ok(())
 }
+pub(crate) fn on_paste_window_focus(_app: AppHandle, _focused: bool) {}
 pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
     false
 }
-pub(crate) fn on_paste_window_focus(_app: AppHandle, _focused: bool) {}
 pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_cliproam_share_receiver::init());
