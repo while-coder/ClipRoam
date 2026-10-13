@@ -4,7 +4,7 @@ import type { FileStat, SaveTarget } from "./files";
 import type { ShareReceiverEvent } from "../types";
 import type { Ref } from "vue";
 
-export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string };
+export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string; architecture?: string };
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };

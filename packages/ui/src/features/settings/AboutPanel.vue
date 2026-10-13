@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { BookOpen, ExternalLink, Github, MessageSquare, Package } from "lucide-vue-next";
-import { computed, ref } from "vue";
-import { native } from "../../platform/native";
+import { computed, onMounted, ref } from "vue";
+import { native, type DeviceInfo } from "../../platform/native";
 import { useAppVersion } from "../../platform/runtime";
 import { errorMessage } from "../../utils";
 import productIcon from "../../assets/cliproam-icon.png";
@@ -9,12 +9,39 @@ import productIcon from "../../assets/cliproam-icon.png";
 const projectUrl = "https://github.com/while-coder/ClipRoam";
 const { appVersion } = useAppVersion();
 const linkError = ref("");
+const deviceInfo = ref<DeviceInfo>();
+const openingFeedback = ref(false);
+let deviceInfoRequest: Promise<void> | undefined;
+
+function loadDeviceInfo(): Promise<void> {
+  if (deviceInfo.value) return Promise.resolve();
+  return deviceInfoRequest ??= native.getDeviceInfo().then((info) => {
+    deviceInfo.value = info;
+  }).catch(() => {
+    // 信息读取失败也允许反馈，保留明确的补充提示；下次点击时重试。
+    deviceInfoRequest = undefined;
+  });
+}
+
+onMounted(() => { void loadDeviceInfo(); });
+
+const operatingSystem = computed(() => {
+  const info = deviceInfo.value;
+  if (!info) return "未能读取，请补充";
+  const names: Record<string, string> = {
+    macos: "macOS", windows: "Windows", linux: "Linux",
+    android: "Android", ios: "iOS", browser: "浏览器",
+  };
+  return [names[info.osType] || info.osType, info.osVersion].filter(Boolean).join(" ") || "未能读取，请补充";
+});
+
 const feedbackUrl = computed(() => {
   const url = new URL(`${projectUrl}/issues/new`);
   url.searchParams.set("body", [
     "### 使用环境",
-    `- ClipRoam 版本：${appVersion.value || "未知"}`,
-    "- 操作系统及版本：",
+    `- ClipRoam 版本：${appVersion.value || deviceInfo.value?.appVersion || "未知"}`,
+    `- 操作系统及版本：${operatingSystem.value}`,
+    ...(deviceInfo.value?.architecture ? [`- 处理器架构：${deviceInfo.value.architecture}`] : []),
     "",
     "### 问题或建议",
     "请描述遇到的问题或希望增加的功能。",
@@ -28,6 +55,17 @@ const feedbackUrl = computed(() => {
   ].join("\n"));
   return url.href;
 });
+
+async function openFeedback(): Promise<void> {
+  if (openingFeedback.value) return;
+  openingFeedback.value = true;
+  try {
+    await loadDeviceInfo();
+    await openLink(feedbackUrl.value);
+  } finally {
+    openingFeedback.value = false;
+  }
+}
 
 async function openLink(url: string): Promise<void> {
   linkError.value = "";
@@ -73,7 +111,7 @@ async function openLink(url: string): Promise<void> {
       <SButton @click="openLink(`${projectUrl}/releases`)">
         <Package :size="16" aria-hidden="true" />版本发布
       </SButton>
-      <SButton type="primary" @click="openLink(feedbackUrl)">
+      <SButton type="primary" :loading="openingFeedback" @click="openFeedback">
         <MessageSquare :size="16" aria-hidden="true" />问题与建议
       </SButton>
     </div>

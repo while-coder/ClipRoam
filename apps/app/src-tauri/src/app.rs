@@ -221,6 +221,7 @@ pub(crate) fn native_get_device_info(app: AppHandle) -> Result<DeviceInfo, Strin
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "未知".to_string()),
         os_type: tauri_plugin_os::platform().to_string(),
         os_version: tauri_plugin_os::version().to_string(),
+        architecture: tauri_plugin_os::arch().to_string(),
         app_version: app.package_info().version.to_string(),
     })
 }
@@ -232,5 +233,6 @@ pub(crate) struct DeviceInfo {
     cpu: String,
     os_type: String,
     os_version: String,
+    architecture: String,
     app_version: String,
 }
