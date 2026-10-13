@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import { getAccountSession } from "../sync/accountSession";
-import { showToast } from "../toast/useToast";
+import { showToast } from "../../core/toast";
 import { errorMessage } from "../../utils/error";
 
 // Shared across workspace pages so switching pages cannot open another picker.

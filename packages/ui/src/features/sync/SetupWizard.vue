@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AuthMode, ServerProtocol } from "../sync/syncSetup";
+import type { AuthMode, ServerProtocol } from "./syncSetup";
 
 /** 提交给 App.vue 的表单草稿；serverAddress 已经过规范化。 */
 export type SetupDraft = {
@@ -14,9 +14,9 @@ export type SetupDraft = {
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { ArrowLeft, Server, ShieldCheck } from "lucide-vue-next";
-import { normalizeServerAddress } from "../sync/syncSetup";
+import { normalizeServerAddress } from "./syncSetup";
 import { errorMessage } from "../../utils/error";
-import { CONFIGURED_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
+import { DEFAULT_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../config";
 import type { SyncConfig } from "../../types";
 
 const props = defineProps<{
@@ -37,7 +37,7 @@ const emit = defineEmits<{
 }>();
 
 const setupServerAddress = ref(DEFAULT_SERVER_ADDRESS);
-const setupServerProtocol = ref<ServerProtocol>(CONFIGURED_SERVER_PROTOCOL);
+const setupServerProtocol = ref<ServerProtocol>(DEFAULT_SERVER_PROTOCOL);
 const setupUsername = ref("");
 const setupPassword = ref("");
 const authMode = ref<AuthMode>("login");
@@ -74,7 +74,7 @@ const protocolHint = computed(() =>
 
 function setFields(config?: SyncConfig): void {
   setupServerAddress.value = config?.serverAddress || DEFAULT_SERVER_ADDRESS;
-  setupServerProtocol.value = config?.serverProtocol || CONFIGURED_SERVER_PROTOCOL;
+  setupServerProtocol.value = config?.serverProtocol || DEFAULT_SERVER_PROTOCOL;
   setupUsername.value = config?.username || "";
   setupPassword.value = "";
   authMode.value = "login";

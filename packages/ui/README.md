@@ -27,7 +27,9 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 - `HistoryClient` 负责历史 HTTP 请求及详情回填，`HistoryCache` 负责记录的本地缓存；两者统一通过 `HistoryManager` 使用。
 - `CaptureService` 捕获和解析剪贴板；`PendingUploader` 发布待上传记录；`RelayUploader` 传输中继文件。它们通过对应 Manager 读写队列或任务列表。
 - `sync/AccountSession` 装配 Manager，管理账号生命周期、取消信号和定时任务；`SyncClient` 管理连接与传输 worker。
-- `src/core` 保留共享数据库、内容处理和哈希；`src/platform` 封装平台操作；`src/components` 放置跨功能的展示组件。
+- `src/core` 保留共享数据库、内容处理、哈希和提示；`src/platform` 封装平台操作与能力状态；`src/components` 放置跨功能的展示组件。
+- `src/config.ts` 统一平台能力、服务器地址、分页和账号偏好的默认配置；登录表单与认证逻辑放在 `features/sync`。
+- `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；包主入口导出的布局默认不带业务菜单。
 
 新增列表操作应放到所属 Manager，页面绑定只调用 Manager，不直接读写数据库或维护另一份业务列表。
 

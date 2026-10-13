@@ -1,4 +1,4 @@
-import { BROWSER_CAPABILITIES } from "../utils/constants";
+import { BROWSER_CAPABILITIES } from "../config";
 import type { PlatformCapabilities, ShareReceiverEvent, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";

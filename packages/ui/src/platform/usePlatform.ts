@@ -1,6 +1,6 @@
 import { computed, ref } from "vue";
-import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../utils/constants";
-import { isNative } from "../platform/runtime";
+import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
+import { isNative } from "./runtime";
 import type { PlatformCapabilities } from "../types";
 
 /** Window mode and platform capabilities, shared by the application. */

@@ -8,7 +8,7 @@ import { CaptureService } from "../pending-upload/captureService";
 import { AccountFiles } from "../../platform/files";
 import { clipboardPlatform } from "../../platform/clipboard";
 import { profileName } from "../../core/hash";
-import { showToast } from "../toast/useToast";
+import { showToast } from "../../core/toast";
 import { createSettingsState } from "../settings/settingsState";
 import type { SyncClient } from "./syncClient";
 import type { SyncConfig, AccountPreferences, Device } from "../../types";
@@ -50,6 +50,8 @@ export function accountStateRef<K extends keyof AccountState>(key: K): WritableC
     },
   });
 }
+
+export const activeView = accountStateRef("activeView");
 
 export function archiveKeyFor(config: SyncConfig | undefined): string {
   const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { native, type Unlisten } from "./platform/native";
-import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./features/sync/syncDefaults";
+import { DEFAULT_AUTO_RECEIVE_CLIPBOARD, DEFAULT_AUTO_UPLOAD_LIMIT_MB, DEFAULT_EXCLUDE_PATTERNS, DEFAULT_WATCH_CLIPBOARD } from "./config";
 import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
@@ -16,8 +16,8 @@ import DownloadsView from "./features/downloads/DownloadsView.vue";
 import DevicesView from "./features/devices/DevicesView.vue";
 import UploadsView from "./features/uploads/UploadsView.vue";
 import PendingUploadsView from "./features/pending-upload/PendingUploadsView.vue";
-import SetupWizard from "./features/setup/SetupWizard.vue";
-import type { SetupDraft } from "./features/setup/SetupWizard.vue";
+import SetupWizard from "./features/sync/SetupWizard.vue";
+import type { SetupDraft } from "./features/sync/SetupWizard.vue";
 import {
   activatingEntryIds,
   activateFromView,
@@ -26,13 +26,12 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { displayToast, showToast } from "./features/toast/useToast";
+import { displayToast, showToast } from "./core/toast";
 import { errorMessage } from "./utils/error";
 import { getDevice } from "./platform/storage";
 import { isNative } from "./platform/runtime";
-import { isQuickPaste, usePlatform } from "./composables/usePlatform";
-import { activeView } from "./composables/useActiveView";
-import { activeAccountSession, getAccountSession } from "./features/sync/accountSession";
+import { isQuickPaste, usePlatform } from "./platform/usePlatform";
+import { activeView, activeAccountSession, getAccountSession } from "./features/sync/accountSession";
 import {
   archiveKeyFor,
   currentUsername,
@@ -80,10 +79,6 @@ import {
   stopAllDownloads,
   ensureLocalFiles,
 } from "./features/downloads/useDownloads";
-import {
-  activeUploadCount,
-  uploadTasks,
-} from "./features/uploads/useUploads";
 import type {
   AccountPreferences,
   ShareImportSummary,
@@ -92,6 +87,8 @@ import type {
 
 const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
 const { initAppVersion } = useAppVersion();
+const uploadTasks = computed(() => getAccountSession()?.uploads.tasks.value ?? []);
+const activeUploadCount = computed(() => getAccountSession()?.uploads.activeCount.value ?? 0);
 
 const historyView = ref<InstanceType<typeof HistoryView>>();
 const quickHistoryView = ref<InstanceType<typeof HistoryView>>();

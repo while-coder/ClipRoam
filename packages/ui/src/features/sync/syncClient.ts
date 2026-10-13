@@ -1,5 +1,5 @@
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
-import { DEFAULT_AUTO_UPLOAD_LIMIT } from "./syncDefaults";
+import { DEFAULT_AUTO_UPLOAD_LIMIT } from "../../config";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./syncHttp";
 import { errorMessage } from "../../utils/error";
 import type { AccountSession } from "./accountSession";

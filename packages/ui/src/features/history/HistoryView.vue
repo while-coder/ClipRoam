@@ -11,14 +11,15 @@ import EntryContextMenu from "./EntryContextMenu.vue";
 import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
+import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import PaginationControl from "./PaginationControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { usePlatform } from "../../composables/usePlatform";
-import { showToast } from "../toast/useToast";
+import { usePlatform } from "../../platform/usePlatform";
+import { showToast } from "../../core/toast";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/useClipboardCapture";
 import {
   parseLocalDate,
@@ -316,6 +317,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
 <template>
   <WorkspacePage title="剪贴板历史" layout="history">
+    <template #menu><WorkspaceMenu /></template>
     <template v-if="isQuickPaste" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>

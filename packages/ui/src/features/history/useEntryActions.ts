@@ -1,7 +1,7 @@
 import { accountStateRef, getAccountSession } from "../sync/accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isQuickPaste, usePlatform } from "../../composables/usePlatform";
-import { showToast } from "../toast/useToast";
+import { isMobile, isQuickPaste, usePlatform } from "../../platform/usePlatform";
+import { showToast } from "../../core/toast";
 import { errorMessage } from "../../utils/error";
 import { canSaveEntry } from "../../utils/entry";
 import { downloadEntry } from "../downloads/useDownloads";

@@ -1,6 +1,6 @@
-import { native } from "../../platform/native";
+import { native } from "../platform/native";
 import { toast } from "@qingfeng346/ui-kit";
-import type { ToastPayload, ToastTone } from "../../types";
+import type { ToastPayload, ToastTone } from "../types";
 
 export function displayToast(payload: ToastPayload): void {
   toast.show(payload.tone, payload.message);

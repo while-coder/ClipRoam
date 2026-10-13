@@ -1,7 +1,7 @@
 import { getAccountSession } from "../sync/accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
-import { isMobile, usePlatform } from "../../composables/usePlatform";
-import { showToast } from "../toast/useToast";
+import { isMobile, usePlatform } from "../../platform/usePlatform";
+import { showToast } from "../../core/toast";
 import { errorMessage } from "../../utils/error";
 import { getSyncClient } from "../sync/syncEngine";
 import { getActiveConfig, getActivePreferences } from "../sync/syncSession";

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Monitor, MonitorSmartphone, RefreshCw, Smartphone } from "lucide-vue-next";
 import WorkspacePage from "../../components/WorkspacePage.vue";
+import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { activeAccountSession } from "../sync/accountSession";
 import { connected, devicesById } from "../sync/syncEngine";
 import { getDeviceIdentity } from "../../platform/storage";
@@ -63,6 +64,7 @@ onBeforeUnmount(() => { disposed = true; });
 
 <template>
   <WorkspacePage title="设备">
+    <template #menu><WorkspaceMenu /></template>
     <template #status>
       <span role="status">共 {{ devices.length }} 台<template v-if="connected"> · {{ onlineCount }} 台在线</template></span>
     </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { Check, ChevronDown } from "lucide-vue-next";
-import { isMobile } from "../../composables/usePlatform";
+import { isMobile } from "../../platform/usePlatform";
 import { usePopoverMenu } from "./usePopoverMenu";
 import type { EntryFilter } from "../../types";
 

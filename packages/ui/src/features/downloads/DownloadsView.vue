@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { ChevronDown, Download, Trash2, X } from "lucide-vue-next";
 import WorkspacePage from "../../components/WorkspacePage.vue";
+import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
 import { formatExactDateTime, formatFileSize, percentOf } from "../../utils/format";
 import type { DownloadRecord, DownloadTaskSnapshot } from "./types";
@@ -36,6 +37,7 @@ function percent(record: DownloadRecord): number {
 
 <template>
   <WorkspacePage title="下载">
+    <template #menu><WorkspaceMenu /></template>
     <template #status>
       <span role="status">{{ activeCount ? `${activeCount} 个进行中` : `共 ${records.length} 条记录` }}</span>
     </template>

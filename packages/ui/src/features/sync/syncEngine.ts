@@ -1,11 +1,10 @@
 import { computed, watch } from "vue";
 import { native } from "../../platform/native";
-import { activeView } from "../../composables/useActiveView";
-import { showToast } from "../toast/useToast";
+import { showToast } from "../../core/toast";
 import { getDevice } from "../../platform/storage";
 import { getServerUrls } from "./syncSetup";
 import { SyncClient } from "./syncClient";
-import { AccountSession, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
+import { AccountSession, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "./accountSession";
 import { activateRemoteClipboard } from "../history/remoteClipboard";
 import { getActivePreferences } from "./syncSession";
 import { errorMessage } from "../../utils/error";

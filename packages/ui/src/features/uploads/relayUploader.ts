@@ -4,7 +4,7 @@ import { errorMessageFromBody, type SyncRequester } from "../sync/syncHttp";
 type RelayUploaderDeps = {
   session: AccountSession;
 };
-import type { ServeTaskSnapshot } from "./types";
+import type { ServeTaskSnapshot } from "./uploadManager";
 
 /** Each relay request starts immediately; independent sessions run concurrently. */
 export class RelayUploader {

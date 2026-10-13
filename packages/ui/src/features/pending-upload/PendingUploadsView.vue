@@ -3,6 +3,7 @@ import { RotateCcw, Trash2 } from "lucide-vue-next";
 import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
+import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { deviceName as deviceDisplayName, isHashing } from "../../utils/entry";
 import { percentOf } from "../../utils/format";
 import type { Device, LocalClipboardEntry, UploadProgress } from "../../types";
@@ -37,6 +38,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
 
 <template>
   <WorkspacePage title="待上传">
+    <template #menu><WorkspaceMenu /></template>
     <template #status>
       <span role="status">共 {{ entries.length }} 条待上传</span>
     </template>

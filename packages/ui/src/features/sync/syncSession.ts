@@ -3,8 +3,7 @@ import { archiveKeyFor, getAccountSession, replaceAccountSession } from "./accou
 export { archiveKeyFor } from "./accountSession";
 import { AccountDatabase } from "../../core/database";
 import { readLoginConfig, writeLoginConfig } from "../../platform/storage";
-import { DEFAULT_SERVER_ADDRESS } from "../../utils/constants";
-import { DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "./syncDefaults";
+import { DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
 import type { AccountPreferences, SyncConfig } from "../../types";
 
 /** 登录或会话验证通过后，才允许从登录页返回主界面。 */

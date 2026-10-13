@@ -2,8 +2,8 @@ import { computed } from "vue";
 import { getAccountSession } from "../sync/accountSession";
 import { errorMessage } from "../../utils/error";
 import type { LocalClipboardEntry } from "../../types";
-import { isMobile } from "../../composables/usePlatform";
-import { showToast } from "../toast/useToast";
+import { isMobile } from "../../platform/usePlatform";
+import { showToast } from "../../core/toast";
 import { DownloadCancelledError } from "./types";
 
 export const downloadRecords = computed(() => getAccountSession()?.downloads.downloadRecords.value ?? []);

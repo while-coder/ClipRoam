@@ -1,7 +1,27 @@
-// 三端共用的账号偏好默认值，由各客户端的 native 能力决定是否启用。
-import type { AccountPreferences } from "../../types";
+import type { AccountPreferences, PlatformCapabilities } from "./types";
 
 export const DEFAULT_SERVER_PROTOCOL = "http";
+export const DEFAULT_SERVER_ADDRESS = "127.0.0.1:4810";
+export const PAGE_SIZE = 50;
+
+export const DESKTOP_CAPABILITIES: PlatformCapabilities = {
+  mobile: false,
+  clipboardMonitoring: true,
+  globalShortcut: true,
+  automaticPaste: true,
+  fileClipboard: true,
+  imageClipboard: true,
+  nativeFileExport: true,
+  openDataDirectory: true,
+  shareReceiver: false,
+};
+
+export const BROWSER_CAPABILITIES: PlatformCapabilities = {
+  mobile: false, clipboardMonitoring: false, globalShortcut: false, automaticPaste: false,
+  fileClipboard: false, imageClipboard: true, nativeFileExport: true, openDataDirectory: false, shareReceiver: false,
+};
+
+// 三端共用的账号偏好默认值，由各客户端的 native 能力决定是否启用。
 export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 50;
 export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
 export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
