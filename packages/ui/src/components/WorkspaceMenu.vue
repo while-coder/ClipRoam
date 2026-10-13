@@ -65,7 +65,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
     <button ref="trigger" class="workspace-menu-trigger" type="button" aria-label="工作区菜单"
       aria-haspopup="menu" :aria-expanded="open" @click="toggle" @keydown.down.prevent="!open && toggle()">
       <span v-if="uploadingFiles" class="s-spinner" aria-label="正在导入内容" />
-      <Menu v-else :size="20" aria-hidden="true" />
+      <Menu v-else :size="16" aria-hidden="true" />
     </button>
     <div v-if="open" ref="menu" class="workspace-menu-popover" role="menu" aria-label="工作区操作" @keydown="handleKeydown">
       <span class="workspace-menu-status" :class="connectionStatus.tone" :title="connectionStatus.title" role="status">{{ connectionStatus.label }}</span>
@@ -85,9 +85,9 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
 <style scoped>
 .workspace-menu { position: relative; flex-shrink: 0; }
 .workspace-menu-trigger {
-  display: grid; place-items: center; width: 44px; height: 44px; padding: 0;
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
   color: var(--color-foreground); background: transparent; border: 1px solid var(--border);
-  border-radius: 8px; cursor: pointer; touch-action: manipulation;
+  border-radius: 6px; cursor: pointer; touch-action: manipulation;
 }
 .workspace-menu-popover {
   position: absolute; z-index: 60; top: calc(100% + 8px); right: 0;

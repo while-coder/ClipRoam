@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange } from "../../utils";
 import { computed, nextTick, ref } from "vue";
-import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-vue-next";
-import { usePopoverMenu } from "./usePopoverMenu";
+import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-vue-next";
 import type { TimeFilter } from "../../types";
 
 type CalendarDay = { key: string; label: number; inMonth: boolean };
@@ -29,15 +28,12 @@ const options: Array<{ value: TimeFilter; label: string }> = [
 ];
 const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
 
-const trigger = ref<HTMLButtonElement>();
-const menu = ref<HTMLElement>();
+const trigger = ref<{ $el: HTMLElement }>();
 const calendarOpen = ref(false);
-const { menuOpen, menuStyle, toggleMenu, openMenuFromKeyboard, handleMenuKeydown } = usePopoverMenu({
-  trigger,
-  menu,
-  width: 172,
-  focusSelector: "[aria-selected='true']",
-});
+
+function focusTrigger(): void {
+  trigger.value?.$el.querySelector<HTMLButtonElement>("button.s-select")?.focus();
+}
 const displayMonth = ref(startOfMonth(new Date()));
 const draftStartDate = ref("");
 const draftEndDate = ref("");
@@ -81,13 +77,12 @@ function displayDate(value: string): string {
 }
 
 function selectOption(value: TimeFilter): void {
-  menuOpen.value = false;
   if (value === "custom") {
     openCalendar();
     return;
   }
   emit("update:modelValue", value);
-  trigger.value?.focus();
+  focusTrigger();
 }
 
 function openCalendar(): void {
@@ -103,7 +98,7 @@ function openCalendar(): void {
 
 function closeCalendar(): void {
   calendarOpen.value = false;
-  nextTick(() => trigger.value?.focus());
+  nextTick(focusTrigger);
 }
 
 function applyCalendar(): void {
@@ -112,7 +107,7 @@ function applyCalendar(): void {
   emit("update:endDate", draftEndDate.value);
   emit("update:modelValue", "custom");
   calendarOpen.value = false;
-  nextTick(() => trigger.value?.focus());
+  nextTick(focusTrigger);
 }
 
 function selectDay(value: string): void {
@@ -150,47 +145,18 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 <template>
   <div class="time-filter-control" :class="{ invalid: error }">
     <span class="time-filter-label">时间</span>
-    <button
+    <SSelect
       ref="trigger"
       class="time-filter-trigger"
-      type="button"
-      aria-haspopup="listbox"
-      :aria-expanded="menuOpen"
-      :title="error || `时间筛选：${currentLabel}`"
-      @click="toggleMenu"
-      @keydown.stop
-      @keydown.arrow-down.prevent="openMenuFromKeyboard"
-      @keydown.arrow-up.prevent="openMenuFromKeyboard"
-    >
-      <span>{{ currentLabel }}</span>
-      <ChevronDown :size="14" aria-hidden="true" />
-    </button>
-  </div>
-
-  <Teleport to="body">
-    <div
-      v-if="menuOpen"
-      ref="menu"
-      class="time-filter-menu"
-      role="listbox"
+      :value="modelValue"
+      :options="options"
+      :menu-width="172"
+      :invalid="Boolean(error)"
       aria-label="时间筛选"
-      :style="menuStyle"
-      @keydown="handleMenuKeydown"
-    >
-      <button
-        v-for="option in options"
-        :key="option.value"
-        type="button"
-        role="option"
-        :aria-selected="modelValue === option.value"
-        :class="{ active: modelValue === option.value }"
-        @click="selectOption(option.value)"
-      >
-        <Check :size="14" :class="{ hidden: modelValue !== option.value }" aria-hidden="true" />
-        <span>{{ option.label }}</span>
-      </button>
-    </div>
-  </Teleport>
+      :title="error || `时间筛选：${currentLabel}`"
+      @select="selectOption"
+    />
+  </div>
 
   <!-- 日历弹窗外壳交给 SModal（自带遮罩/Esc/焦点圈围），日期网格与区间逻辑原样。 -->
   <SModal
@@ -241,15 +207,11 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 <style scoped>
 .time-filter-control { display: flex; flex: 0 0 auto; align-items: center; height: 27px; gap: 5px; margin-left: 5px; padding-left: 9px; border-left: 1px solid rgba(148, 163, 184, 0.16); white-space: nowrap; }
 .time-filter-label { color: #64748b; font-size: 11px; }
-.time-filter-trigger { display: flex; align-items: center; justify-content: space-between; min-width: 106px; height: 27px; gap: 8px; padding: 0 7px 0 9px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 11px; cursor: pointer; }
-.time-filter-trigger:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
-.time-filter-trigger:focus-visible { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
-.invalid .time-filter-trigger { color: #fecaca; border-color: rgba(248, 113, 113, 0.58); }
-.time-filter-menu { position: fixed; z-index: 60; display: grid; gap: 2px; padding: 5px; background: #111c31; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 8px; box-shadow: 0 14px 36px rgba(2, 6, 23, 0.62); }
-.time-filter-menu button { display: grid; grid-template-columns: 18px 1fr; align-items: center; min-height: 34px; padding: 0 9px; color: #cbd5e1; text-align: left; background: transparent; border: 0; border-radius: 5px; font-size: 12px; cursor: pointer; }
-.time-filter-menu button:hover, .time-filter-menu button:focus-visible { color: #f8fafc; background: rgba(96, 165, 250, 0.13); outline: 0; }
-.time-filter-menu button.active { color: #dbeafe; background: #1e3a5f; }
-.hidden { visibility: hidden; }
+.time-filter-control .time-filter-trigger { min-width: 106px; width: auto; }
+.time-filter-trigger :deep(.s-select) { min-height: 27px; height: 27px; gap: 8px; padding: 0 7px 0 9px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 11px; }
+.time-filter-trigger :deep(.s-select:hover) { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
+.time-filter-trigger :deep(.s-select:focus-visible) { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
+.invalid .time-filter-trigger :deep(.s-select) { color: #fecaca; border-color: rgba(248, 113, 113, 0.58); }
 .time-calendar-month-header button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: #94a3b8; background: transparent; border: 0; border-radius: 7px; cursor: pointer; }
 .time-calendar-month-header button:hover { color: #f8fafc; background: rgba(255, 255, 255, 0.07); }
 .time-calendar-boundaries { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
@@ -274,8 +236,8 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 @media (max-width: 640px) {
   .time-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .time-filter-label { font-size: 13px; }
-  .time-filter-trigger { min-width: 126px; height: 44px; padding-inline: 12px 9px; font-size: 13px; }
-  .time-filter-menu button { min-height: 36px; font-size: 13px; }
+  .time-filter-control .time-filter-trigger { min-width: 126px; }
+  .time-filter-trigger :deep(.s-select) { min-height: 44px; height: 44px; padding-inline: 12px 9px; font-size: 13px; }
   .time-calendar-grid button { height: 40px; font-size: 13px; }
 }
 </style>

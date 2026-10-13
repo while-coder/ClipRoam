@@ -51,6 +51,16 @@ export class AccountFiles {
     return (await this.resolveMany([fileId])).get(fileId);
   }
 
+  /** 普通下载的保存位置；浏览器 Blob 缓存没有可展示的磁盘路径。 */
+  async downloadDestination(fileIds: string[]): Promise<string> {
+    if (!isNative) return "浏览器本地缓存";
+    const root = `${await this.root()}/download`;
+    const ids = [...new Set(fileIds)].map(contentId);
+    if (!ids.length) return root;
+    const available = await this.resolveMany(ids);
+    return ids.map((id) => available.get(id) ?? `${root}/${id}`).join("\n");
+  }
+
   async resolveMany(fileIds: string[]): Promise<Map<string,string>> {
     const ids = [...new Set(fileIds)].map(contentId), result = new Map<string,string>();
     if (!ids.length) return result;

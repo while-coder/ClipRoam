@@ -4,7 +4,7 @@ import type { LocalClipboardEntry } from "../../types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
 import type { SaveTarget } from "../../platform/files";
-import { safeName } from "../../core/content";
+import { safeName, type StoredEntry } from "../../core/content";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
@@ -151,10 +151,18 @@ export class DownloadManager {
     await this.session.database.batch(partials.map((id) => ({name:"blobs",id})));
     const records = await this.session.database.list<DownloadRecord>("downloads");
     for (const record of records) {
+      let changed = false;
       if (record.finishedMs === null) {
         Object.assign(record, { status: "interrupted", finishedMs: Date.now(), error: "应用退出，下载未完成" });
-        await this.session.database.put("downloads", record.id, record);
+        changed = true;
       }
+      if (!record.destination?.trim()) {
+        const entry = await this.session.database.get<StoredEntry>("entries", record.entryId);
+        const ids = entry ? entryContents(entry).map((file) => file.fileId) : record.files.map((file) => file.fileId);
+        record.destination = await this.session.files.downloadDestination(ids);
+        changed = true;
+      }
+      if (changed) await this.session.database.put("downloads", record.id, record);
       this.#records.set(record.id, record);
     }
     await this.#trim(); this.#publish();
@@ -202,6 +210,7 @@ export class DownloadManager {
     const save = saveId ? this.#saves.get(saveId) : undefined;
     if (saveId && (!save || save.entryId !== entryId)) throw new Error("另存为任务不存在或不匹配");
     if (save) { save.recordId = record.id; record.destination = save.target.value; }
+    else record.destination = await this.session.files.downloadDestination(files.map((file) => file.fileId));
     this.#records.set(record.id, record);
     await this.#persist(record);
     await this.#trim();

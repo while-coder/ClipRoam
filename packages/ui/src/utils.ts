@@ -75,15 +75,10 @@ export function formatAge(createdAt: string, now: number): string {
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(createdAt));
 }
 
-export function formatExactDateTime(createdAt: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(createdAt));
+export function formatExactDateTime(createdAt: string | number): string {
+  const date = new Date(createdAt);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 export function parseLocalDate(value: string, endOfDay = false): Date | undefined {

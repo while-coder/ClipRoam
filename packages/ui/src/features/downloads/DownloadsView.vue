@@ -15,9 +15,6 @@ const emit = defineEmits<{
   "clear-finished": [];
 }>();
 const expandedRecords = ref(new Set<string>());
-const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
-});
 function toggleDetails(id: string): void {
   if (expandedRecords.value.has(id)) expandedRecords.value.delete(id);
   else expandedRecords.value.add(id);
@@ -67,7 +64,7 @@ function percent(record: DownloadRecord): number {
                 <span class="download-status" :class="record.status">{{ labels[record.status] }}</span>
                 <span v-if="record.fileCount > 1">· {{ record.fileCount }} 个文件</span>
                 <span>· <template v-if="record.finishedMs === null">{{ formatFileSize(record.receivedBytes) }}/</template>{{ formatFileSize(record.size) }}</span>
-                <time :datetime="new Date(record.createdMs).toISOString()" :title="formatExactDateTime(new Date(record.createdMs).toISOString())">· {{ timeFormatter.format(record.createdMs) }}</time>
+                <time :datetime="new Date(record.createdMs).toISOString()">· {{ formatExactDateTime(record.createdMs) }}</time>
               </span>
               <span v-if="record.error" class="download-record-error download-record-error-summary" :title="record.error">{{ record.error }}</span>
               <TransferProgress v-if="record.finishedMs === null" :percent="percent(record)" :label="`${record.label} 下载进度`" />
@@ -83,7 +80,7 @@ function percent(record: DownloadRecord): number {
           </button>
         </div>
         <div v-if="expandedRecords.has(record.id)" :id="`download-details-${record.id}`" class="download-record-details">
-          <span class="download-record-destination">保存位置：{{ record.destination }}</span>
+          <span class="download-record-destination">保存位置：{{ record.destination || '未记录' }}</span>
           <span v-if="record.error" class="download-record-error">{{ record.error }}</span>
           <div v-for="file in record.fileCount > 1 ? record.files : []" :key="file.id" class="download-record-file">
             <span>{{ file.label }}</span>
@@ -116,6 +113,7 @@ function percent(record: DownloadRecord): number {
 .download-record-icon-button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--color-secondary-text); cursor: pointer; touch-action: manipulation; }
 .download-record-icon-button:hover { color: var(--sui-error); }
 .download-record-details { display: grid; gap: 4px; margin: 4px 44px 6px 40px; color: var(--color-secondary-text); font-size: 12px; overflow-wrap: anywhere; }
+.download-record-destination { white-space: pre-wrap; }
 .download-record-file { display: grid; gap: 3px; padding: 6px 0; }
 @media (max-width: 640px) {
   .download-record-summary { grid-template-columns: 44px minmax(0, 1fr); }
