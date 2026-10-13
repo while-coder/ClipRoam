@@ -75,6 +75,7 @@ function update(value: string[]): void {
 </template>
 
 <style scoped>
+.entry-type-filter.s-tag-filter { flex: 0 0 auto; flex-wrap: nowrap; }
 .entry-type-filter :deep(.s-tag-filter-clear) { display: none; }
 .entry-type-trigger { display: flex; align-items: center; justify-content: space-between; min-width: 96px; height: 44px; gap: 8px; padding: 0 9px 0 12px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .entry-type-trigger:hover { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }

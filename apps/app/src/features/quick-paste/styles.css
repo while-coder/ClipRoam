@@ -9,22 +9,7 @@ html.paste-window-root .app-shell { overflow: clip; }
 .paste-app .toolbar { cursor: grab; user-select: none; }
 .paste-app .toolbar:active { cursor: grabbing; }
 .paste-app .footer-hint { gap: 8px; }
-.paste-app .time-filter-label,
-.paste-app .device-filter-label { display: none; }
-.paste-app .time-filter-control,
-.paste-app .device-filter-control { margin-left: 0; padding-left: 0; border-left: 0; }
-.paste-app .time-filter-trigger,
-.paste-app .device-filter-trigger {
-  min-width: 0;
-  height: 27px;
-  padding: 0 9px;
-  background: transparent;
-  border-color: transparent;
-  font-size: 12px;
-}
-.paste-app .time-filter-trigger:hover,
-.paste-app .device-filter-trigger:hover { background: rgba(255, 255, 255, 0.05); }
-.paste-app .device-filter-trigger > span { max-width: 108px; }
+.paste-app .history-content { grid-template-rows: 6px auto minmax(0, 1fr) 36px; }
 .paste-app .app-content {
   height: 100%;
   border: 0;

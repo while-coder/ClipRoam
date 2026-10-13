@@ -367,6 +367,10 @@ async function restoreSavedSession(): Promise<void> {
   }
 }
 
+function handleContextMenu(event: MouseEvent): void {
+  if (isQuickPaste.value) event.preventDefault();
+}
+
 function handleKeys(event: KeyboardEvent): void {
   // SModal（图片预览、嵌套 confirm 等）开着时键盘归模态栈：Esc 只关栈顶弹窗，
   // Tab 在弹窗内循环，不再落到下面触发 hideWindow。
@@ -464,6 +468,7 @@ async function enableAccountShortcuts(): Promise<void> {
 onMounted(async () => {
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
+  document.addEventListener("contextmenu", handleContextMenu);
 
   let config: SyncConfig | null = null;
   let startupWarning = "";
@@ -522,6 +527,7 @@ onBeforeUnmount(() => {
   cancelPendingRefresh();
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
+  document.removeEventListener("contextmenu", handleContextMenu);
   unlisteners.forEach((unlisten) => unlisten());
   shareReceiverListener?.();
   void stop();

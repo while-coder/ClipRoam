@@ -49,7 +49,7 @@ const currentLabel = computed(() => {
 .device-filter-trigger :deep(.s-select:hover) { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
 .device-filter-trigger :deep(.s-select:focus-visible) { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }
 .device-filter-trigger :deep(.s-multi-select-chip) { max-width: 140px; padding: 0; color: inherit; background: transparent; border-radius: 0; font-size: inherit; }
-@media (max-width: 640px) {
+@media (max-width: 640px) and (pointer: coarse) {
   .device-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .device-filter-label { font-size: 13px; }
   .device-filter-control .device-filter-trigger { min-width: 126px; }

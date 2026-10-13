@@ -233,7 +233,7 @@ function dayClass(day: CalendarDay): Record<string, boolean> {
 .time-calendar-grid button.in-range { color: #dbeafe; background: rgba(37, 99, 235, 0.18); border-radius: 0; }
 .time-calendar-grid button.range-start, .time-calendar-grid button.range-end { color: #eff6ff; background: #2563eb; }
 .time-calendar-error { margin: 9px 0 0; color: #fca5a5; font-size: 11px; }
-@media (max-width: 640px) {
+@media (max-width: 640px) and (pointer: coarse) {
   .time-filter-control { height: 44px; margin-left: 0; padding-left: 12px; }
   .time-filter-label { font-size: 13px; }
   .time-filter-control .time-filter-trigger { min-width: 126px; }
