@@ -9,7 +9,7 @@ import {
   quickPasteShortcutStatus,
   resetQuickPasteShortcutDraft,
   saveQuickPasteShortcut,
-} from "../quick-paste/quickPasteShortcut";
+} from "./useQuickPasteShortcut";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/syncSetup";
 import { getDevice, getDeviceIdentity } from "../../utils/device";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";

@@ -6,11 +6,6 @@ import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/syncSetup";
-import {
-  disposeQuickPasteShortcut,
-  initializeQuickPasteShortcut,
-  quickPasteShortcutStatus,
-} from "./features/quick-paste/quickPasteShortcut";
 import { useUpdater } from "./features/settings/useUpdater";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
@@ -470,8 +465,8 @@ async function initializeNativeServices(): Promise<void> {
 
 async function enableAccountShortcuts(): Promise<void> {
   if (platformCapabilities.value.globalShortcut) {
-    const registered = await initializeQuickPasteShortcut();
-    if (!registered) showToast(quickPasteShortcutStatus.value.message, "error");
+    const registered = await native.quickPasteShortcut?.initialize();
+    if (!registered) showToast(native.quickPasteShortcut?.status.value.message ?? "快捷键初始化失败", "error");
   }
 }
 
@@ -539,7 +534,7 @@ onBeforeUnmount(() => {
   unlisteners.forEach((unlisten) => unlisten());
   shareReceiverListener?.();
   void stopSyncClient();
-  void disposeQuickPasteShortcut();
+  void native.quickPasteShortcut?.dispose();
 });
 </script>
 

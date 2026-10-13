@@ -8,7 +8,7 @@ import {
   quickPasteShortcut,
   quickPasteShortcutRefreshing,
   quickPasteShortcutStatus,
-} from "../quick-paste/quickPasteShortcut";
+} from "./useQuickPasteShortcut";
 import { useUpdater } from "./useUpdater";
 import productIcon from "../../assets/cliproam-icon.png";
 import {

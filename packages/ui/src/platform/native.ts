@@ -15,12 +15,24 @@ export type UpdaterState = {
   checkForUpdate(options?: {silent?: boolean}): Promise<unknown>;
 };
 
+export type QuickPasteShortcutState = {
+  shortcut: Ref<string>;
+  status: Ref<{state: "idle" | "ok" | "error"; message: string}>;
+  refreshing: Ref<boolean>;
+  display(shortcut: string): string;
+  initialize(): Promise<boolean>;
+  save(): Promise<boolean>;
+  resetDraft(): void;
+  dispose(): Promise<void>;
+};
+
 /** Platform operations independent of Rust command names and wire formats. */
 export interface NativePlatform {
   readonly kind: "rust" | "web";
   readonly clipboardMonitoring: boolean;
   readonly windowLabel: string;
   readonly updater?: UpdaterState;
+  readonly quickPasteShortcut?: QuickPasteShortcutState;
   getAppVersion(): Promise<string>;
   initializeWindowMode(): Promise<void>;
   showMainWindow(): Promise<void>;
@@ -29,9 +41,6 @@ export interface NativePlatform {
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
   listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
   listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten>;
-  registerQuickPasteShortcut(shortcut: string): Promise<void>;
-  isShortcutRegistered(shortcut: string): Promise<boolean>;
-  unregisterShortcut(shortcut: string): Promise<void>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;

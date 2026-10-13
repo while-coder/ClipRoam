@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { addPluginListener } from "@tauri-apps/api/core";
 import { useTauriUpdater } from "@while-coder/tauri-updater-vue";
+import * as shortcuts from "../features/quick-paste/quickPasteShortcut";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = <T>(event: string, handler: (payload: T) => void) => Promise<Unlisten>;
@@ -18,6 +19,16 @@ export class NativeRust implements NativePlatform {
   readonly kind = "rust";
   readonly clipboardMonitoring = true;
   readonly updater = useTauriUpdater();
+  readonly quickPasteShortcut = {
+    shortcut: shortcuts.quickPasteShortcut,
+    status: shortcuts.quickPasteShortcutStatus,
+    refreshing: shortcuts.quickPasteShortcutRefreshing,
+    display: shortcuts.displayShortcut,
+    initialize: shortcuts.initializeQuickPasteShortcut,
+    save: shortcuts.saveQuickPasteShortcut,
+    resetDraft: shortcuts.resetQuickPasteShortcutDraft,
+    dispose: shortcuts.disposeQuickPasteShortcut,
+  };
   get windowLabel(): string { return getCurrentWindow().label; }
   getAppVersion(): Promise<string> { return getVersion(); }
   async initializeWindowMode(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).initializeWindowMode(); }
@@ -33,18 +44,6 @@ export class NativeRust implements NativePlatform {
   }
   listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten> {
     return this.subscribe("cliproam://toast", handler);
-  }
-  async registerQuickPasteShortcut(shortcut: string): Promise<void> {
-    const { register } = await import("@tauri-apps/plugin-global-shortcut");
-    await register(shortcut, (event) => {
-      if (event.state === "Pressed") void import("@tauri-apps/api/event").then(({emitTo}) => emitTo("main", "cliproam://show-paste"));
-    });
-  }
-  async isShortcutRegistered(shortcut: string): Promise<boolean> {
-    return (await import("@tauri-apps/plugin-global-shortcut")).isRegistered(shortcut);
-  }
-  async unregisterShortcut(shortcut: string): Promise<void> {
-    return (await import("@tauri-apps/plugin-global-shortcut")).unregister(shortcut);
   }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }

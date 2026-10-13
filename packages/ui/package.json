@@ -11,7 +11,8 @@
     "./native-web": "./src/platform/native_web.ts",
     "./runtime": "./src/host.ts",
     "./history": "./src/features/history/HistoryView.vue",
-    "./bytes": "./src/utils/bytes.ts"
+    "./bytes": "./src/utils/bytes.ts",
+    "./errors": "./src/utils/error.ts"
   },
   "scripts": {
     "check": "vue-tsc --noEmit"

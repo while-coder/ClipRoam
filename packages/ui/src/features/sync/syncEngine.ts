@@ -1,5 +1,5 @@
 import { computed, watch } from "vue";
-import { disposeQuickPasteShortcut } from "../quick-paste/quickPasteShortcut";
+import { native } from "../../platform/native";
 import { activeView } from "../../composables/useActiveView";
 import { showToast } from "../toast/useToast";
 import { getDevice } from "../../utils/device";
@@ -34,7 +34,7 @@ export async function stopSyncClient(): Promise<void> {
   if (session?.state.connected.value) showToast("同步连接已断开", "error");
   session?.dispose();
   replaceAccountSession();
-  await disposeQuickPasteShortcut();
+  await native.quickPasteShortcut?.dispose();
 }
 
 export const connectionStatus = computed(() => connected.value
