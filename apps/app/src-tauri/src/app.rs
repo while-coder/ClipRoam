@@ -63,16 +63,15 @@ pub(crate) fn quick_paste_enabled(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn native_set_quick_paste_mode(
-    window: tauri::WebviewWindow,
-    mode: tauri::State<'_, QuickPasteMode>,
+pub(crate) fn set_quick_paste_mode(
+    window: &tauri::WebviewWindow,
     enabled: bool,
 ) -> Result<bool, String> {
     if window.label() != "main" {
         return Err("仅主窗口可切换快速粘贴模式".to_string());
     }
-    let mut mode = mode.0.lock().map_err(|error| error.to_string())?;
+    let state = window.state::<QuickPasteMode>();
+    let mut mode = state.0.lock().map_err(|error| error.to_string())?;
     let previous = mode.0;
     mode.0 = enabled;
     mode.1 = mode.1.wrapping_add(1);
@@ -113,33 +112,6 @@ pub(crate) async fn native_register_quick_paste_shortcut(
         let _ = (app, shortcut);
         Err("移动端不支持全局快捷键".to_string())
     }
-}
-
-/// 前端配置好快速粘贴布局后再显示，避免主界面闪现。
-#[tauri::command]
-pub(crate) async fn native_focus_quick_paste_window(
-    window: tauri::WebviewWindow,
-) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("仅主窗口可显示快速粘贴界面".to_string());
-    }
-    // macOS 的应用隐藏状态独立于窗口可见状态；先恢复应用再激活窗口。
-    #[cfg(target_os = "macos")]
-    {
-        let target = window.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            platform::position_quick_paste_window(&target)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        window
-            .app_handle()
-            .show()
-            .map_err(|error| error.to_string())?;
-    }
-    window.show().map_err(|error| error.to_string())?;
-    window.unminimize().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------

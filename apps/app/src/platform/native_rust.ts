@@ -1,5 +1,5 @@
 import type { PlatformCapabilities, ToastPayload, ClipboardData, ClipboardWrite, SharedContent,
-  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent } from "@cliproam/ui/native";
+  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent, WindowModeOptions } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
@@ -52,7 +52,7 @@ export class NativeRust implements NativePlatform {
   getDeviceInfo(): Promise<DeviceInfo> { return this.invoke("native_get_device_info"); }
   openAppDataDir(): Promise<void> { return this.invoke("native_open_app_data_dir"); }
   startWindowDrag(): Promise<void> { return this.invoke("native_start_window_drag"); }
-  setQuickPasteMode(enabled: boolean): Promise<boolean> { return this.invoke("native_set_quick_paste_mode", {enabled}); }
+  setWindowMode(options: WindowModeOptions): Promise<boolean> { return this.invoke("native_set_window_mode", {...options}); }
   capturePasteTarget(): Promise<void> { return this.invoke("native_capture_paste_target"); }
   showToast(payload: ToastPayload): Promise<void> { return this.invoke("native_show_toast", {...payload}); }
   hideToast(): Promise<void> { return this.invoke("native_hide_toast"); }

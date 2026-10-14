@@ -8,6 +8,14 @@ export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVe
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
+export type WindowModeOptions = {
+  mode: "main" | "quickPaste";
+  title?: string;
+  /** Omit to preserve position; restoring main mode restores its saved geometry. */
+  position?: { kind: "cursor" } | { kind: "center" } | { kind: "coordinates"; x: number; y: number };
+  /** Defaults to true. Use false to prepare the window before rendering its view. */
+  visible?: boolean;
+};
 
 export type QuickPasteShortcutState = {
   shortcut: Ref<string>;
@@ -39,7 +47,8 @@ export interface NativePlatform {
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;
   startWindowDrag(): Promise<void>;
-  setQuickPasteMode(enabled: boolean): Promise<boolean>;
+  /** Returns whether the previous native window layout was quick paste. */
+  setWindowMode(options: WindowModeOptions): Promise<boolean>;
   capturePasteTarget(): Promise<void>;
   showToast(payload: ToastPayload): Promise<void>;
   hideToast(): Promise<void>;

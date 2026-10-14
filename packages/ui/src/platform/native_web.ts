@@ -2,7 +2,7 @@ import { BROWSER_CAPABILITIES } from "../config";
 import type { PlatformCapabilities, ShareReceiverEvent, ToastPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
+import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, WindowModeOptions } from "./native";
 
 /** Browser operations use Web APIs without loading Tauri. */
 export class NativeWeb implements NativePlatform {
@@ -33,7 +33,7 @@ export class NativeWeb implements NativePlatform {
   private unavailable(): never { throw new Error("此操作需要桌面或手机客户端"); }
   async openAppDataDir(): Promise<void> { this.unavailable(); }
   async startWindowDrag(): Promise<void> { this.unavailable(); }
-  async setQuickPasteMode(_enabled: boolean): Promise<boolean> { return this.unavailable(); }
+  async setWindowMode(_options: WindowModeOptions): Promise<boolean> { return this.unavailable(); }
   async capturePasteTarget(): Promise<void> { this.unavailable(); }
   async showToast(_payload: ToastPayload): Promise<void> { this.unavailable(); }
   async hideToast(): Promise<void> {}

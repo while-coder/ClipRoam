@@ -166,14 +166,7 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "main window is unavailable".to_string())?;
     window
         .emit("cliproam://show-main", ())
-        .map_err(|error| error.to_string())?;
-    if crate::app::quick_paste_enabled(app) {
-        // The existing webview restores the main layout and geometry before showing.
-        return Ok(());
-    }
-    window.show().map_err(|error| error.to_string())?;
-    window.unminimize().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())
 }
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {

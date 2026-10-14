@@ -3,6 +3,7 @@ mod clipboard;
 mod files;
 mod platform;
 mod platforms;
+mod window_mode;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,6 +21,7 @@ pub fn run() {
         .setup(|app| {
             std::fs::create_dir_all(app.path().app_data_dir()?)?;
             app.manage(app::QuickPasteMode::default());
+            app.manage(window_mode::WindowModeState::default());
             app.manage(clipboard::ClipboardState::default());
             platform::manage_platform_state(app.handle())?;
             platform::create_windows(app.handle())?;
@@ -35,10 +37,9 @@ pub fn run() {
             app::native_get_device_info,
             app::native_open_app_data_dir,
             app::native_start_window_drag,
-            app::native_set_quick_paste_mode,
+            window_mode::native_set_window_mode,
             app::native_capture_paste_target,
             app::native_register_quick_paste_shortcut,
-            app::native_focus_quick_paste_window,
             app::native_show_toast,
             app::native_hide_toast,
             clipboard::native_read_clipboard,
