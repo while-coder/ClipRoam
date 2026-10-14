@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::platform;
 
@@ -120,40 +120,35 @@ pub(crate) async fn native_register_quick_paste_shortcut(
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ToastPayload {
+pub(crate) struct NotificationPayload {
     pub(crate) message: String,
+    pub(crate) title: String,
     pub(crate) tone: String,
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn native_show_toast(
+pub(crate) fn native_show_notification(
     app: AppHandle,
     message: String,
-    tone: String,
+    title: Option<String>,
+    tone: Option<String>,
 ) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Ok(());
     }
-    let payload = ToastPayload {
+    let payload = NotificationPayload {
         message: message.to_string(),
-        tone: match tone.as_str() {
-            "success" | "error" | "info" => tone,
+        title: title
+            .filter(|title| !title.trim().is_empty())
+            .map(|title| title.trim().to_string())
+            .unwrap_or_else(|| "ClipRoam".to_string()),
+        tone: match tone.as_deref() {
+            Some(tone @ ("success" | "error" | "info")) => tone.to_string(),
             _ => "info".to_string(),
         },
     };
-    let main = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window is unavailable".to_string())?;
-    let main_is_visible =
-        main.is_visible().unwrap_or(false) && !main.is_minimized().unwrap_or(false);
-    if main_is_visible {
-        return main
-            .emit("cliproam://toast", payload)
-            .map_err(|error| error.to_string());
-    }
-
-    platform::show_detached_toast(&app, payload)
+    platform::show_notification(&app, payload)
 }
 
 /// 设备展示信息（机器名、CPU、OS 类型与版本、App 版本），除 App 版本外每次

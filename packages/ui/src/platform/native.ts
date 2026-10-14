@@ -1,4 +1,4 @@
-import type { PlatformCapabilities, ToastPayload } from "../types";
+import type { PlatformCapabilities, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { ShareReceiverEvent } from "../types";
@@ -42,7 +42,7 @@ export interface NativePlatform {
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
   listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
-  listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten>;
+  listenNotification(handler: (payload: NotificationPayload) => void): Promise<Unlisten>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;
@@ -50,7 +50,7 @@ export interface NativePlatform {
   /** Returns whether the previous native window layout was quick paste. */
   setWindowMode(options: WindowModeOptions): Promise<boolean>;
   capturePasteTarget(): Promise<void>;
-  showToast(payload: ToastPayload): Promise<void>;
+  showNotification(payload: NotificationPayload): Promise<void>;
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
   previewSource(path: string): Promise<string>;
   readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
@@ -79,6 +79,6 @@ export function configureNative(platform: NativePlatform): void {
   native = platform;
 }
 
-export type { PlatformCapabilities, ToastPayload, ShareReceiverEvent } from "../types";
+export type { PlatformCapabilities, NotificationPayload, NotificationOptions, ShareReceiverEvent } from "../types";
 export type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 export type { FileStat, SaveTarget } from "./files";

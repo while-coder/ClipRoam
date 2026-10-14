@@ -20,7 +20,7 @@ import DeviceFilterControl from "./DeviceFilterControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { usePlatform, showToast } from "../../platform/runtime";
+import { usePlatform, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
 import type {
   ClipboardEntry,
@@ -147,7 +147,7 @@ const {
   // An invalid custom range matches nothing — the backend never sees it, and
   // background revision bumps must not refill the cleared list either.
   canFetch: () => !timeRangeError.value,
-  onError: (message) => showToast(`读取历史失败：${message}`, "error"),
+  onError: (message) => showNotification({ message: `读取历史失败：${message}`, tone: "error" }),
   listElement: historyListElement,
   getSelectedEntryId: () => selectedEntryId.value,
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },

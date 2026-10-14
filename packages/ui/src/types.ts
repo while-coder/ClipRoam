@@ -86,8 +86,9 @@ export type UploadProgress = { uploadedBytes: number; totalBytes: number };
 export type EntryFilter = "all" | ClipboardKind;
 export type TimeFilter = "all" | "today" | "7-days" | "30-days" | "custom";
 export type SettingsPage = "general" | "shortcuts" | "account" | "data" | "about";
-export type ToastTone = "success" | "error" | "info";
-export type ToastPayload = { message: string; tone: ToastTone };
+export type NotificationTone = "success" | "error" | "info";
+export type NotificationOptions = { message: string; title?: string; tone?: NotificationTone };
+export type NotificationPayload = { message: string; title: string; tone: NotificationTone };
 export type ShareReceiverEvent = { id?: string; error?: string };
 export type ShareImportSummary = { shares: number; texts: number; images: number; files: number };
 

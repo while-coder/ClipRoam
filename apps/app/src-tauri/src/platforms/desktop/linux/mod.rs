@@ -8,7 +8,7 @@ pub(crate) use super::arboard_clipboard::{
 };
 pub(crate) use super::{
     create_windows, deliver_paste, on_paste_window_focus, on_window_event, register_plugins,
-    setup_desktop_shell, should_ignore_paste_focus_loss, show_detached_toast,
+    setup_desktop_shell, should_ignore_paste_focus_loss, show_notification,
 };
 
 pub(crate) fn manage_platform_state(app: &AppHandle) -> Result<(), String> {

@@ -13,7 +13,7 @@ use crate::clipboard::{decode_image_as_bmp, RichText};
 
 pub(crate) use super::{
     create_windows, deliver_paste, on_window_event, register_plugins, setup_desktop_shell,
-    show_detached_toast,
+    show_notification,
 };
 
 // ---------------------------------------------------------------------------

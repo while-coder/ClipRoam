@@ -8,7 +8,7 @@ import { CaptureService } from "./features/pending-upload/captureService";
 import { AccountFiles } from "./platform/files";
 import { clipboardPlatform } from "./platform/clipboard";
 import { profileName } from "./utils";
-import { showToast } from "./platform/runtime";
+import { showNotification } from "./platform/runtime";
 import type { ClientConnection } from "./features/sync/clientSessionManager";
 import type { SyncRequester } from "./features/sync/httpClient";
 import type { SyncConfig, AccountPreferences, Device, SettingsPage } from "./types";
@@ -108,9 +108,9 @@ export class AccountSession {
       if (this.signal.aborted) return;
       this.history.invalidate();
       void this.pendingUploads.refresh().catch((error) => {
-        if (!this.signal.aborted) showToast(`待上传记录读取失败：${String(error)}`, "error");
+        if (!this.signal.aborted) showNotification({ message: `待上传记录读取失败：${String(error)}`, tone: "error" });
       });
-    }, (message) => { if (!this.signal.aborted) showToast(message, "error"); });
+    }, (message) => { if (!this.signal.aborted) showNotification({ message: message, tone: "error" }); });
     this.ready = this.downloads.restore();
     this.own(() => { this.downloads.stop(); this.files.dispose(); });
     this.own(() => {

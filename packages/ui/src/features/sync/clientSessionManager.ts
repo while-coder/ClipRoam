@@ -6,7 +6,7 @@ import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
-import { showToast } from "../../platform/runtime";
+import { showNotification } from "../../platform/runtime";
 import { getServerUrls } from "./authApi";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./httpClient";
 import { activateRemoteClipboard } from "../history/remoteClipboard";
@@ -91,12 +91,12 @@ export class ClientSessionManager {
     if (session.state.connected.value === value) return;
     session.state.connected.value = value;
     if (value) session.history.invalidate();
-    showToast(value ? "同步已连接" : "同步连接已断开", value ? "success" : "error");
+    showNotification({ message: value ? "同步已连接" : "同步连接已断开", tone: value ? "success" : "error" });
   };
 
   stop = async (): Promise<void> => {
     const session = getAccountSession();
-    if (session?.state.connected.value) showToast("同步连接已断开", "error");
+    if (session?.state.connected.value) showNotification({ message: "同步连接已断开", tone: "error" });
     session?.dispose();
     replaceAccountSession();
     await native.quickPasteShortcut?.dispose();
@@ -116,7 +116,7 @@ export class ClientSessionManager {
   #registerAccountEvents = async (session: AccountSession): Promise<void> => {
     await session.capture.start();
     session.scope.run(() => watch(activeView, (view) => {
-      if (view === "pending-upload") void session.pendingUploads.refresh().catch(session.guard((error) => showToast(`待上传记录读取失败：${errorMessage(error)}`, "error")));
+      if (view === "pending-upload") void session.pendingUploads.refresh().catch(session.guard((error) => showNotification({ message: `待上传记录读取失败：${errorMessage(error)}`, tone: "error" })));
     }));
     session.interval(() => {
       if (session.state.activeView.value === "downloads") session.downloads.refresh();
@@ -139,12 +139,12 @@ export class ClientSessionManager {
         onEntry: guard(() => session.history.invalidate()),
         onActivation: guard((entry) => { void activateRemoteClipboard(entry); }),
         onDelete: guard((entryId) => {
-          void session.history.removeLocal(entryId).catch(guard(() => showToast("历史缓存清理失败", "error")));
+          void session.history.removeLocal(entryId).catch(guard(() => showNotification({ message: "历史缓存清理失败", tone: "error" })));
         }),
         onFileAvailable: guard(() => session.history.invalidate()),
         onUploadProgress: guard((entryId, uploaded, total) => session.pendingUploads.queueProgress(entryId, uploaded, total)),
         onUploadFinished: guard((entryId) => session.pendingUploads.finishProgress(entryId)),
-        onError: guard((message) => showToast(message, "error")),
+        onError: guard((message) => showNotification({ message: message, tone: "error" })),
         onAuthenticationFailed: guard((message) => {
           void this.stop(); this.#deps.onAuthenticationFailed(message, config);
         }),
@@ -153,7 +153,7 @@ export class ClientSessionManager {
       await session.start(() => this.#registerAccountEvents(session));
       session.signal.throwIfAborted();
       session.history.invalidate();
-      void session.pendingUploads.refresh().catch(guard((error) => showToast(`待上传记录读取失败：${errorMessage(error)}`, "error")));
+      void session.pendingUploads.refresh().catch(guard((error) => showNotification({ message: `待上传记录读取失败：${errorMessage(error)}`, tone: "error" })));
       void client.pullDevices(); client.connect();
     } catch (error) {
       if (session.signal.aborted) return;

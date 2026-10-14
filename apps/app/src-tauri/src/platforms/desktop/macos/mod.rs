@@ -10,7 +10,7 @@ pub(crate) use super::arboard_clipboard::{
 };
 pub(crate) use super::{
     create_windows, on_paste_window_focus, on_window_event, register_plugins, setup_desktop_shell,
-    should_ignore_paste_focus_loss, show_detached_toast,
+    should_ignore_paste_focus_loss, show_notification,
 };
 
 /// 快捷粘贴窗口弹出前的最前台应用（unix pid）。隐藏粘贴窗口后 macOS 会把

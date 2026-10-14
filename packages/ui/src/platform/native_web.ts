@@ -1,5 +1,6 @@
 import { BROWSER_CAPABILITIES } from "../config";
-import type { PlatformCapabilities, ShareReceiverEvent, ToastPayload } from "../types";
+import { toast } from "@qingfeng346/ui-kit";
+import type { PlatformCapabilities, ShareReceiverEvent, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, WindowModeOptions } from "./native";
@@ -27,7 +28,7 @@ export class NativeWeb implements NativePlatform {
     return () => { window.removeEventListener("focus", focus); window.removeEventListener("blur", blur); };
   }
   async listenShares(_handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> { return () => {}; }
-  async listenToast(_handler: (payload: ToastPayload) => void): Promise<Unlisten> { return () => {}; }
+  async listenNotification(_handler: (payload: NotificationPayload) => void): Promise<Unlisten> { return () => {}; }
   async getCapabilities(): Promise<PlatformCapabilities> { return {...BROWSER_CAPABILITIES}; }
   async getDeviceInfo(): Promise<DeviceInfo> { return {deviceName:"浏览器",cpu:"",osType:"browser",osVersion:navigator.userAgent,appVersion:"web"}; }
   private unavailable(): never { throw new Error("此操作需要桌面或手机客户端"); }
@@ -35,7 +36,9 @@ export class NativeWeb implements NativePlatform {
   async startWindowDrag(): Promise<void> { this.unavailable(); }
   async setWindowMode(_options: WindowModeOptions): Promise<boolean> { return this.unavailable(); }
   async capturePasteTarget(): Promise<void> { this.unavailable(); }
-  async showToast(_payload: ToastPayload): Promise<void> { this.unavailable(); }
+  async showNotification(payload: NotificationPayload): Promise<void> {
+    toast.show(payload.tone, payload.message);
+  }
   async listen<T>(_event: string, _handler: (payload: T) => void): Promise<Unlisten> { return () => {}; }
   async previewSource(path: string): Promise<string> { return path; }
   async readClipboard(_textOnly: boolean): Promise<ClipboardData | null> {

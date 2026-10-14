@@ -1,9 +1,9 @@
 import { ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { native, type Unlisten, type ToastPayload } from "@cliproam/ui/native";
+import { native, type Unlisten, type NotificationPayload } from "@cliproam/ui/native";
 
 /** 模块级单例（对齐 usePlatform 风格）：所有窗口内组件共享同一个 toast 状态。 */
-const toastPayload = ref<ToastPayload>();
+const toastPayload = ref<NotificationPayload>();
 
 let toastTimer: number | undefined;
 let toastWindowHideTimer: number | undefined;
@@ -21,7 +21,7 @@ function scheduleToastWindowHide(): void {
   }, 180);
 }
 
-function displayToast(payload: ToastPayload): void {
+function displayNotification(payload: NotificationPayload): void {
   clearTimers();
   toastPayload.value = payload;
   toastTimer = window.setTimeout(() => {
@@ -46,7 +46,7 @@ function disposeToast(): void {
 
 /** toast 专用窗口（tray 旁的通知窗口）只监听 toast 事件，不初始化其他服务。 */
 function startToastWindowListener(): Promise<Unlisten> {
-  return native.listenToast(displayToast);
+  return native.listenNotification(displayNotification);
 }
 
 export { toastPayload, hideToastNow, disposeToast, startToastWindowListener };

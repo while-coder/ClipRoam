@@ -2,7 +2,7 @@ import { errorMessage } from "../../utils";
 import { computed } from "vue";
 import { getAccountSession } from "../../accountSession";
 import type { LocalClipboardEntry } from "../../types";
-import { isMobile, showToast } from "../../platform/runtime";
+import { isMobile, showNotification } from "../../platform/runtime";
 import { DownloadCancelledError } from "./downloadManager";
 
 export const downloadRecords = computed(() => getAccountSession()?.downloads.downloadRecords.value ?? []);
@@ -33,10 +33,10 @@ export async function refreshDownloadTasks(): Promise<void> { getAccountSession(
 export async function removeDownloadRecords(recordId?: string): Promise<void> {
   const session = getAccountSession();
   try { await session?.downloads.removeRecords(recordId); }
-  catch (error) { if (!session?.signal.aborted) showToast(`清理下载记录失败：${errorMessage(error)}`, "error"); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `清理下载记录失败：${errorMessage(error)}`, tone: "error" }); }
 }
 export async function cancelDownloadRecord(recordId: string): Promise<void> {
   const session = getAccountSession();
   try { await session?.downloads.cancelRecord(recordId); }
-  catch (error) { if (!session?.signal.aborted) showToast(`取消下载失败：${errorMessage(error)}`, "error"); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `取消下载失败：${errorMessage(error)}`, tone: "error" }); }
 }

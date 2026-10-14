@@ -2,7 +2,7 @@ import { computed, ref } from "vue";
 import { native } from "./native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
 import { toast } from "@qingfeng346/ui-kit";
-import type { PlatformCapabilities, ToastPayload, ToastTone } from "../types";
+import type { PlatformCapabilities, NotificationPayload, NotificationOptions } from "../types";
 import packageInfo from "../../package.json";
 
 export const isNative = native.kind !== "web";
@@ -49,13 +49,23 @@ export function useAppVersion() {
 }
 
 /** 原生通知与 UI 通知回退。 */
-export function displayToast(payload: ToastPayload): void {
+export function displayNotification(payload: NotificationPayload): void {
   toast.show(payload.tone, payload.message);
 }
 
-export function showToast(message: string, tone: ToastTone = "info"): void {
-  const normalized = message.trim();
+export function showNotification(options: NotificationOptions): void {
+  const normalized = options.message.trim();
   if (!normalized) return;
-  const payload = {message:normalized,tone};
-  void native.showToast(payload).catch(() => displayToast(payload));
+  const payload: NotificationPayload = {
+    message: normalized,
+    title: options.title?.trim() || "ClipRoam",
+    tone: options.tone ?? "info",
+  };
+  if (isMobile.value) {
+    displayNotification(payload);
+    return;
+  }
+  void native.showNotification(payload).catch(() => displayNotification(payload));
 }
+
+export type { NotificationOptions } from "../types";

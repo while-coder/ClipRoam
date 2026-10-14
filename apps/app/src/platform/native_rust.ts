@@ -1,4 +1,4 @@
-import type { PlatformCapabilities, ToastPayload, ClipboardData, ClipboardWrite, SharedContent,
+import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, SharedContent,
   FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent, WindowModeOptions } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -44,8 +44,8 @@ export class NativeRust implements NativePlatform {
     const listener = await addPluginListener("cliproam-share-receiver", "received", handler);
     return () => { void listener.unregister(); };
   }
-  listenToast(handler: (payload: ToastPayload) => void): Promise<Unlisten> {
-    return this.subscribe("cliproam://toast", handler);
+  listenNotification(handler: (payload: NotificationPayload) => void): Promise<Unlisten> {
+    return this.subscribe("cliproam://notification", handler);
   }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
@@ -54,7 +54,7 @@ export class NativeRust implements NativePlatform {
   startWindowDrag(): Promise<void> { return this.invoke("native_start_window_drag"); }
   setWindowMode(options: WindowModeOptions): Promise<boolean> { return this.invoke("native_set_window_mode", {...options}); }
   capturePasteTarget(): Promise<void> { return this.invoke("native_capture_paste_target"); }
-  showToast(payload: ToastPayload): Promise<void> { return this.invoke("native_show_toast", {...payload}); }
+  showNotification(payload: NotificationPayload): Promise<void> { return this.invoke("native_show_notification", {...payload}); }
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten> { return this.subscribe(event, handler); }
   async previewSource(path: string): Promise<string> {
     if (/^(blob:|data:|https?:)/.test(path)) return path;

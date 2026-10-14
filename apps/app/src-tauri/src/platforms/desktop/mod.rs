@@ -216,9 +216,9 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 // 线程兜底；代字号保证展示新 toast 后，旧定时器不会把新 toast 提前藏掉。
 static TOAST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn show_detached_toast(
+pub(crate) fn show_notification(
     app: &AppHandle,
-    payload: crate::app::ToastPayload,
+    payload: crate::app::NotificationPayload,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("toast")
@@ -226,7 +226,7 @@ pub(crate) fn show_detached_toast(
     position_toast_window(app, &window)?;
     let tone = payload.tone.clone();
     window
-        .emit("cliproam://toast", payload)
+        .emit("cliproam://notification", payload)
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     // 比前端定时器（error 5s / 其余 3.2s）晚 1s 触发：前端正常时先隐藏，

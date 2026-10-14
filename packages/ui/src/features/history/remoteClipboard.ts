@@ -2,7 +2,7 @@ import { errorMessage } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { getAccountSession } from "../../accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
-import { isMobile, usePlatform, showToast } from "../../platform/runtime";
+import { isMobile, usePlatform, showNotification } from "../../platform/runtime";
 import { ensureLocalFiles } from "../downloads/useDownloads";
 
 const { platformCapabilities } = usePlatform();
@@ -51,7 +51,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
       && clientSessionManager.getActiveConfig() === config
       && clientSessionManager.getActivePreferences().autoReceiveClipboard
     ) {
-      showToast(`自动接收剪贴板失败：${errorMessage(error)}`, "error");
+      showNotification({ message: `自动接收剪贴板失败：${errorMessage(error)}`, tone: "error" });
     }
   }
 }

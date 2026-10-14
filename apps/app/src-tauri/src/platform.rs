@@ -1,6 +1,6 @@
 //! 跨平台原生能力的统一函数声明与转发。系统实现只放在 platforms/。
 use crate::files::{NativeShare, SaveTarget};
-use crate::{app::ToastPayload, clipboard::RichText, platforms::implementation};
+use crate::{app::NotificationPayload, clipboard::RichText, platforms::implementation};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -32,8 +32,11 @@ pub(crate) fn open_data_directory(app: &AppHandle) -> Result<(), String> {
     implementation::open_data_directory(app)
 }
 
-pub(crate) fn show_detached_toast(app: &AppHandle, payload: ToastPayload) -> Result<(), String> {
-    implementation::show_detached_toast(app, payload)
+pub(crate) fn show_notification(
+    app: &AppHandle,
+    payload: NotificationPayload,
+) -> Result<(), String> {
+    implementation::show_notification(app, payload)
 }
 
 pub(crate) fn begin_window_drag(window: &tauri::WebviewWindow) -> Result<(), String> {

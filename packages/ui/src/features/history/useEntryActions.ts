@@ -1,7 +1,7 @@
 import { errorMessage, canSaveEntry } from "../../utils";
 import { accountStateRef, getAccountSession } from "../../accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isQuickPaste, usePlatform, showToast } from "../../platform/runtime";
+import { isMobile, isQuickPaste, usePlatform, showNotification } from "../../platform/runtime";
 import { downloadEntry } from "../downloads/useDownloads";
 import { DownloadCancelledError } from "../downloads/downloadManager";
 import { refreshHistory } from "./useHistorySync";
@@ -35,7 +35,7 @@ async function activateEntry(
     await write;
     // 粘贴的结果用户肉眼可见（内容已进入目标应用），不再弹提示；复制的结果
     // 看不见，保留确认提示。
-    if (command === "copy_entry") showToast("已复制到系统剪贴板", "success");
+    if (command === "copy_entry") showNotification({ message: "已复制到系统剪贴板", tone: "success" });
   } catch (error) {
     // 取消的提示已由取消方给出，原激活方静默收尾。
     if (session.signal.aborted || error instanceof DownloadCancelledError) return;
@@ -43,7 +43,7 @@ async function activateEntry(
       refreshHistory();
       return;
     }
-    showToast(String(error), "error");
+    showNotification({ message: String(error), tone: "error" });
   } finally {
     activatingEntryIds.value.delete(entry.id);
   }
@@ -67,7 +67,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   try {
     if (!platformCapabilities.value.nativeFileExport) {
       await downloadEntry(entry.id, session);
-      showToast("内容已下载到应用缓存，可在 ClipRoam 中离线使用", "success");
+      showNotification({ message: "内容已下载到应用缓存，可在 ClipRoam 中离线使用", tone: "success" });
     } else {
       await session.start(() => session.ready);
       const preparation = await session.acquire(session.downloads.prepareSave(entry.id), (value) => {
@@ -80,13 +80,13 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 
       const saved = await session.downloads.finishSave(preparation.saveId);
       saveId = undefined;
-      if (isMobile.value) showToast("已保存到所选目录", "success");
-      else if (saved > 0) showToast(`已保存 ${saved} 个文件`, "success");
+      if (isMobile.value) showNotification({ message: "已保存到所选目录", tone: "success" });
+      else if (saved > 0) showNotification({ message: `已保存 ${saved} 个文件`, tone: "success" });
     }
   } catch (error) {
     if (saveId) await session.downloads.cancelSave(saveId);
     if (session.signal.aborted || error instanceof DownloadCancelledError) return;
-    showToast(`${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, "error");
+    showNotification({ message: `${isMobile.value ? "下载" : "另存为"}失败：${errorMessage(error)}`, tone: "error" });
   } finally {
     savingEntryId.value = "";
   }
@@ -103,7 +103,7 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
   if (isQuickPaste.value) void pasteEntry(entry);
   else if (entry.kind === "files") {
-    showToast("文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“下载”手动下载", "info");
+    showNotification({ message: "文件请使用 Ctrl+Shift+V 快捷粘贴，或点击“下载”手动下载", tone: "info" });
   } else {
     void copyEntry(entry);
   }
@@ -113,13 +113,13 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
 export async function removeEntry(entry: ClipboardEntry): Promise<void> {
   const session = getAccountSession();
   if (!session?.client) {
-    showToast("网络异常，暂时无法删除，请检查同步连接", "error");
+    showNotification({ message: "网络异常，暂时无法删除，请检查同步连接", tone: "error" });
     return;
   }
   try {
     await session.history.delete(entry.id);
   } catch (error) {
-    if (!session.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error");
+    if (!session.signal.aborted) showNotification({ message: `删除失败：${errorMessage(error)}`, tone: "error" });
     return;
   }
 }

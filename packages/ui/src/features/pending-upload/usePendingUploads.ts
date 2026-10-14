@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
 import { getAccountSession } from "../../accountSession";
-import { showToast } from "../../platform/runtime";
+import { showNotification } from "../../platform/runtime";
 import type { LocalClipboardEntry } from "../../types";
 
 /** UI bindings follow the active account's shared manager. */
@@ -21,19 +21,19 @@ export function cancelPendingRefresh(): void { getAccountSession()?.cancelSchedu
 export async function removePendingEntry(entry: LocalClipboardEntry): Promise<void> {
   const session = getAccountSession();
   try { await session?.pendingUploads.remove(entry.id); }
-  catch (error) { if (!session?.signal.aborted) showToast(`删除失败：${errorMessage(error)}`, "error"); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `删除失败：${errorMessage(error)}`, tone: "error" }); }
 }
 
 export async function retryPendingEntry(entry: LocalClipboardEntry): Promise<void> {
   const session = getAccountSession();
   try { await session?.pendingUploads.retry(entry.id); }
-  catch (error) { if (!session?.signal.aborted) showToast(`重试失败：${errorMessage(error)}`, "error"); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `重试失败：${errorMessage(error)}`, tone: "error" }); }
 }
 
 export async function refreshPendingEntries(): Promise<void> {
   const session = getAccountSession();
   try { await session?.pendingUploads.refresh(); }
-  catch (error) { if (!session?.signal.aborted) showToast(`待上传记录读取失败：${errorMessage(error)}`, "error"); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `待上传记录读取失败：${errorMessage(error)}`, tone: "error" }); }
 }
 
 export async function refreshPendingCount(): Promise<void> {
@@ -52,9 +52,9 @@ export async function captureCurrentClipboard(): Promise<void> {
   capturingClipboard.value = true;
   try {
     const captured = await getAccountSession()?.capture.readCurrentText();
-    showToast(captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", captured ? "success" : "info");
+    showNotification({ message: captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", tone: captured ? "success" : "info" });
   } catch (error) {
-    showToast(`读取剪贴板失败：${errorMessage(error)}`, "error");
+    showNotification({ message: `读取剪贴板失败：${errorMessage(error)}`, tone: "error" });
   } finally {
     capturingClipboard.value = false;
   }
@@ -65,9 +65,9 @@ export async function captureFilesFromPicker(mode: "file" | "folder"): Promise<v
   uploadingFiles.value = true;
   try {
     const captured = await getAccountSession()?.capture.pickFiles(mode);
-    showToast(captured ? "已加入上传队列" : "未选择文件", captured ? "success" : "info");
+    showNotification({ message: captured ? "已加入上传队列" : "未选择文件", tone: captured ? "success" : "info" });
   } catch (error) {
-    showToast(`选择文件失败：${errorMessage(error)}`, "error");
+    showNotification({ message: `选择文件失败：${errorMessage(error)}`, tone: "error" });
   } finally {
     uploadingFiles.value = false;
   }

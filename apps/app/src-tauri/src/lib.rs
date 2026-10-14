@@ -40,7 +40,7 @@ pub fn run() {
             window_mode::native_set_window_mode,
             app::native_capture_paste_target,
             app::native_register_quick_paste_shortcut,
-            app::native_show_toast,
+            app::native_show_notification,
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,
             clipboard::native_watch_clipboard,

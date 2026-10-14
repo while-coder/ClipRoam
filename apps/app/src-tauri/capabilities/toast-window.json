@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "toast-window",
+  "description": "Allow the toast window to hide itself after its exit animation",
+  "windows": ["toast"],
+  "platforms": ["windows", "macOS", "linux"],
+  "permissions": ["core:window:allow-hide"]
+}

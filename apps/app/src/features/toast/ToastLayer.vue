@@ -4,7 +4,7 @@ import { hideToastNow, toastPayload } from "./useToastWindow";
 </script>
 
 <template>
-  <!-- 收缩为托盘通知窗口专用；主窗口 toast 已改走 ui-kit（useToast displayToast）。 -->
+  <!-- 桌面全局通知使用独立窗口，不抢主界面或外部应用的焦点。 -->
   <Transition name="toast">
     <aside
       v-if="toastPayload"
@@ -17,7 +17,7 @@ import { hideToastNow, toastPayload } from "./useToastWindow";
       <span class="toast-card">
         <img class="toast-app-icon" src="/cliproam-icon.png" alt="" aria-hidden="true" />
         <span class="toast-body">
-          <span class="toast-title">ClipRoam</span>
+          <span class="toast-title">{{ toastPayload.title }}</span>
           <span class="toast-message">{{ toastPayload.message }}</span>
         </span>
         <button class="toast-close" type="button" aria-label="关闭通知" @click="hideToastNow">

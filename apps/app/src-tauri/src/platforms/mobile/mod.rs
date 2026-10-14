@@ -51,13 +51,13 @@ pub(crate) fn open_data_directory(_app: &AppHandle) -> Result<(), String> {
     Err("移动端应用数据由系统沙箱管理，不能直接打开数据目录".to_string())
 }
 
-pub(crate) fn show_detached_toast(
+pub(crate) fn show_notification(
     app: &AppHandle,
-    payload: crate::app::ToastPayload,
+    payload: crate::app::NotificationPayload,
 ) -> Result<(), String> {
     app.get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?
-        .emit("cliproam://toast", payload)
+        .emit("cliproam://notification", payload)
         .map_err(|error| error.to_string())
 }
 

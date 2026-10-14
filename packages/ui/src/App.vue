@@ -27,7 +27,7 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { displayToast, showToast, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
+import { displayNotification, showNotification, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { getDevice } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
 import {
@@ -128,7 +128,7 @@ initialize({
     savedSessionConfig.value = undefined;
     if (!alreadyRelogging) {
       void persistSyncConfig(expiredConfig).catch((error) => {
-        if (getActiveConfig() === expiredConfig) showToast(errorMessage(error), "error");
+        if (getActiveConfig() === expiredConfig) showNotification({ message: errorMessage(error), tone: "error" });
       });
       void nextTick(() => setupWizard.value?.setFields(expiredConfig));
     }
@@ -164,7 +164,7 @@ initSettings({
 
 watch(setupVisible, (visible) => {
   if (visible && isQuickPaste.value) {
-    void native.showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+    void native.showMainWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));
   }
 });
 
@@ -188,10 +188,10 @@ async function consumeMobileShares(): Promise<void> {
     while (shareConsumeRequested && getActiveConfig()?.sessionToken) {
       shareConsumeRequested = false;
       const summary = await getAccountSession()!.capture.consumeShares();
-      if (summary.shares) showToast(shareImportMessage(summary), "success");
+      if (summary.shares) showNotification({ message: shareImportMessage(summary), tone: "success" });
     }
   } catch (error) {
-    showToast(`接收系统分享失败：${errorMessage(error)}，请重新分享`, "error");
+    showNotification({ message: `接收系统分享失败：${errorMessage(error)}，请重新分享`, tone: "error" });
   } finally {
     importingShare.value = false;
   }
@@ -347,7 +347,7 @@ async function restoreSavedSession(): Promise<void> {
     if (controller.signal.aborted) return;
     const message = errorMessage(error);
     setupError.value = message;
-    if (message.startsWith("服务器尚未支持登录状态验证")) showToast(message, "error");
+    if (message.startsWith("服务器尚未支持登录状态验证")) showNotification({ message: message, tone: "error" });
     if (message === "登录已失效，请重新登录" || message === "设备与登录会话不匹配，请重新登录") {
       const expiredConfig = { ...config, sessionToken: "" };
       savedSessionConfig.value = undefined;
@@ -414,13 +414,13 @@ function readableStartupError(error: unknown): string {
 async function initializeNativeServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
-    native.listenToast(displayToast),
+    native.listenNotification(displayNotification),
     native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
-      void native.showPasteWindow().catch((error) => showToast(errorMessage(error), "error"));
+      void native.showPasteWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));
     }),
     native.listen("cliproam://show-main", () => {
-      void native.showMainWindow().catch((error) => showToast(errorMessage(error), "error"));
+      void native.showMainWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));
     }),
     // 兜底：窗口隐藏期间（macOS 对不可见 WKWebView 有节流）可能错过事件，
     // 重新获焦时主动拉一次全量快照，保证「下载」页与行内进度不失真。
@@ -433,7 +433,7 @@ async function initializeNativeServices(): Promise<void> {
   unlisteners = listenerResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
   const listenerError = listenerResults.find((result) => result.status === "rejected");
   if (listenerError?.status === "rejected") {
-    showToast(`部分后台事件监听初始化失败：${String(listenerError.reason)}`, "error");
+    showNotification({ message: `部分后台事件监听初始化失败：${String(listenerError.reason)}`, tone: "error" });
   }
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
@@ -444,7 +444,7 @@ async function initializeNativeServices(): Promise<void> {
       shareReceiverListener = await native.listenShares(
         (payload) => {
           if (payload.error) {
-            showToast(`接收系统分享失败：${payload.error}，请重新分享`, "error");
+            showNotification({ message: `接收系统分享失败：${payload.error}，请重新分享`, tone: "error" });
           } else {
             void consumeMobileShares();
           }
@@ -452,7 +452,7 @@ async function initializeNativeServices(): Promise<void> {
       );
       await consumeMobileShares();
     } catch (error) {
-      showToast(`系统分享接收初始化失败：${errorMessage(error)}`, "error");
+      showNotification({ message: `系统分享接收初始化失败：${errorMessage(error)}`, tone: "error" });
     }
   }
 }
@@ -460,7 +460,7 @@ async function initializeNativeServices(): Promise<void> {
 async function enableAccountShortcuts(): Promise<void> {
   if (platformCapabilities.value.globalShortcut) {
     const registered = await native.quickPasteShortcut?.initialize();
-    if (!registered) showToast(native.quickPasteShortcut?.status.value.message ?? "快捷键初始化失败", "error");
+    if (!registered) showNotification({ message: native.quickPasteShortcut?.status.value.message ?? "快捷键初始化失败", tone: "error" });
   }
 }
 
@@ -506,7 +506,7 @@ onMounted(async () => {
   setupVisible.value = true;
   initializing.value = false;
 
-  if (startupWarning) showToast(startupWarning, "error");
+  if (startupWarning) showNotification({ message: startupWarning, tone: "error" });
   void initAppVersion();
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
