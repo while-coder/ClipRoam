@@ -55,7 +55,6 @@ export class NativeRust implements NativePlatform {
   setWindowMode(options: WindowModeOptions): Promise<boolean> { return this.invoke("native_set_window_mode", {...options}); }
   capturePasteTarget(): Promise<void> { return this.invoke("native_capture_paste_target"); }
   showToast(payload: ToastPayload): Promise<void> { return this.invoke("native_show_toast", {...payload}); }
-  hideToast(): Promise<void> { return this.invoke("native_hide_toast"); }
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten> { return this.subscribe(event, handler); }
   async previewSource(path: string): Promise<string> {
     if (/^(blob:|data:|https?:)/.test(path)) return path;

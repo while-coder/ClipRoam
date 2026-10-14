@@ -51,7 +51,6 @@ export interface NativePlatform {
   setWindowMode(options: WindowModeOptions): Promise<boolean>;
   capturePasteTarget(): Promise<void>;
   showToast(payload: ToastPayload): Promise<void>;
-  hideToast(): Promise<void>;
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
   previewSource(path: string): Promise<string>;
   readClipboard(textOnly: boolean): Promise<ClipboardData | null>;

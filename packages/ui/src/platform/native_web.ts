@@ -36,7 +36,6 @@ export class NativeWeb implements NativePlatform {
   async setWindowMode(_options: WindowModeOptions): Promise<boolean> { return this.unavailable(); }
   async capturePasteTarget(): Promise<void> { this.unavailable(); }
   async showToast(_payload: ToastPayload): Promise<void> { this.unavailable(); }
-  async hideToast(): Promise<void> {}
   async listen<T>(_event: string, _handler: (payload: T) => void): Promise<Unlisten> { return () => {}; }
   async previewSource(path: string): Promise<string> { return path; }
   async readClipboard(_textOnly: boolean): Promise<ClipboardData | null> {

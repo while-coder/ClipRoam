@@ -156,14 +156,6 @@ pub(crate) fn native_show_toast(
     platform::show_detached_toast(&app, payload)
 }
 
-#[tauri::command]
-pub(crate) fn native_hide_toast(app: AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("toast") else {
-        return Ok(());
-    };
-    window.hide().map_err(|error| error.to_string())
-}
-
 /// 设备展示信息（机器名、CPU、OS 类型与版本、App 版本），除 App 版本外每次
 /// 现取、不缓存：机器改名后下次读取立即生效。OS 类型为
 /// `windows`/`macos`/`linux`/`android`/`ios`。

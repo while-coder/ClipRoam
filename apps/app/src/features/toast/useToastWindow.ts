@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { native, type Unlisten, type ToastPayload } from "@cliproam/ui/native";
 
 /** 模块级单例（对齐 usePlatform 风格）：所有窗口内组件共享同一个 toast 状态。 */
@@ -15,7 +16,7 @@ function clearTimers(): void {
 /** toast 消失后延迟隐藏通知窗口，让收尾动画播完。 */
 function scheduleToastWindowHide(): void {
   toastWindowHideTimer = window.setTimeout(() => {
-    void native.hideToast().catch(() => {});
+    void getCurrentWindow().hide().catch(() => {});
     toastWindowHideTimer = undefined;
   }, 180);
 }
