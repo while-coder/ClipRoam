@@ -35,6 +35,8 @@ pub fn run() {
             app::native_get_platform_capabilities,
             app::native_get_device_info,
             app::native_open_app_data_dir,
+            app::native_debug_tools_supported,
+            app::native_open_devtools,
             app::native_start_window_drag,
             window_mode::native_set_window_mode,
             app::native_capture_paste_target,

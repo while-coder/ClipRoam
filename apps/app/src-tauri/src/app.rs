@@ -43,6 +43,25 @@ pub(crate) fn native_open_app_data_dir(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub(crate) fn native_debug_tools_supported() -> bool {
+    cfg!(all(debug_assertions, desktop))
+}
+
+#[tauri::command]
+pub(crate) fn native_open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(all(debug_assertions, desktop))]
+    {
+        window.open_devtools();
+        Ok(())
+    }
+    #[cfg(not(all(debug_assertions, desktop)))]
+    {
+        let _ = window;
+        Err("当前构建不支持调试工具".to_string())
+    }
+}
+
+#[tauri::command]
 pub(crate) fn native_start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     platform::begin_window_drag(&window)
 }

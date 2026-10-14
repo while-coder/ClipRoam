@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { RefreshCw } from "lucide-vue-next";
+import { Bug, RefreshCw } from "lucide-vue-next";
+import { onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "@cliproam/ui/errors";
 import SettingsDialog from "@cliproam/ui/settings-dialog";
 import { useRustSettings } from "./useRustSettings";
 import "./styles.css";
@@ -12,6 +15,21 @@ const {
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
     updaterSupported, updateStatus, updateStatusText, checkForUpdate, openAppDataDirectory, saveSettings,
 } = useRustSettings();
+
+const debugToolsSupported = ref(false);
+const openingDebugTools = ref(false);
+const debugToolsError = ref("");
+onMounted(async () => {
+  debugToolsSupported.value = await invoke<boolean>("native_debug_tools_supported").catch(() => false);
+});
+async function openDebugTools(): Promise<void> {
+  if (openingDebugTools.value) return;
+  openingDebugTools.value = true;
+  debugToolsError.value = "";
+  try { await invoke("native_open_devtools"); }
+  catch (error) { debugToolsError.value = `调试工具打开失败：${errorMessage(error)}`; }
+  finally { openingDebugTools.value = false; }
+}
 </script>
 <template>
   <SettingsDialog :current-username="currentUsername" :save="saveSettings" :save-pages="['general', 'shortcuts']">
@@ -148,12 +166,20 @@ const {
                   ? "下载中…"
                   : "检查更新" }}
           </SButton>
-    </template>
-                <p class="settings-section-desc">检查 GitHub Release 中是否有可用的新版本。</p>
-                <p class="about-update-status" :class="{ 'update-error': updateStatus === 'error' }" :role="updateStatus === 'error' ? 'alert' : 'status'" aria-live="polite">
-                  {{ updateStatusText }}
-                </p>
-              </SCard>
+        </template>
+        <p class="settings-section-desc">检查 GitHub Release 中是否有可用的新版本。</p>
+        <p class="about-update-status" :class="{ 'update-error': updateStatus === 'error' }" :role="updateStatus === 'error' ? 'alert' : 'status'" aria-live="polite">
+          {{ updateStatusText }}
+        </p>
+      </SCard>
+      <SCard v-if="debugToolsSupported" title="调试">
+        <p class="settings-section-desc">查看页面、控制台和本地存储。</p>
+        <SButton :loading="openingDebugTools" @click="openDebugTools">
+          <Bug v-if="!openingDebugTools" :size="16" aria-hidden="true" />
+          打开调试工具
+        </SButton>
+        <p v-if="debugToolsError" class="settings-section-desc" role="alert">{{ debugToolsError }}</p>
+      </SCard>
     </template>
   </SettingsDialog>
 </template>
