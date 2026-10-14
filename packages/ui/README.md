@@ -6,7 +6,7 @@
 
 Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口及其样式保留在 `apps/app`。快速粘贴视图和原生更新弹窗通过共享 App 的 `quick-paste`、`native-overlays` 插槽接入。独立 Toast 入口不加载共享业务 App。
 
-组件直接导出源码，由各入口的 Vite 构建。各入口安装 Vue 与 ui-kit 插件，并导入 `@cliproam/ui/styles.css`。工作区布局和展示组件仍可从包的主入口独立引用。
+组件直接导出源码，由各入口的 Vite 构建。各入口安装 Vue 与 ui-kit 插件，并导入 `@cliproam/ui/styles.css`。包子路径直接指向实现文件：平台状态通过 `@cliproam/ui/platform` 引用，账号会话通过 `@cliproam/ui/account-session` 引用，历史搜索操作通过 `@cliproam/ui/history-search` 引用。
 
 ## UI 代码结构
 
@@ -30,7 +30,7 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 - `sync/httpClient.ts` 提供认证 HTTP 请求、取消与响应校验；每个账号连接持有一个请求器，历史、上传和下载通过所属会话复用它。`sync/authApi.ts` 保留登录、注册、会话验证、设备信息更新和改密 API。
 - `src/accountSession.ts` 管理账号状态与资源生命周期；`src/utils.ts` 放置共享工具函数，`src/types.ts` 放置共享类型；`src/platform` 封装数据库、平台操作、通知与能力状态；`src/components` 放置跨功能的展示组件。
 - `src/config.ts` 统一平台能力、服务器地址、分页和账号偏好的默认配置；登录表单与认证逻辑放在 `features/sync`。
-- `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；包主入口导出的布局默认不带业务菜单。
+- `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；布局默认不带业务菜单。
 - `platform/runtime.ts` 统一窗口模式、平台能力和版本信息；`usePendingUploads.ts` 统一手动捕获与待上传列表交互；下载快照类型和取消异常由 `downloadManager.ts` 导出。
 
 目录保持按职责和业务功能划分，不再为单个类型、状态绑定或简单分页标记创建独立文件：
@@ -38,7 +38,6 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 ```text
 src/
   App.vue, config.ts, types.ts, styles.css
-  index.ts, host.ts                 # 包公开入口
   assets/                          # 图片资源
   components/                      # 跨功能布局和展示组件
   accountSession.ts                # 账号状态、资源与任务生命周期

@@ -2,7 +2,7 @@
 import RustSettingsDialog from "./features/settings/RustSettingsDialog.vue";
 import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
-import { isNative, isQuickPaste } from "@cliproam/ui/runtime";
+import { isNative, isQuickPaste } from "@cliproam/ui/platform";
 import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
 </script>
 

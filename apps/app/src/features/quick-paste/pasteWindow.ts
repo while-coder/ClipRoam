@@ -1,6 +1,9 @@
 import { nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { native, isMobile, isQuickPaste, isNative, getAccountSession, focusSearch, focusSearchInput } from "@cliproam/ui/runtime";
+import { native } from "@cliproam/ui/native";
+import { isMobile, isQuickPaste, isNative } from "@cliproam/ui/platform";
+import { getAccountSession } from "@cliproam/ui/account-session";
+import { focusSearch, focusSearchInput } from "@cliproam/ui/history-search";
 import {
   cursorPosition,
   getCurrentWindow,
