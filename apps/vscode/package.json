@@ -1,0 +1,53 @@
+{
+  "name": "cliproam-vscode",
+  "displayName": "ClipRoam",
+  "description": "在 VS Code 中查看跨设备剪贴板历史、保存选中文本并插入代码片段。",
+  "version": "0.2.1",
+  "publisher": "while-coder",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "https://github.com/while-coder/ClipRoam.git" },
+  "engines": { "vscode": "^1.96.0" },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "main": "./dist/extension.js",
+  "icon": "public/cliproam-icon.png",
+  "contributes": {
+    "commands": [
+      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "ClipRoam" },
+      { "command": "cliproam.captureSelection", "title": "保存选中文本", "category": "ClipRoam" },
+      { "command": "cliproam.insertHistory", "title": "从历史插入文本", "category": "ClipRoam" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "cliproam.captureSelection", "when": "editorHasSelection", "group": "9_cliproam" },
+        { "command": "cliproam.insertHistory", "when": "editorTextFocus", "group": "9_cliproam" }
+      ]
+    }
+  },
+  "scripts": {
+    "prebuild": "pnpm --filter @cliproam/protocol build",
+    "build": "pnpm check && vite build && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --sourcemap",
+    "check": "tsc -p tsconfig.extension.json --noEmit && vue-tsc --noEmit",
+    "test": "node --test test/extension.test.cjs",
+    "package": "pnpm build && vsce package --no-dependencies --skip-license --out dist/cliproam.vsix"
+  },
+  "dependencies": {
+    "@cliproam/ui": "workspace:*",
+    "@qingfeng346/ui-kit": "link:../../../ui-kit/ui-kit",
+    "vue": "^3.5.43"
+  },
+  "ciDependencies": {
+    "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.96.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.25.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vue-tsc": "^2.1.10"
+  }
+}

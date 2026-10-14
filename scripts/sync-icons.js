@@ -60,12 +60,12 @@ execFileSync(
     ...browserIconSizes.flatMap((size) => ["--png", String(size)])],
   { cwd: rootDirectory, stdio: "inherit" },
 );
-for (const platform of ["pwa", "chrome", "firefox"]) {
+for (const platform of ["pwa", "chrome", "firefox", "vscode"]) {
   const publicDirectory = path.join(rootDirectory, "apps", platform, "public");
   const iconsDirectory = path.join(publicDirectory, "icons");
   fs.mkdirSync(iconsDirectory, { recursive: true });
   fs.copyFileSync(path.join(browserIconsDirectory, "128x128.png"), path.join(publicDirectory, "cliproam-icon.png"));
-  const sizes = platform === "pwa" ? [192, 512] : [16, 32, 48, 128];
+  const sizes = platform === "vscode" ? [] : platform === "pwa" ? [192, 512] : [16, 32, 48, 128];
   for (const size of sizes) {
     fs.copyFileSync(path.join(browserIconsDirectory, `${size}x${size}.png`), path.join(iconsDirectory, `icon-${size}.png`));
   }

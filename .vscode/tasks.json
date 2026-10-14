@@ -2,6 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "build:vscode",
+      "type": "shell",
+      "command": "pnpm build:vscode",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$tsc"
+    },
+    {
       "label": "ui:kill",
       "type": "process",
       "command": "node",

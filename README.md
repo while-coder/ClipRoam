@@ -122,7 +122,15 @@ macOS 首次使用自动粘贴时，需要在“系统设置 → 隐私与安全
 
 PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指定路径，Release 工作流设为 `/ClipRoam/`。
 
-`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome 和 Firefox 图标；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
+### VS Code 扩展
+
+从发布页面下载 `ClipRoam_版本号_vscode.vsix`，在 VS Code 扩展菜单选择“从 VSIX 安装”。运行命令 `ClipRoam: 打开剪贴板历史`，连接服务器并登录。
+
+选中编辑器文本后，右键选择 `ClipRoam: 保存选中文本` 可加入同步队列。选择 `ClipRoam: 从历史插入文本`，在历史中双击复制文本，再点击顶部“插入已复制文本”，即可替换编辑器选区。首版仅支持桌面 VS Code 的文本剪贴板，不持续监听系统复制。
+
+本地运行 `pnpm build:vscode` 构建，`pnpm package:vscode` 生成 `apps/vscode/dist/cliproam.vsix`。Release 工作流同时发布 VSIX；开发和能力说明见 [VS Code 扩展说明](apps/vscode/README.md)。
+
+`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
 
 ### 常见问题
 

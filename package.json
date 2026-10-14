@@ -10,6 +10,8 @@
     "build:pwa": "pnpm --filter @cliproam/pwa build",
     "build:chrome": "pnpm --filter @cliproam/chrome build",
     "build:firefox": "pnpm --filter @cliproam/firefox build",
+    "build:vscode": "pnpm --filter cliproam-vscode build",
+    "package:vscode": "pnpm --filter cliproam-vscode package",
     "docker": "node scripts/docker.js",
     "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",

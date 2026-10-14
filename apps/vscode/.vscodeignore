@@ -1,0 +1,8 @@
+**/*
+!package.json
+!README.md
+!dist/extension.js
+!dist/webview/**
+!public/cliproam-icon.png
+dist/**/*.map
+dist/*.vsix

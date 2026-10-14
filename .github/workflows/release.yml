@@ -176,6 +176,33 @@ jobs:
           BROWSER: ${{ matrix.browser }}
         run: gh release upload "$TAG" "ClipRoam_${VERSION}_${BROWSER}.zip" --clobber
 
+  release-vscode:
+    name: Release VS Code extension
+    needs: [check, prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: while-coder/workflows/.github/actions/install-pnpm-dependencies@main
+      - name: Synchronize versions
+        run: pnpm sync:versions
+      - name: Package VS Code extension
+        run: pnpm package:vscode
+      - name: Test VS Code extension host
+        run: pnpm --filter cliproam-vscode test
+      - name: Upload VSIX to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cp apps/vscode/dist/cliproam.vsix "ClipRoam_${VERSION}_vscode.vsix"
+          gh release upload "$TAG" "ClipRoam_${VERSION}_vscode.vsix" --clobber
+
   docker:
     needs: [check, prepare-release]
     runs-on: ubuntu-latest

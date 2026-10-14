@@ -2,6 +2,14 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Launch VS Code Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}/apps/vscode"],
+      "outFiles": ["${workspaceFolder}/apps/vscode/dist/extension.js"],
+      "preLaunchTask": "build:vscode"
+    },
+    {
       "name": "Launch Server",
       "type": "node",
       "request": "launch",
