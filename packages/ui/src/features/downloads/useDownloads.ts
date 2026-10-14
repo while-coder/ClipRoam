@@ -1,6 +1,6 @@
 import { errorMessage } from "../../utils";
 import { computed } from "vue";
-import { getAccountSession } from "../../core/accountSession";
+import { getAccountSession } from "../../accountSession";
 import type { LocalClipboardEntry } from "../../types";
 import { isMobile, showToast } from "../../platform/runtime";
 import { DownloadCancelledError } from "./downloadManager";

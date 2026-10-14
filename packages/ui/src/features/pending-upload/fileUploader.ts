@@ -1,6 +1,6 @@
 import { base64ToBytes } from "../../utils";
 import { FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;

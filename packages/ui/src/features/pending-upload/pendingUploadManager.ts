@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import type { LocalClipboardEntry, UploadProgress, PendingRow, StoredEntry } from "../../types";
 import { summarize } from "../../utils";
 import { entryContents } from "@cliproam/protocol";

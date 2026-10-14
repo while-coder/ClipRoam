@@ -1,6 +1,6 @@
 import { errorMessage } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
-import { getAccountSession } from "../../core/accountSession";
+import { getAccountSession } from "../../accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
 import { isMobile, usePlatform, showToast } from "../../platform/runtime";
 import { ensureLocalFiles } from "../downloads/useDownloads";

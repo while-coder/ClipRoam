@@ -1,5 +1,5 @@
 import { errorMessage, anyAbortSignal } from "../../utils";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 
 /** Structural stand-in for the protocol's zod schemas, keeping zod out of call sites' imports. */
 type Schema<T> = { safeParse: (value: unknown) => { success: true; data: T } | { success: false } };

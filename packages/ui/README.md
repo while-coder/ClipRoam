@@ -26,9 +26,9 @@ Tauri SDK、日志、原生更新器、快捷粘贴窗口、独立 Toast 窗口�
 - `.vue` 文件负责布局、显示和用户事件。历史页的筛选、选中项与页码属于视图状态，不共享给其他历史视图。
 - `HistoryClient` 负责历史 HTTP 请求及详情回填，`HistoryManager` 直接管理记录的本地缓存和刷新通知。
 - `CaptureService` 捕获和解析剪贴板；`PendingUploader` 发布待上传记录；`RelayUploader` 传输中继文件。它们通过对应 Manager 读写队列或任务列表。
-- `core/AccountSession` 装配业务 Manager，创建账号与设置状态，管理账号资源、取消信号和定时任务。`ClientSessionManager` 统一管理当前账号配置、偏好、连接状态、设备列表和会话启停；WebSocket、心跳、重连与传输 worker 装配收在同文件的私有连接类中。
+- `src/accountSession.ts` 装配业务 Manager，创建账号与设置状态，管理账号资源、取消信号和定时任务。`ClientSessionManager` 统一管理当前账号配置、偏好、连接状态、设备列表和会话启停；WebSocket、心跳、重连与传输 worker 装配收在同文件的私有连接类中。
 - `sync/httpClient.ts` 提供认证 HTTP 请求、取消与响应校验；每个账号连接持有一个请求器，历史、上传和下载通过所属会话复用它。`sync/authApi.ts` 保留登录、注册、会话验证、设备信息更新和改密 API。
-- `src/core` 保留共享数据库、内容处理、哈希和提示；`src/platform` 封装平台操作与能力状态；`src/components` 放置跨功能的展示组件。
+- `src/accountSession.ts` 管理账号状态与资源生命周期；`src/utils.ts` 放置共享工具函数，`src/types.ts` 放置共享类型；`src/platform` 封装数据库、平台操作、通知与能力状态；`src/components` 放置跨功能的展示组件。
 - `src/config.ts` 统一平台能力、服务器地址、分页和账号偏好的默认配置；登录表单与认证逻辑放在 `features/sync`。
 - `WorkspacePage` 统一页面布局，业务页面通过 `menu` 插槽放入 `WorkspaceMenu`；包主入口导出的布局默认不带业务菜单。
 - `platform/runtime.ts` 统一窗口模式、平台能力和版本信息；`usePendingUploads.ts` 统一手动捕获与待上传列表交互；下载快照类型和取消异常由 `downloadManager.ts` 导出。
@@ -41,9 +41,9 @@ src/
   index.ts, host.ts                 # 包公开入口
   assets/                          # 图片资源
   components/                      # 跨功能布局和展示组件
-  core/                            # 账号生命周期、数据库、内容、哈希、提示
+  accountSession.ts                # 账号状态、资源与任务生命周期
   platform/                        # 平台接口、适配器、运行信息、文件与存储
-  utils.ts                         # 取消信号、字节转换、错误、格式化和条目展示纯函数
+  utils.ts                         # 取消信号、字节转换、格式化、内容处理与哈希
   features/
     sync/                          # ClientSessionManager、HTTP、认证 API、登录表单
     history/                       # 历史缓存、分页查询、筛选和预览
@@ -56,7 +56,7 @@ src/
 
 新增列表操作应放到所属 Manager，页面绑定只调用 Manager，不直接读写数据库或维护另一份业务列表。
 
-通用纯函数集中在 `src/utils.ts`，按用途分组并保留具名导出。`@cliproam/ui/bytes` 和 `@cliproam/ui/errors` 映射到该模块，原有客户端导入方式保持可用。账号、数据库、剪贴板内容处理、增量哈希和提示仍归各自模块管理。
+通用纯函数集中在 `src/utils.ts`，按用途分组并保留具名导出。`@cliproam/ui/bytes` 和 `@cliproam/ui/errors` 映射到该模块，原有客户端导入方式保持可用。账号生命周期由 `src/accountSession.ts` 管理；数据库与提示归 `src/platform`，剪贴板内容处理和增量哈希归 `src/utils.ts`。
 
 客户端会话从 `clientSessionManager` 单例进入，`start` 创建账号资源与连接，`stop` 释放账号资源；配置与偏好持久化也由该入口提供。登录验证成功与 WebSocket 已连接是两个独立状态，连接暂时断开不会清除登录状态。后台任务持有自己的 `AccountSession`，通过 `session.http` 使用该账号的请求器；账号切换会取消旧会话，旧任务不能取得新账号的凭证。
 

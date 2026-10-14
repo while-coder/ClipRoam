@@ -1,5 +1,5 @@
 import { FILE_CHUNK_SIZE, type FileRelayRequest } from "@cliproam/protocol";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import { errorMessageFromBody, type SyncRequester } from "../sync/httpClient";
 type RelayUploaderDeps = {
   session: AccountSession;

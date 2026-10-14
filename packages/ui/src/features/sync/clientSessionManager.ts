@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils";
 import { computed, ref, watch } from "vue";
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
-import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../core/accountSession";
+import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../accountSession";
 import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
@@ -14,7 +14,7 @@ import { PendingUploader } from "../pending-upload/pendingUploader";
 import { RelayUploader } from "../uploads/relayUploader";
 import type { AccountPreferences, SyncConfig } from "../../types";
 
-export { archiveKeyFor } from "../../core/accountSession";
+export { archiveKeyFor } from "../../accountSession";
 
 export interface ClientConnection {
   readonly http: SyncRequester;

@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils";
 import { getDevice, getDeviceIdentity, saveDeviceAlias } from "../../platform/storage";
 import { nextTick } from "vue";
-import { accountStateRef, getAccountSession } from "../../core/accountSession";
+import { accountStateRef, getAccountSession } from "../../accountSession";
 import { changeAccountPassword, pushDeviceInfo } from "../sync/authApi";
 import type { AccountPreferences, SettingsPage, SyncConfig } from "../../types";
 

@@ -1,6 +1,6 @@
 import { base64ToBytes, nameMatches, safeName, profileName, Sha256 } from "../../utils";
 import { isFileNode, type FileInfo } from "@cliproam/protocol";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";

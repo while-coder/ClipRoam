@@ -1,5 +1,5 @@
 import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type ClipboardManifestEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import { PAGE_SIZE } from "../../config";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";

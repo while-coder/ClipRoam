@@ -2,7 +2,7 @@ import { errorMessage, anyAbortSignal, safeName } from "../../utils";
 import { computed, ref } from "vue";
 import type { LocalClipboardEntry, StoredEntry } from "../../types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
-import type { AccountSession } from "../../core/accountSession";
+import type { AccountSession } from "../../accountSession";
 import type { SaveTarget } from "../../platform/files";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */

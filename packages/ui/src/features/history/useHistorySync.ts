@@ -1,6 +1,6 @@
 import { computed, nextTick } from "vue";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { getAccountSession } from "../../core/accountSession";
+import { getAccountSession } from "../../accountSession";
 import type {
   EntriesManifestFilter,
   EntriesManifestPage,

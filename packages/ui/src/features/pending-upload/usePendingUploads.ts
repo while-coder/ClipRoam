@@ -1,6 +1,6 @@
 import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
-import { getAccountSession } from "../../core/accountSession";
+import { getAccountSession } from "../../accountSession";
 import { showToast } from "../../platform/runtime";
 import type { LocalClipboardEntry } from "../../types";
 

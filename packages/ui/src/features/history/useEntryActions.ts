@@ -1,5 +1,5 @@
 import { errorMessage, canSaveEntry } from "../../utils";
-import { accountStateRef, getAccountSession } from "../../core/accountSession";
+import { accountStateRef, getAccountSession } from "../../accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { isMobile, isQuickPaste, usePlatform, showToast } from "../../platform/runtime";
 import { downloadEntry } from "../downloads/useDownloads";

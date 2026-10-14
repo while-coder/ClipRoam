@@ -29,7 +29,7 @@ import {
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import { displayToast, showToast, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { getDevice } from "./platform/storage";
-import { activeView, activeAccountSession, getAccountSession } from "./core/accountSession";
+import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
 import {
   fetchHistoryPage,
   focusSearchInput,
