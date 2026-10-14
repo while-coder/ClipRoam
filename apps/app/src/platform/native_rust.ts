@@ -1,5 +1,5 @@
 import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, SharedContent,
-  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent, WindowModeOptions } from "@cliproam/ui/native";
+  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
@@ -33,8 +33,7 @@ export class NativeRust implements NativePlatform {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl(url);
   }
-  async initializeWindowMode(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).initializeWindowMode(); }
-  async showMainWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showMainWindow(); }
+  async showMainWindow(options?: { focusSearch?: boolean }): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showMainWindow(options); }
   async showPasteWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).showPasteWindow(); }
   async hideWindow(): Promise<void> { return (await import("../features/quick-paste/pasteWindow")).hideWindow(); }
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
@@ -49,8 +48,6 @@ export class NativeRust implements NativePlatform {
   getDeviceInfo(): Promise<DeviceInfo> { return this.invoke("native_get_device_info"); }
   openAppDataDir(): Promise<void> { return this.invoke("native_open_app_data_dir"); }
   startWindowDrag(): Promise<void> { return this.invoke("native_start_window_drag"); }
-  setWindowMode(options: WindowModeOptions): Promise<boolean> { return this.invoke("native_set_window_mode", {...options}); }
-  capturePasteTarget(): Promise<void> { return this.invoke("native_capture_paste_target"); }
   showNotification(payload: NotificationPayload): Promise<void> { return this.invoke("native_show_notification", {...payload}); }
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten> { return this.subscribe(event, handler); }
   async previewSource(path: string): Promise<string> {

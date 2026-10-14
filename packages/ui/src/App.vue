@@ -482,7 +482,7 @@ onMounted(async () => {
   }
   if (capabilitiesResult.status === "fulfilled") {
     try {
-      await native.initializeWindowMode();
+      await native.showMainWindow({ focusSearch: false });
     } catch (error) {
       startupWarning = `恢复主窗口失败：${errorMessage(error)}`;
     }

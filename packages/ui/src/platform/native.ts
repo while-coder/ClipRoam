@@ -8,14 +8,6 @@ export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVe
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
-export type WindowModeOptions = {
-  mode: "main" | "quickPaste";
-  title?: string;
-  /** Omit to preserve position; restoring main mode restores its saved geometry. */
-  position?: { kind: "cursor" } | { kind: "center" } | { kind: "coordinates"; x: number; y: number };
-  /** Defaults to true. Use false to prepare the window before rendering its view. */
-  visible?: boolean;
-};
 
 export type QuickPasteShortcutState = {
   shortcut: Ref<string>;
@@ -36,8 +28,7 @@ export interface NativePlatform {
   readonly quickPasteShortcut?: QuickPasteShortcutState;
   getAppVersion(): Promise<string>;
   openExternalUrl(url: string): Promise<void>;
-  initializeWindowMode(): Promise<void>;
-  showMainWindow(): Promise<void>;
+  showMainWindow(options?: { focusSearch?: boolean }): Promise<void>;
   showPasteWindow(): Promise<void>;
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
@@ -46,9 +37,6 @@ export interface NativePlatform {
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;
   startWindowDrag(): Promise<void>;
-  /** Returns whether the previous native window layout was quick paste. */
-  setWindowMode(options: WindowModeOptions): Promise<boolean>;
-  capturePasteTarget(): Promise<void>;
   showNotification(payload: NotificationPayload): Promise<void>;
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
   previewSource(path: string): Promise<string>;

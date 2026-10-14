@@ -3,7 +3,7 @@ import { toast } from "@qingfeng346/ui-kit";
 import type { PlatformCapabilities, ShareReceiverEvent, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, WindowModeOptions } from "./native";
+import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
 
 /** Browser operations use Web APIs without loading Tauri. */
 export class NativeWeb implements NativePlatform {
@@ -18,8 +18,7 @@ export class NativeWeb implements NativePlatform {
     link.rel = "noopener noreferrer";
     link.click();
   }
-  async initializeWindowMode(): Promise<void> {}
-  async showMainWindow(): Promise<void> {}
+  async showMainWindow(_options?: { focusSearch?: boolean }): Promise<void> {}
   async showPasteWindow(): Promise<void> {}
   async hideWindow(): Promise<void> {}
   async onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
@@ -33,8 +32,6 @@ export class NativeWeb implements NativePlatform {
   private unavailable(): never { throw new Error("此操作需要桌面或手机客户端"); }
   async openAppDataDir(): Promise<void> { this.unavailable(); }
   async startWindowDrag(): Promise<void> { this.unavailable(); }
-  async setWindowMode(_options: WindowModeOptions): Promise<boolean> { return this.unavailable(); }
-  async capturePasteTarget(): Promise<void> { this.unavailable(); }
   async showNotification(payload: NotificationPayload): Promise<void> {
     toast.show(payload.tone, payload.message);
   }

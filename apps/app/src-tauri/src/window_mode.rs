@@ -49,7 +49,7 @@ pub(crate) async fn native_set_window_mode(
     title: Option<String>,
     position: Option<WindowPosition>,
     visible: Option<bool>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     if window.label() != "main" {
         return Err("仅主窗口可切换窗口模式".into());
     }
@@ -67,7 +67,7 @@ fn apply_mode(
     title: Option<String>,
     position: Option<WindowPosition>,
     visible: bool,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let state = window.state::<WindowModeState>();
     let mut geometry = state.0.lock().map_err(|error| error.to_string())?;
     let previous = geometry.quick;
@@ -183,7 +183,7 @@ fn apply_mode(
             crate::app::set_quick_paste_mode(window, true)?;
         }
     }
-    Ok(previous)
+    Ok(())
 }
 
 fn position_at_cursor(window: &WebviewWindow) -> Result<(), String> {
