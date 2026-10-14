@@ -43,7 +43,7 @@ rfd = "0.15"
 
 # macOS 上 WKWebView 透明背景走私有 API（toast 窗口 transparent: true 依赖它）
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "image-png"] }
 # 辅助功能权限检测与授权弹窗（AXIsProcessTrustedWithOptions，见 macos/mod.rs）
 core-foundation = "0.10"
 # 原生焦点恢复和按键投递，避免额外的 Apple Events 自动化权限。

@@ -80,4 +80,11 @@ if (fs.existsSync(androidResourcesDirectory)) {
   );
 }
 
+if (process.platform === "darwin") {
+  execFileSync("swift", [path.join(__dirname, "mac-icon.swift")], {
+    cwd: rootDirectory,
+    stdio: "inherit",
+  });
+}
+
 console.log(`已从 ${path.relative(rootDirectory, sourceIcon)} 刷新全部图标`);
