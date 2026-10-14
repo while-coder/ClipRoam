@@ -1,10 +1,9 @@
-import { errorMessage, anyAbortSignal } from "../../utils";
+import { errorMessage, anyAbortSignal, safeName } from "../../utils";
 import { computed, ref } from "vue";
-import type { LocalClipboardEntry } from "../../types";
+import type { LocalClipboardEntry, StoredEntry } from "../../types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
 import type { SaveTarget } from "../../platform/files";
-import { safeName, type StoredEntry } from "../../core/content";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}

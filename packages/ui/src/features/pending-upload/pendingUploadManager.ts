@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import type { AccountSession } from "../../core/accountSession";
-import type { LocalClipboardEntry, UploadProgress } from "../../types";
-import { summarize, type PendingRow, type StoredEntry } from "../../core/content";
+import type { LocalClipboardEntry, UploadProgress, PendingRow, StoredEntry } from "../../types";
+import { summarize } from "../../utils";
 import { entryContents } from "@cliproam/protocol";
 
 /** Shared pending queue for one account. Capture, publishing and views use this instance. */

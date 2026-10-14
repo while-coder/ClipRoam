@@ -20,8 +20,7 @@ import DeviceFilterControl from "./DeviceFilterControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
-import { usePlatform } from "../../platform/runtime";
-import { showToast } from "../../core/toast";
+import { usePlatform, showToast } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
 import type {
   ClipboardEntry,

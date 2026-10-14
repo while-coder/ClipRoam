@@ -1,5 +1,5 @@
 import { computed, effectScope, ref, shallowRef, type Ref, type WritableComputedRef } from "vue";
-import { AccountDatabase } from "./database";
+import { AccountDatabase } from "../platform/database";
 import { HistoryManager } from "../features/history/historyManager";
 import { PendingUploadManager } from "../features/pending-upload/pendingUploadManager";
 import { UploadManager } from "../features/uploads/uploadManager";
@@ -7,8 +7,8 @@ import { DownloadManager } from "../features/downloads/downloadManager";
 import { CaptureService } from "../features/pending-upload/captureService";
 import { AccountFiles } from "../platform/files";
 import { clipboardPlatform } from "../platform/clipboard";
-import { profileName } from "./hash";
-import { showToast } from "./toast";
+import { profileName } from "../utils";
+import { showToast } from "../platform/runtime";
 import type { ClientConnection } from "../features/sync/clientSessionManager";
 import type { SyncRequester } from "../features/sync/httpClient";
 import type { SyncConfig, AccountPreferences, Device, SettingsPage } from "../types";

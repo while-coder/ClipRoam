@@ -2,8 +2,7 @@ import { errorMessage } from "../../utils";
 import { computed } from "vue";
 import { getAccountSession } from "../../core/accountSession";
 import type { LocalClipboardEntry } from "../../types";
-import { isMobile } from "../../platform/runtime";
-import { showToast } from "../../core/toast";
+import { isMobile, showToast } from "../../platform/runtime";
 import { DownloadCancelledError } from "./downloadManager";
 
 export const downloadRecords = computed(() => getAccountSession()?.downloads.downloadRecords.value ?? []);

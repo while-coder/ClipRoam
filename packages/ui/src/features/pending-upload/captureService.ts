@@ -1,9 +1,8 @@
-import { base64ToBytes } from "../../utils";
+import { base64ToBytes, nameMatches, safeName, profileName, Sha256 } from "../../utils";
 import { isFileNode, type FileInfo } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
 import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
-import { nameMatches, safeName, type LocalSources, type StoredEntry } from "../../core/content";
-import { profileName, Sha256 } from "../../core/hash";
+import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */

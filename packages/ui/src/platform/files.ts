@@ -1,7 +1,7 @@
 import { entryContents, isFileNode, type FileInfo } from "@cliproam/protocol";
-import { AccountDatabase } from "../core/database";
-import { profileName, Sha256 } from "../core/hash";
-import { safeName, type LocalSource, type StoredEntry } from "../core/content";
+import { AccountDatabase } from "./database";
+import { profileName, Sha256, safeName } from "../utils";
+import type { LocalSource, StoredEntry } from "../types";
 import { isNative } from "./runtime";
 import { native, type DirectoryEntry } from "./native";
 import type { ClipboardData } from "./clipboard";

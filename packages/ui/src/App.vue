@@ -27,9 +27,8 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { displayToast, showToast } from "./core/toast";
+import { displayToast, showToast, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { getDevice } from "./platform/storage";
-import { isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { activeView, activeAccountSession, getAccountSession } from "./core/accountSession";
 import {
   fetchHistoryPage,

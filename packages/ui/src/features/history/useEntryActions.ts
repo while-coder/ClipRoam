@@ -1,8 +1,7 @@
 import { errorMessage, canSaveEntry } from "../../utils";
 import { accountStateRef, getAccountSession } from "../../core/accountSession";
 import type { ClipboardEntry } from "@cliproam/protocol";
-import { isMobile, isQuickPaste, usePlatform } from "../../platform/runtime";
-import { showToast } from "../../core/toast";
+import { isMobile, isQuickPaste, usePlatform, showToast } from "../../platform/runtime";
 import { downloadEntry } from "../downloads/useDownloads";
 import { DownloadCancelledError } from "../downloads/downloadManager";
 import { refreshHistory } from "./useHistorySync";

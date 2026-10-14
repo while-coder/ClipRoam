@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
 import { getAccountSession } from "../../core/accountSession";
-import { showToast } from "../../core/toast";
+import { showToast } from "../../platform/runtime";
 import type { LocalClipboardEntry } from "../../types";
 
 /** UI bindings follow the active account's shared manager. */

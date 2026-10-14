@@ -1,5 +1,5 @@
 import { base64ToBytes, bytesToBase64 } from "../utils";
-import { applicationDatabase } from "../core/database";
+import { applicationDatabase } from "./database";
 import { native } from "./native";
 import type { Device, SyncConfig } from "../types";
 

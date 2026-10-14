@@ -92,3 +92,8 @@ export type ShareReceiverEvent = { id?: string; error?: string };
 export type ShareImportSummary = { shares: number; texts: number; images: number; files: number };
 
 export type WorkspaceView = "history" | "pending-upload" | "uploads" | "downloads" | "devices";
+
+export type LocalSource = { path: string; source: string; size: number; modifiedAt?: number; fileId?: string };
+export type LocalSources = { roots: string[]; files: LocalSource[] };
+export type StoredEntry = ClipboardEntry & { sources?: LocalSources; pendingStatus?: "wait" | "failed" };
+export type PendingRow = { seq: number; status: "wait" | "failed"; entry: StoredEntry; captureId?: string; resolving?: boolean };

@@ -2,7 +2,7 @@ import { errorMessage } from "../../utils";
 import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
 import type { SyncRequester } from "../sync/httpClient";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
-import type { PendingRow } from "../../core/content";
+import type { PendingRow } from "../../types";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 const DRAIN_POLL_INTERVAL_MS = 2_000;
 /** Captures stay durable in IndexedDB; one row is published at a time. */

@@ -2,8 +2,7 @@ import { errorMessage } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { getAccountSession } from "../../core/accountSession";
 import type { ClipboardManifestEntry } from "@cliproam/protocol";
-import { isMobile, usePlatform } from "../../platform/runtime";
-import { showToast } from "../../core/toast";
+import { isMobile, usePlatform, showToast } from "../../platform/runtime";
 import { ensureLocalFiles } from "../downloads/useDownloads";
 
 const { platformCapabilities } = usePlatform();

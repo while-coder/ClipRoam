@@ -2,10 +2,10 @@ import { ref } from "vue";
 import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus } from "@cliproam/protocol";
 import type { AccountSession } from "../../core/accountSession";
 import type { SyncRequester } from "../sync/httpClient";
-import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
+import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry, PendingRow, StoredEntry } from "../../types";
 import { HistoryClient } from "./historyClient";
-import { summarize, type PendingRow, type StoredEntry } from "../../core/content";
-import type { AccountDatabase } from "../../core/database";
+import { summarize } from "../../utils";
+import type { AccountDatabase } from "../../platform/database";
 import type { AccountFiles } from "../../platform/files";
 
 /** Account-wide entry cache and server history operations; views own filters and selection. */

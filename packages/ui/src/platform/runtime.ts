@@ -1,7 +1,8 @@
 import { computed, ref } from "vue";
 import { native } from "./native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
-import type { PlatformCapabilities } from "../types";
+import { toast } from "@qingfeng346/ui-kit";
+import type { PlatformCapabilities, ToastPayload, ToastTone } from "../types";
 import packageInfo from "../../package.json";
 
 export const isNative = native.kind !== "web";
@@ -45,4 +46,16 @@ export function useAppVersion() {
     appVersion,
     initAppVersion,
   };
+}
+
+/** 原生通知与 UI 通知回退。 */
+export function displayToast(payload: ToastPayload): void {
+  toast.show(payload.tone, payload.message);
+}
+
+export function showToast(message: string, tone: ToastTone = "info"): void {
+  const normalized = message.trim();
+  if (!normalized) return;
+  const payload = {message:normalized,tone};
+  void native.showToast(payload).catch(() => displayToast(payload));
 }
