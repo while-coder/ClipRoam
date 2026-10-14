@@ -2,7 +2,7 @@
 import { errorMessage, formatAge, formatExactDateTime } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Monitor, MonitorSmartphone, RefreshCw, Smartphone } from "lucide-vue-next";
+import { Monitor, MonitorSmartphone, RefreshCw, Smartphone, Trash2 } from "lucide-vue-next";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { activeAccountSession } from "../../accountSession";
@@ -124,6 +124,14 @@ onBeforeUnmount(() => { disposed = true; });
           <span class="device-status" :class="{ online: connected && device.online === true }">
             <span class="status-dot" aria-hidden="true" />{{ statusText(device) }}
           </span>
+          <button v-if="currentDeviceId && device.id !== currentDeviceId" type="button" class="device-remove"
+            :disabled="!!removingDeviceId || !connected || !activeAccountSession?.client"
+            :aria-label="removingDeviceId === device.id ? `正在处理设备 ${device.name}` : `移除设备 ${device.name}`"
+            :aria-busy="removingDeviceId === device.id"
+            :title="removingDeviceId === device.id ? '处理中' : '移除设备'" @click="removeDevice(device)">
+            <span v-if="removingDeviceId === device.id" class="s-spinner" aria-hidden="true" />
+            <Trash2 v-else :size="15" aria-hidden="true" />
+          </button>
         </div>
         <dl class="device-details">
           <div><dt>系统 / 浏览器</dt><dd>{{ device.platform }} · {{ device.osVersion || '未知' }}</dd></div>
@@ -139,13 +147,6 @@ onBeforeUnmount(() => { disposed = true; });
           </div>
           <div class="device-id"><dt>设备 ID</dt><dd>{{ device.id }}</dd></div>
         </dl>
-        <div v-if="currentDeviceId && device.id !== currentDeviceId" class="device-actions">
-          <SButton type="error" :disabled="!!removingDeviceId || !connected || !activeAccountSession?.client"
-            :aria-label="`移除设备 ${device.name}`" @click="removeDevice(device)">
-            <span v-if="removingDeviceId === device.id" class="s-spinner" aria-hidden="true" />
-            {{ removingDeviceId === device.id ? '处理中' : '移除设备' }}
-          </SButton>
-        </div>
       </article>
       <SEmpty v-if="!devices.length">{{ loading ? '正在获取设备列表…' : refreshError ? '设备列表暂不可用，请点击刷新重试' : '暂无设备，登录同一账号的设备会显示在这里' }}</SEmpty>
     </section>
@@ -171,8 +172,17 @@ onBeforeUnmount(() => { disposed = true; });
 .device-id { grid-column: 1 / -1; }
 .device-id dd { color: var(--color-secondary-text); font-family: ui-monospace, monospace; font-size: 12px; }
 .device-error { color: var(--sui-error); font-size: 13px; line-height: 1.6; }
-.device-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
-.device-actions :deep(button) { min-height: 44px; }
+.device-remove { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; touch-action: manipulation; transition: color 150ms, background-color 150ms; }
+.device-remove:hover:not(:disabled), .device-remove:focus-visible { background: var(--sui-bg-hover); color: var(--sui-error); }
+.device-remove:active:not(:disabled) { background: var(--sui-bg-active); }
+.device-remove:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.device-remove:disabled { opacity: .4; cursor: default; }
+@media (pointer: coarse) {
+  .device-remove { width: 44px; height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .device-remove { transition: none; }
+}
 @media (max-width: 760px) {
   .device-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
   .device-last-online { grid-column: 1 / -1; }
