@@ -9,8 +9,7 @@ const ENCRYPTION_KEY = "cliproam.storage-key.v1";
 type EncryptedConfig = { version: 1; iv: string; ciphertext: string };
 
 async function localKey(create: boolean): Promise<CryptoKey> {
-  let encoded = await applicationDatabase.get<string>("meta", ENCRYPTION_KEY)
-    ?? localStorage.getItem(ENCRYPTION_KEY);
+  let encoded = await applicationDatabase.get<string>("meta", ENCRYPTION_KEY);
   if (encoded) {
     let key: CryptoKey | undefined;
     try {
@@ -19,10 +18,9 @@ async function localKey(create: boolean): Promise<CryptoKey> {
       key = await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
     } catch {
       if (!create) throw new Error("本地登录配置无法解密，请重新登录");
-      encoded = null;
+      encoded = undefined;
     }
     if (key && encoded) {
-      await applicationDatabase.put("meta", ENCRYPTION_KEY, encoded);
       return key;
     }
   }
@@ -36,20 +34,15 @@ async function localKey(create: boolean): Promise<CryptoKey> {
 
 /** Persist the local key and ciphertext alongside device identity in IndexedDB. */
 export async function readLoginConfig(): Promise<SyncConfig | null> {
-  let stored = await applicationDatabase.get<EncryptedConfig>("meta", CONFIG_KEY);
-  const legacy = stored ? null : localStorage.getItem(CONFIG_KEY);
-  if (!stored && !legacy) return null;
+  const stored = await applicationDatabase.get<EncryptedConfig>("meta", CONFIG_KEY);
+  if (!stored) return null;
   try {
-    stored ??= JSON.parse(legacy!) as EncryptedConfig;
     if (stored.version !== 1) throw new Error("unsupported version");
     const key = await localKey(false);
     const plaintext = await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(stored.iv)},key,base64ToBytes(stored.ciphertext));
     const config = JSON.parse(new TextDecoder().decode(plaintext)) as SyncConfig;
     if (typeof config.serverAddress !== "string" || typeof config.username !== "string" || typeof config.sessionToken !== "string"
       || (config.serverProtocol !== "http" && config.serverProtocol !== "https")) throw new Error("invalid config");
-    if (legacy) await applicationDatabase.put("meta", CONFIG_KEY, stored);
-    localStorage.removeItem(CONFIG_KEY);
-    localStorage.removeItem(ENCRYPTION_KEY);
     return config;
   } catch {
     throw new Error("本地登录配置无法解密，请输入账号信息重新登录");
@@ -59,15 +52,12 @@ export async function readLoginConfig(): Promise<SyncConfig | null> {
 export async function writeLoginConfig(config: SyncConfig | null): Promise<void> {
   if (!config) {
     await applicationDatabase.delete("meta", CONFIG_KEY);
-    localStorage.removeItem(CONFIG_KEY);
     return;
   }
   const key = await localKey(true), iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(config));
   const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM",iv},key,plaintext);
   await applicationDatabase.put("meta", CONFIG_KEY, {version:1,iv:bytesToBase64(iv),ciphertext:bytesToBase64(new Uint8Array(ciphertext))} satisfies EncryptedConfig);
-  localStorage.removeItem(CONFIG_KEY);
-  localStorage.removeItem(ENCRYPTION_KEY);
 }
 
 type StoredDeviceIdentity = { deviceId: string; deviceAlias: string | null };

@@ -1,89 +1,97 @@
-/** Browser-owned persistence. No Tauri APIs or platform paths belong here. */
-export type StoreName = "entries" | "files" | "pending" | "downloads" | "sources" | "blobs" | "meta";
-type Row<T> = { account: string; id: string; value: T };
-const stores: StoreName[] = ["entries", "files", "pending", "downloads", "sources", "blobs", "meta"];
-let opening: Promise<IDBDatabase> | undefined;
+import type { PendingRow, StoredEntry } from "../types";
 
-function database(): Promise<IDBDatabase> {
-  return opening ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open("cliproam", 1);
+/** Browser-owned persistence. Each account has its own database. */
+export type StoreName = "entries" | "files" | "pending" | "downloads" | "sources" | "blobs" | "settings" | "captures";
+type GlobalStoreName = "meta" | "file_hash";
+type Row<T> = { id: string | number; value: T };
+const accountStores: StoreName[] = ["entries", "files", "pending", "downloads", "sources", "blobs", "settings", "captures"];
+const openings = new Map<string, Promise<IDBDatabase>>();
+
+function database(name: string, stores: readonly string[]): Promise<IDBDatabase> {
+  const existing = openings.get(name);
+  if (existing) return existing;
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    let blocked = false;
     request.onupgradeneeded = () => {
-      for (const name of stores) {
-        const store = request.result.createObjectStore(name, { keyPath: ["account", "id"] });
-        store.createIndex("account", "account");
-      }
+      for (const store of stores) request.result.createObjectStore(store, { keyPath: "id", autoIncrement: store === "pending" });
     };
-    request.onerror = () => { opening = undefined; reject(request.error); };
-    request.onblocked = () => { opening = undefined; reject(new Error("请关闭其他 ClipRoam 页面后重试数据库升级")); };
+    request.onerror = () => { openings.delete(name); reject(request.error); };
+    request.onblocked = () => {
+      blocked = true;
+      openings.delete(name);
+      reject(new Error("请关闭其他 ClipRoam 页面后重试数据库升级"));
+    };
     request.onsuccess = () => {
-      request.result.onversionchange = () => { request.result.close(); opening = undefined; };
-      resolve(request.result);
+      const db = request.result;
+      if (blocked) { db.close(); return; }
+      db.onversionchange = () => { db.close(); openings.delete(name); };
+      resolve(db);
     };
   });
+  openings.set(name, opening);
+  return opening;
 }
 
-export class AccountDatabase {
-  constructor(readonly account: string) {}
+class LocalDatabase<S extends string> {
+  constructor(readonly name: string, private readonly stores: readonly S[]) {}
 
-  async get<T>(name: StoreName, id: string): Promise<T | undefined> {
-    const db = await database();
+  protected open(): Promise<IDBDatabase> { return database(this.name, this.stores); }
+
+  async get<T>(name: S, id: string | number): Promise<T | undefined> {
+    const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(name, "readonly");
-      const request = transaction.objectStore(name).get([this.account, id]);
+      const request = transaction.objectStore(name).get(id);
       transaction.oncomplete = () => resolve((request.result as Row<T> | undefined)?.value);
       transaction.onabort = () => reject(transaction.error);
     });
   }
 
-  async list<T>(name: StoreName): Promise<T[]> {
-    const db = await database();
+  async list<T>(name: S): Promise<T[]> {
+    const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(name, "readonly");
-      const request = transaction.objectStore(name).index("account").getAll(this.account);
+      const request = transaction.objectStore(name).getAll();
       transaction.oncomplete = () => resolve((request.result as Row<T>[]).map((row) => row.value));
       transaction.onabort = () => reject(transaction.error);
     });
   }
 
-  async getMany<T>(name: StoreName, ids: string[]): Promise<(T | undefined)[]> {
+  async getMany<T>(name: S, ids: (string | number)[]): Promise<(T | undefined)[]> {
     if (!ids.length) return [];
-    const db = await database();
-    return new Promise((resolve,reject) => {
-      const transaction = db.transaction(name,"readonly"), store = transaction.objectStore(name);
-      const requests = ids.map((id) => store.get([this.account,id]));
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(name, "readonly"), store = transaction.objectStore(name);
+      const requests = ids.map((id) => store.get(id));
       transaction.oncomplete = () => resolve(requests.map((request) => (request.result as Row<T> | undefined)?.value));
       transaction.onabort = () => reject(transaction.error);
     });
   }
 
-  async ids(name: StoreName): Promise<string[]> {
-    const db = await database();
-    return new Promise((resolve,reject) => {
-      const transaction = db.transaction(name,"readonly");
-      const request = transaction.objectStore(name).index("account").getAllKeys(this.account);
-      transaction.oncomplete = () => resolve((request.result as [string,string][]).map((key) => key[1]));
+  async ids(name: S): Promise<string[]> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(name, "readonly");
+      const request = transaction.objectStore(name).getAllKeys();
+      transaction.oncomplete = () => resolve(request.result.map(String));
       transaction.onabort = () => reject(transaction.error);
     });
   }
 
-  put<T>(name: StoreName, id: string, value: T): Promise<void> {
-    return this.batch([{ name, id, value }]);
-  }
+  put<T>(name: S, id: string | number, value: T): Promise<void> { return this.batch([{ name, id, value }]); }
+  delete(name: S, id: string | number): Promise<void> { return this.batch([{ name, id }]); }
 
-  delete(name: StoreName, id: string): Promise<void> {
-    return this.batch([{ name, id }]);
-  }
-
-  async update<T>(name: StoreName, id: string, transform: (previous: T | undefined) => T | undefined): Promise<void> {
-    const db = await database();
+  async update<T>(name: S, id: string | number, transform: (previous: T | undefined) => T | undefined): Promise<void> {
+    const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(name, "readwrite");
       const store = transaction.objectStore(name);
-      const request = store.get([this.account, id]);
+      const request = store.get(id);
       request.onsuccess = () => {
         const value = transform((request.result as Row<T> | undefined)?.value);
-        if (value === undefined) store.delete([this.account, id]);
-        else store.put({ account: this.account, id, value });
+        if (value === undefined) store.delete(id);
+        else store.put({ id, value });
       };
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(transaction.error);
@@ -91,36 +99,62 @@ export class AccountDatabase {
   }
 
   /** Commit all changes together; callers never observe an incomplete import. */
-  async batch(changes: { name: StoreName; id: string; value?: unknown }[]): Promise<void> {
+  async batch(changes: { name: S; id: string | number; value?: unknown }[]): Promise<void> {
     if (!changes.length) return;
-    const db = await database();
+    const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([...new Set(changes.map((change) => change.name))], "readwrite");
-      for (const change of changes) {
-        const store = transaction.objectStore(change.name);
-        if (change.value === undefined) store.delete([this.account, change.id]);
-        else store.put({ account: this.account, id: change.id, value: change.value });
+      try {
+        for (const change of changes) {
+          const store = transaction.objectStore(change.name);
+          if (change.value === undefined) store.delete(change.id);
+          else store.put({ id: change.id, value: change.value });
+        }
+      } catch (error) {
+        transaction.abort();
+        reject(error);
+        return;
       }
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(transaction.error);
     });
   }
+}
 
-  async nextSequence(): Promise<number> {
-    const db = await database();
+export class AccountDatabase extends LocalDatabase<StoreName> {
+  constructor(readonly account: string) {
+    if (!account) throw new Error("账号数据库需要有效的账号标识");
+    super(`cliproam-${account}`, accountStores);
+  }
+
+  /** Deduplication and insertion share one transaction, including across windows. */
+  async enqueuePending(entry: StoredEntry, captureId?: string, resolving = false): Promise<number> {
+    const db = await this.open();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction("meta", "readwrite");
-      const store = transaction.objectStore("meta");
-      const request = store.get([this.account, "sequence"]);
-      let next = 0;
-      request.onsuccess = () => {
-        next = Math.max(Date.now(), Number(request.result?.value ?? 0) + 1);
-        store.put({ account: this.account, id: "sequence", value: next });
+      const transaction = db.transaction(["pending", "captures"], "readwrite");
+      const pending = transaction.objectStore("pending"), captures = transaction.objectStore("captures");
+      let id = 0;
+      const insert = () => {
+        const request = pending.add({ value: null });
+        request.onsuccess = () => {
+          id = request.result as number;
+          const row: PendingRow = { id, status: "wait", entry: { ...entry, id: `p${id}` }, captureId, resolving };
+          pending.put({ id, value: row });
+          if (captureId) captures.put({ id: captureId, value: id });
+        };
       };
-      transaction.oncomplete = () => resolve(next);
+      if (captureId) {
+        const request = captures.get(captureId);
+        request.onsuccess = () => {
+          if (request.result) id = (request.result as Row<number>).value;
+          else insert();
+        };
+      } else insert();
+      transaction.oncomplete = () => resolve(id);
       transaction.onabort = () => reject(transaction.error);
     });
   }
 }
 
-export const applicationDatabase = new AccountDatabase("");
+export type FileHashRecord = { hash: string; size: number; modifiedAt?: number };
+export const applicationDatabase = new LocalDatabase<GlobalStoreName>("cliproam-global", ["meta", "file_hash"]);

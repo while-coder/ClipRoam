@@ -70,7 +70,7 @@ export class ClientSessionManager {
     const config = this.getActiveConfig();
     if (!config?.username) return defaultAccountPreferences();
     const key = archiveKeyFor(config);
-    const stored = await new AccountDatabase(key).get<Partial<AccountPreferences>>("meta", "preferences");
+    const stored = await new AccountDatabase(key).get<Partial<AccountPreferences>>("settings", "preferences");
     return { ...defaultAccountPreferences(), ...stored };
   };
 
@@ -78,7 +78,7 @@ export class ClientSessionManager {
     const config = this.getActiveConfig();
     if (!config?.username) throw new Error("同步账号未登录");
     const session = getAccountSession();
-    await new AccountDatabase(archiveKeyFor(config)).put("meta", "preferences", preferences);
+    await new AccountDatabase(archiveKeyFor(config)).put("settings", "preferences", preferences);
     if (session) { session.preferences = preferences; await session.capture.updateWatch(); }
     this.#activePreferences = preferences;
   };

@@ -134,7 +134,6 @@ export class AccountFiles {
           if (blobs.some((blob) => !blob)) throw new Error("下载缓存不完整");
           await this.database.batch([
             { name:"blobs",id:fileId,value:new Blob(blobs as Blob[]) },
-            { name:"meta",id:`blob:${fileId}`,value:{createdMs:Date.now(),captured} },
             ...chunks.map((id) => ({name:"blobs" as const,id})),
           ]);
         }

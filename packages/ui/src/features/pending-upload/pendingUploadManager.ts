@@ -16,38 +16,30 @@ export class PendingUploadManager {
   constructor(private readonly session: AccountSession) {}
 
   async rows(): Promise<PendingRow[]> {
-    return (await this.session.database.list<PendingRow>("pending")).sort((a, b) => a.seq - b.seq);
+    return this.session.database.list<PendingRow>("pending");
   }
 
-  get(seq: number): Promise<PendingRow | undefined> {
-    return this.session.database.get<PendingRow>("pending", String(seq));
+  get(id: number): Promise<PendingRow | undefined> {
+    return this.session.database.get<PendingRow>("pending", id);
   }
 
   /** File resolution preserves a retry/status change made while hashing. */
   updateResolved(row: PendingRow, failed = false): Promise<void> {
-    return this.session.database.update<PendingRow>("pending", String(row.seq), (current) =>
+    return this.session.database.update<PendingRow>("pending", row.id, (current) =>
       current ? { ...row, status: failed ? "failed" : current.status } : undefined);
   }
 
-  async complete(seq: number): Promise<void> {
-    await this.session.database.delete("pending", String(seq));
-    this.finishProgress(`p${seq}`);
+  async complete(id: number): Promise<void> {
+    await this.session.database.delete("pending", id);
+    this.finishProgress(`p${id}`);
   }
 
-  async enqueue(entry: StoredEntry, captureId?: string, resolving = false): Promise<number> {
-    const existing = captureId ? await this.session.database.get<number>("meta", `capture:${captureId}`) : undefined;
-    if (existing !== undefined) return existing;
-    const seq = await this.session.database.nextSequence();
-    const row: PendingRow = { seq, status: "wait", entry: { ...entry, id: `p${seq}` }, captureId, resolving };
-    await this.session.database.batch([
-      { name: "pending", id: String(seq), value: row },
-      ...(captureId ? [{ name: "meta" as const, id: `capture:${captureId}`, value: seq }] : []),
-    ]);
-    return seq;
+  enqueue(entry: StoredEntry, captureId?: string, resolving = false): Promise<number> {
+    return this.session.database.enqueuePending(entry, captureId, resolving);
   }
 
-  setStatus(seq: number, status: "wait" | "failed"): Promise<void> {
-    return this.session.database.update<PendingRow>("pending", String(seq), (row) => row ? { ...row, status } : undefined);
+  setStatus(id: number, status: "wait" | "failed"): Promise<void> {
+    return this.session.database.update<PendingRow>("pending", id, (row) => row ? { ...row, status } : undefined);
   }
 
   async refresh(list = true): Promise<void> {
@@ -73,7 +65,7 @@ export class PendingUploadManager {
 
   async remove(entryId: string): Promise<void> {
     if (!/^p\d+$/.test(entryId)) return;
-    await this.session.database.delete("pending", entryId.slice(1));
+    await this.session.database.delete("pending", Number(entryId.slice(1)));
     this.finishProgress(entryId);
     await this.refresh();
   }

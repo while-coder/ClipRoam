@@ -32,9 +32,9 @@ export class PendingUploader {
         await this.#publishQueueRow(row);
       } catch (error) {
         if (this.deps.session.signal.aborted) return;
-        console.warn(`Pending upload failed: seq=${row.seq} kind=${row.entry.kind}`, error);
+        console.warn(`Pending upload failed: id=${row.id} kind=${row.entry.kind}`, error);
         try {
-          await this.deps.session.pendingUploads.setStatus(row.seq, "failed");
+          await this.deps.session.pendingUploads.setStatus(row.id, "failed");
           this.#refreshPending();
         } catch (statusError) {
           if (!this.deps.session.signal.aborted) this.deps.onError(`同步失败状态保存失败：${errorMessage(statusError)}`);
@@ -59,10 +59,10 @@ export class PendingUploader {
       imageInfo: row.entry.imageInfo ?? undefined,
       sourceDeviceId: this.device.id,
     };
-    await this.#files.uploadEntry({ ...payload, id: `p${row.seq}` } as ClipboardEntry, this.autoUploadLimit);
+    await this.#files.uploadEntry({ ...payload, id: `p${row.id}` } as ClipboardEntry, this.autoUploadLimit);
     const entryId = await this.#publishEntry(payload);
     await this.deps.session.history.recordPublished(entryId, row.entry);
-    await this.deps.session.pendingUploads.complete(row.seq);
+    await this.deps.session.pendingUploads.complete(row.id);
     this.#refreshPending();
   }
 

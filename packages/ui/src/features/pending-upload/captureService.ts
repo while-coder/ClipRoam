@@ -4,6 +4,7 @@ import type { AccountSession } from "../../accountSession";
 import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
+import { applicationDatabase, type FileHashRecord } from "../../platform/database";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
@@ -35,7 +36,7 @@ export class CaptureService {
 
   async #capture(data: ClipboardData, captureId?: string): Promise<void> {
     this.session.signal.throwIfAborted();
-    if (captureId && await this.session.database.get("meta", `capture:${captureId}`)) return;
+    if (captureId && await this.session.database.get("captures", captureId)) return;
     this.session.state.localClipboardRevision++;
     const entry: StoredEntry = { id: "", version: 0, kind: data.kind, content: "",
       sourceDeviceId: "", createdAt: new Date().toISOString() };
@@ -52,9 +53,9 @@ export class CaptureService {
       entry.fileInfo = collected.info; entry.sources = collected.sources;
       entry.content = Object.keys(collected.info).join("、");
     }
-    const seq = await this.session.pendingUploads.enqueue(entry, captureId, data.kind === "files");
+    const id = await this.session.pendingUploads.enqueue(entry, captureId, data.kind === "files");
     this.changed();
-    if (data.kind === "files") await this.#resolve(seq);
+    if (data.kind === "files") await this.#resolve(id);
   }
 
   async #collect(paths: string[]): Promise<{ info: FileInfo; sources: LocalSources }> {
@@ -88,16 +89,16 @@ export class CaptureService {
     return { info, sources };
   }
 
-  async #resolve(seq: number): Promise<void> {
-    const row = await this.session.pendingUploads.get(seq);
+  async #resolve(id: number): Promise<void> {
+    const row = await this.session.pendingUploads.get(id);
     if (!row?.resolving) return;
     try {
       for (const source of row.entry.sources?.files ?? []) {
         this.session.signal.throwIfAborted();
         const [before] = await this.session.files.stats([source.source]);
         if (!before || before.directory || before.symlink || before.size !== source.size || (source.modifiedAt != null && before.modifiedAt !== source.modifiedAt)) throw new Error(`源文件已修改或不可用：${source.path}`);
-        const cacheKey = `hash:${source.source}:${source.size}:${source.modifiedAt ?? -1}`;
-        let fileId = await this.session.database.get<string>("meta", cacheKey);
+        const cached = await applicationDatabase.get<FileHashRecord>("file_hash", source.source);
+        let fileId = cached && source.modifiedAt != null && cached.size === source.size && cached.modifiedAt === source.modifiedAt ? cached.hash : undefined;
         if (!fileId) {
           const hash = new Sha256();
           for (let offset = 0; offset < source.size;) {
@@ -109,7 +110,7 @@ export class CaptureService {
           fileId = hash.digest();
           const [after] = await this.session.files.stats([source.source]);
           if (!after || after.size !== before.size || after.modifiedAt !== before.modifiedAt) throw new Error(`读取期间源文件发生变化：${source.path}`);
-          await this.session.database.put("meta", cacheKey, fileId);
+          await applicationDatabase.put("file_hash", source.source, { hash: fileId, size: source.size, modifiedAt: source.modifiedAt } satisfies FileHashRecord);
         }
         source.fileId = fileId; await this.session.files.rememberSource(source);
         const segments = source.path.split("/"); let parent = row.entry.fileInfo!;
@@ -128,7 +129,7 @@ export class CaptureService {
 
   async resume(): Promise<void> {
     for (const row of await this.session.pendingUploads.rows()) if (row.resolving && row.status === "wait") {
-      const work = this.#work.then(() => this.#resolve(row.seq));
+      const work = this.#work.then(() => this.#resolve(row.id));
       this.#work = work.catch(() => undefined);
       try { await work; } catch (error) { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); }
     }
@@ -171,7 +172,6 @@ export class CaptureService {
       const fileId = hash.digest();
       await this.session.database.batch([
         {name:"blobs",id:fileId,value:file},
-        {name:"meta",id:`blob:${fileId}`,value:{createdMs:Date.now(),captured:true}},
       ]);
       parent[name] = { f: fileId, s: file.size };
     }

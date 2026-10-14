@@ -74,7 +74,7 @@ export const activeView = accountStateRef("activeView");
 export function archiveKeyFor(config: SyncConfig | undefined): string {
   const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";
   const username = config?.username.trim().toLowerCase() ?? "";
-  return username ? `account:${serverAddress}:${username}` : "";
+  return username ? `account:${serverAddress}/${encodeURIComponent(username)}` : "";
 }
 
 /** Account-owned state, resources and cooperative task lifetime. */

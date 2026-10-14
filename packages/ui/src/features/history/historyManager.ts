@@ -57,7 +57,7 @@ export class HistoryManager {
   }
 
   async get(entryId: string): Promise<StoredEntry> {
-    const pending = /^p\d+$/.test(entryId) ? await this.database.get<PendingRow>("pending", entryId.slice(1)) : undefined;
+    const pending = /^p\d+$/.test(entryId) ? await this.database.get<PendingRow>("pending", Number(entryId.slice(1))) : undefined;
     const entry = pending?.entry ?? await this.database.get<StoredEntry>("entries", entryId);
     if (!entry) throw new Error("剪贴板记录不存在");
     return entry;

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import SModal from '@qingfeng346/ui-kit/components/SModal.vue'
 import SButton from '@qingfeng346/ui-kit/components/button/SButton.vue'
+import { useAppVersion } from '@cliproam/ui/platform'
 import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-vue-next'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -16,6 +17,7 @@ const props = withDefaults(defineProps<{
 })
 
 const updater = useTauriUpdater()
+const { appVersion, initAppVersion } = useAppVersion()
 const { updateStatus, updateVersion, updateNotes, updateDownloaded, updateTotal, updateProgressPercent, updateMsg } = updater
 const updateVisible = computed(() => ['available', 'downloading', 'installed', 'error'].includes(updateStatus.value))
 const downloading = computed(() => updateStatus.value === 'downloading')
@@ -53,6 +55,7 @@ function formatBytes(value: number) {
 }
 
 onMounted(() => {
+  void initAppVersion()
   if (props.autoCheck) updater.scheduleAutoCheck(props.autoCheckDelayMs)
 })
 onBeforeUnmount(() => updater.dispose())
@@ -69,7 +72,7 @@ async function dismiss() {
   <SModal
     :show="updateVisible"
     :title="title"
-    width="480px"
+    width="640px"
     :closable="!downloading"
     :mask-closable="!downloading"
     :close-on-esc="!downloading"
@@ -95,6 +98,7 @@ async function dismiss() {
             <strong>更新未能完成</strong>
             <p>请查看下方错误信息。</p>
           </template>
+          <p>当前版本：{{ appVersion || '…' }}</p>
         </div>
       </div>
 
@@ -154,7 +158,7 @@ async function dismiss() {
 .updater-summary-copy .updater-version { font-size: 20px; line-height: 1.4; letter-spacing: -0.3px; }
 .updater-summary-copy p { margin: 3px 0 0; color: var(--sui-fg-muted); }
 .updater-release h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--sui-fg-muted); }
-.updater-notes { max-height: min(280px, 40vh); padding: 14px 16px; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; border: 1px solid var(--sui-border); border-radius: 8px; background: var(--sui-bg-subtle); }
+.updater-notes { max-height: min(420px, 55vh); padding: 14px 16px; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; border: 1px solid var(--sui-border); border-radius: 8px; background: var(--sui-bg-subtle); }
 .updater-notes :deep(*) { box-sizing: border-box; }
 .updater-notes :deep(h1), .updater-notes :deep(h2), .updater-notes :deep(h3), .updater-notes :deep(h4), .updater-notes :deep(h5), .updater-notes :deep(h6) { margin: 16px 0 8px; font-size: 14px; font-weight: 600; color: var(--sui-fg); line-height: 1.4; }
 .updater-notes :deep(> :first-child) { margin-top: 0; }
