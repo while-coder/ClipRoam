@@ -27,7 +27,7 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { displayNotification, showNotification, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
+import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
 import { getDevice } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
 import {
@@ -414,7 +414,6 @@ function readableStartupError(error: unknown): string {
 async function initializeNativeServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
-    native.listenNotification(displayNotification),
     native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
       void native.showPasteWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));

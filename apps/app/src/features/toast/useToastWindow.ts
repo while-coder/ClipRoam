@@ -46,7 +46,7 @@ function disposeToast(): void {
 
 /** toast 专用窗口（tray 旁的通知窗口）只监听 toast 事件，不初始化其他服务。 */
 function startToastWindowListener(): Promise<Unlisten> {
-  return native.listenNotification(displayNotification);
+  return native.listen<NotificationPayload>("cliproam://notification", displayNotification);
 }
 
 export { toastPayload, hideToastNow, disposeToast, startToastWindowListener };

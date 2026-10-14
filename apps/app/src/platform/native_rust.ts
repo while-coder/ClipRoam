@@ -44,9 +44,6 @@ export class NativeRust implements NativePlatform {
     const listener = await addPluginListener("cliproam-share-receiver", "received", handler);
     return () => { void listener.unregister(); };
   }
-  listenNotification(handler: (payload: NotificationPayload) => void): Promise<Unlisten> {
-    return this.subscribe("cliproam://notification", handler);
-  }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
   getDeviceInfo(): Promise<DeviceInfo> { return this.invoke("native_get_device_info"); }

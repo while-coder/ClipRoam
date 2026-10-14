@@ -49,7 +49,7 @@ export function useAppVersion() {
 }
 
 /** 原生通知与 UI 通知回退。 */
-export function displayNotification(payload: NotificationPayload): void {
+function displayNotification(payload: NotificationPayload): void {
   toast.show(payload.tone, payload.message);
 }
 

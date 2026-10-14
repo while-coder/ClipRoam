@@ -42,7 +42,6 @@ export interface NativePlatform {
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
   listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
-  listenNotification(handler: (payload: NotificationPayload) => void): Promise<Unlisten>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;
