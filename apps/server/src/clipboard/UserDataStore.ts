@@ -200,7 +200,12 @@ export class UserDataStore {
     });
   }
 
-  // A removed device takes the entries it contributed with it, so no fresh
+  // Removing a device leaves its account-owned clipboard history intact.
+  removeDevice(deviceId: string): boolean {
+    return this.#database.prepare("DELETE FROM devices WHERE device_id = ?").run(deviceId).changes > 0;
+  }
+
+  // A deleted device takes the entries it contributed with it, so no fresh
   // "unknown device" orphans are left behind. Returns the deleted entry ids
   // for the route layer to broadcast (pool bytes remain stored), or null when the device row
   // does not exist.

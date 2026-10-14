@@ -124,7 +124,7 @@ const MANUAL_UPLOAD_LIMIT = 100 * 1024 * 1024;
  */
 
 export function deviceName(devicesById: Record<string, Device>, entry: ClipboardEntry): string {
-  return devicesById[entry.sourceDeviceId]?.name ?? "";
+  return devicesById[entry.sourceDeviceId]?.name ?? (entry.sourceDeviceId ? "已移除设备" : "");
 }
 
 export function isHashing(entry: LocalClipboardEntry): boolean {

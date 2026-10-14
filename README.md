@@ -112,14 +112,17 @@ macOS 首次使用自动粘贴时，需要在“系统设置 → 隐私与安全
 
 - **PWA**：Release 发布后自动部署到 [网页版](https://while-coder.github.io/ClipRoam/)。
 - **浏览器插件**：从发布页面下载 `ClipRoam_版本号_chrome.zip`，解压后在 Chrome 的 `chrome://extensions` 页面开启开发者模式，选择“加载已解压的扩展程序”，选中包含 `manifest.json` 的目录。
+- **Firefox 插件**：下载 `ClipRoam_版本号_firefox.zip` 并解压，在 Firefox 128 或更新版本的 `about:debugging#/runtime/this-firefox` 页面点击“临时载入附加组件”，选择解压目录中的 `manifest.json`。当前产物未签名，临时安装在退出 Firefox 后失效；长期安装需要 Mozilla 签名的 XPI。
 
 ### 浏览器端构建与发布
 
-本地运行 `pnpm build:pwa` 或 `pnpm build:chrome`，产物分别位于 `apps/pwa/dist` 和 `apps/chrome/dist`。
+本地运行 `pnpm build:pwa`、`pnpm build:chrome` 或 `pnpm build:firefox`，产物分别位于 `apps/pwa/dist`、`apps/chrome/dist` 和 `apps/firefox/dist`。
 
-推送 `v*` 标签或手动运行 Release 工作流时，会构建并上传插件 ZIP，同时把 PWA 部署到 `gh-pages` 分支。首次部署后，在仓库 Settings → Pages 中选择 “Deploy from a branch”、`gh-pages` 分支和根目录 `/`；启用后重新运行发布工作流。
+推送 `v*` 标签或手动运行 Release 工作流时，会分别构建并上传 Chrome、Firefox 插件 ZIP，同时把 PWA 部署到 `gh-pages` 分支。首次部署后，在仓库 Settings → Pages 中选择 “Deploy from a branch”、`gh-pages` 分支和根目录 `/`；启用后重新运行发布工作流。
 
 PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指定路径，Release 工作流设为 `/ClipRoam/`。
+
+`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome 和 Firefox 图标；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
 
 ### 常见问题
 

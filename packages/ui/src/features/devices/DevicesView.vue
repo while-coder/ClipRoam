@@ -65,7 +65,7 @@ async function removeDevice(device: Device): Promise<void> {
   try {
     const confirmed = await confirm.show({
       title: `移除设备 ${device.name}？`,
-      content: "将注销该设备并清除设备信息，同时删除它上传到服务器的全部剪贴板历史，其他设备也会同步移除这些历史。此操作不可恢复。该设备重新登录后可再次加入。",
+      content: "将注销该设备并从设备列表移除，已上传的剪贴板历史会保留。该设备重新登录后可再次加入。",
       confirmText: "确认移除",
       error: true,
     });

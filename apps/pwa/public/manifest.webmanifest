@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "ClipRoam",
+  "short_name": "ClipRoam",
+  "description": "保存剪贴板历史，并在自己的设备之间同步文字、图片和文件。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

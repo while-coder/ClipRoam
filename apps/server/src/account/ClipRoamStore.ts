@@ -81,6 +81,12 @@ export class ClipRoamStore {
     return this.#userStore(userId).listDevices();
   }
 
+  // App removal revokes access and removes the device row, preserving history.
+  removeUserDevice(userId: string, deviceId: string): boolean {
+    this.#accounts.deleteSession(userId, deviceId);
+    return this.#userStore(userId).removeDevice(deviceId);
+  }
+
   // The accounts-side session for this device dies with the device row, so a
   // removed device cannot keep syncing until its stored token expires. The
   // entries it contributed are removed with it; the caller broadcasts the

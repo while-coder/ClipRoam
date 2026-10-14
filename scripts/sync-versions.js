@@ -21,7 +21,7 @@ const packageFiles = ["apps", "packages"].flatMap((directory) => {
     .filter((file) => fs.existsSync(path.join(rootDirectory, file)));
 });
 
-const versionFiles = [...packageFiles, "apps/chrome/public/manifest.json"];
+const versionFiles = [...packageFiles, "apps/chrome/public/manifest.json", "apps/firefox/public/manifest.json"];
 const updates = [];
 for (const file of versionFiles) {
   const absolutePath = path.join(rootDirectory, file);

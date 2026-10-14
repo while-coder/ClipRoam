@@ -1,14 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import { DeviceSchema, type DeviceListResponse, type ServerMessage } from "@cliproam/protocol";
+import { DeviceSchema, type DeviceListResponse } from "@cliproam/protocol";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 import { parseOr400 } from "./parseRequest.js";
 
 export type DeviceRouteDeps = {
-  store: Pick<ClipRoamStore, "listDevices" | "upsertDevice" | "deleteUserDevice">;
+  store: Pick<ClipRoamStore, "listDevices" | "upsertDevice" | "removeUserDevice">;
   isDeviceOnline: (userId: string, deviceId: string) => boolean;
   disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
-  broadcast: (userId: string, message: ServerMessage) => void;
 };
 
 export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps): void {
@@ -25,13 +24,10 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps
     if (deviceId === user.deviceId) {
       return reply.code(400).send({ message: "当前设备请通过退出登录处理。" });
     }
-    const deletedEntryIds = store.deleteUserDevice(user.id, deviceId);
+    const removed = store.removeUserDevice(user.id, deviceId);
     deps.disconnectUser(user.id, "Device deleted", deviceId);
-    if (deletedEntryIds === null) {
+    if (!removed) {
       return reply.code(404).send({ message: "设备不存在或已被移除。" });
-    }
-    for (const entryId of deletedEntryIds) {
-      deps.broadcast(user.id, { type: "clipboard.deleted", entryId });
     }
     return reply.code(204).send();
   });

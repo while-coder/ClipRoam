@@ -9,6 +9,7 @@
     "build:server": "pnpm --filter @cliproam/server build",
     "build:pwa": "pnpm --filter @cliproam/pwa build",
     "build:chrome": "pnpm --filter @cliproam/chrome build",
+    "build:firefox": "pnpm --filter @cliproam/firefox build",
     "docker": "node scripts/docker.js",
     "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",

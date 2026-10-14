@@ -135,9 +135,14 @@ jobs:
           user_email: github-actions[bot]@users.noreply.github.com
           commit_message: Deploy PWA ${{ needs.check.outputs.tag }}
 
-  release-chrome:
+  release-extensions:
+    name: Release ${{ matrix.browser }} extension
     needs: [check, prepare-release]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox]
     steps:
       - uses: actions/checkout@v5
 
@@ -154,20 +159,22 @@ jobs:
         run: pnpm sync:versions
 
       - name: Build extension
-        run: pnpm build:chrome
+        run: pnpm build:${{ matrix.browser }}
 
       - name: Package extension
-        working-directory: apps/chrome/dist
+        working-directory: apps/${{ matrix.browser }}/dist
         env:
           VERSION: ${{ needs.check.outputs.version }}
-        run: zip -r "../../../ClipRoam_${VERSION}_chrome.zip" .
+          BROWSER: ${{ matrix.browser }}
+        run: zip -r "../../../ClipRoam_${VERSION}_${BROWSER}.zip" .
 
       - name: Upload extension to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.check.outputs.tag }}
           VERSION: ${{ needs.check.outputs.version }}
-        run: gh release upload "$TAG" "ClipRoam_${VERSION}_chrome.zip" --clobber
+          BROWSER: ${{ matrix.browser }}
+        run: gh release upload "$TAG" "ClipRoam_${VERSION}_${BROWSER}.zip" --clobber
 
   docker:
     needs: [check, prepare-release]
