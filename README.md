@@ -108,6 +108,19 @@ macOS 首次使用自动粘贴时，需要在“系统设置 → 隐私与安全
 - Android 点按图片或文件后，选择保存目录即可下载；下载中再次点按同一条目可取消。
 - iOS 的图片和文件目前下载到应用缓存，系统分享和文件导出暂未支持。
 
+### 浏览器端
+
+- **PWA**：Release 发布后自动部署到 [网页版](https://while-coder.github.io/ClipRoam/)。
+- **浏览器插件**：从发布页面下载 `ClipRoam_版本号_chrome.zip`，解压后在 Chrome 的 `chrome://extensions` 页面开启开发者模式，选择“加载已解压的扩展程序”，选中包含 `manifest.json` 的目录。
+
+### 浏览器端构建与发布
+
+本地运行 `pnpm build:pwa` 或 `pnpm build:chrome`，产物分别位于 `apps/pwa/dist` 和 `apps/chrome/dist`。
+
+推送 `v*` 标签或手动运行 Release 工作流时，会构建并上传插件 ZIP，同时把 PWA 部署到 `gh-pages` 分支。首次部署后，在仓库 Settings → Pages 中选择 “Deploy from a branch”、`gh-pages` 分支和根目录 `/`；启用后重新运行发布工作流。
+
+PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指定路径，Release 工作流设为 `/ClipRoam/`。
+
 ### 常见问题
 
 **连接不上服务器**

@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { DeviceSchema, type DeviceListResponse } from "@cliproam/protocol";
+import { DeviceSchema, type DeviceListResponse, type ServerMessage } from "@cliproam/protocol";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { requireSessionUser } from "./SessionUser.js";
 import { parseOr400 } from "./parseRequest.js";
 
 export type DeviceRouteDeps = {
-  store: Pick<ClipRoamStore, "listDevices" | "upsertDevice">;
+  store: Pick<ClipRoamStore, "listDevices" | "upsertDevice" | "deleteUserDevice">;
   isDeviceOnline: (userId: string, deviceId: string) => boolean;
+  disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
+  broadcast: (userId: string, message: ServerMessage) => void;
 };
 
 export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps): void {
@@ -15,6 +17,23 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: DeviceRouteDeps
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     return { devices: store.listDevices(user.id).map((device) => ({ ...device, online: deps.isDeviceOnline(user.id, device.id) })) } satisfies DeviceListResponse;
+  });
+  app.delete("/devices/:deviceId", async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const { deviceId } = request.params as { deviceId: string };
+    if (deviceId === user.deviceId) {
+      return reply.code(400).send({ message: "当前设备请通过退出登录处理。" });
+    }
+    const deletedEntryIds = store.deleteUserDevice(user.id, deviceId);
+    deps.disconnectUser(user.id, "Device deleted", deviceId);
+    if (deletedEntryIds === null) {
+      return reply.code(404).send({ message: "设备不存在或已被移除。" });
+    }
+    for (const entryId of deletedEntryIds) {
+      deps.broadcast(user.id, { type: "clipboard.deleted", entryId });
+    }
+    return reply.code(204).send();
   });
   // 设备信息上报（登录时也会随 body 带一份）。以会话绑定的 deviceId 为准：
   // body.id 仅为形状校验，落库时覆盖，杜绝与 session 不一致的孤儿设备行。

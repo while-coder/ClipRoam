@@ -102,6 +102,8 @@ export class ClipRoamServer {
     registerDeviceRoutes(this.#app, {
       store: this.#store,
       isDeviceOnline: this.#sockets.isDeviceOnline.bind(this.#sockets),
+      disconnectUser: this.#sockets.disconnectUser.bind(this.#sockets),
+      broadcast: this.#sockets.broadcast.bind(this.#sockets),
     });
     registerAuthRoutes(this.#app, {
       auth: this.#auth,

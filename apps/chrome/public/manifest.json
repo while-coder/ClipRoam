@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ClipRoam",
-  "description": "ClipRoam Chrome 扩展占位项目，共用客户端主界面布局。",
+  "description": "保存剪贴板历史，并在自己的设备之间同步文字、图片和文件。",
   "version": "0.1.9",
   "action": {
     "default_popup": "index.html"

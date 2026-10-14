@@ -134,7 +134,9 @@ export class ClientSessionManager {
       const guard = session.guard.bind(session);
       const client: SessionConnection = new SessionConnection(httpUrl, webSocketUrl, config.sessionToken, device, {
         onConnected: guard((value) => this.#setConnectionState(session, value)),
-        onDevices: guard((devices) => this.#rememberSessionDevices(session, devices)),
+        onDevices: guard((devices) => {
+          session.state.devicesById.value = Object.fromEntries(devices.map((device) => [device.id, device]));
+        }),
         onDevicePresence: guard((device) => this.#rememberSessionDevices(session, [device])),
         onEntry: guard(() => session.history.invalidate()),
         onActivation: guard((entry) => { void activateRemoteClipboard(entry); }),

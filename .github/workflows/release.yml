@@ -99,6 +99,76 @@ jobs:
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
     secrets: inherit
 
+  deploy-pwa:
+    needs: [check, prepare-release]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-pwa
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: while-coder/workflows/.github/actions/install-pnpm-dependencies@main
+
+      - name: Synchronize versions
+        run: pnpm sync:versions
+
+      - name: Build PWA
+        run: pnpm build:pwa
+        env:
+          PWA_BASE: /ClipRoam/
+
+      - name: Publish PWA to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: apps/pwa/dist
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: Deploy PWA ${{ needs.check.outputs.tag }}
+
+  release-chrome:
+    needs: [check, prepare-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: while-coder/workflows/.github/actions/install-pnpm-dependencies@main
+
+      - name: Synchronize versions
+        run: pnpm sync:versions
+
+      - name: Build extension
+        run: pnpm build:chrome
+
+      - name: Package extension
+        working-directory: apps/chrome/dist
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: zip -r "../../../ClipRoam_${VERSION}_chrome.zip" .
+
+      - name: Upload extension to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: gh release upload "$TAG" "ClipRoam_${VERSION}_chrome.zip" --clobber
+
   docker:
     needs: [check, prepare-release]
     runs-on: ubuntu-latest

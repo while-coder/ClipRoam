@@ -7,6 +7,8 @@
     "debug:app": "pnpm --filter @cliproam/protocol build && cargo build --manifest-path apps/app/src-tauri/Cargo.toml",
     "debug:server": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/server debug",
     "build:server": "pnpm --filter @cliproam/server build",
+    "build:pwa": "pnpm --filter @cliproam/pwa build",
+    "build:chrome": "pnpm --filter @cliproam/chrome build",
     "docker": "node scripts/docker.js",
     "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatAge, formatExactDateTime } from "../../utils";
+import { errorMessage, formatAge, formatExactDateTime } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Monitor, MonitorSmartphone, RefreshCw, Smartphone } from "lucide-vue-next";
@@ -8,6 +8,7 @@ import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { activeAccountSession } from "../../accountSession";
 import { getDeviceIdentity } from "../../platform/storage";
 import type { Device } from "../../types";
+import { confirm, toast } from "@qingfeng346/ui-kit";
 
 const { connected, devicesById } = clientSessionManager;
 
@@ -16,6 +17,8 @@ defineProps<{ currentTime: number }>();
 const currentDeviceId = ref("");
 const loading = ref(false);
 const refreshError = ref("");
+const removingDeviceId = ref("");
+const removeError = ref("");
 let disposed = false;
 let revision = 0;
 
@@ -54,6 +57,34 @@ async function refresh(): Promise<void> {
   }
 }
 
+async function removeDevice(device: Device): Promise<void> {
+  const session = activeAccountSession.value;
+  if (!session?.client || !currentDeviceId.value || device.id === currentDeviceId.value || removingDeviceId.value) return;
+  removingDeviceId.value = device.id;
+  removeError.value = "";
+  try {
+    const confirmed = await confirm.show({
+      title: `移除设备 ${device.name}？`,
+      content: "将注销该设备并清除设备信息，同时删除它上传到服务器的全部剪贴板历史，其他设备也会同步移除这些历史。此操作不可恢复。该设备重新登录后可再次加入。",
+      confirmText: "确认移除",
+      error: true,
+    });
+    if (!confirmed || disposed || session !== activeAccountSession.value) return;
+    await session.client.http.request("DELETE", `/devices/${encodeURIComponent(device.id)}`,
+      { signal: AbortSignal.timeout(30_000) }, null, "");
+    if (disposed || session !== activeAccountSession.value) return;
+    const remaining = { ...session.state.devicesById.value };
+    delete remaining[device.id];
+    session.state.devicesById.value = remaining;
+    toast.show("success", `设备 ${device.name} 已移除。`);
+    await refresh();
+  } catch (error) {
+    if (!disposed && session === activeAccountSession.value) removeError.value = `移除设备失败：${errorMessage(error)}`;
+  } finally {
+    removingDeviceId.value = "";
+  }
+}
+
 watch([activeAccountSession, connected], () => { void refresh(); }, { immediate: true });
 onMounted(async () => {
   try {
@@ -81,6 +112,7 @@ onBeforeUnmount(() => { disposed = true; });
     <section class="device-list history-list" aria-label="设备列表" :aria-busy="loading">
       <div v-if="!connected" class="device-summary" role="status">同步连接已断开，设备状态暂不可确认</div>
       <p v-if="refreshError" class="device-error" role="alert">{{ refreshError }}</p>
+      <p v-if="removeError" class="device-error" role="alert">{{ removeError }}</p>
 
       <article v-for="device in devices" :key="device.id" class="device-card">
         <div class="device-heading">
@@ -107,6 +139,13 @@ onBeforeUnmount(() => { disposed = true; });
           </div>
           <div class="device-id"><dt>设备 ID</dt><dd>{{ device.id }}</dd></div>
         </dl>
+        <div v-if="currentDeviceId && device.id !== currentDeviceId" class="device-actions">
+          <SButton type="error" :disabled="!!removingDeviceId || !connected || !activeAccountSession?.client"
+            :aria-label="`移除设备 ${device.name}`" @click="removeDevice(device)">
+            <span v-if="removingDeviceId === device.id" class="s-spinner" aria-hidden="true" />
+            {{ removingDeviceId === device.id ? '处理中' : '移除设备' }}
+          </SButton>
+        </div>
       </article>
       <SEmpty v-if="!devices.length">{{ loading ? '正在获取设备列表…' : refreshError ? '设备列表暂不可用，请点击刷新重试' : '暂无设备，登录同一账号的设备会显示在这里' }}</SEmpty>
     </section>
@@ -132,6 +171,8 @@ onBeforeUnmount(() => { disposed = true; });
 .device-id { grid-column: 1 / -1; }
 .device-id dd { color: var(--color-secondary-text); font-family: ui-monospace, monospace; font-size: 12px; }
 .device-error { color: var(--sui-error); font-size: 13px; line-height: 1.6; }
+.device-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.device-actions :deep(button) { min-height: 44px; }
 @media (max-width: 760px) {
   .device-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
   .device-last-online { grid-column: 1 / -1; }

@@ -219,7 +219,7 @@ async function main() {
   run(`git push origin "${branch}"`);
   run(`git push origin "${tag}"`);
 
-  console.log(`✓ 发版完成！tag ${tag} 已推送 — GitHub Actions 将构建 App 与 Server 产物`);
+  console.log(`✓ 发版完成！tag ${tag} 已推送 — GitHub Actions 将构建 App、Server 和插件产物，并部署 PWA`);
   console.log("  https://github.com/while-coder/ClipRoam/actions");
 }
 
