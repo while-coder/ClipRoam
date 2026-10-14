@@ -1,6 +1,6 @@
 {
   "name": "@cliproam/ui",
-  "version": "0.2.1",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "exports": {

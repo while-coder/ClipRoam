@@ -7,8 +7,8 @@ const rootDirectory = path.resolve(__dirname, "..");
 const rootPackage = readJson(path.join(rootDirectory, "package.json"));
 const rootVersion = rootPackage.version;
 
-if (!rootVersion) {
-  console.error("根 package.json 没有 version 字段");
+if (!/^\d+\.\d+\.\d+$/.test(rootVersion ?? "")) {
+  console.error("根 package.json 的 version 必须为 major.minor.patch 格式");
   process.exit(1);
 }
 
@@ -21,8 +21,9 @@ const packageFiles = ["apps", "packages"].flatMap((directory) => {
     .filter((file) => fs.existsSync(path.join(rootDirectory, file)));
 });
 
-let changed = 0;
-for (const file of packageFiles) {
+const versionFiles = [...packageFiles, "apps/chrome/public/manifest.json"];
+const updates = [];
+for (const file of versionFiles) {
   const absolutePath = path.join(rootDirectory, file);
   const content = fs.readFileSync(absolutePath, "utf8");
   const currentVersion = readJson(absolutePath).version;
@@ -35,15 +36,33 @@ for (const file of packageFiles) {
     /("version"\s*:\s*")[^"]*(")/,
     (_match, prefix, suffix) => `${prefix}${rootVersion}${suffix}`,
   );
+  updates.push({ file, absolutePath, updated, currentVersion });
+}
+
+// 只同步应用自身的 Rust 版本，不改插件和第三方依赖版本。
+for (const [file, pattern] of [
+  ["apps/app/src-tauri/Cargo.toml", /(\[package\][\s\S]*?^version\s*=\s*")([^"]+)(")/m],
+  ["apps/app/src-tauri/Cargo.lock", /(\[\[package\]\]\r?\nname = "cliproam"\r?\nversion = ")([^"]+)(")/],
+]) {
+  const absolutePath = path.join(rootDirectory, file);
+  const content = fs.readFileSync(absolutePath, "utf8");
+  const match = content.match(pattern);
+  if (!match) throw new Error(`${file} 没有应用版本字段`);
+  const currentVersion = match[2];
+  if (currentVersion === rootVersion) continue;
+  const updated = content.replace(pattern, (_match, prefix, _version, suffix) => `${prefix}${rootVersion}${suffix}`);
+  updates.push({ file, absolutePath, updated, currentVersion });
+}
+
+for (const { file, absolutePath, updated, currentVersion } of updates) {
   fs.writeFileSync(absolutePath, updated);
-  changed++;
   console.log(`${file}: ${currentVersion} -> ${rootVersion}`);
 }
 
-if (changed === 0) {
-  console.log(`${packageFiles.length} 个子项目版本已与根版本一致 (${rootVersion})`);
+if (updates.length === 0) {
+  console.log(`所有客户端版本已与根版本一致 (${rootVersion})`);
 } else {
-  console.log(`已同步 ${changed}/${packageFiles.length} 个子项目到 ${rootVersion}`);
+  console.log(`已同步 ${updates.length} 个版本文件到 ${rootVersion}`);
 }
 
 function readJson(file) {

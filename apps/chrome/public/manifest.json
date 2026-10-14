@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ClipRoam",
   "description": "ClipRoam Chrome 扩展占位项目，共用客户端主界面布局。",
-  "version": "0.2.1",
+  "version": "0.1.9",
   "action": {
     "default_popup": "index.html"
   },
