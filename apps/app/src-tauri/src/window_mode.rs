@@ -1,9 +1,11 @@
 //! Native geometry and focus transitions for the shared main/quick-paste window.
 use serde::Deserialize;
+#[cfg(desktop)]
 use std::sync::Mutex;
+use tauri::WebviewWindow;
+#[cfg(desktop)]
 use tauri::{
-    LogicalSize, LogicalUnit, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
-    WindowSizeConstraints,
+    LogicalSize, LogicalUnit, Manager, PhysicalPosition, PhysicalSize, WindowSizeConstraints,
 };
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
@@ -25,6 +27,7 @@ pub(crate) enum WindowPosition {
     },
 }
 
+#[cfg(desktop)]
 struct MainGeometry {
     size: PhysicalSize<u32>,
     position: PhysicalPosition<i32>,
@@ -32,6 +35,7 @@ struct MainGeometry {
     fullscreen: bool,
 }
 
+#[cfg(desktop)]
 #[derive(Default)]
 struct Geometry {
     quick: bool,
@@ -39,8 +43,13 @@ struct Geometry {
     quick_height: Option<f64>,
 }
 
+#[cfg(desktop)]
 #[derive(Default)]
 pub(crate) struct WindowModeState(Mutex<Geometry>);
+
+#[cfg(mobile)]
+#[derive(Default)]
+pub(crate) struct WindowModeState;
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn native_set_window_mode(
@@ -50,17 +59,26 @@ pub(crate) async fn native_set_window_mode(
     position: Option<WindowPosition>,
     visible: Option<bool>,
 ) -> Result<(), String> {
-    if window.label() != "main" {
-        return Err("仅主窗口可切换窗口模式".into());
+    #[cfg(mobile)]
+    {
+        let _ = (window, mode, title, position, visible);
+        Err("移动端不支持切换窗口模式".into())
     }
-    // Window operations and macOS AppKit dispatch must not block the UI thread.
-    tauri::async_runtime::spawn_blocking(move || {
-        apply_mode(&window, mode, title, position, visible.unwrap_or(true))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    #[cfg(desktop)]
+    {
+        if window.label() != "main" {
+            return Err("仅主窗口可切换窗口模式".into());
+        }
+        // Window operations and macOS AppKit dispatch must not block the UI thread.
+        tauri::async_runtime::spawn_blocking(move || {
+            apply_mode(&window, mode, title, position, visible.unwrap_or(true))
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
 }
 
+#[cfg(desktop)]
 fn apply_mode(
     window: &WebviewWindow,
     mode: WindowMode,
@@ -186,6 +204,7 @@ fn apply_mode(
     Ok(())
 }
 
+#[cfg(desktop)]
 fn position_at_cursor(window: &WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     return crate::platform::position_quick_paste_window(window);
