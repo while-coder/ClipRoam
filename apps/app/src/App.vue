@@ -3,7 +3,7 @@ import RustSettingsDialog from "./features/settings/RustSettingsDialog.vue";
 import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
 import { isNative, isQuickPaste } from "@cliproam/ui/platform";
-import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
+import UpdaterDialog from "./features/updater/UpdaterDialog.vue";
 </script>
 
 <template>
@@ -15,7 +15,7 @@ import { UpdaterDialog } from "@while-coder/tauri-updater-vue";
       <RustSettingsDialog :current-username="currentUsername" />
     </template>
     <template #native-overlays>
-      <UpdaterDialog v-if="isNative && !isQuickPaste" locale="zh-CN" />
+      <UpdaterDialog v-if="isNative && !isQuickPaste" />
     </template>
   </SharedApp>
 </template>

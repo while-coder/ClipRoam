@@ -44,6 +44,7 @@ pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
                 .build(),
         )
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
 }
 
 // ---------------------------------------------------------------------------

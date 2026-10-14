@@ -1,5 +1,5 @@
 import { computed, ref, watch } from "vue";
-import { useTauriUpdater } from "@while-coder/tauri-updater-vue";
+import { useTauriUpdater } from "../updater/useTauriUpdater";
 import { savingSettings, changingPassword, settingsPage, settingsError, saveSettings as saveSharedSettings, getSettingsPreferences } from "@cliproam/ui/settings";
 import { native } from "@cliproam/ui/native";
 import { usePlatform } from "@cliproam/ui/platform";

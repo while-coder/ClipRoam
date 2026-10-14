@@ -606,7 +606,6 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
- "tauri-updater-kit",
  "uuid",
  "windows-sys 0.59.0",
 ]
@@ -4518,15 +4517,6 @@ dependencies = [
  "webview2-com",
  "windows",
  "wry",
-]
-
-[[package]]
-name = "tauri-updater-kit"
-version = "0.0.0"
-source = "git+https://github.com/while-coder/tauri-updater-kit?branch=main#9728f9a9eb6b9ed6eb5620cb42e34bbce1100fb6"
-dependencies = [
- "tauri",
- "tauri-plugin-updater",
 ]
 
 [[package]]
