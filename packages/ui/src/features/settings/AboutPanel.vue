@@ -40,7 +40,7 @@ const feedbackUrl = computed(() => {
   url.searchParams.set("body", [
     "### 使用环境",
     `- ClipRoam 版本：${appVersion.value || deviceInfo.value?.appVersion || "未知"}`,
-    `- 操作系统及版本：${operatingSystem.value}`,
+    `- 系统 / 浏览器及版本：${operatingSystem.value}`,
     ...(deviceInfo.value?.architecture ? [`- 处理器架构：${deviceInfo.value.architecture}`] : []),
     "",
     "### 问题或建议",

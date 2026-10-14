@@ -1,6 +1,7 @@
 import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, SharedContent,
   FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
+import { getEnvironmentInfo } from "@cliproam/ui/device-info";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { addPluginListener } from "@tauri-apps/api/core";
@@ -45,7 +46,9 @@ export class NativeRust implements NativePlatform {
   }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
-  getDeviceInfo(): Promise<DeviceInfo> { return this.invoke("native_get_device_info"); }
+  async getDeviceInfo(): Promise<DeviceInfo> {
+    return { ...await this.invoke<Omit<DeviceInfo, "language" | "timeZone">>("native_get_device_info"), ...getEnvironmentInfo() };
+  }
   openAppDataDir(): Promise<void> { return this.invoke("native_open_app_data_dir"); }
   startWindowDrag(): Promise<void> { return this.invoke("native_start_window_drag"); }
   showNotification(payload: NotificationPayload): Promise<void> { return this.invoke("native_show_notification", {...payload}); }

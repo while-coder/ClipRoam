@@ -182,7 +182,22 @@ pub(crate) fn native_get_device_info(app: AppHandle) -> Result<DeviceInfo, Strin
         os_version: tauri_plugin_os::version().to_string(),
         architecture: tauri_plugin_os::arch().to_string(),
         app_version: app.package_info().version.to_string(),
+        username: read_username(),
+        system_locale: tauri_plugin_os::locale().filter(|locale| !locale.trim().is_empty()),
     })
+}
+
+fn read_username() -> Option<String> {
+    #[cfg(desktop)]
+    for key in ["USERNAME", "USER"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[derive(serde::Serialize)]
@@ -194,4 +209,8 @@ pub(crate) struct DeviceInfo {
     os_version: String,
     architecture: String,
     app_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_locale: Option<String>,
 }

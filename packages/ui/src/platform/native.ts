@@ -4,7 +4,22 @@ import type { FileStat, SaveTarget } from "./files";
 import type { ShareReceiverEvent } from "../types";
 import type { Ref } from "vue";
 
-export type DeviceInfo = { deviceName: string; cpu: string; osType: string; osVersion: string; appVersion: string; architecture?: string };
+export type DeviceInfo = {
+  deviceName: string;
+  cpu: string;
+  /** Native OS type, or browser name for Web/PWA/extensions. */
+  osType: string;
+  /** Native OS version, or the browser's reported version (possibly major-only). */
+  osVersion: string;
+  appVersion: string;
+  architecture?: string;
+  /** Operating system username; unavailable in browsers. */
+  username?: string;
+  /** Browser/WebView preferred language, distinct from the OS locale. */
+  language: string;
+  timeZone?: string;
+  systemLocale?: string;
+};
 export type PickedFiles = { paths?: string[]; files?: File[] };
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };

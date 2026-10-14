@@ -1,5 +1,6 @@
 import { BROWSER_CAPABILITIES } from "../config";
 import { toast } from "@qingfeng346/ui-kit";
+import { getBrowserInfo, getEnvironmentInfo } from "./deviceInfo";
 import type { PlatformCapabilities, ShareReceiverEvent, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
@@ -28,7 +29,14 @@ export class NativeWeb implements NativePlatform {
   }
   async listenShares(_handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> { return () => {}; }
   async getCapabilities(): Promise<PlatformCapabilities> { return {...BROWSER_CAPABILITIES}; }
-  async getDeviceInfo(): Promise<DeviceInfo> { return {deviceName:"浏览器",cpu:"",osType:"browser",osVersion:navigator.userAgent,appVersion:"web"}; }
+  async getDeviceInfo(): Promise<DeviceInfo> {
+    return {
+      deviceName: "浏览器", cpu: "",
+      appVersion: await this.getAppVersion(),
+      ...getEnvironmentInfo(),
+      ...getBrowserInfo(),
+    };
+  }
   private unavailable(): never { throw new Error("此操作需要桌面或手机客户端"); }
   async openAppDataDir(): Promise<void> { this.unavailable(); }
   async startWindowDrag(): Promise<void> { this.unavailable(); }

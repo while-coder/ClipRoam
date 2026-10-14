@@ -94,7 +94,7 @@ onBeforeUnmount(() => { disposed = true; });
           </span>
         </div>
         <dl class="device-details">
-          <div><dt>操作系统</dt><dd>{{ device.platform }} · {{ device.osVersion || '未知' }}</dd></div>
+          <div><dt>系统 / 浏览器</dt><dd>{{ device.platform }} · {{ device.osVersion || '未知' }}</dd></div>
           <div><dt>应用版本</dt><dd>{{ device.appVersion || '未知' }}</dd></div>
           <div class="device-last-online">
             <dt>最后在线时间</dt>
