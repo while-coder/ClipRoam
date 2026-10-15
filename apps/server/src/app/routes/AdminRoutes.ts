@@ -215,6 +215,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     return { ok: true };
   });
 
+  app.get("/", async (_request, reply) => reply.redirect("/admin"));
   app.get("/admin", async (_request, reply) => serveAdminAsset("", reply));
   app.get("/admin/*", async (request, reply) => {
     const path = (request.params as { "*"?: string })["*"] ?? "";
