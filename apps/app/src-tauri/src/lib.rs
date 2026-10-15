@@ -1,4 +1,5 @@
 mod app;
+mod autostart;
 mod clipboard;
 mod files;
 mod platform;
@@ -32,6 +33,8 @@ pub fn run() {
             platform::on_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            autostart::autostart_is_enabled,
+            autostart::autostart_set_enabled,
             app::native_get_platform_capabilities,
             app::native_get_device_info,
             app::native_open_app_data_dir,

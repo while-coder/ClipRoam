@@ -15,3 +15,7 @@ pub(crate) use mobile::android as implementation;
 pub(crate) use mobile::ios as implementation;
 
 mod files;
+
+/// 与 tauri.conf.json 的 identifier 保持一致，供桌面系统启动项使用。
+#[cfg(desktop)]
+const AUTOSTART_APP_IDENTIFIER: &str = "com.whilecode.cliproam";

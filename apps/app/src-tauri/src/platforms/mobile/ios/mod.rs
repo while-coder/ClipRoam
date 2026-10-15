@@ -1,4 +1,5 @@
 //! iOS 平台实现。
+pub(crate) use super::{autostart_is_enabled, autostart_set_enabled};
 pub(crate) use super::{
     open_data_directory, read_clipboard_files, read_clipboard_image, read_clipboard_text,
     show_notification, write_clipboard_files, write_clipboard_image, write_clipboard_text,

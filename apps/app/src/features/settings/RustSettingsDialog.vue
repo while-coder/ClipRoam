@@ -9,6 +9,7 @@ import "./styles.css";
 
 defineProps<{ currentUsername: string }>();
 const {
+    autostartEnabled, autostartLoading, autostartLoaded, autostartError,
     isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboard,
     watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
@@ -34,6 +35,21 @@ async function openDebugTools(): Promise<void> {
 <template>
   <SettingsDialog :current-username="currentUsername" :save="saveSettings" :save-pages="['general', 'shortcuts']">
     <template #general>
+      <SCard v-if="!isMobile" title="启动设置">
+        <label class="setting-switch" for="autostart">
+          <span class="setting-switch-copy">
+            <strong>开机启动</strong>
+            <small>登录系统后自动启动 ClipRoam，点击保存后生效。</small>
+          </span>
+          <SSwitch
+            id="autostart"
+            v-model:value="autostartEnabled"
+            :disabled="busy || !autostartLoaded"
+          />
+        </label>
+        <p v-if="autostartLoading" class="settings-section-desc" role="status">正在读取开机启动状态…</p>
+        <p v-if="autostartError" class="settings-section-desc" role="alert">{{ autostartError }}</p>
+      </SCard>
       <SCard title="剪贴板漫游">
         <p class="settings-section-desc">{{ isMobile
           ? "开启监听后自动记录本机剪贴板文本，也可点击“读取当前剪贴板”导入；其他设备的内容同步到历史，点按文本即可复制。"

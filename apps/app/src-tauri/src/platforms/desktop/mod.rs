@@ -177,7 +177,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN, "显示主界面", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT, "退出 ClipRoam", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT, "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_main, &quit])?;
     #[cfg(target_os = "macos")]
     let icon = tauri::image::Image::from_bytes(include_bytes!("../../../icons/tray-macos.png"))?;

@@ -11,6 +11,18 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::clipboard::RichText;
 
+pub(crate) fn autostart_is_enabled() -> Result<bool, String> {
+    Ok(false)
+}
+
+pub(crate) fn autostart_set_enabled(enabled: bool) -> Result<(), String> {
+    if enabled {
+        Err("当前平台暂不支持开机启动设置".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 剪贴板读写
 // ---------------------------------------------------------------------------

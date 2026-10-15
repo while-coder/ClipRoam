@@ -1,5 +1,8 @@
 //! Linux 平台实现：arboard 剪贴板 + wtype/ydotool/xdotool 合成 Ctrl+V。
 
+mod autostart;
+pub(crate) use autostart::{autostart_is_enabled, autostart_set_enabled};
+
 use tauri::{AppHandle, Manager};
 
 pub(crate) use super::arboard_clipboard::{

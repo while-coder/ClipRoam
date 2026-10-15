@@ -1,6 +1,7 @@
 import { computed, ref, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useTauriUpdater } from "../updater/useTauriUpdater";
-import { savingSettings, changingPassword, settingsPage, settingsError, saveSettings as saveSharedSettings, getSettingsPreferences } from "@cliproam/ui/settings";
+import { savingSettings, changingPassword, settingsVisible, settingsPage, settingsError, saveSettings as saveSharedSettings, getSettingsPreferences } from "@cliproam/ui/settings";
 import { native } from "@cliproam/ui/native";
 import { usePlatform } from "@cliproam/ui/platform";
 import { errorMessage } from "@cliproam/ui/errors";
@@ -16,6 +17,27 @@ export function useRustSettings() {
   const serverMaxFileMb = ref(preferences.serverMaxFileMb);
   const recordingQuickPasteShortcut = ref(false);
   const busy = computed(() => savingSettings.value || changingPassword.value);
+  const autostartEnabled = ref(false);
+  const autostartLoading = ref(false);
+  const autostartLoaded = ref(false);
+  const autostartError = ref("");
+  let savedAutostart: boolean | undefined;
+  watch(settingsVisible, async (visible) => {
+    if (!visible || isMobile.value) return;
+    autostartLoading.value = true;
+    autostartLoaded.value = false;
+    autostartError.value = "";
+    savedAutostart = undefined;
+    try {
+      savedAutostart = await invoke<boolean>("autostart_is_enabled");
+      autostartEnabled.value = savedAutostart;
+      autostartLoaded.value = true;
+    } catch (error) {
+      autostartError.value = `无法读取开机启动状态：${errorMessage(error)}`;
+    } finally {
+      autostartLoading.value = false;
+    }
+  }, { immediate: true });
   resetQuickPasteShortcutDraft();
   watch(settingsPage, () => { recordingQuickPasteShortcut.value = false; });
   const { updaterSupported, updateStatus, updateStatusText, checkForUpdate } = useTauriUpdater();
@@ -103,6 +125,19 @@ export function useRustSettings() {
         excludePatterns: [...new Set(excludePatternsInput.value.split("\n").map(value => value.trim()).filter(Boolean))],
       },
       beforeSave: async () => {
+        if (!isMobile.value && settingsPage.value === "general") {
+          if (autostartLoading.value) throw new Error("正在读取开机启动状态，请稍后重试");
+          if (savedAutostart !== undefined && autostartEnabled.value !== savedAutostart) {
+            try {
+              await invoke("autostart_set_enabled", { enabled: autostartEnabled.value });
+              savedAutostart = autostartEnabled.value;
+              autostartError.value = "";
+            } catch (error) {
+              autostartError.value = `无法设置开机启动：${errorMessage(error)}`;
+              throw new Error(autostartError.value);
+            }
+          }
+        }
         if (platformCapabilities.value.globalShortcut && settingsPage.value === "shortcuts" && !await saveQuickPasteShortcut()) {
           throw new Error(quickPasteShortcutStatus.value.message);
         }
@@ -110,6 +145,7 @@ export function useRustSettings() {
     });
   }
   return {
+    autostartEnabled, autostartLoading, autostartLoaded, autostartError,
     isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboard,
     watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,

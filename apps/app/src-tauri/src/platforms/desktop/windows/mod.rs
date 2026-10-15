@@ -1,6 +1,9 @@
 //! Windows 平台实现：clipboard-win 剪贴板读写、SendInput 合成 Ctrl+V、
 //! 以及拖拽焦点守卫。
 
+mod autostart;
+pub(crate) use autostart::{autostart_is_enabled, autostart_set_enabled};
+
 use std::{
     path::PathBuf,
     sync::Mutex,

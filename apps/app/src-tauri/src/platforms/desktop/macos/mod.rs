@@ -1,5 +1,8 @@
 //! macOS 平台实现：arboard 剪贴板 + 原生 AppKit 焦点恢复与 Quartz Cmd+V。
 
+mod autostart;
+pub(crate) use autostart::{autostart_is_enabled, autostart_set_enabled};
+
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};

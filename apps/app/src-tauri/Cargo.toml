@@ -53,7 +53,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = { version = "5.4.1", features = ["std"] }
-windows-sys = { version = "0.59", features = ["Win32_System_DataExchange", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.59", features = ["Win32_System_DataExchange", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-cliproam-share-receiver = { path = "plugins/share-receiver" }

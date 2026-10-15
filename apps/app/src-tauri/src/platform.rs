@@ -4,6 +4,14 @@ use crate::{app::NotificationPayload, clipboard::RichText, platforms::implementa
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+pub(crate) fn autostart_is_enabled() -> Result<bool, String> {
+    implementation::autostart_is_enabled()
+}
+
+pub(crate) fn autostart_set_enabled(enabled: bool) -> Result<(), String> {
+    implementation::autostart_set_enabled(enabled)
+}
+
 pub(crate) fn read_clipboard_text(app: &AppHandle) -> Option<RichText> {
     implementation::read_clipboard_text(app)
 }
