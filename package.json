@@ -13,6 +13,7 @@
     "build:vscode": "pnpm --filter cliproam-vscode build",
     "package:vscode": "pnpm --filter cliproam-vscode package",
     "docker": "node scripts/docker.js",
+    "docker:publish": "node scripts/docker.js publish",
     "release": "node scripts/release.js",
     "sync:versions": "node scripts/sync-versions.js",
     "sync:icons": "node scripts/sync-icons.js",

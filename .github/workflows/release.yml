@@ -226,15 +226,15 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           docker build \
-            --tag "cliproam-server:$VERSION" \
-            --tag cliproam-server:latest \
+            --tag "qingfeng346/cliproam:$VERSION" \
+            --tag qingfeng346/cliproam:latest \
             --file apps/server/Dockerfile \
             apps/server/dist
 
       - name: Save Docker image
         env:
           VERSION: ${{ needs.check.outputs.version }}
-        run: docker save --output cliproam-server.tar "cliproam-server:$VERSION"
+        run: docker save --output cliproam-server.tar "qingfeng346/cliproam:$VERSION"
 
       - name: Upload Docker image to release
         env:
