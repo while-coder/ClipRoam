@@ -10,6 +10,7 @@ import { registerDeviceRoutes } from "./routes/DeviceRoutes.js";
 import { registerEntryRoutes } from "./routes/EntryRoutes.js";
 import { registerFileRoutes } from "./routes/FileRoutes.js";
 import { registerAdminRoutes } from "./routes/AdminRoutes.js";
+import { registerAdminUiRoutes } from "./routes/AdminUiRoutes.js";
 import { readBearerToken } from "./routes/AuthRoutes.js";
 import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
@@ -121,6 +122,7 @@ export class ClipRoamServer {
       disconnectUser: this.#sockets.disconnectUser.bind(this.#sockets),
       isDeviceOnline: this.#sockets.isDeviceOnline.bind(this.#sockets),
     });
+    registerAdminUiRoutes(this.#app);
     this.#app.addHook("onClose", async () => {
       this.#store.close();
     });

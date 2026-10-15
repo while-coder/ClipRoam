@@ -1,7 +1,3 @@
-import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { extname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { ServerMessage } from "@cliproam/protocol";
 import type { AdminService } from "../../admin/AdminService.js";
@@ -12,12 +8,6 @@ import { updateTransferSettings, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } 
 const ADMIN_SESSION_COOKIE = "cliproam_admin";
 // 与管理后台会话有效期保持同一来源（ServerConfig 的 const），单位换算为秒。
 const ADMIN_SESSION_MAX_AGE_SECONDS = ADMIN_SESSION_LIFETIME_MS / 1000;
-// The admin UI ships inside the server package once built, under ./admin-ui —
-// a different name from the backend ./admin (AdminService), because tsc mirrors
-// the src tree and both would otherwise land in the same output directory. The
-// workspace fallback serves the Vite output straight from the monorepo in dev.
-const BUNDLED_ADMIN_DIRECTORY = fileURLToPath(new URL("../../admin-ui", import.meta.url));
-const WORKSPACE_ADMIN_DIRECTORY = fileURLToPath(new URL("../../../admin", import.meta.url));
 
 export type AdminRouteDeps = {
   admin: AdminService;
@@ -214,53 +204,10 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     }
     return { ok: true };
   });
-
-  app.get("/", async (_request, reply) => reply.redirect("/admin"));
-  app.get("/admin", async (_request, reply) => serveAdminAsset("", reply));
-  app.get("/admin/*", async (request, reply) => {
-    const path = (request.params as { "*"?: string })["*"] ?? "";
-    return serveAdminAsset(path, reply);
-  });
 }
 
 function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;
   const prefix = `${name}=`;
   return header.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix))?.slice(prefix.length);
-}
-
-async function serveAdminAsset(requestPath: string, reply: { code: (statusCode: number) => { send: (payload: unknown) => unknown }; type: (contentType: string) => { send: (payload: unknown) => unknown } }): Promise<unknown> {
-  // The backend also compiles into a sibling "admin" directory, so a bare
-  // directory check is not enough — only index.html proves the UI is here.
-  const hasBundledUi = existsSync(join(BUNDLED_ADMIN_DIRECTORY, "index.html"));
-  const directory = hasBundledUi ? BUNDLED_ADMIN_DIRECTORY : WORKSPACE_ADMIN_DIRECTORY;
-  if (!existsSync(join(directory, "index.html"))) {
-    return reply.code(503).send({ message: "管理后台资源未构建。请先执行 pnpm --filter @cliproam/admin build。" });
-  }
-
-  const relativePath = requestPath || "index.html";
-  const assetPath = resolve(directory, relativePath);
-  if (!assetPath.startsWith(`${directory}${sep}`) && assetPath !== directory) {
-    return reply.code(404).send({ message: "Not found" });
-  }
-  try {
-    if (!(await stat(assetPath)).isFile()) throw new Error("Not a file");
-    return reply.type(contentTypeFor(assetPath)).send(await readFile(assetPath));
-  } catch {
-    if (extname(relativePath)) return reply.code(404).send({ message: "Not found" });
-    return reply.type("text/html; charset=utf-8").send(await readFile(join(directory, "index.html")));
-  }
-}
-
-function contentTypeFor(path: string): string {
-  switch (extname(path)) {
-    case ".html": return "text/html; charset=utf-8";
-    case ".css": return "text/css; charset=utf-8";
-    case ".js": return "text/javascript; charset=utf-8";
-    case ".svg": return "image/svg+xml";
-    case ".json": return "application/json; charset=utf-8";
-    case ".ico": return "image/x-icon";
-    case ".png": return "image/png";
-    default: return "application/octet-stream";
-  }
 }
