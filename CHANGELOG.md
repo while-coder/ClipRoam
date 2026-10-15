@@ -1,6 +1,35 @@
 # Changelog
 
-本文件记录 ClipRoam App、Server 与 Admin 的发版说明。发版 workflow 会自动提取对应 `## <version>` 段落作为 GitHub Release notes。
+本文件记录 ClipRoam 各客户端、Server 与 Admin 的发版说明。发版 workflow 会自动提取对应 `## <version>` 段落作为 GitHub Release notes。
+
+## 0.2.2
+
+### App
+
+#### 新增
+
+- Windows、macOS 与 Linux 设置新增「开机启动」开关，保存后可在登录系统时自动启动 ClipRoam
+
+#### 修复
+
+- 进一步调整 macOS Dock 图标的显示尺寸与透明留白，并补充独立的菜单栏托盘图标资源
+
+### VS Code
+
+#### 新增
+
+- 新增桌面 VS Code 扩展，可通过 VSIX 安装，在编辑器标签页中连接 ClipRoam Server，使用登录、剪贴板历史、设置与同步功能
+- 支持通过右键菜单或标签页按钮保存编辑器选中文本，将内容加入当前账号的上传队列
+- 支持将历史中已复制的文本插入最近使用的文本编辑器，替换当前选区，支持多个光标
+- 支持手动读取系统文本剪贴板；首版不持续监听系统复制，不提供全局快捷键及系统图片、文件复制和原生文件导出；关闭扩展标签页后停止同步
+- 发布产物新增 `ClipRoam_版本号_vscode.vsix`
+
+### Server
+
+#### 变更
+
+- Docker 镜像名称统一为 `qingfeng346/cliproam`，提供版本号与 `latest` 标签；Release 中的离线镜像包仍使用 `cliproam-server.tar` 文件名
+- 新增 `pnpm docker:publish` 命令，可推送本地已构建的版本号与 `latest` 镜像标签
 
 ## 0.2.1
 
