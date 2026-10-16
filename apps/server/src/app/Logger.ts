@@ -26,7 +26,7 @@ log4js.configure({
     default: {
       enableCallStack: true,
       appenders: ["console", "file"],
-      level: process.env.CLIPROAM_LOG_LEVEL ?? process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "INFO" : "ALL"),
+      level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "INFO" : "ALL"),
     },
   },
 });
