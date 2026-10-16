@@ -1,6 +1,5 @@
 import { errorMessage, canSaveEntry } from "../../utils";
 import { accountStateRef, getAccountSession } from "../../accountSession";
-import type { ClipboardEntry } from "@cliproam/protocol";
 import { isMobile, isQuickPaste, usePlatform, showNotification } from "../../platform/runtime";
 import { downloadEntry } from "../downloads/useDownloads";
 import { DownloadCancelledError } from "../downloads/downloadManager";
@@ -110,16 +109,18 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
 }
 
 // Server-confirmed deletion only marks history changed; the view owns refetching.
-export async function removeEntry(entry: ClipboardEntry): Promise<void> {
+export async function removeEntries(entryIds: readonly string[]): Promise<boolean> {
+  if (!entryIds.length) return true;
   const session = getAccountSession();
   if (!session?.client) {
     showNotification({ message: "网络异常，暂时无法删除，请检查同步连接", tone: "error" });
-    return;
+    return false;
   }
   try {
-    await session.history.delete(entry.id);
+    await session.history.delete(entryIds);
+    return !session.signal.aborted;
   } catch (error) {
     if (!session.signal.aborted) showNotification({ message: `删除失败：${errorMessage(error)}`, tone: "error" });
-    return;
+    return false;
   }
 }

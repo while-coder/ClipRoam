@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { native } from "../../platform/native";
 import {
   ChevronLeft,
@@ -8,6 +9,9 @@ import {
   Clipboard,
   Image,
   Search,
+  Check,
+  ListChecks,
+  Trash2,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -20,10 +24,10 @@ import DeviceFilterControl from "./DeviceFilterControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
+import { useHistorySelection } from "./useHistorySelection";
 import { usePlatform, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
 import type {
-  ClipboardEntry,
   Device,
   EntriesManifestFilter,
   EntriesManifestPage,
@@ -46,11 +50,11 @@ const props = defineProps<{
   activatingEntryIds: ReadonlySet<string>;
   savingEntryId: string;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
+  removeEntries: (ids: readonly string[]) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
-  remove: [entry: ClipboardEntry];
   save: [entry: LocalClipboardEntry];
 }>();
 
@@ -70,6 +74,8 @@ const previewEntry = ref<LocalClipboardEntry>();
 // SInput 不 expose 内部 input：实例根节点上 querySelector 一次拿原生元素。
 const searchInput = ref<{ $el?: Element }>();
 const historyListElement = ref<HTMLElement>();
+const deleting = ref(false);
+const deleteTargets = ref<string[]>([]);
 
 function focusSearchInputEl(): void {
   searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
@@ -153,6 +159,115 @@ const {
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },
 });
 
+const { selecting, selectedIds, allSelected, start: startSelection, toggle: toggleSelection, toggleAll, clear: clearSelection, setAnchor } = useHistorySelection(computed(() => pageEntries.value.map((entry) => entry.id)));
+const selectedCount = computed(() => selectedIds.value.size);
+watch(pageEntries, (entries) => {
+  if (menuEntry.value && !entries.some((entry) => entry.id === menuEntry.value?.id)) closeEntryMenu();
+});
+watch([committedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
+  clearSelection();
+  closeEntryMenu();
+});
+
+function beginSelection(entry?: LocalClipboardEntry): void {
+  closeEntryMenu();
+  startSelection(entry?.id);
+}
+
+function requestSelectedDelete(): void {
+  if (!selectedCount.value || deleting.value) return;
+  closeEntryMenu();
+  deleteTargets.value = [...selectedIds.value];
+}
+
+async function confirmDelete(): Promise<void> {
+  if (deleting.value || !deleteTargets.value.length) return;
+  deleting.value = true;
+  try {
+    if (await props.removeEntries(deleteTargets.value)) {
+      clearSelection();
+      deleteTargets.value = [];
+    }
+    // Keep the dialog and selection after failure so retry never targets new rows.
+  } finally { deleting.value = false; }
+}
+
+function removeFromMenu(entry: LocalClipboardEntry): void {
+  if (selectedIds.value.has(entry.id) && selectedCount.value > 1) requestSelectedDelete();
+  else void props.removeEntries([entry.id]);
+}
+
+function changeHistoryPage(page: number): void {
+  clearSelection();
+  closeEntryMenu();
+  void changePage(page);
+}
+
+function handleSelectionKeys(event: KeyboardEvent): void {
+  if (isQuickPaste.value || openModalCount.value || deleting.value) return;
+  if (menuEntry.value) {
+    // Android's native back dispatches Escape on document rather than the menu.
+    if (event.key === "Escape" && event.target === document) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeEntryMenu();
+    }
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (selecting.value && event.key === "Escape") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    clearSelection();
+    return;
+  }
+  if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && (selecting.value || historyListElement.value?.contains(target))) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!allSelected.value) toggleAll();
+  } else if (selecting.value && event.key === "Delete") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    requestSelectedDelete();
+  }
+}
+
+// A mobile browser back action first leaves selection, without leaving the app.
+let selectionHistoryActive = false;
+watch(selecting, (active) => {
+  if (!isMobile.value) return;
+  if (active) {
+    window.history.pushState({ ...window.history.state, cliproamHistorySelection: true }, "");
+    selectionHistoryActive = true;
+  } else if (selectionHistoryActive) {
+    selectionHistoryActive = false;
+    if (window.history.state?.cliproamHistorySelection) window.history.back();
+  }
+}, { flush: "sync" });
+function handleSelectionBack(): void {
+  if (!selectionHistoryActive) return;
+  if (menuEntry.value || deleteTargets.value.length || deleting.value) {
+    window.history.pushState({ ...window.history.state, cliproamHistorySelection: true }, "");
+    closeEntryMenu();
+    if (!deleting.value) deleteTargets.value = [];
+    return;
+  }
+  selectionHistoryActive = false;
+  closeEntryMenu();
+  if (!deleting.value) deleteTargets.value = [];
+  clearSelection();
+}
+onMounted(() => {
+  document.addEventListener("keydown", handleSelectionKeys, true);
+  window.addEventListener("popstate", handleSelectionBack);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", handleSelectionKeys, true);
+  window.removeEventListener("popstate", handleSelectionBack);
+  clearSelection();
+});
+
 // An invalid custom range matches nothing — the backend never sees it.
 watch(timeRangeError, (error) => { if (error) clearManifest(); });
 
@@ -215,26 +330,43 @@ function closeEntryPreview(): void {
   void nextTick(focusSearchInputEl);
 }
 
-function handleEntryMouseDown(entry: LocalClipboardEntry): void {
+function handleEntryMouseDown(entry: LocalClipboardEntry, event: MouseEvent): void {
+  if (!isQuickPaste.value && (selecting.value || event.ctrlKey || event.metaKey || event.shiftKey)) {
+    event.preventDefault();
+    return;
+  }
   if (!isQuickPaste.value) return;
   selectedEntryId.value = entry.id;
   emit("activate", entry, true);
 }
 
-function handleEntryClick(entry: LocalClipboardEntry): void {
-  if (!isMobile.value) return;
+function handleEntryClick(entry: LocalClipboardEntry, event: MouseEvent): void {
   if (longPressFired) {
     longPressFired = false;
     return;
   }
+  if (!isQuickPaste.value && (selecting.value || event.ctrlKey || event.metaKey || event.shiftKey)) {
+    closeEntryMenu();
+    toggleSelection(entry.id, event.shiftKey, event.ctrlKey || event.metaKey);
+    return;
+  }
+  setAnchor(entry.id);
+  if (!isMobile.value) return;
   if (entry.kind === "text") emit("activate", entry, false);
   else openEntryPreview(entry);
 }
 
 function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
-  if (isQuickPaste.value || isMobile.value || longPressFired) return;
+  if (selecting.value || isQuickPaste.value || isMobile.value || longPressFired) return;
   if (entry.kind === "text") emit("activate", entry, false);
   else if (!isMobile.value) openEntryPreview(entry);
+}
+
+function handleEntryKeydown(entry: LocalClipboardEntry, event: KeyboardEvent): void {
+  if (!selecting.value || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  toggleSelection(entry.id, event.shiftKey, event.ctrlKey || event.metaKey);
 }
 
 // —— 条目右键/长按菜单 ——
@@ -247,12 +379,13 @@ let longPressX = 0;
 let longPressY = 0;
 
 function openEntryMenu(entry: LocalClipboardEntry, x: number, y: number): void {
-  if (isQuickPaste.value) return;
+  if (isQuickPaste.value || deleting.value) return;
   if (isMobile.value) longPressFired = true;
   const now = Date.now();
   if (now - lastMenuOpenedAt < 600 && menuEntry.value?.id === entry.id) return;
   lastMenuOpenedAt = now;
   selectedEntryId.value = entry.id;
+  if (selecting.value && !selectedIds.value.has(entry.id)) startSelection(entry.id);
   menuX.value = x;
   menuY.value = y;
   menuEntry.value = entry;
@@ -307,13 +440,18 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>
-  <WorkspacePage title="剪贴板历史" layout="history">
+  <WorkspacePage title="剪贴板历史" layout="history" :data-history-selecting="selecting || undefined">
     <template #menu><WorkspaceMenu /></template>
     <template v-if="isQuickPaste" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
     <template v-if="!isQuickPaste" #actions>
+      <SButton :disabled="deleting || (!selecting && !pageEntries.length)" @click="selecting ? clearSelection() : beginSelection()">
+        <ListChecks :size="15" aria-hidden="true" />
+        {{ selecting ? "取消选择" : "选择" }}
+      </SButton>
       <SButton
+        v-if="!selecting"
         aria-label="读取当前剪贴板"
         title="读取当前剪贴板"
         :aria-busy="capturingClipboard"
@@ -368,7 +506,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
         </div>
       </div>
-      <p v-if="isMobile" class="mobile-history-hint">单击文字复制，单击图片或文件预览，长按打开菜单</p>
+      <p v-if="isMobile" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击文字复制，单击图片或文件预览，长按打开菜单" }}</p>
     </section>
     </template>
 
@@ -377,13 +515,15 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         v-for="entry in pageEntries"
         :key="entry.id"
         class="history-item"
-        :class="{ selected: selectedEntryId === entry.id, 'image-entry': entry.kind === 'image' }"
-        role="button"
-        :tabindex="activatingEntryIds.has(entry.id) ? -1 : 0"
-        :aria-disabled="activatingEntryIds.has(entry.id)"
-        @mouseenter="!isMobile && (selectedEntryId = entry.id)"
-        @mousedown.left="handleEntryMouseDown(entry)"
-        @click="handleEntryClick(entry)"
+        :class="{ selected: selecting ? selectedIds.has(entry.id) : selectedEntryId === entry.id, 'image-entry': entry.kind === 'image', 'selection-item': selecting }"
+        :role="selecting ? 'checkbox' : 'button'"
+        :aria-checked="selecting ? selectedIds.has(entry.id) : undefined"
+        :tabindex="deleting || (!selecting && activatingEntryIds.has(entry.id)) ? -1 : 0"
+        :aria-disabled="deleting || (!selecting && activatingEntryIds.has(entry.id))"
+        @mouseenter="!isMobile && !selecting && (selectedEntryId = entry.id)"
+        @mousedown.left="handleEntryMouseDown(entry, $event)"
+        @click="handleEntryClick(entry, $event)"
+        @keydown="handleEntryKeydown(entry, $event)"
         @dblclick.stop="handleEntryDoubleClick(entry)"
         @contextmenu.prevent="openEntryMenu(entry, $event.clientX, $event.clientY)"
         @touchstart="handleEntryTouchStart(entry, $event)"
@@ -391,8 +531,11 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         @touchend="handleEntryTouchEnd"
         @touchcancel="handleEntryTouchEnd"
       >
+        <span v-if="selecting" class="entry-selection-box" :class="{ checked: selectedIds.has(entry.id) }" aria-hidden="true">
+          <Check v-if="selectedIds.has(entry.id)" :size="16" />
+        </span>
         <button
-          v-if="entry.kind === 'image' && isQuickPaste"
+          v-else-if="entry.kind === 'image' && isQuickPaste"
           class="image-thumbnail"
           type="button"
           :aria-label="`预览${entry.content}`"
@@ -451,6 +594,15 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     </section>
 
     <template #footer>
+      <div v-if="selecting" class="history-selection-actions" role="toolbar" aria-label="历史多选操作">
+        <span role="status" aria-live="polite">已选 {{ selectedCount }} 条</span>
+        <SButton :disabled="deleting || !pageEntries.length" @click="toggleAll">{{ allSelected ? "取消全选" : "本页全选" }}</SButton>
+        <SButton class="history-selection-delete" type="error" :disabled="deleting || !selectedCount" @click="requestSelectedDelete">
+          <Trash2 :size="15" aria-hidden="true" />
+          删除 {{ selectedCount }} 条
+        </SButton>
+      </div>
+      <template v-else>
       <span v-if="isQuickPaste">单击条目粘贴，点击图片或文件图标预览</span>
       <span v-else-if="!isMobile">双击图片或文件预览，双击文字复制，右键打开菜单</span>
       <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
@@ -461,7 +613,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           title="上一页"
           aria-label="上一页"
           :disabled="currentPage <= 1"
-          @click="changePage(currentPage - 1)"
+          @click="changeHistoryPage(currentPage - 1)"
         >
           <ChevronLeft :size="15" aria-hidden="true" />
         </button>
@@ -472,26 +624,40 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           title="下一页"
           aria-label="下一页"
           :disabled="currentPage >= pageCount"
-          @click="changePage(currentPage + 1)"
+          @click="changeHistoryPage(currentPage + 1)"
         >
           <ChevronRight :size="15" aria-hidden="true" />
         </button>
       </nav>
+      </template>
     </template>
 
     <EntryContextMenu
       v-if="menuEntry"
+      :key="menuEntry.id"
       :entry="menuEntry"
       :x="menuX"
       :y="menuY"
       :activating="activatingEntryIds.has(menuEntry.id)"
       :saving-entry-id="savingEntryId"
       :is-mobile="isMobile"
+      :selected-count="selectedIds.has(menuEntry.id) ? selectedCount : 0"
       @activate="emit('activate', $event, false)"
       @save="emit('save', $event)"
-      @remove="emit('remove', $event)"
+      @remove="removeFromMenu"
+      @select="beginSelection"
       @close="closeEntryMenu"
     />
+
+    <SModal v-if="deleteTargets.length" :show="true" :title="`删除 ${deleteTargets.length} 条历史？`" width="420px"
+      :closable="!deleting" :mask-closable="!deleting" :close-on-esc="!deleting"
+      @update:show="!deleting && (deleteTargets = [])">
+      <p>所选历史会从当前账号的所有设备同步删除，此操作无法撤销。</p>
+      <template #footer>
+        <SButton :disabled="deleting" @click="deleteTargets = []">取消</SButton>
+        <SButton type="error" :loading="deleting" @click="confirmDelete">确认删除 {{ deleteTargets.length }} 条</SButton>
+      </template>
+    </SModal>
 
     <ImagePreview
       v-if="previewEntry?.kind === 'image'"
@@ -512,7 +678,14 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 <style scoped>
 .file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .file-preview-trigger:hover { background: var(--sui-bg-hover); }
+.selection-item { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.entry-selection-box { display: grid; place-items: center; justify-self: center; width: 22px; height: 22px; border: 1px solid var(--sui-border-strong); border-radius: 5px; }
+.entry-selection-box.checked { color: var(--sui-primary); border-color: var(--sui-primary); background: var(--sui-bg-active); }
+.history-selection-actions { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: 52px; color: var(--color-foreground); font-size: 13px; }
+.history-selection-actions :deep(.s-button) { flex-shrink: 0; }
+.history-selection-delete { margin-left: auto; }
 @media (max-width: 640px) {
   .file-preview-trigger { min-width: 44px; min-height: 44px; }
+  .history-selection-actions :deep(.s-button) { min-height: 44px; }
 }
 </style>

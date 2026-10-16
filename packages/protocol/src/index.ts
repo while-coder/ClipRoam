@@ -182,6 +182,10 @@ export const EntryQueryRequestSchema = z.object({
 // Ids the server does not know are simply absent, not an error.
 export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
+export const EntryDeleteRequestSchema = z.object({
+  ids: z.array(z.string().min(1).max(100)).min(1).max(ENTRY_QUERY_BATCH),
+});
+
 // Whether the pool holds the bytes for a batch of content ids — the state the
 // per-entry `missing` list used to inline. Size rides along so callers can
 // render totals for contents the pool has registered but not received yet.

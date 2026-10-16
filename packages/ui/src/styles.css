@@ -466,6 +466,7 @@ button.image-thumbnail { cursor: zoom-in; }
   grid-template-rows: 52px auto minmax(0, 1fr) 36px;
   background: #10192e;
 }
+.history-content[data-history-selecting] { grid-template-rows: 52px auto minmax(0, 1fr) auto; }
 .pending-content { grid-template-rows: 52px minmax(0, 1fr); }
 .pending-content.has-footer { grid-template-rows: 52px minmax(0, 1fr) 36px; }
 /* grid item 默认 min-width:auto，会把筛选行的 min-content（最宽 479px）
@@ -730,6 +731,7 @@ button:focus-visible, [role="button"]:focus-visible {
   line-height: 1.4;
 }
 .mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 36px; }
+.mobile-app .history-content[data-history-selecting] { grid-template-rows: 40px auto minmax(0, 1fr) auto; }
 .mobile-app .pending-content { grid-template-rows: 40px minmax(0, 1fr); }
 .mobile-app .pending-content.has-footer { grid-template-rows: 40px minmax(0, 1fr) 36px; }
 .mobile-app .workspace-titlebar { padding-inline: 12px; }

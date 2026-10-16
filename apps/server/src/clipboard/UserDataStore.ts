@@ -271,8 +271,9 @@ export class UserDataStore {
 
   // Content is shared across entries, so deletion only drops the reference.
   // Stored bytes remain until an administrator removes them.
-  delete(entryId: string): void {
-    this.#database.prepare("DELETE FROM entries WHERE id = ?").run(entryId);
+  delete(entryIds: readonly string[]): void {
+    if (!entryIds.length) return;
+    this.#database.prepare(`DELETE FROM entries WHERE id IN (${placeholders(entryIds.length)})`).run(...entryIds);
   }
 
   hasFileReference(entryId: string, downloadId: string): boolean {

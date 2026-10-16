@@ -68,7 +68,7 @@ export class ClipRoamStore {
   upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
     return this.#userStore(userId).upsert(entry);
   }
-  delete(userId: string, entryId: string): void { this.#userStore(userId).delete(entryId); }
+  delete(userId: string, entryIds: readonly string[]): void { this.#userStore(userId).delete(entryIds); }
   pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
   files(): FileStore { return this.#files; }
   listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }

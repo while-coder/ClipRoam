@@ -23,7 +23,7 @@ import type { SetupDraft } from "./features/sync/SetupWizard.vue";
 import {
   activatingEntryIds,
   activateFromView,
-  removeEntry,
+  removeEntries,
   saveEntry,
   savingEntryId,
 } from "./features/history/useEntryActions";
@@ -574,8 +574,8 @@ onBeforeUnmount(() => {
       :activating-entry-ids="activatingEntryIds"
       :saving-entry-id="savingEntryId"
       :ensure-local-files="ensureLocalFiles"
+      :remove-entries="removeEntries"
       @activate="activateFromView"
-      @remove="removeEntry"
       @save="saveEntry"
     />
 
@@ -618,8 +618,8 @@ onBeforeUnmount(() => {
       :register="registerQuickHistoryView"
       :bindings="{
         fetchHistoryPage, revision: historyRevision, devicesById, currentTime, importingShare: false,
-        activatingEntryIds, savingEntryId, ensureLocalFiles,
-        onActivate: activateFromView, onRemove: removeEntry, onSave: saveEntry,
+        activatingEntryIds, savingEntryId, ensureLocalFiles, removeEntries,
+        onActivate: activateFromView, onSave: saveEntry,
       }"
     />
 

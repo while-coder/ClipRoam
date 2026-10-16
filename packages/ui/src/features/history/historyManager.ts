@@ -50,10 +50,11 @@ export class HistoryManager {
     this.invalidate();
   }
 
-  async delete(entryId: string): Promise<void> {
+  async delete(entryIds: readonly string[]): Promise<void> {
     if (!this.#client) throw new Error("同步账号未登录");
-    await this.#client.delete(entryId);
-    await this.removeLocal(entryId);
+    await this.#client.delete(entryIds);
+    await this.database.batch(entryIds.map((id) => ({ name: "entries", id })));
+    this.invalidate();
   }
 
   async get(entryId: string): Promise<StoredEntry> {

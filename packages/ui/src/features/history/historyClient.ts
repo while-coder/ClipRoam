@@ -102,16 +102,13 @@ export class HistoryClient {
     return queried!.files;
   }
 
-  // A 404 is not a failure: another device may have deleted the entry first,
-  // and the outcome every device converges on is the same.
-  async delete(entryId: string): Promise<void> {
+  async delete(ids: readonly string[]): Promise<void> {
     await this.http.request(
       "DELETE",
-      `/entries/${encodeURIComponent(entryId)}`,
-      { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
+      "/entries",
+      this.#jsonInit({ ids }, ENTRY_HTTP_TIMEOUT_MS),
       null,
       "",
-      true,
     );
   }
 

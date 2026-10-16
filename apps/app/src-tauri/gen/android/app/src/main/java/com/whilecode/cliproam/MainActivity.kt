@@ -14,13 +14,13 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
-    // Native back navigation bypasses the SModal Escape handler in the WebView.
+    // Give modals and history selection first chance to consume native back.
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         webView.evaluateJavascript(
           """
           (() => {
-            if (!document.querySelector('[aria-modal="true"]')) return false;
+            if (!document.querySelector('[aria-modal="true"], [data-history-selecting]')) return false;
             document.dispatchEvent(new KeyboardEvent('keydown', {
               key: 'Escape', code: 'Escape', bubbles: true, cancelable: true
             }));

@@ -5,6 +5,7 @@ import {
   EntryManifestQuerySchema,
   EntryPublishRequestSchema,
   EntryQueryRequestSchema,
+  EntryDeleteRequestSchema,
   type EntryManifestResponse,
   type EntryPublishResponse,
   type EntryQueryResponse,
@@ -105,15 +106,29 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return { entry } satisfies EntryActivateResponse;
   });
 
+  const deleteEntries = (userId: string, ids: readonly string[]): void => {
+    const uniqueIds = [...new Set(ids)];
+    store.delete(userId, uniqueIds);
+    logger.info(`Clipboard entries deleted: user=${userId} entries=${uniqueIds.join(",")}`);
+    // Include already-absent ids so all devices converge on the same state.
+    for (const entryId of uniqueIds) broadcast(userId, { type: "clipboard.deleted", entryId });
+  };
+
+  app.delete("/entries", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const body = parseOr400(reply, EntryDeleteRequestSchema, request.body, "删除参数无效");
+    if (!body) return reply;
+    deleteEntries(user.id, body.ids);
+    return reply.code(204).send();
+  });
+
+  // Compatibility for clients using the original single-entry endpoint.
   app.delete("/entries/:id", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     const { id } = request.params as { id: string };
-    store.delete(user.id, id);
-    logger.info(`Clipboard entry deleted: user=${user.id} entry=${id}`);
-    // Broadcast even when the row was already gone: every device cleans up
-    // idempotently, and the initiator clears its pending-deletion list.
-    broadcast(user.id, { type: "clipboard.deleted", entryId: id });
+    deleteEntries(user.id, [id]);
     return reply.code(204).send();
   });
 }
