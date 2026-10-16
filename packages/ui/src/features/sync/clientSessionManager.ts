@@ -1,6 +1,6 @@
 import { errorMessage } from "../../utils";
 import { computed, ref, watch } from "vue";
-import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device, type ServerSettings } from "@cliproam/protocol";
+import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
 import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../accountSession";
 import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
@@ -8,6 +8,7 @@ import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/sto
 import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
 import { showNotification } from "../../platform/runtime";
 import { getServerUrls } from "./authApi";
+import { applyServerSettings } from "./serverSettings";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./httpClient";
 import { activateRemoteClipboard } from "../history/remoteClipboard";
 import { PendingUploader } from "../pending-upload/pendingUploader";
@@ -214,19 +215,12 @@ class SessionConnection implements ClientConnection {
     this.pendingUploader.setAutoUploadLimit(limitMb * 1024 * 1024);
   }
 
-  #updateServerSettings(settings: ServerSettings): void {
+  #updateServerSettings(settings: unknown): void {
     // Keep ACK and live updates in arrival order, including persistence.
     // Each write belongs to this account session.
     this.#settingsUpdates = this.#settingsUpdates.then(async () => {
       if (this.session.signal.aborted) return;
-      const preferences: AccountPreferences = {
-        ...this.session.preferences,
-        autoUploadLimitMb: Math.min(this.session.preferences.autoUploadLimitMb, settings.maxStoredFileMb),
-        serverMaxFileMb: settings.maxStoredFileMb,
-        serverMaxImageMb: settings.maxStoredImageMb,
-        serverMaxHistoryEntries: settings.maxHistoryEntries,
-        maxCaptureFileCount: settings.maxCaptureFileCount,
-      };
+      const preferences = applyServerSettings(this.session.preferences, settings);
       this.session.preferences = preferences;
       this.setAutoUploadLimit(preferences.autoUploadLimitMb);
       await this.session.database.put("settings", "preferences", preferences);

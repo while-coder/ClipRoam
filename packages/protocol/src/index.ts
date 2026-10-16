@@ -138,14 +138,13 @@ export const ChangePasswordSchema = z.object({
 // 客户端自动上传档位不能超过 `maxStoredFileMb`（0 表示服务器禁止保存文件），
 // `maxHistoryEntries` 是服务器为账号保留的历史条数上限，
 // `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
-export const ServerSettingsSchema = z.object({
-  maxStoredFileMb: z.number().int().nonnegative(),
+export type ServerSettings = {
+  maxStoredFileMb: number;
   // 剪贴板图片独立于普通文件，0 表示禁止保存图片。
-  maxStoredImageMb: z.number().int().nonnegative(),
-  maxHistoryEntries: z.number().int().positive(),
-  maxCaptureFileCount: z.number().int().positive(),
-});
-export type ServerSettings = z.infer<typeof ServerSettingsSchema>;
+  maxStoredImageMb: number;
+  maxHistoryEntries: number;
+  maxCaptureFileCount: number;
+};
 
 export const AuthResponseSchema = z.object({
   sessionToken: z.string().min(1),
@@ -153,7 +152,9 @@ export const AuthResponseSchema = z.object({
   user: z.object({
     username: z.string(),
   }),
-  settings: ServerSettingsSchema,
+  // Settings evolve independently of authentication. Consumers read known
+  // fields with local fallbacks; missing or changed settings never reject login.
+  settings: z.unknown().optional(),
 });
 
 // Entries run over HTTP. The publish response is the sender's confirmation —
@@ -248,8 +249,8 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   // Reconnection refreshes settings missed while offline.
-  z.object({ type: z.literal("auth.ack"), settings: ServerSettingsSchema }),
-  z.object({ type: z.literal("settings.updated"), settings: ServerSettingsSchema }),
+  z.object({ type: z.literal("auth.ack"), settings: z.unknown().optional() }),
+  z.object({ type: z.literal("settings.updated"), settings: z.unknown().optional() }),
   z.object({
     type: z.literal("clipboard.created"),
     // A change notification only invalidates history; details are queried later.

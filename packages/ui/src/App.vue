@@ -8,6 +8,7 @@ import { LoaderCircle } from "lucide-vue-next";
 import WorkspaceLayout from "./components/WorkspaceLayout.vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { authenticateAccount, verifyAccountSession } from "./features/sync/authApi";
+import { applyServerSettings } from "./features/sync/serverSettings";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
@@ -242,12 +243,10 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     setActiveConfig(config);
     currentUsername.value = config.username;
     const accountPreferences = await loadAccountPreferences();
-    const preferences: AccountPreferences = {
+    const preferences: AccountPreferences = applyServerSettings({
+      ...accountPreferences,
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
-      autoUploadLimitMb: Math.min(
-        DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-        Math.max(0, session.settings.maxStoredFileMb),
-      ),
+      autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
       autoReceiveClipboard: sameArchive
         ? accountPreferences.autoReceiveClipboard
         : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
@@ -257,12 +256,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       excludePatterns: sameArchive
         ? accountPreferences.excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
-      serverMaxFileMb: session.settings.maxStoredFileMb,
-      serverMaxImageMb: session.settings.maxStoredImageMb,
-      serverMaxHistoryEntries: session.settings.maxHistoryEntries,
-      // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
-      maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
-    };
+    }, session.settings);
     await persistAccountPreferences(preferences);
     refreshPending();
     // HTTP 登录成功后准备客户端，设备表和首页查询不等待 WebSocket。
@@ -328,14 +322,7 @@ async function restoreSavedSession(): Promise<void> {
     const verified = await verifyAccountSession(config, await getDevice(), controller.signal);
     controller.signal.throwIfAborted();
     const preferences = await loadAccountPreferences();
-    await persistAccountPreferences({
-      ...preferences,
-      autoUploadLimitMb: Math.min(preferences.autoUploadLimitMb, verified.settings.maxStoredFileMb),
-      serverMaxFileMb: verified.settings.maxStoredFileMb,
-      serverMaxImageMb: verified.settings.maxStoredImageMb,
-      serverMaxHistoryEntries: verified.settings.maxHistoryEntries,
-      maxCaptureFileCount: Math.max(1, Math.floor(verified.settings.maxCaptureFileCount)),
-    });
+    await persistAccountPreferences(applyServerSettings(preferences, verified.settings));
     await start(config);
     await enableAccountShortcuts();
     controller.signal.throwIfAborted();
