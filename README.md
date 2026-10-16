@@ -12,18 +12,19 @@ ClipRoam 用来保存剪贴板历史，并在自己的多台设备之间同步�
 ### 启动服务
 
 1. 在服务器上安装 Docker。
-2. 从 [发布页面](https://github.com/while-coder/ClipRoam/releases) 下载 `cliproam-server.tar`。
-3. 在下载目录运行以下命令，导入镜像：
+2. 从 GitHub Container Registry 拉取服务端镜像：
 
    ```bash
-   docker load -i cliproam-server.tar
+   docker pull ghcr.io/while-coder/cliproam:latest
    ```
 
-4. 启动服务。将下面的 `版本号` 替换为下载版本（例如 `0.2.0`），并填写自己的管理员密码：
+3. 启动服务，并填写自己的管理员密码：
 
    ```bash
-   docker run -d --name cliproam-server --restart unless-stopped -p 4810:4810 -e CLIPROAM_ADMIN_PASSWORD="请替换为自己的管理员密码" -v cliproam-data:/root/.cliproam cliproam-server:版本号
+   docker run -d --name cliproam-server --restart unless-stopped -p 4810:4810 -e CLIPROAM_ADMIN_PASSWORD="请替换为自己的管理员密码" -v cliproam-data:/root/.cliproam ghcr.io/while-coder/cliproam:latest
    ```
+
+需要固定版本时，将 `latest` 替换为版本号（例如 `0.2.3`）。离线部署可从 [发布页面](https://github.com/while-coder/ClipRoam/releases) 下载 `cliproam-server.tar`，执行 `docker load -i cliproam-server.tar` 后使用相同的镜像名启动。旧版本附件的镜像名可通过 `docker image ls` 查看。
 
 启动后，App 使用的服务器地址为 `服务器 IP 或域名:4810`，例如 `192.168.1.20:4810`。请确保使用 App 的设备能够访问这个地址；在另一台设备上连接时，不要填写 `127.0.0.1`。
 

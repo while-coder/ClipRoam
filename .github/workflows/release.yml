@@ -205,39 +205,15 @@ jobs:
 
   docker:
     needs: [check, prepare-release]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - uses: while-coder/workflows/.github/actions/install-pnpm-dependencies@main
-
-      - name: Build server distribution
-        run: pnpm build:server
-
-      - name: Build Docker image
-        env:
-          VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          docker build \
-            --tag "qingfeng346/cliproam:$VERSION" \
-            --tag qingfeng346/cliproam:latest \
-            --file apps/server/Dockerfile \
-            apps/server/dist
-
-      - name: Save Docker image
-        env:
-          VERSION: ${{ needs.check.outputs.version }}
-        run: docker save --output cliproam-server.tar "qingfeng346/cliproam:$VERSION"
-
-      - name: Upload Docker image to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.check.outputs.tag }}
-        run: gh release upload "$TAG" cliproam-server.tar --clobber
+    permissions:
+      contents: write
+      packages: write
+    uses: while-coder/workflows/.github/workflows/docker-ghcr-release.yml@main
+    with:
+      version: ${{ needs.check.outputs.version }}
+      context: apps/server/dist
+      dockerfile: apps/server/Dockerfile
+      setup-pnpm: true
+      build-command: pnpm build:server
+      release-tag: ${{ needs.check.outputs.tag }}
+      archive-name: cliproam-server.tar
