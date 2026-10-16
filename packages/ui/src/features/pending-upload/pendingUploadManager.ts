@@ -9,6 +9,7 @@ export class PendingUploadManager {
   readonly entries = ref<LocalClipboardEntry[]>([]);
   readonly count = ref(0);
   readonly progress = ref<Record<string, UploadProgress>>({});
+  readonly retryingAll = ref(false);
   #progress = new Map<string, UploadProgress>();
   #listRevision = 0;
   #countRevision = 0;
@@ -75,6 +76,20 @@ export class PendingUploadManager {
     await this.setStatus(Number(entryId.slice(1)), "wait");
     await this.session.capture.resume();
     await this.refresh();
+  }
+
+  async retryAll(): Promise<void> {
+    if (this.retryingAll.value) return;
+    this.retryingAll.value = true;
+    try {
+      for (const row of await this.rows()) {
+        this.session.signal.throwIfAborted();
+        if (row.status === "failed") await this.setStatus(row.id, "wait");
+      }
+      await this.refresh();
+    } finally {
+      this.retryingAll.value = false;
+    }
   }
 
   queueProgress(entryId: string, uploadedBytes: number, totalBytes: number): void {

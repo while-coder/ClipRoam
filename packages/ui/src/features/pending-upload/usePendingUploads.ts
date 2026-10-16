@@ -8,6 +8,7 @@ import type { LocalClipboardEntry } from "../../types";
 export const pendingEntries = computed(() => getAccountSession()?.pendingUploads.entries.value ?? []);
 export const pendingCount = computed(() => getAccountSession()?.pendingUploads.count.value ?? 0);
 export const uploadProgressByEntryId = computed(() => getAccountSession()?.pendingUploads.progress.value ?? {});
+export const retryingAllPending = computed(() => getAccountSession()?.pendingUploads.retryingAll.value ?? false);
 
 export function refreshPending(): void {
   const session = getAccountSession();
@@ -28,6 +29,12 @@ export async function retryPendingEntry(entry: LocalClipboardEntry): Promise<voi
   const session = getAccountSession();
   try { await session?.pendingUploads.retry(entry.id); }
   catch (error) { if (!session?.signal.aborted) showNotification({ message: `重试失败：${errorMessage(error)}`, tone: "error" }); }
+}
+
+export async function retryAllPendingEntries(): Promise<void> {
+  const session = getAccountSession();
+  try { await session?.pendingUploads.retryAll(); }
+  catch (error) { if (!session?.signal.aborted) showNotification({ message: `全部重试失败：${errorMessage(error)}`, tone: "error" }); }
 }
 
 export async function refreshPendingEntries(): Promise<void> {

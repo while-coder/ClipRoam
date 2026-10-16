@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { deviceName as deviceDisplayName, isHashing, percentOf } from "../../utils";
 import { RotateCcw, Trash2 } from "lucide-vue-next";
+import { computed } from "vue";
 import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
@@ -15,12 +16,16 @@ const props = defineProps<{
   devicesById: Record<string, Device>;
   currentTime: number;
   uploadProgressByEntryId: Record<string, UploadProgress>;
+  retryingAll: boolean;
 }>();
 
 const emit = defineEmits<{
   remove: [entry: LocalClipboardEntry];
   retry: [entry: LocalClipboardEntry];
+  "retry-all": [];
 }>();
+
+const hasFailed = computed(() => props.entries.some((entry) => entry.pendingStatus === "failed"));
 
 /**
  * 队列行的两个进行中阶段：哈希进度来自 Rust 分批写回的 summary（hashCount
@@ -41,6 +46,12 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
     <template #status>
       <span role="status">共 {{ entries.length }} 条待上传</span>
     </template>
+    <template #actions>
+      <SButton :disabled="!hasFailed || retryingAll" :loading="retryingAll" @click="emit('retry-all')">
+        <RotateCcw v-if="!retryingAll" :size="15" aria-hidden="true" />
+        全部重试
+      </SButton>
+    </template>
 
     <section class="history-list" aria-label="待上传列表">
       <div v-for="entry in entries" :key="entry.id" class="history-item pending-item">
@@ -52,7 +63,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
           </template>
         </ClipboardEntryContent>
         <span class="entry-actions">
-          <SIconButton v-if="entry.pendingStatus === 'failed'" :size="28" title="重试上传" aria-label="重试上传" @click.stop="emit('retry', entry)">
+          <SIconButton v-if="entry.pendingStatus === 'failed'" :disabled="retryingAll" :size="28" title="重试上传" aria-label="重试上传" @click.stop="emit('retry', entry)">
             <RotateCcw :size="15" aria-hidden="true" />
           </SIconButton>
           <SIconButton type="error" :size="28" title="删除" aria-label="删除" @click.stop="emit('remove', entry)">

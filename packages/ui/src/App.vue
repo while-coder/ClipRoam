@@ -47,6 +47,8 @@ import {
   refreshPendingCount,
   removePendingEntry,
   retryPendingEntry,
+  retryAllPendingEntries,
+  retryingAllPending,
 } from "./features/pending-upload/usePendingUploads";
 import {
   activeDownloadCount,
@@ -584,8 +586,10 @@ onBeforeUnmount(() => {
       :devices-by-id="devicesById"
       :current-time="currentTime"
       :upload-progress-by-entry-id="uploadProgressByEntryId"
+      :retrying-all="retryingAllPending"
       @remove="removePendingEntry"
       @retry="retryPendingEntry"
+      @retry-all="retryAllPendingEntries"
     />
 
     <UploadsView
