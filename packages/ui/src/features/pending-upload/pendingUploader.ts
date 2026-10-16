@@ -1,5 +1,5 @@
 import { errorMessage } from "../../utils";
-import { EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
+import { ClipboardKind, EntryPublishResponseSchema, type ClipboardEntry, type Device, type EntryPublishInput, type EntryPublishRequest } from "@cliproam/protocol";
 import type { SyncRequester } from "../sync/httpClient";
 import { FileUploader, type FileUploaderDeps } from "./fileUploader";
 import type { PendingRow } from "../../types";
@@ -59,7 +59,10 @@ export class PendingUploader {
       imageInfo: row.entry.imageInfo ?? undefined,
       sourceDeviceId: this.device.id,
     };
-    await this.#files.uploadEntry({ ...payload, id: `p${row.id}` } as ClipboardEntry, this.autoUploadLimit);
+    const sizeLimit = payload.kind === ClipboardKind.Image
+      ? this.deps.session.preferences.serverMaxImageMb * 1024 * 1024
+      : this.autoUploadLimit;
+    await this.#files.uploadEntry({ ...payload, id: `p${row.id}` } as ClipboardEntry, sizeLimit);
     const entryId = await this.#publishEntry(payload);
     await this.deps.session.history.recordPublished(entryId, row.entry);
     await this.deps.session.pendingUploads.complete(row.id);

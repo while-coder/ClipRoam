@@ -88,6 +88,7 @@ export class AccountSession {
   readonly ready: Promise<void>;
   readonly database: AccountDatabase;
   readonly files: AccountFiles;
+  readonly #preferences: Ref<AccountPreferences>;
   readonly history: HistoryManager;
   readonly pendingUploads: PendingUploadManager;
   readonly uploads: UploadManager;
@@ -97,7 +98,8 @@ export class AccountSession {
   #cleanups = new Set<() => void>();
   #timers = new Map<string, number>();
 
-  constructor(readonly config: SyncConfig, public preferences: AccountPreferences) {
+  constructor(readonly config: SyncConfig, preferences: AccountPreferences) {
+    this.#preferences = shallowRef(preferences);
     this.database = new AccountDatabase(this.accountKey);
     this.files = new AccountFiles(this.accountKey);
     this.history = new HistoryManager(this);
@@ -123,6 +125,9 @@ export class AccountSession {
     if (!this.client) throw new Error("同步账号未登录");
     return this.client.http;
   }
+
+  get preferences(): AccountPreferences { return this.#preferences.value; }
+  set preferences(value: AccountPreferences) { this.#preferences.value = value; }
 
   get accountKey(): string { return archiveKeyFor(this.config); }
 

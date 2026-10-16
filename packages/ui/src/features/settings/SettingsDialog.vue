@@ -3,6 +3,8 @@ import { Check } from "lucide-vue-next";
 import { computed } from "vue";
 import type { SettingsPage } from "../../types";
 import AboutPanel from "./AboutPanel.vue";
+import ServerLimitsCard from "./ServerLimitsCard.vue";
+import { clientSessionManager } from "../sync/clientSessionManager";
 import {
   deviceAliasInput,
   systemDeviceName,
@@ -32,6 +34,10 @@ const submitSettings = () => props.save ? props.save() : saveSettings();
 
 /** 保存或改密进行中：禁止关闭弹窗、禁止重复提交。 */
 const busy = computed(() => savingSettings.value || changingPassword.value);
+const currentServer = computed(() => {
+  const config = clientSessionManager.getActiveConfig();
+  return config?.serverAddress ? `${config.serverProtocol}://${config.serverAddress}` : "";
+});
 </script>
 
 <template>
@@ -56,7 +62,7 @@ const busy = computed(() => savingSettings.value || changingPassword.value);
             <div class="settings-page">
               <header class="settings-page-header">
                 <h3>通用</h3>
-                <p>设置当前设备的显示名称。</p>
+                <p>管理本机偏好，查看服务器限制。</p>
               </header>
               <SCard title="本机设备">
                 <p class="settings-section-desc">设备列表与历史来源中显示的名称。</p>
@@ -72,6 +78,7 @@ const busy = computed(() => savingSettings.value || changingPassword.value);
                 <span class="field-hint">留空使用系统机器名；保存后立即上报新名称。</span>
               </SCard>
               <slot name="general" />
+              <ServerLimitsCard v-if="currentUsername" />
             </div>
           </STabPane>
 
@@ -85,6 +92,7 @@ const busy = computed(() => savingSettings.value || changingPassword.value);
               </header>
               <SCard title="账号">
                 <p class="settings-section-desc">{{ currentUsername ? `当前登录：${currentUsername}` : "当前未登录同步账号" }}</p>
+                <p v-if="currentServer" class="settings-section-desc settings-server-address">当前服务器：{{ currentServer }}</p>
                 <div class="account-actions">
                   <SButton type="error" :disabled="busy || !currentUsername" @click="signOut()">退出账号</SButton>
                 </div>
@@ -163,3 +171,7 @@ const busy = computed(() => savingSettings.value || changingPassword.value);
       </form>
     </SModal>
 </template>
+
+<style scoped>
+.settings-server-address { overflow-wrap: anywhere; }
+</style>

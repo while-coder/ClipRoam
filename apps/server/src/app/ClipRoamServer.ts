@@ -150,6 +150,7 @@ function createApp(tls: TlsOptions | undefined): FastifyInstance {
 function serverSettings(config: ServerConfig): ServerSettings {
   return {
     maxStoredFileMb: config.maxStoredFileMb,
+    maxStoredImageMb: config.maxStoredImageMb,
     maxHistoryEntries: config.maxHistoryEntries,
     maxCaptureFileCount: config.maxCaptureFileCount,
   };

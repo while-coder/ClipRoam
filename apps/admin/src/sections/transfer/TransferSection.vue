@@ -6,13 +6,14 @@ import { errorMessage } from "../../shared/errorMessage.js";
 
 // The dropdown presets live here; the server only sanity-checks that a saved
 // value stays inside its range (ServerConfig.ts).
-const MAX_STORED_FILE_MB_OPTIONS = [0, 100, 200, 300, 400, 500, 1024, 1536, 2048];
+const MAX_STORED_FILE_MB_OPTIONS = [0, 50, 100, 200, 300, 400, 500, 1024, 1536, 2048];
+const MAX_STORED_IMAGE_MB_OPTIONS = [0, 5, 10, 20, 50, 100, 200];
 const RESUMABLE_UPLOAD_TTL_HOURS_OPTIONS = [0, 1, 6, 12, 24, 48, 72, 168];
-const MAX_HISTORY_ENTRIES_OPTIONS = [1000, 1500, 2000, 2500, 3000];
+const MAX_HISTORY_ENTRIES_OPTIONS = [100, 200, 500, 1000, 1500, 2000, 2500, 3000];
 const MAX_CAPTURE_FILE_COUNT_OPTIONS = [100, 300, 500, 1000, 2000, 5000];
 
 function maxStoredFileMbLabel(value: number): string {
-  if (value === 0) return "0（禁止保存文件）";
+  if (value === 0) return "0（禁止保存普通文件）";
   if (value === 2048) return "2048 MB（2 GB）";
   return `${value} MB`;
 }
@@ -27,6 +28,9 @@ function resumableUploadTtlHoursLabel(value: number): string {
 const maxStoredFileMbSelect = computed(() =>
   MAX_STORED_FILE_MB_OPTIONS.map((value) => ({ label: maxStoredFileMbLabel(value), value })),
 );
+const maxStoredImageMbSelect = computed(() =>
+  MAX_STORED_IMAGE_MB_OPTIONS.map((value) => ({ label: value === 0 ? "0（禁止保存剪贴板图片）" : `${value} MB`, value })),
+);
 const resumableUploadTtlHoursSelect = computed(() =>
   RESUMABLE_UPLOAD_TTL_HOURS_OPTIONS.map((value) => ({ label: resumableUploadTtlHoursLabel(value), value })),
 );
@@ -40,6 +44,7 @@ const maxCaptureFileCountSelect = computed(() =>
 const submitting = ref(false);
 const error = ref("");
 const maxStoredFileMb = ref(100);
+const maxStoredImageMb = ref(10);
 const resumableUploadTtlHours = ref(24);
 const maxHistoryEntries = ref(3000);
 const maxCaptureFileCount = ref(1000);
@@ -48,6 +53,7 @@ async function load(): Promise<void> {
   try {
     const result = await fetchStatus();
     maxStoredFileMb.value = result.transfer.maxStoredFileMb;
+    maxStoredImageMb.value = result.transfer.maxStoredImageMb;
     resumableUploadTtlHours.value = result.transfer.resumableUploadTtlHours;
     maxHistoryEntries.value = result.transfer.maxHistoryEntries;
     maxCaptureFileCount.value = result.transfer.maxCaptureFileCount;
@@ -63,11 +69,13 @@ async function save(): Promise<void> {
   try {
     const transfer = await updateTransferSettings({
       maxStoredFileMb: maxStoredFileMb.value,
+      maxStoredImageMb: maxStoredImageMb.value,
       resumableUploadTtlHours: resumableUploadTtlHours.value,
       maxHistoryEntries: maxHistoryEntries.value,
       maxCaptureFileCount: maxCaptureFileCount.value,
     });
     maxStoredFileMb.value = transfer.maxStoredFileMb;
+    maxStoredImageMb.value = transfer.maxStoredImageMb;
     resumableUploadTtlHours.value = transfer.resumableUploadTtlHours;
     maxHistoryEntries.value = transfer.maxHistoryEntries;
     maxCaptureFileCount.value = transfer.maxCaptureFileCount;
@@ -93,8 +101,11 @@ onMounted(load);
 
       <SForm>
         <div class="form-grid">
-          <SFormItem label="服务器文件上限" hint="限制单文件可保存到服务器的最大体积，设为 0 可禁止向服务器保存文件。">
+          <SFormItem label="普通文件存储上限" hint="普通文件和文件夹中的单个文件须小于此上限。设为 0 禁止保存普通文件，不影响剪贴板图片。">
             <SSelect id="max-stored-file-mb" v-model:value="maxStoredFileMb" :options="maxStoredFileMbSelect" :disabled="submitting" required />
+          </SFormItem>
+          <SFormItem label="剪贴板图片存储上限" hint="截图等剪贴板图片小于此上限时自动上传，不受设备的普通文件自动上传设置影响。设为 0 禁止保存图片；在线中转仍可用。">
+            <SSelect id="max-stored-image-mb" v-model:value="maxStoredImageMb" :options="maxStoredImageMbSelect" :disabled="submitting" required />
           </SFormItem>
           <SFormItem label="断点续传有效期" hint="设为 0 可禁用断点续传。">
             <SSelect id="upload-resume-ttl" v-model:value="resumableUploadTtlHours" :options="resumableUploadTtlHoursSelect" :disabled="submitting" required />

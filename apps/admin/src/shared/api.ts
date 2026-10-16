@@ -1,6 +1,7 @@
 export type TlsStatus = { enabled: boolean };
 export type TransferSettings = {
   maxStoredFileMb: number;
+  maxStoredImageMb: number;
   resumableUploadTtlHours: number;
   maxHistoryEntries: number;
   maxCaptureFileCount: number;

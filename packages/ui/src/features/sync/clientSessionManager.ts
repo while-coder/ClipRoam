@@ -222,7 +222,9 @@ class SessionConnection implements ClientConnection {
       const preferences: AccountPreferences = {
         ...this.session.preferences,
         autoUploadLimitMb: Math.min(this.session.preferences.autoUploadLimitMb, settings.maxStoredFileMb),
-        serverMaxFileMb: Math.max(1, settings.maxStoredFileMb),
+        serverMaxFileMb: settings.maxStoredFileMb,
+        serverMaxImageMb: settings.maxStoredImageMb,
+        serverMaxHistoryEntries: settings.maxHistoryEntries,
         maxCaptureFileCount: settings.maxCaptureFileCount,
       };
       this.session.preferences = preferences;

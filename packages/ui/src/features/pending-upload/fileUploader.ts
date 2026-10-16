@@ -1,12 +1,12 @@
 import { base64ToBytes } from "../../utils";
-import { FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
+import { ClipboardKind, FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type UploadKind, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const TRANSFER_CONCURRENCY = 4;
-type FileReference = { fileId: string; size: number };
+type FileReference = { fileId: string; size: number; kind: UploadKind };
 export type FileUploaderDeps = {
   session: AccountSession;
   onUploadProgress(entryId: string, uploadedBytes: number, totalBytes: number): void;
@@ -31,7 +31,8 @@ export class FileUploader {
   }
 
   async #uploadEntry(entry: ClipboardEntry, sizeLimit: number): Promise<void> {
-    if (entry.kind !== "files" && entry.kind !== "image") return;
+    if (entry.kind !== ClipboardKind.Files && entry.kind !== ClipboardKind.Image) return;
+    const kind = entry.kind;
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
 
@@ -43,7 +44,7 @@ export class FileUploader {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadContent(file, (fileUploadedBytes) => {
+          await this.#uploadContent({ ...file, kind }, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -140,6 +141,7 @@ export class FileUploader {
     const request: UploadBeginRequest = {
       fileId: file.fileId,
       size: file.size,
+      kind: file.kind,
     };
     const begin = await this.http.request(
       "POST",

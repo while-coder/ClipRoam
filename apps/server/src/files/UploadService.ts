@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, fdatasyncSync, ftruncateSync, openSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
-import { FILE_CHUNK_SIZE, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
+import { ClipboardKind, FILE_CHUNK_SIZE, type UploadKind, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
 import { countWrittenChunks, isBitmapFull, zeroBitmap, type FileStore } from "./FileStore.js";
 import { HOUR, MEGABYTE, type ServerConfig } from "../app/ServerConfig.js";
 
@@ -29,7 +29,7 @@ export class UploadService {
     private readonly fileStored: (fileId: string) => void,
   ) {}
 
-  begin(fileId: string, size: number): UploadBeginResponse {
+  begin(fileId: string, size: number, kind: UploadKind = ClipboardKind.Files): UploadBeginResponse {
     // Content the server already holds needs no transfer at all — even when it
     // exceeds a limit that was lowered after it was stored. Availability was
     // broadcast exactly once when the content was promoted, so repeat answers
@@ -37,7 +37,8 @@ export class UploadService {
     if (this.files.has(fileId)) {
       return { status: "stored", fileId };
     }
-    if (size >= this.config.maxStoredFileMb * MEGABYTE) throw new UploadHttpError(413, "文件超过服务器存储上限");
+    const limitMb = kind === ClipboardKind.Image ? this.config.maxStoredImageMb : this.config.maxStoredFileMb;
+    if (size >= limitMb * MEGABYTE) throw new UploadHttpError(413, kind === ClipboardKind.Image ? "图片超过服务器存储上限" : "文件超过服务器存储上限");
     const chunkCount = Math.ceil(size / FILE_CHUNK_SIZE);
     // An empty content has no chunks: the buffer is complete on arrival, so it
     // is promoted inside this very request.

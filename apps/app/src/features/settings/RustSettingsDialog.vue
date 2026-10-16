@@ -78,15 +78,15 @@ async function openDebugTools(): Promise<void> {
         </label>
       </SCard>
       <SCard title="文件同步">
-        <p class="settings-section-desc">配置当前设备自动上传到同步服务的文件大小上限。</p>
-        <label for="auto-upload-limit">自动上传文件</label>
+        <p class="settings-section-desc">配置当前设备普通文件的自动上传大小上限。截图等剪贴板图片按服务器独立上限自动上传。</p>
+        <label for="auto-upload-limit">自动上传普通文件</label>
         <SSelect
           id="auto-upload-limit"
           v-model:value="autoUploadLimitMb"
           :options="autoUploadSelectOptions"
           :disabled="savingSettings"
         />
-        <span class="field-hint">超过上限的文件不会自动上传，粘贴时需要源设备在线。</span>
+        <span class="field-hint">关闭或超出此上限的普通文件不会自动上传，粘贴时需要源设备在线。此设置不影响剪贴板图片。</span>
       </SCard>
       <SCard title="复制过滤">
         <p class="settings-section-desc">复制文件/文件夹时按名称跳过匹配的内容，不进入历史与同步。</p>

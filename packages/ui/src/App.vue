@@ -257,7 +257,9 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       excludePatterns: sameArchive
         ? accountPreferences.excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],
-      serverMaxFileMb: Math.max(1, Math.floor(session.settings.maxStoredFileMb)),
+      serverMaxFileMb: session.settings.maxStoredFileMb,
+      serverMaxImageMb: session.settings.maxStoredImageMb,
+      serverMaxHistoryEntries: session.settings.maxHistoryEntries,
       // 单次复制文件数上限跟随服务器配置，随偏好持久化供 Rust 捕获时读取。
       maxCaptureFileCount: Math.max(1, Math.floor(session.settings.maxCaptureFileCount)),
     };
@@ -329,7 +331,9 @@ async function restoreSavedSession(): Promise<void> {
     await persistAccountPreferences({
       ...preferences,
       autoUploadLimitMb: Math.min(preferences.autoUploadLimitMb, verified.settings.maxStoredFileMb),
-      serverMaxFileMb: Math.max(1, Math.floor(verified.settings.maxStoredFileMb)),
+      serverMaxFileMb: verified.settings.maxStoredFileMb,
+      serverMaxImageMb: verified.settings.maxStoredImageMb,
+      serverMaxHistoryEntries: verified.settings.maxHistoryEntries,
       maxCaptureFileCount: Math.max(1, Math.floor(verified.settings.maxCaptureFileCount)),
     });
     await start(config);

@@ -14,7 +14,8 @@ export function useRustSettings() {
   const autoReceiveClipboard = ref(preferences.autoReceiveClipboard);
   const watchClipboard = ref(preferences.watchClipboard);
   const excludePatternsInput = ref(preferences.excludePatterns.join("\n"));
-  const serverMaxFileMb = ref(preferences.serverMaxFileMb);
+  const serverMaxFileMb = computed(() => getSettingsPreferences().serverMaxFileMb);
+  watch(serverMaxFileMb, (max) => { autoUploadLimitMb.value = Math.min(autoUploadLimitMb.value, max); });
   const recordingQuickPasteShortcut = ref(false);
   const busy = computed(() => savingSettings.value || changingPassword.value);
   const autostartEnabled = ref(false);

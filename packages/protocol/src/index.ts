@@ -18,7 +18,14 @@ export const ENTRY_PAGE_DEFAULT_LIMIT = 100;
 // 服务器端配置共用这一份。
 export const ENTRY_PAGE_SIZE_RANGE = { min: 10, max: 100 } as const;
 
-export const ClipboardKindSchema = z.enum(["text", "files", "image"]);
+export const ClipboardKind = {
+  Text: "text",
+  Files: "files",
+  Image: "image",
+} as const;
+export const ClipboardKindSchema = z.enum([ClipboardKind.Text, ClipboardKind.Files, ClipboardKind.Image]);
+export const UploadKindSchema = ClipboardKindSchema.exclude([ClipboardKind.Text]);
+export type UploadKind = z.infer<typeof UploadKindSchema>;
 
 // A file is addressed by the sha256 of its content, so identical bytes are one
 // entity no matter how many entries, paths or devices reference them.
@@ -63,7 +70,7 @@ export const ClipboardEntrySchema = z.object({
 // Every content an entry references, de-duplicated in encounter order. Covers
 // both kinds, so server-side availability/GC checks have one entry point.
 export function entryContents(entry: { kind: string; fileInfo?: FileInfo; imageInfo?: ImageInfo }): Array<{ fileId: string; size: number }> {
-  if (entry.kind === "image") {
+  if (entry.kind === ClipboardKind.Image) {
     return entry.imageInfo ? [{ fileId: entry.imageInfo.fileId, size: entry.imageInfo.size }] : [];
   }
   const contents = new Map<string, number>();
@@ -133,6 +140,8 @@ export const ChangePasswordSchema = z.object({
 // `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
 export const ServerSettingsSchema = z.object({
   maxStoredFileMb: z.number().int().nonnegative(),
+  // 剪贴板图片独立于普通文件，0 表示禁止保存图片。
+  maxStoredImageMb: z.number().int().nonnegative(),
   maxHistoryEntries: z.number().int().positive(),
   maxCaptureFileCount: z.number().int().positive(),
 });
@@ -302,6 +311,7 @@ export const UPLOAD_STATUS = {
 export const UploadBeginRequestSchema = z.object({
   fileId: FileIdSchema,
   size: z.number().int().nonnegative(),
+  kind: UploadKindSchema.default(ClipboardKind.Files),
 });
 
 export const UploadBeginResponseSchema = z.discriminatedUnion("status", [

@@ -10,8 +10,9 @@ export const HOUR = 60 * 60 * 1_000;
 // 必须落在这些范围内。0 关闭对应功能（文件保存 / 断点续传）。
 const SETTING_CONSTRAINTS = {
   maxStoredFileMb: { default: 200, min: 0, max: 2048 },
+  maxStoredImageMb: { default: 10, min: 0, max: 2048 },
   resumableUploadTtlHours: { default: 24, min: 0, max: 8760 },
-  maxHistoryEntries: { default: 3000, min: 1000, max: 100_000 },
+  maxHistoryEntries: { default: 3000, min: 100, max: 100_000 },
   maxCaptureFileCount: { default: 1000, min: 1, max: 100_000 },
 } as const;
 
@@ -37,6 +38,7 @@ export const SMALL_JSON_BODY_LIMIT = 64 * 1024;
 // 单位与管理后台编辑、落盘、下发 app 的源头值保持一致，不做换算存储。
 export type ServerConfig = {
   maxStoredFileMb: number;
+  maxStoredImageMb: number;
   resumableUploadTtlHours: number;
   maxHistoryEntries: number;
   maxCaptureFileCount: number;
@@ -45,6 +47,7 @@ export type ServerConfig = {
 export function loadServerConfig(): ServerConfig {
   return {
     maxStoredFileMb: SETTING_CONSTRAINTS.maxStoredFileMb.default,
+    maxStoredImageMb: SETTING_CONSTRAINTS.maxStoredImageMb.default,
     resumableUploadTtlHours: SETTING_CONSTRAINTS.resumableUploadTtlHours.default,
     maxHistoryEntries: SETTING_CONSTRAINTS.maxHistoryEntries.default,
     maxCaptureFileCount: SETTING_CONSTRAINTS.maxCaptureFileCount.default,
@@ -57,6 +60,7 @@ export function updateTransferSettings(config: ServerConfig, values: unknown): S
   const input = values as Record<string, unknown>;
   const next: ServerConfig = {
     maxStoredFileMb: validateSetting(input.maxStoredFileMb, "服务器文件上限（MB）", SETTING_CONSTRAINTS.maxStoredFileMb),
+    maxStoredImageMb: validateSetting(input.maxStoredImageMb, "剪贴板图片上限（MB）", SETTING_CONSTRAINTS.maxStoredImageMb),
     resumableUploadTtlHours: validateSetting(input.resumableUploadTtlHours, "断点续传有效期（小时）", SETTING_CONSTRAINTS.resumableUploadTtlHours),
     maxHistoryEntries: validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries),
     maxCaptureFileCount: validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount),
@@ -75,6 +79,7 @@ function readTransferSettings(): Partial<ServerConfig> {
   // blocking startup.
   return {
     maxStoredFileMb: pickSetting(input.maxStoredFileMb, SETTING_CONSTRAINTS.maxStoredFileMb),
+    maxStoredImageMb: pickSetting(input.maxStoredImageMb, SETTING_CONSTRAINTS.maxStoredImageMb),
     resumableUploadTtlHours: pickSetting(input.resumableUploadTtlHours, SETTING_CONSTRAINTS.resumableUploadTtlHours),
     maxHistoryEntries: pickSetting(input.maxHistoryEntries, SETTING_CONSTRAINTS.maxHistoryEntries),
     maxCaptureFileCount: pickSetting(input.maxCaptureFileCount, SETTING_CONSTRAINTS.maxCaptureFileCount),

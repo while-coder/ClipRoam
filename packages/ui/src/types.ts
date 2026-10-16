@@ -23,6 +23,10 @@ export type AccountPreferences = {
   excludePatterns: string[];
   /** 服务器下发的单文件存储上限（MB），连接及配置变更时刷新。 */
   serverMaxFileMb: number;
+  /** 剪贴板图片自动上传上限（MB），独立于普通文件，0 关闭图片上传。 */
+  serverMaxImageMb: number;
+  /** 服务器为单个账号保留的最大历史条数。 */
+  serverMaxHistoryEntries: number;
   /** 服务器下发的单次复制文件数上限，捕获时超过则不捕获、不同步。 */
   maxCaptureFileCount: number;
 };

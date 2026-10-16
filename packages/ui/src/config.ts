@@ -41,6 +41,8 @@ export function defaultAccountPreferences(): AccountPreferences {
     watchClipboard: DEFAULT_WATCH_CLIPBOARD,
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS],
     serverMaxFileMb: DEFAULT_SERVER_MAX_FILE_MB,
+    serverMaxImageMb: 10,
+    serverMaxHistoryEntries: 3000,
     maxCaptureFileCount: DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
 }

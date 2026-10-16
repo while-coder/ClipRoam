@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed } from "vue";
+import ServerLimitsCard from "./ServerLimitsCard.vue";
 import {
   changePassword, changingPassword, closeSettings, currentPassword, newPassword,
   confirmNewPassword, passwordChangeError, savingSettings, settingsError, signOut,
@@ -26,6 +27,7 @@ const serverAddress = getActiveConfig()?.serverAddress ?? "";
           <SButton type="error" :disabled="busy" @click="signOut()">退出账号</SButton>
         </div>
       </SCard>
+      <ServerLimitsCard v-if="currentUsername" />
       <SCard title="修改密码">
         <form class="mobile-password-form" @submit.prevent="changePassword">
           <p>修改后，所有设备需要使用新密码重新登录。</p>
