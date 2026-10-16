@@ -142,7 +142,7 @@ fn apply_mode(
             #[cfg(not(target_os = "macos"))]
             window.set_skip_taskbar(false)?;
             window.set_size_constraints(WindowSizeConstraints {
-                min_width: Some(LogicalUnit(760.0).into()),
+                min_width: Some(LogicalUnit(840.0).into()),
                 min_height: Some(LogicalUnit(600.0).into()),
                 ..Default::default()
             })?;
