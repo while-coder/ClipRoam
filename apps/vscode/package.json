@@ -2,7 +2,7 @@
   "name": "cliproam-vscode",
   "displayName": "ClipRoam",
   "description": "在 VS Code 中查看跨设备剪贴板历史、保存选中文本并插入代码片段。",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "while-coder",
   "private": true,
   "license": "UNLICENSED",

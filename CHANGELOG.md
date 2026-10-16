@@ -2,6 +2,28 @@
 
 本文件记录 ClipRoam 各客户端、Server 与 Admin 的发版说明。发版 workflow 会自动提取对应 `## <version>` 段落作为 GitHub Release notes。
 
+## 0.2.4
+
+### App
+
+#### 变更
+
+- 多选模式下显示已收藏条目的星标，便于批量操作时区分收藏状态
+
+#### 修复
+
+- 修复桌面端与移动端多选模式下条目内容被挤压、时间和上传状态异常换行的问题
+
+### Server
+
+#### 变更
+
+- 发布流程新增 GitHub Container Registry（GHCR）镜像，提供 `ghcr.io/while-coder/cliproam:版本号` 与 `latest` 标签；Release 继续提供 `cliproam-server.tar` 离线镜像包
+
+#### 修复
+
+- 修复跨域配置未允许 `PATCH`，导致收藏与取消收藏请求被拦截并提示「同步连接已断开」的问题
+
 ## 0.2.3
 
 ### App
