@@ -56,17 +56,6 @@ jobs:
       release-repo: ClipRoam
     secrets: inherit
 
-  publish-manifest:
-    needs: [check, desktop]
-    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
-    uses: while-coder/workflows/.github/workflows/tauri-updater-manifest.yml@main
-    with:
-      product-prefix: ClipRoam
-      tag-name: ${{ needs.check.outputs.tag }}
-      version: ${{ needs.check.outputs.version }}
-      release-notes: ${{ needs.check.outputs.notes }}
-    secrets: inherit
-
   android:
     needs: [check, desktop]
     if: ${{ !cancelled() && needs.desktop.result == 'success' }}
@@ -97,6 +86,17 @@ jobs:
       release-repository: while-coder/ClipRoam
       init-command: pnpm tauri ios init --ci
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
+    secrets: inherit
+
+  publish-manifest:
+    needs: [check, desktop, android, ios]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' }}
+    uses: while-coder/workflows/.github/workflows/tauri-updater-manifest.yml@main
+    with:
+      product-prefix: ClipRoam
+      tag-name: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+      release-notes: ${{ needs.check.outputs.notes }}
     secrets: inherit
 
   deploy-pwa:
