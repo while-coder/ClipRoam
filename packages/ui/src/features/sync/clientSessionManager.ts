@@ -1,6 +1,6 @@
 import { errorMessage } from "../../utils";
 import { computed, ref, watch } from "vue";
-import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
+import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device, type ServerSettings } from "@cliproam/protocol";
 import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../accountSession";
 import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
@@ -191,6 +191,7 @@ class SessionConnection implements ClientConnection {
   #reconnectTimer?: number;
   #pingTimer?: number;
   #awaitingPong = false;
+  #settingsUpdates: Promise<void> = Promise.resolve();
   readonly http: SyncRequester;
   readonly pendingUploader: PendingUploader;
   readonly relayUploader: RelayUploader;
@@ -211,6 +212,25 @@ class SessionConnection implements ClientConnection {
   }
   setAutoUploadLimit(limitMb: number): void {
     this.pendingUploader.setAutoUploadLimit(limitMb * 1024 * 1024);
+  }
+
+  #updateServerSettings(settings: ServerSettings): void {
+    // Keep ACK and live updates in arrival order, including persistence.
+    // Each write belongs to this account session.
+    this.#settingsUpdates = this.#settingsUpdates.then(async () => {
+      if (this.session.signal.aborted) return;
+      const preferences: AccountPreferences = {
+        ...this.session.preferences,
+        autoUploadLimitMb: Math.min(this.session.preferences.autoUploadLimitMb, settings.maxStoredFileMb),
+        serverMaxFileMb: Math.max(1, settings.maxStoredFileMb),
+        maxCaptureFileCount: settings.maxCaptureFileCount,
+      };
+      this.session.preferences = preferences;
+      this.setAutoUploadLimit(preferences.autoUploadLimitMb);
+      await this.session.database.put("settings", "preferences", preferences);
+    }).catch((error) => {
+      if (!this.session.signal.aborted) this.handlers.onError(`服务器配置保存失败：${errorMessage(error)}`);
+    });
   }
 
   connect(): void {
@@ -323,8 +343,12 @@ class SessionConnection implements ClientConnection {
         void this.relayUploader.serveRelayRequest(message).catch(() => undefined);
         return;
       case "auth.ack":
+        this.#updateServerSettings(message.settings);
         this.handlers.onConnected(true);
         this.#startHeartbeat();
+        return;
+      case "settings.updated":
+        this.#updateServerSettings(message.settings);
         return;
       case "pong":
         this.#awaitingPong = false;

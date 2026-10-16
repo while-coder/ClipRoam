@@ -21,9 +21,9 @@ export type AccountPreferences = {
   /** 是否监听本机剪贴板（自动捕获复制内容进历史）；关闭后仅接收同步内容。 */
   watchClipboard: boolean;
   excludePatterns: string[];
-  /** 登录时服务器下发的单文件存储上限（MB），自动上传档位不超过它。 */
+  /** 服务器下发的单文件存储上限（MB），连接及配置变更时刷新。 */
   serverMaxFileMb: number;
-  /** 登录时服务器下发的单次复制文件数上限，捕获时超过则不捕获、不同步。 */
+  /** 服务器下发的单次复制文件数上限，捕获时超过则不捕获、不同步。 */
   maxCaptureFileCount: number;
 };
 

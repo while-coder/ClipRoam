@@ -35,6 +35,7 @@ export class ClipRoamServer {
       authenticateSession: (token) => this.#auth.authenticateSession(token),
       getDevice: (userId, deviceId) => this.#store.getDevice(userId, deviceId),
       recordDeviceOnline: (userId, deviceId) => this.#store.recordDeviceOnline(userId, deviceId),
+      serverSettings: () => serverSettings(this.config),
     });
     this.#relays = new FileRelayService();
     this.#uploads = new UploadService(
@@ -116,6 +117,7 @@ export class ClipRoamServer {
       admin: this.#admin,
       tls: this.#tls,
       config: this.config,
+      onSettingsChanged: () => this.#sockets.broadcastAll({ type: "settings.updated", settings: serverSettings(this.config) }),
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },

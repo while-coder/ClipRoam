@@ -13,6 +13,7 @@ export type AdminRouteDeps = {
   admin: AdminService;
   tls: TlsCertificateService;
   config: ServerConfig;
+  onSettingsChanged: () => void;
   store: ClipRoamStore;
   broadcast: (userId: string, message: ServerMessage) => void;
   disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
@@ -77,7 +78,9 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
   app.put("/admin-api/transfer-settings", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
     try {
-      return { transfer: updateTransferSettings(config, request.body) };
+      const transfer = updateTransferSettings(config, request.body);
+      deps.onSettingsChanged();
+      return { transfer };
     } catch (error) {
       return reply.code(400).send({
         code: "INVALID_TRANSFER_SETTINGS",

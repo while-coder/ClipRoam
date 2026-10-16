@@ -7,7 +7,7 @@ export type AuthRouteDeps = {
   // Changing the password invalidates every live session, so the socket for
   // each of the user's devices is closed and the clients re-login.
   onPasswordChanged: (userId: string) => void;
-  // Sent with every successful login/register so clients can keep their
+  // Sent with every successful login/register/verify so clients can keep their
   // auto-upload tier and local history mirror at or below the server's caps.
   // A getter on purpose: admin settings changes apply to new logins without
   // a restart.

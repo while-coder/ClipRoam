@@ -3,6 +3,7 @@ import {
   ClientMessageSchema,
   type Device,
   type ServerMessage,
+  type ServerSettings,
 } from "@cliproam/protocol";
 import { getLogger } from "./Logger.js";
 
@@ -25,6 +26,7 @@ export type SocketHubDeps = {
   authenticateSession: (token: string) => { id: string; deviceId: string } | undefined;
   getDevice: (userId: string, deviceId: string) => Device | undefined;
   recordDeviceOnline: (userId: string, deviceId: string) => string;
+  serverSettings: () => ServerSettings;
 };
 
 // Authenticated sockets only ever send auth and ping: every other
@@ -147,9 +149,8 @@ export class SocketHub {
     onlineDevices.add(device.id);
     this.#onlineDevices.set(user.id, onlineDevices);
     logger.info(`Device authenticated: user=${user.id} device=${device.id}`);
-    // A bare confirmation; the client pulls the manifest and device list over
-    // HTTP (`GET /entries/manifest`) once it sees this.
-    this.#send(client, { type: "auth.ack" });
+    // Always read the live settings, including on reconnection.
+    this.#send(client, { type: "auth.ack", settings: this.deps.serverSettings() });
     if (!wasOnline) {
       this.broadcast(user.id, { type: "device.presence", device: { ...device, online: true } });
     }

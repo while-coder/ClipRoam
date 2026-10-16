@@ -127,7 +127,7 @@ export const ChangePasswordSchema = z.object({
   message: "新密码不能与当前密码相同",
 });
 
-// 服务器能力上限，随登录/注册响应下发（客户端在下次登录时拿到最新值）。
+// 服务器能力上限，随登录/注册/验证响应和 WebSocket 认证 ACK 下发，变更时广播。
 // 客户端自动上传档位不能超过 `maxStoredFileMb`（0 表示服务器禁止保存文件），
 // `maxHistoryEntries` 是服务器为账号保留的历史条数上限，
 // `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
@@ -238,9 +238,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
-  // A bare confirmation: the manifest and device list it used to carry ride
-  // HTTP instead (see `EntryManifestResponseSchema`).
-  z.object({ type: z.literal("auth.ack") }),
+  // Reconnection refreshes settings missed while offline.
+  z.object({ type: z.literal("auth.ack"), settings: ServerSettingsSchema }),
+  z.object({ type: z.literal("settings.updated"), settings: ServerSettingsSchema }),
   z.object({
     type: z.literal("clipboard.created"),
     // A change notification only invalidates history; details are queried later.
