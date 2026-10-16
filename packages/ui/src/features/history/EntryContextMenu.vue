@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Trash2, ListChecks } from "lucide-vue-next";
+import { Copy, Download, Trash2, ListChecks, Star } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 
 /**
@@ -17,6 +17,7 @@ const props = defineProps<{
   savingEntryId: string;
   isMobile: boolean;
   selectedCount?: number;
+  favoriting?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +25,7 @@ const emit = defineEmits<{
   save: [entry: LocalClipboardEntry];
   remove: [entry: LocalClipboardEntry];
   select: [entry: LocalClipboardEntry];
+  favorite: [entry: LocalClipboardEntry, isFavorite: boolean];
   close: [];
 }>();
 
@@ -85,6 +87,10 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
 const onSelect = run((entry) => emit("select", entry));
+function onFavorite(isFavorite: boolean): void {
+  emit("close");
+  emit("favorite", props.entry, isFavorite);
+}
 
 function handleMenuKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
@@ -166,6 +172,14 @@ onBeforeUnmount(() => {
         <span v-if="saving" class="s-spinner" aria-hidden="true" />
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
+      </SButton>
+      <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.isFavorite)">
+        <Star :size="15" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" />
+        <span>{{ multiple ? `收藏选中的 ${selectedCount} 条` : entry.isFavorite ? '取消收藏' : '收藏' }}</span>
+      </SButton>
+      <SButton v-if="multiple" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
+        <Star :size="15" aria-hidden="true" />
+        <span>取消收藏选中的 {{ selectedCount }} 条</span>
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />

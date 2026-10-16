@@ -21,6 +21,7 @@ import { userDatabasePath } from "../DataPaths.js";
 type EntryRow = {
   id: number;
   version: number;
+  is_favorite: number;
   kind: string;
   content: string;
   extra: string;
@@ -45,6 +46,7 @@ export class UserDataStore {
       CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY,
         version INTEGER NOT NULL DEFAULT 1,
+        is_favorite INTEGER NOT NULL DEFAULT 0,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -62,6 +64,9 @@ export class UserDataStore {
       );
     `);
     const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
+    if (!columns.some(({ name }) => name === "is_favorite")) {
+      this.#database.exec("ALTER TABLE entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0");
+    }
     if (!columns.some(({ name }) => name === "version")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
     }
@@ -102,6 +107,7 @@ export class UserDataStore {
       WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
         AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
         AND (@kind IS NULL OR kind = @kind)
+        AND (@favoriteOnly = 0 OR is_favorite = 1)
         ${deviceClause ? `AND (${deviceClause})` : ""}
     `;
     const filters = {
@@ -109,6 +115,7 @@ export class UserDataStore {
       dateStart: query.dateStart ? normalizeDateBound(query.dateStart, "start") : null,
       dateEnd: query.dateEnd ? normalizeDateBound(query.dateEnd, "end") : null,
       kind: query.kind ?? null,
+      favoriteOnly: query.favoriteOnly ? 1 : 0,
       ...deviceParams,
     };
     const rows = this.#database
@@ -136,7 +143,7 @@ export class UserDataStore {
       if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
-          SELECT id, version, kind, content, extra, source_device_id, created_at
+          SELECT id, version, is_favorite, kind, content, extra, source_device_id, created_at
           FROM entries
           WHERE id IN (${placeholders(ids.length)})
           ORDER BY created_at DESC
@@ -240,7 +247,7 @@ export class UserDataStore {
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
-        RETURNING id, version, kind, content, extra, source_device_id, created_at
+        RETURNING id, version, is_favorite, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -255,7 +262,20 @@ export class UserDataStore {
     });
   }
 
-  // Enforces the account-wide history cap: entries beyond the newest
+  setFavorite(entryIds: readonly string[], isFavorite: boolean): ClipboardEntry[] {
+    const ids = [...new Set(entryIds)];
+    return this.#transaction(() => {
+      for (const batch of chunk(ids, QUERY_BATCH)) {
+        this.#database.prepare(`
+          UPDATE entries SET is_favorite = ?, version = version + 1
+          WHERE id IN (${placeholders(batch.length)}) AND is_favorite != ?
+        `).run(isFavorite ? 1 : 0, ...batch, isFavorite ? 1 : 0);
+      }
+      return this.listByIds(ids);
+    });
+  }
+
+  // Enforces the non-favorite history cap: entries beyond the newest
   // `maxEntries` are dropped and their ids returned so the route layer can
   // broadcast clipboard.deleted. Like delete(), only references go away —
   // Stored bytes remain until an administrator removes them.
@@ -263,7 +283,9 @@ export class UserDataStore {
     if (maxEntries <= 0) return [];
     const rows = this.#database.prepare(`
       DELETE FROM entries
-      WHERE id NOT IN (SELECT id FROM entries ORDER BY created_at DESC LIMIT ?)
+      WHERE is_favorite = 0 AND id NOT IN (
+        SELECT id FROM entries WHERE is_favorite = 0 ORDER BY created_at DESC LIMIT ?
+      )
       RETURNING id
     `).all(maxEntries) as Array<{ id: number }>;
     return rows.map(({ id }) => String(id));
@@ -292,6 +314,7 @@ export class UserDataStore {
       ...(typeof extra === "object" && extra !== null ? extra : {}),
       id: String(row.id),
       version: row.version,
+      isFavorite: row.is_favorite === 1,
       kind: row.kind,
       content: row.content,
       sourceDeviceId: row.source_device_id,

@@ -276,14 +276,6 @@ kbd {
   scrollbar-width: none;
 }
 .filter-scroll::-webkit-scrollbar { display: none; }
-.filter-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding-left: 8px;
-  border-left: 1px solid rgba(148, 163, 184, 0.14);
-}
 .downloads-list .download-row { gap: 12px; }
 .download-row { display: flex; align-items: center; gap: 8px; }
 .download-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
@@ -297,8 +289,6 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .download-bar-fill { transition: none; }
 }
-.result-summary { max-width: 180px; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.result-summary.error { color: #fca5a5; }
 /* 下拉 trigger 里的选中文案可能很长（如设备名），收不住会撑爆筛选行 */
 .time-filter-trigger > span,
 .device-filter-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -371,6 +361,7 @@ button.image-thumbnail { cursor: zoom-in; }
 }
 .app-shell:not(.mobile-app) .history-list .history-item .kind-icon,
 .app-shell:not(.mobile-app) .history-list .history-item .image-thumbnail { width: 40px; height: 40px; }
+.app-shell:not(.mobile-app) .history-list .history-item.selection-item { grid-template-columns: 22px 40px minmax(0, 1fr); }
 .app-shell:not(.mobile-app) .history-list .history-item .kind-icon > svg { width: 20px; height: 20px; }
 .app-shell:not(.mobile-app) .history-list .entry-body { gap: 4px; }
 .entry-body { display: grid; gap: 6px; min-width: 0; }
@@ -445,7 +436,7 @@ button.image-thumbnail { cursor: zoom-in; }
 .pagination-button:hover:not(:disabled) { color: #e2e8f0; background: rgba(255, 255, 255, 0.09); }
 .pagination-button:disabled { opacity: 0.4; cursor: default; }
 .pagination-status { color: #94a3b8; white-space: nowrap; }
-.mobile-app .pagination-button { justify-content: center; width: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
+.mobile-app .pagination-button { justify-content: center; width: 44px; min-height: 44px; padding: 0; border-radius: 5px; }
 
 .app-shell {
   position: relative;
@@ -730,7 +721,7 @@ button:focus-visible, [role="button"]:focus-visible {
   font-size: 10px;
   line-height: 1.4;
 }
-.mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 36px; }
+.mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 44px; }
 .mobile-app .history-content[data-history-selecting] { grid-template-rows: 40px auto minmax(0, 1fr) auto; }
 .mobile-app .pending-content { grid-template-rows: 40px minmax(0, 1fr); }
 .mobile-app .pending-content.has-footer { grid-template-rows: 40px minmax(0, 1fr) 36px; }
@@ -771,27 +762,25 @@ button:focus-visible, [role="button"]:focus-visible {
   gap: 0;
   margin-top: 4px;
 }
-.mobile-app .filter-scroll { gap: 6px; }
-.mobile-app .filter-scroll > * { flex: 1 1 0; min-width: 0; }
+.mobile-app .filter-scroll { gap: 6px; overflow: visible; }
+.mobile-app .filter-scroll > * { min-width: 0; }
 .mobile-app .filter-scroll .time-filter-label,
 .mobile-app .filter-scroll .device-filter-label { display: none; }
 .mobile-app .filter-scroll .time-filter-control,
-.mobile-app .filter-scroll .device-filter-control { height: 32px; margin-left: 0; padding-left: 0; border-left: 0; }
+.mobile-app .filter-scroll .device-filter-control { height: 44px; margin-left: 0; padding-left: 0; border-left: 0; }
 .mobile-app .filter-scroll .entry-type-trigger,
 .mobile-app .filter-scroll .time-filter-trigger,
-.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 32px; gap: 4px; padding-inline: 7px; font-size: 12px; border-radius: 5px; }
+.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 44px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll .time-filter-trigger,
 .mobile-app .filter-scroll .device-filter-trigger { padding: 0; }
 .mobile-app .filter-scroll .time-filter-trigger .s-select,
-.mobile-app .filter-scroll .device-filter-trigger .s-select { min-height: 32px; height: 32px; gap: 4px; padding-inline: 7px; font-size: 12px; border-radius: 5px; }
+.mobile-app .filter-scroll .device-filter-trigger .s-select { min-height: 44px; height: 44px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll button:active,
 .mobile-app .filter-scroll button[aria-expanded="true"] { color: var(--color-foreground); background: var(--sui-bg-active); border-color: var(--sui-border-strong); }
 .mobile-app .filter-scroll button > svg { flex-shrink: 0; }
 .mobile-app .filter-scroll .entry-type-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mobile-app .entry-type-filter { flex-wrap: nowrap; gap: 8px; }
 .mobile-app .entry-type-filter button { min-width: 32px; min-height: 32px; flex-shrink: 0; }
-.mobile-app .filter-actions { display: none; }
-.mobile-app .result-summary { max-width: 92px; }
 .mobile-app .empty-filter-reset { min-height: 32px; padding-inline: 10px; font-size: 12px; }
 .mobile-app .history-list { padding: 0 8px 4px; }
 .mobile-app .history-item,
@@ -804,6 +793,7 @@ button:focus-visible, [role="button"]:focus-visible {
 }
 .mobile-app .history-item .kind-icon,
 .mobile-app .history-item .image-thumbnail { width: 36px; height: 36px; }
+.mobile-app .history-item.selection-item { grid-template-columns: 22px 36px minmax(0, 1fr); }
 .mobile-app .history-item .entry-body { gap: 3px; }
 .mobile-app .history-item .entry-content { -webkit-line-clamp: 1; }
 .mobile-app .history-item .entry-meta { flex-wrap: nowrap; overflow: hidden; color: var(--color-secondary-text); }

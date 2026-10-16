@@ -70,6 +70,9 @@ export class ClipRoamStore {
   }
   delete(userId: string, entryIds: readonly string[]): void { this.#userStore(userId).delete(entryIds); }
   pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
+  setFavorite(userId: string, entryIds: readonly string[], isFavorite: boolean): ClipboardEntry[] {
+    return this.#userStore(userId).setFavorite(entryIds, isFavorite);
+  }
   files(): FileStore { return this.#files; }
   listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }
   hasUser(userId: string): boolean { return this.#accounts.hasUser(userId); }

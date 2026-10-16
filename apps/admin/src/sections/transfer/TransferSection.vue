@@ -112,7 +112,7 @@ onMounted(load);
           </SFormItem>
           <SFormItem
             label="单用户最大历史条数"
-            hint="超过上限后服务器自动删除最旧的剪贴板记录，并广播 clipboard.deleted 让各设备同步删除本地副本。"
+            hint="仅计算未收藏记录，超过上限后自动删除最旧记录并同步到各设备；已收藏记录不自动清理。"
           >
             <SSelect id="max-history-entries" v-model:value="maxHistoryEntries" :options="maxHistoryEntriesSelect" :disabled="submitting" required />
           </SFormItem>

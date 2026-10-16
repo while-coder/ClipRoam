@@ -44,7 +44,7 @@ const currentLabel = computed(() => {
 <style scoped>
 .device-filter-control { display: flex; flex: 0 0 auto; align-items: center; height: 27px; gap: 5px; margin-left: 5px; padding-left: 9px; border-left: 1px solid rgba(148, 163, 184, 0.16); white-space: nowrap; }
 .device-filter-label { color: #64748b; font-size: 11px; }
-.device-filter-control .device-filter-trigger { min-width: 106px; width: auto; }
+.device-filter-control .device-filter-trigger { min-width: 106px; width: auto; max-width: 220px; }
 .device-filter-trigger :deep(.s-select) { min-height: 27px; height: 27px; gap: 8px; padding: 0 7px 0 9px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 11px; }
 .device-filter-trigger :deep(.s-select:hover) { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
 .device-filter-trigger :deep(.s-select:focus-visible) { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }

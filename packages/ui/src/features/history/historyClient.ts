@@ -35,6 +35,7 @@ export class HistoryClient {
     if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
     if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
     for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
+    if (filter.favoriteOnly) params.set("favoriteOnly", "true");
     const result = await this.http.request(
       "GET", `/entries/manifest?${params}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
@@ -43,6 +44,14 @@ export class HistoryClient {
     const entries = await this.fetchHistoryInfo(result!.manifest);
     if (this.session.signal.aborted) return { total: 0, entries: [] };
     return { total: result!.total, entries };
+  }
+
+  async setFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<void> {
+    await this.http.request(
+      "PATCH", "/entries/favorite",
+      this.#jsonInit({ ids: [...new Set(entryIds)], isFavorite }, ENTRY_HTTP_TIMEOUT_MS),
+      null, "",
+    );
   }
 
   /** Only detail backfill writes server entry/file information into the cache. */

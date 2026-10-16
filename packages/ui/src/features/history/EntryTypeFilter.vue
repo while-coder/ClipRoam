@@ -59,6 +59,15 @@ function update(value: string[]): void {
     <ChevronDown :size="14" aria-hidden="true" />
   </button>
   <STagFilter v-else class="entry-type-filter" :value="[labels[model]]" :options="options" :multiple="false" @update:value="update" />
+  <SSelect
+    v-if="!isMobile && !dropdown"
+    v-model:value="model"
+    class="entry-type-select entry-type-compact"
+    :options="dropdownOptions"
+    :menu-width="152"
+    aria-label="类型筛选"
+    :title="`类型筛选：${labels[model]}`"
+  />
   <Teleport to="body">
     <div
       v-if="isMobile && !dropdown && menuOpen"
@@ -87,6 +96,11 @@ function update(value: string[]): void {
 
 <style scoped>
 .entry-type-select.s-single-select { flex: 0 0 auto; width: 106px; min-width: 0; }
+.entry-type-compact { display: none; }
+@container history-toolbar (max-width: 650px) {
+  .entry-type-filter.s-tag-filter { display: none; }
+  .entry-type-compact { display: block; }
+}
 .entry-type-select :deep(.s-select) { min-height: 27px; height: 27px; gap: 8px; padding: 0 7px 0 9px; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; font-size: 11px; }
 .entry-type-select :deep(.s-select:hover) { color: #e2e8f0; background: rgba(255, 255, 255, 0.07); }
 .entry-type-select :deep(.s-select:focus-visible) { border-color: #60a5fa; outline: 0; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18); }

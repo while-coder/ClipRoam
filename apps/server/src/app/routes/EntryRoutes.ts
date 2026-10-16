@@ -6,6 +6,7 @@ import {
   EntryPublishRequestSchema,
   EntryQueryRequestSchema,
   EntryDeleteRequestSchema,
+  EntryFavoriteRequestSchema,
   type EntryManifestResponse,
   type EntryPublishResponse,
   type EntryQueryResponse,
@@ -21,7 +22,7 @@ import { parseOr400 } from "./parseRequest.js";
 const logger = getLogger("EntryRoutes");
 
 export type EntryRouteDeps = {
-  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory">;
+  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite">;
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
   maxHistoryEntries: () => number;
@@ -104,6 +105,21 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
       logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${user.deviceId}`);
     }
     return { entry } satisfies EntryActivateResponse;
+  });
+
+  app.patch("/entries/favorite", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const body = parseOr400(reply, EntryFavoriteRequestSchema, request.body, "收藏参数无效");
+    if (!body) return reply;
+    const entries = store.setFavorite(user.id, body.ids, body.isFavorite);
+    if (entries.length) broadcast(user.id, {
+      type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
+    });
+    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries())) {
+      broadcast(user.id, { type: "clipboard.deleted", entryId });
+    }
+    return reply.code(204).send();
   });
 
   const deleteEntries = (userId: string, ids: readonly string[]): void => {

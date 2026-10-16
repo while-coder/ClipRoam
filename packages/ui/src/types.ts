@@ -25,7 +25,7 @@ export type AccountPreferences = {
   serverMaxFileMb: number;
   /** 剪贴板图片自动上传上限（MB），独立于普通文件，0 关闭图片上传。 */
   serverMaxImageMb: number;
-  /** 服务器为单个账号保留的最大历史条数。 */
+  /** 服务器为单个账号保留的最大未收藏历史条数。 */
   serverMaxHistoryEntries: number;
   /** 服务器下发的单次复制文件数上限，捕获时超过则不捕获、不同步。 */
   maxCaptureFileCount: number;
@@ -72,6 +72,7 @@ export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary; pend
  * cache queries.
  */
 export type EntriesManifestFilter = {
+  favoriteOnly?: boolean;
   query?: string;
   kind?: EntryFilter;
   start?: number;

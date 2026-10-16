@@ -108,6 +108,22 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
 }
 
+export async function setEntriesFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<boolean> {
+  if (!entryIds.length) return true;
+  const session = getAccountSession();
+  if (!session?.client) {
+    showNotification({ message: "网络异常，暂时无法修改收藏，请检查同步连接", tone: "error" });
+    return false;
+  }
+  try {
+    await session.history.setFavorite(entryIds, isFavorite);
+    return !session.signal.aborted;
+  } catch (error) {
+    if (!session.signal.aborted) showNotification({ message: `修改收藏失败：${errorMessage(error)}`, tone: "error" });
+    return false;
+  }
+}
+
 // Server-confirmed deletion only marks history changed; the view owns refetching.
 export async function removeEntries(entryIds: readonly string[]): Promise<boolean> {
   if (!entryIds.length) return true;

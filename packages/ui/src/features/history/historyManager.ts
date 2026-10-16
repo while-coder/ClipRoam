@@ -57,6 +57,13 @@ export class HistoryManager {
     this.invalidate();
   }
 
+  async setFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<void> {
+    if (!entryIds.length) return;
+    if (!this.#client) throw new Error("同步账号未登录");
+    await this.#client.setFavorite(entryIds, isFavorite);
+    this.invalidate();
+  }
+
   async get(entryId: string): Promise<StoredEntry> {
     const pending = /^p\d+$/.test(entryId) ? await this.database.get<PendingRow>("pending", Number(entryId.slice(1))) : undefined;
     const entry = pending?.entry ?? await this.database.get<StoredEntry>("entries", entryId);

@@ -350,6 +350,7 @@ class SessionConnection implements ClientConnection {
         this.#awaitingPong = false;
         return;
       case "clipboard.created":
+      case "clipboard.updated":
         this.handlers.onEntry();
         return;
       case "clipboard.activated":

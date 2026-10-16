@@ -55,6 +55,7 @@ export const ImageInfoSchema = z.object({
 export const ClipboardEntrySchema = z.object({
   id: z.string(),
   version: z.number().int().positive().safe(),
+  isFavorite: z.boolean().optional(),
   kind: ClipboardKindSchema,
   content: z.string(),
   html: z.string().optional(),
@@ -136,7 +137,7 @@ export const ChangePasswordSchema = z.object({
 
 // 服务器能力上限，随登录/注册/验证响应和 WebSocket 认证 ACK 下发，变更时广播。
 // 客户端自动上传档位不能超过 `maxStoredFileMb`（0 表示服务器禁止保存文件），
-// `maxHistoryEntries` 是服务器为账号保留的历史条数上限，
+// `maxHistoryEntries` 是服务器为账号保留的未收藏历史条数上限，
 // `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
 export type ServerSettings = {
   maxStoredFileMb: number;
@@ -162,7 +163,7 @@ export const AuthResponseSchema = z.object({
 // Identity and revision belong to the server: it assigns the id (arrival order),
 // timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true }).extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });
@@ -208,6 +209,7 @@ export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchem
 // apply before paging, so a filtered page always holds up to a full page of
 // matching rows.
 export const EntryManifestQuerySchema = z.object({
+  favoriteOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   search: z.string().trim().min(1).max(100).optional(),
   // Either a UTC date (`YYYY-MM-DD`, expanded to the whole day) or a concrete
   // UTC timestamp down to milliseconds, matching how entries are stored.
@@ -237,6 +239,7 @@ export const EntryManifestResponseSchema = z.object({
 export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema) });
 
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
+export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({ isFavorite: z.boolean() });
 
 // The socket only authenticates the connection and carries server-push
 // notifications. Every request/response exchange — listing, querying,
@@ -252,6 +255,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("clipboard.updated"), entries: z.array(ClipboardManifestEntrySchema) }),
   // Reconnection refreshes settings missed while offline.
   z.object({ type: z.literal("auth.ack"), settings: z.unknown().optional() }),
   z.object({ type: z.literal("settings.updated"), settings: z.unknown().optional() }),

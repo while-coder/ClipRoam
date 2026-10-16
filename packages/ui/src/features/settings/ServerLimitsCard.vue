@@ -20,7 +20,7 @@ const connected = clientSessionManager.connected;
       </div>
       <div>
         <dt>单账号历史条数</dt>
-        <dd>最多 {{ limits.serverMaxHistoryEntries }} 条</dd>
+        <dd>未收藏最多 {{ limits.serverMaxHistoryEntries }} 条，收藏不自动清理</dd>
       </div>
       <div>
         <dt>单次复制文件数</dt>

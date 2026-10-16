@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { parseLocalDate, TIME_FILTER_LABELS, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
+import { parseLocalDate, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { native } from "../../platform/native";
@@ -12,6 +12,7 @@ import {
   Check,
   ListChecks,
   Trash2,
+  Star,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -24,6 +25,7 @@ import DeviceFilterControl from "./DeviceFilterControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
+import { setEntriesFavorite } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
 import { usePlatform, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
@@ -63,6 +65,25 @@ const isQuickPaste = computed(() => props.quickPaste === true);
 
 const query = ref("");
 const filter = ref<EntryFilter>("all");
+const favoriteOnly = ref(false);
+const favoritingIds = ref(new Set<string>());
+const favoriting = computed(() => favoritingIds.value.size > 0);
+
+async function toggleFavorite(entry: LocalClipboardEntry): Promise<void> {
+  await favoriteEntries([entry.id], !entry.isFavorite);
+}
+
+async function favoriteEntries(ids: readonly string[], isFavorite: boolean): Promise<void> {
+  if (!ids.length || deleting.value || favoriting.value) return;
+  for (const id of ids) favoritingIds.value.add(id);
+  try { await setEntriesFavorite(ids, isFavorite); }
+  finally { for (const id of ids) favoritingIds.value.delete(id); }
+}
+
+function favoriteFromMenu(entry: LocalClipboardEntry, isFavorite: boolean): void {
+  const ids = selectedIds.value.has(entry.id) && selectedCount.value > 1 ? [...selectedIds.value] : [entry.id];
+  void favoriteEntries(ids, isFavorite);
+}
 const timeFilter = ref<TimeFilter>("all");
 const startDate = ref("");
 const endDate = ref("");
@@ -103,13 +124,6 @@ const activeTimeRange = computed<{ start?: number; end?: number }>(() => {
   return { start: start.getTime(), end: end.getTime() };
 });
 
-const timeFilterSummary = computed(() => {
-  if (timeFilter.value === "all") return "";
-  if (timeFilter.value !== "custom") return TIME_FILTER_LABELS[timeFilter.value];
-  if (!startDate.value || !endDate.value) return "自定义区间";
-  return `${startDate.value.replace(/-/g, "/")}–${endDate.value.replace(/-/g, "/")}`;
-});
-
 // 搜索关键词按 Enter 提交（含输入法 composition 结束）；输入过程不打扰列表。
 const committedQuery = ref("");
 function commitSearch(): void {
@@ -142,6 +156,7 @@ const {
   fetchHistoryPage: props.fetchHistoryPage,
   buildFilter: (page) => ({
     query: committedQuery.value,
+    favoriteOnly: favoriteOnly.value,
     kind: filter.value,
     start: activeTimeRange.value.start,
     end: activeTimeRange.value.end,
@@ -149,7 +164,7 @@ const {
     page,
   }),
   revision: computed(() => props.revision),
-  filterSources: [committedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds],
+  filterSources: [committedQuery, filter, favoriteOnly, timeFilter, startDate, endDate, selectedDeviceIds],
   // An invalid custom range matches nothing — the backend never sees it, and
   // background revision bumps must not refill the cleared list either.
   canFetch: () => !timeRangeError.value,
@@ -164,7 +179,7 @@ const selectedCount = computed(() => selectedIds.value.size);
 watch(pageEntries, (entries) => {
   if (menuEntry.value && !entries.some((entry) => entry.id === menuEntry.value?.id)) closeEntryMenu();
 });
-watch([committedQuery, filter, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
+watch([committedQuery, filter, favoriteOnly, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
   clearSelection();
   closeEntryMenu();
 });
@@ -270,12 +285,6 @@ onBeforeUnmount(() => {
 
 // An invalid custom range matches nothing — the backend never sees it.
 watch(timeRangeError, (error) => { if (error) clearManifest(); });
-
-const filterResultSummary = computed(() => {
-  if (timeRangeError.value) return "日期有误";
-  const count = `${manifestTotal.value} 条`;
-  return timeFilterSummary.value ? `${timeFilterSummary.value} · ${count}` : count;
-});
 
 function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
   return uploadStatusOf(entry);
@@ -488,7 +497,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         </label>
       </div>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
-        <div class="filter-scroll">
+        <div class="filter-scroll" :class="{ 'has-device-filter': devices.length > 0 }">
           <EntryTypeFilter v-model="filter" :dropdown="isQuickPaste" />
           <TimeFilterControl
             v-model="timeFilter"
@@ -501,9 +510,14 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
             v-model="selectedDeviceIds"
             :devices="devices"
           />
-        </div>
-        <div class="filter-actions">
-          <span class="result-summary" :class="{ error: timeRangeError }" :title="filterResultSummary">{{ filterResultSummary }}</span>
+          <button
+            class="favorite-filter"
+            type="button"
+            :aria-pressed="favoriteOnly"
+            aria-label="仅显示已收藏"
+            :title="favoriteOnly ? '显示全部记录' : '仅显示已收藏'"
+            @click="favoriteOnly = !favoriteOnly"
+          ><Star :size="13" :fill="favoriteOnly ? 'currentColor' : 'none'" aria-hidden="true" /><span>已收藏</span></button>
         </div>
       </div>
       <p v-if="isMobile" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击文字复制，单击图片或文件预览，长按打开菜单" }}</p>
@@ -583,12 +597,29 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
         </ClipboardEntryContent>
+        <button
+          v-if="!selecting"
+          class="entry-favorite"
+          type="button"
+          :class="{ active: entry.isFavorite }"
+          :aria-label="entry.isFavorite ? '取消收藏' : '收藏'"
+          :title="entry.isFavorite ? '取消收藏' : '收藏'"
+          :aria-pressed="!!entry.isFavorite"
+          :aria-busy="favoritingIds.has(entry.id)"
+          :disabled="favoriting"
+          @click.stop="toggleFavorite(entry)"
+          @mousedown.stop
+          @dblclick.stop
+          @keydown.stop
+          @touchstart.stop
+          @touchend.stop
+        ><Star :size="17" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" /></button>
       </div>
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
         <Search :size="28" aria-hidden="true" />
-        <strong>{{ timeRangeError ? "日期区间无效" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <strong>{{ timeRangeError ? "日期区间无效" : favoriteOnly ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
+        <span>{{ timeRangeError || (favoriteOnly ? "点击条目的星标收藏，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
       </SEmpty>
     </section>
@@ -597,6 +628,10 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       <div v-if="selecting" class="history-selection-actions" role="toolbar" aria-label="历史多选操作">
         <span role="status" aria-live="polite">已选 {{ selectedCount }} 条</span>
         <SButton :disabled="deleting || !pageEntries.length" @click="toggleAll">{{ allSelected ? "取消全选" : "本页全选" }}</SButton>
+        <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], true)">
+          <Star :size="15" aria-hidden="true" />收藏
+        </SButton>
+        <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], false)">取消收藏</SButton>
         <SButton class="history-selection-delete" type="error" :disabled="deleting || !selectedCount" @click="requestSelectedDelete">
           <Trash2 :size="15" aria-hidden="true" />
           删除 {{ selectedCount }} 条
@@ -617,7 +652,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         >
           <ChevronLeft :size="15" aria-hidden="true" />
         </button>
-        <span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条 · 第 {{ currentPage }} / {{ pageCount }} 页</span>
+        <span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条 · {{ isMobile ? `${currentPage} / ${pageCount}` : `第 ${currentPage} / ${pageCount} 页` }}</span>
         <button
           class="pagination-button"
           type="button"
@@ -636,6 +671,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       v-if="menuEntry"
       :key="menuEntry.id"
       :entry="menuEntry"
+      :favoriting="favoriting"
+      @favorite="favoriteFromMenu"
       :x="menuX"
       :y="menuY"
       :activating="activatingEntryIds.has(menuEntry.id)"
@@ -676,14 +713,47 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 </template>
 
 <style scoped>
+.toolbar { container: history-toolbar / inline-size; }
+.favorite-filter { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; height: 27px; margin-left: 5px; padding: 0 9px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; background: rgba(255, 255, 255, 0.04); color: #cbd5e1; font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.favorite-filter[aria-pressed="true"] { color: var(--sui-primary); background: var(--sui-bg-active); border-color: var(--sui-primary); }
+.entry-favorite { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
+.entry-favorite.active { color: var(--sui-primary); }
+.entry-favorite:hover, .favorite-filter:hover { background: var(--sui-bg-hover); }
+.entry-favorite:focus-visible, .favorite-filter:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 2px; }
+.entry-favorite:disabled { opacity: 0.5; cursor: wait; }
+:global(.mobile-app .history-item), :global(.mobile-app .history-item.image-entry) { grid-template-columns: 36px minmax(0, 1fr) auto; }
+:global(.mobile-app .filter-scroll .favorite-filter) { width: 44px; height: 44px; margin-left: 0; padding-inline: 9px; border-radius: 5px; }
+:global(.mobile-app .favorite-filter span) { display: none; }
+:global(.mobile-app .favorite-filter svg) { width: 17px; height: 17px; }
+:global(.mobile-app .entry-favorite) { min-width: 44px; min-height: 44px; }
 .file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .file-preview-trigger:hover { background: var(--sui-bg-hover); }
 .selection-item { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .entry-selection-box { display: grid; place-items: center; justify-self: center; width: 22px; height: 22px; border: 1px solid var(--sui-border-strong); border-radius: 5px; }
 .entry-selection-box.checked { color: var(--sui-primary); border-color: var(--sui-primary); background: var(--sui-bg-active); }
-.history-selection-actions { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: 52px; color: var(--color-foreground); font-size: 13px; }
+.history-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 52px; color: var(--color-foreground); font-size: 13px; }
 .history-selection-actions :deep(.s-button) { flex-shrink: 0; }
 .history-selection-delete { margin-left: auto; }
+@container history-toolbar (max-width: 650px) {
+  .filter-scroll { display: flex; gap: 6px; overflow: visible; }
+  .filter-scroll :deep(.entry-type-select),
+  .filter-scroll :deep(.time-filter-control),
+  .filter-scroll :deep(.device-filter-control) { flex: 1 1 0; width: 0; min-width: 0; margin-left: 0; padding-left: 0; border-left: 0; }
+  .filter-scroll :deep(.time-filter-label), .filter-scroll :deep(.device-filter-label) { display: none; }
+  .filter-scroll :deep(.time-filter-control .time-filter-trigger),
+  .filter-scroll :deep(.device-filter-control .device-filter-trigger) { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
+  .favorite-filter { margin-left: 0; }
+}
+@container history-toolbar (max-width: 460px) {
+  .favorite-filter { flex: 0 0 32px; width: 32px; height: 27px; padding: 0; border-radius: 6px; }
+  .favorite-filter span { display: none; }
+}
+:global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px; }
+:global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; }
+:global(.mobile-app .filter-scroll .time-filter-control),
+:global(.mobile-app .filter-scroll .device-filter-control) { width: auto; }
+:global(.mobile-app .filter-scroll .time-filter-control .time-filter-trigger),
+:global(.mobile-app .filter-scroll .device-filter-control .device-filter-trigger) { width: 100%; min-width: 0; max-width: none; }
 @media (max-width: 640px) {
   .file-preview-trigger { min-width: 44px; min-height: 44px; }
   .history-selection-actions :deep(.s-button) { min-height: 44px; }
