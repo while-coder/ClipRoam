@@ -1,6 +1,6 @@
 [package]
 name = "cliproam"
-version = "0.2.2"
+version = "0.2.3"
 description = "A private, cross-platform clipboard history and roaming client"
 authors = ["while"]
 edition = "2021"
