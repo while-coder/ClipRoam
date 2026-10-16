@@ -597,6 +597,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
         </ClipboardEntryContent>
+        <span v-if="selecting && entry.isFavorite" class="entry-favorite-indicator" role="img" aria-label="已收藏" title="已收藏">
+          <Star :size="17" fill="currentColor" aria-hidden="true" />
+        </span>
         <button
           v-if="!selecting"
           class="entry-favorite"
@@ -718,10 +721,12 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 .favorite-filter[aria-pressed="true"] { color: var(--sui-primary); background: var(--sui-bg-active); border-color: var(--sui-primary); }
 .entry-favorite { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
 .entry-favorite.active { color: var(--sui-primary); }
+.entry-favorite-indicator { display: grid; place-items: center; color: var(--sui-primary); }
 .entry-favorite:hover, .favorite-filter:hover { background: var(--sui-bg-hover); }
 .entry-favorite:focus-visible, .favorite-filter:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 2px; }
 .entry-favorite:disabled { opacity: 0.5; cursor: wait; }
 :global(.mobile-app .history-item), :global(.mobile-app .history-item.image-entry) { grid-template-columns: 36px minmax(0, 1fr) auto; }
+:global(.mobile-app .history-item.selection-item) { grid-template-columns: 22px minmax(0, 1fr) auto; }
 :global(.mobile-app .filter-scroll .favorite-filter) { width: 44px; height: 44px; margin-left: 0; padding-inline: 9px; border-radius: 5px; }
 :global(.mobile-app .favorite-filter span) { display: none; }
 :global(.mobile-app .favorite-filter svg) { width: 17px; height: 17px; }
