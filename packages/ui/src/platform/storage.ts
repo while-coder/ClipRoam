@@ -1,7 +1,6 @@
 import { base64ToBytes, bytesToBase64 } from "../utils";
 import { applicationDatabase } from "./database";
 import { native } from "./native";
-import { shareReceiver } from "./share";
 import type { Device, SyncConfig } from "../types";
 
 /** Application storage for encrypted login configuration and device identity. */
@@ -57,7 +56,6 @@ export async function removeSavedAccounts(config?: SyncConfig, wholeServer = fal
   const changes = [{ name: "meta" as const, id: SAVED_ACCOUNTS_KEY, value: await encrypt(accounts) }];
   if (current && (!config || (serverKey(current) === serverKey(config) && (wholeServer || current.username === config.username)))) {
     changes.push({ name: "meta", id: CONFIG_KEY, value: await encrypt({ ...current, sessionToken: "" }) });
-    await shareReceiver.configureSession?.(null);
   }
   await applicationDatabase.batch(changes);
 }
@@ -105,7 +103,6 @@ export async function readLoginConfig(): Promise<SyncConfig | null> {
 
 export async function writeLoginConfig(config: SyncConfig | null): Promise<void> {
   if (!config) {
-    await shareReceiver.configureSession?.(null);
     await applicationDatabase.delete("meta", CONFIG_KEY);
     return;
   }

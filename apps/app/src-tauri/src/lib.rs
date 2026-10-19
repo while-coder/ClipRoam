@@ -65,7 +65,6 @@ pub fn run() {
             files::native_save_dialog,
             files::native_pick_files,
             share::native_pending_shares,
-            share::native_configure_share_session,
             share::native_ack_share,
         ])
         .build(tauri::generate_context!())

@@ -18,14 +18,14 @@ export class VscodeShareInbox {
   enqueue(text: string): Promise<void> {
     return this.update((pending) => [...pending, { id: randomUUID(), text }]);
   }
-  async pending(scope: string): Promise<{ id: string; text: string; images: string[]; paths: string[] }[]> {
+  async pending(scope: string): Promise<{ id: string; text: string; paths: string[] }[]> {
     let selected: PendingSelection[] = [];
     await this.update((pending) => {
       const claimed = pending.map((item) => item.scope ? item : { ...item, scope });
       selected = claimed.filter((item) => item.scope === scope);
       return claimed;
     });
-    return selected.map(({ id, text }) => ({ id, text, images: [], paths: [] }));
+    return selected.map(({ id, text }) => ({ id, text, paths: [] }));
   }
   acknowledge(id: string): Promise<void> { return this.update((pending) => pending.filter((item) => item.id !== id)); }
 }

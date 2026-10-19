@@ -15,7 +15,6 @@ pub(crate) fn pending_shares(app: AppHandle, scope: String) -> Result<Vec<Native
             uuid::Uuid::parse_str(&share.id).map_err(|_| "分享标识不合法")?;
             let dir = root.join(&share.id);
             fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let images = Vec::new();
             let mut paths = Vec::new();
             for (index, item) in share.items.iter().enumerate() {
                 let name = Path::new(&item.name)
@@ -35,7 +34,6 @@ pub(crate) fn pending_shares(app: AppHandle, scope: String) -> Result<Vec<Native
                 id: share.id,
                 text: share.text,
                 html: share.html,
-                images,
                 paths,
             })
         })

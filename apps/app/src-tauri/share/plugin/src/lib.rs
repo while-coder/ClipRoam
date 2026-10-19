@@ -16,8 +16,6 @@ pub enum Error {
     PluginInvoke(#[from] tauri::plugin::mobile::PluginInvokeError),
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
-    #[error("{0}")]
-    Native(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -25,7 +23,6 @@ pub enum Error {
 pub struct SharedItem {
     pub path: String,
     pub name: String,
-    pub mime_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -38,22 +35,15 @@ pub struct PendingShare {
     pub items: Vec<SharedItem>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareUploadSession {
-    pub http_url: String,
-    pub token: String,
-    pub username: String,
-    pub device_id: String,
-    pub device: serde_json::Value,
-    pub scope: String,
-    pub file_limit: u64,
-    pub max_count: u64,
+#[derive(Serialize)]
+struct PendingRequest<'a> {
+    scope: &'a str,
 }
 
 #[derive(Serialize)]
-struct NativeCall { input: serde_json::Value }
-
+struct AcknowledgeRequest<'a> {
+    id: &'a str,
+}
 
 #[derive(Deserialize)]
 pub struct DirectorySelection {
@@ -99,17 +89,21 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
     api: PluginApi<R, C>,
 ) -> Result<ShareReceiver<R>> {
     #[cfg(target_os = "android")]
-    { let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ShareReceiverPlugin")?; Ok(ShareReceiver(handle)) }
+    {
+        let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ShareReceiverPlugin")?;
+        Ok(ShareReceiver(handle))
+    }
     #[cfg(target_os = "ios")]
-    { Ok(ShareReceiver(api.register_ios_plugin(init_plugin_cliproam_share_receiver)?)) }
+    {
+        Ok(ShareReceiver(api.register_ios_plugin(
+            init_plugin_cliproam_share_receiver,
+        )?))
+    }
 }
 
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
-    pub fn configure_session(&self, session: Option<ShareUploadSession>) -> Result<()> {
-        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"configure","session":session}) }).map_err(Into::into)
-    }
     #[cfg(target_os = "android")]
     pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
         self.0
@@ -150,10 +144,15 @@ impl<R: Runtime> ShareReceiver<R> {
     }
 
     pub fn pending(&self, scope: &str) -> Result<Vec<PendingShare>> {
-        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"pending","scope":scope}) }).map_err(Into::into)
+        self.0
+            .run_mobile_plugin("pending", PendingRequest { scope })
+            .map_err(Into::into)
     }
     pub fn acknowledge(&self, id: &str) -> Result<()> {
-        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"ack","id":id}) }).map_err(Into::into)
+        self.0
+            .run_mobile_plugin::<serde_json::Value>("acknowledge", AcknowledgeRequest { id })
+            .map(|_| ())
+            .map_err(Into::into)
     }
 }
 

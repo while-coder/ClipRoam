@@ -1,15 +1,11 @@
 import type { Unlisten } from "./native";
-import type { Device } from "../types";
 
-export type SharedContent = { id: string; text?: string; html?: string; images: string[]; paths: string[]; files?: File[] };
-export type ShareReceiverEvent = { id?: string; error?: string };
-export type ShareUploadSession = { httpUrl: string; token: string; username: string; deviceId: string; device: Device; scope: string; fileLimit: number; maxCount: number };
+export type SharedContent = { id: string; text?: string; html?: string; paths: string[]; files?: File[] };
 
 /** Platform inbox: receive notifications, read pending content and acknowledge successful imports. */
 export interface ShareReceiver {
-  configureSession?(session: ShareUploadSession | null): Promise<void>;
   isSupported(): Promise<boolean>;
-  listen(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
+  listen(handler: () => void): Promise<Unlisten>;
   pending(scope: string): Promise<SharedContent[]>;
   acknowledge(id: string): Promise<void>;
 }

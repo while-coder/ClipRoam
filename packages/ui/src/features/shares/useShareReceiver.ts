@@ -1,5 +1,5 @@
 import { onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
-import { getAccountSession } from "../../accountSession";
+import { activeAccountSession, getAccountSession } from "../../accountSession";
 import { shareReceiver } from "../../platform/share";
 import { showNotification } from "../../platform/runtime";
 import { errorMessage } from "../../utils";
@@ -8,7 +8,7 @@ import type { Unlisten } from "../../platform/native";
 import type { ShareImportSummary } from "../../types";
 
 function importMessage(summary: ShareImportSummary): string {
-  const parts = [summary.texts ? `${summary.texts} 条文字` : "", summary.images ? `${summary.images} 张图片` : "", summary.files ? `${summary.files} 个文件` : ""].filter(Boolean);
+  const parts = [summary.texts ? `${summary.texts} 条文字` : "", summary.files ? `${summary.files} 个文件` : ""].filter(Boolean);
   return parts.length ? `已接收${parts.join("、")}` : "";
 }
 
@@ -41,14 +41,13 @@ export function useShareReceiver(canImport: Readonly<Ref<boolean>>) {
     } finally { importingShare.value = false; }
   }
 
-  watch(canImport, (ready) => { if (ready) void consume(); }, { flush: "post" });
+  watch([canImport, activeAccountSession], ([ready, session]) => {
+    if (ready && session) void consume();
+  }, { flush: "post" });
   onMounted(async () => {
     try {
       if (!await shareReceiver.isSupported() || disposed) return;
-      const stop = await shareReceiver.listen((event) => {
-        if (event.error) reportError(`接收分享失败：${event.error}，请重新分享`);
-        else void consume();
-      });
+      const stop = await shareReceiver.listen(() => { void consume(); });
       if (disposed) { stop(); return; }
       unlisten = stop;
       initialized = true;

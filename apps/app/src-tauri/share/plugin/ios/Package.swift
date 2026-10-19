@@ -7,8 +7,6 @@ let package = Package(
     products: [.library(name: "tauri-plugin-cliproam-share-receiver", type: .static, targets: ["ClipRoamSharePlugin"])],
     dependencies: [.package(name: "Tauri", path: "../.tauri/tauri-api")],
     targets: [
-        .target(name: "ShareUploadCore", path: "FFI", publicHeadersPath: "."),
-        .target(name: "ClipRoamShareSupport", dependencies: ["ShareUploadCore"], path: "Sources/Support"),
-        .target(name: "ClipRoamSharePlugin", dependencies: ["ClipRoamShareSupport", .byName(name: "Tauri")], path: "Sources/Plugin"),
+        .target(name: "ClipRoamSharePlugin", dependencies: [.byName(name: "Tauri")], path: "Sources"),
     ]
 )

@@ -4,6 +4,17 @@
   <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>com.whilecode.cliproam.share</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>cliproam</string>
+        </array>
+      </dict>
+    </array>
     <key>CFBundleLocalizations</key>
     <array>
       <string>en</string>

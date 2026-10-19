@@ -15,10 +15,10 @@
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `macos/mac-icon.swift` | macOS 应用与托盘图标生成 | 根目录 `pnpm sync:icons` 在 macOS 上调用，输出 `icons/icon.icns` 和 `icons/tray-macos.png`。 |
 | `linux/linux.desktop` | Linux 桌面入口模板 | 维护启动命令、图标及本地化显示名；由 `tauri.linux.conf.json` 的 `bundle.linux.deb.desktopTemplate` 引用。 |
-| `../share/plugin/ios/ShareExtension/` | iOS 分享扩展的 Swift 生命周期入口 | `ios/prepare.cjs` 将入口与 `Sources/Support/` 的 HTTP 支持代码复制到 Xcode 扩展工程；主应用通过 Swift Package 接入同一支持代码。 |
-| `ios/prepare.cjs` | iOS 工程准备与扩展 Rust 构建脚本 | 默认配置 App Group、分享扩展及静态库链接；Xcode 构建阶段调用 `build-share-core` 子命令编译 Rust 静态库。 |
+| `../share/plugin/ios/Sources/SharePlugin.swift` | iOS 分享扩展、主应用插件与共用收件箱 | `ios/prepare.cjs` 将文件复制到扩展工程并启用 `CLIPROAM_SHARE_EXTENSION`；Swift Package 编译主应用插件分支。 |
+| `ios/prepare.cjs` | iOS 工程准备脚本 | 配置 App Group、分享扩展与共用的 Swift 收件箱源码。 |
 | `ios/sync-icons.cjs` | iOS 图标生成和 Xcode 资源同步 | `prepare.cjs` 和根目录 `pnpm sync:icons` 调用。 |
-| `../share/` | 分享功能的 Rust 核心和原生桥接 | 共用上传逻辑在 `core/`；`android/` 只保留 JNI 入口；Kotlin 的 Worker 与 Swift 的 URLSession 接口在 `plugin/`。 |
+| `../share/` | 分享接收与收件箱桥接 | Kotlin / Swift 保存内容并打开主 App，Rust 命令读取与确认收件箱，上传复用共用 TS 待上传队列。 |
 | `../src/platforms/mobile/` | 主应用其他原生能力 | 剪贴板、文件选择与导出等 Rust 平台适配。 |
 
 Tauri 的 `tauri.android.conf.json`、`tauri.ios.conf.json`、`tauri.macos.conf.json`、`tauri.linux.conf.json` 仍在 `src-tauri/` 根目录，供 CLI 按平台自动加载。图标仍统一存放于 `../icons/`。

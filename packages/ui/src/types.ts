@@ -93,7 +93,7 @@ export type SettingsPage = "general" | "shortcuts" | "account" | "data" | "about
 export type NotificationTone = "success" | "error" | "info";
 export type NotificationOptions = { message: string; title?: string; tone?: NotificationTone };
 export type NotificationPayload = { message: string; title: string; tone: NotificationTone };
-export type ShareImportSummary = { shares: number; texts: number; images: number; files: number };
+export type ShareImportSummary = { shares: number; texts: number; files: number };
 
 export type WorkspaceView = "history" | "pending-upload" | "uploads" | "downloads" | "devices";
 

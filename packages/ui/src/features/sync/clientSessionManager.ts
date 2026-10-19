@@ -1,5 +1,4 @@
-import { errorMessage, profileName } from "../../utils";
-import { shareReceiver } from "../../platform/share";
+import { errorMessage } from "../../utils";
 import { computed, ref, watch } from "vue";
 import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type ClipboardManifestEntry, type Device } from "@cliproam/protocol";
 import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../accountSession";
@@ -97,7 +96,6 @@ export class ClientSessionManager {
   };
 
   stop = async (): Promise<void> => {
-    await shareReceiver.configureSession?.(null).catch((error) => console.warn("清理分享登录状态失败", error));
     const session = getAccountSession();
     if (session?.state.connected.value) showNotification({ message: "同步连接已断开", tone: "error" });
     session?.dispose();
@@ -134,12 +132,6 @@ export class ClientSessionManager {
       await session.start(() => session.ready);
       const device = await session.start(() => getDevice());
       const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
-      await shareReceiver.configureSession?.({
-        httpUrl, token: config.sessionToken, username: config.username,
-        deviceId: device.id, device, scope: profileName(session.accountKey),
-        fileLimit: session.preferences.autoUploadLimitMb * 1024 * 1024,
-        maxCount: session.preferences.maxCaptureFileCount,
-      }).catch((error) => showNotification({ message: `分享直接上传初始化失败：${errorMessage(error)}`, tone: "error" }));
       const guard = session.guard.bind(session);
       const client: SessionConnection = new SessionConnection(httpUrl, webSocketUrl, config.sessionToken, device, {
         onConnected: guard((value) => this.#setConnectionState(session, value)),

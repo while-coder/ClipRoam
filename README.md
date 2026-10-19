@@ -105,7 +105,7 @@ macOS 首次使用自动粘贴时，需要在“系统设置 → 隐私与安全
 
 - 在“剪贴板历史”界面点击“读取当前剪贴板”，导入当前复制的文字。
 - 点按历史中的文字，将它复制到系统剪贴板，再到其他应用中粘贴。
-- Android 和 iOS 可以通过系统分享菜单，将文字、链接或文件分享给 ClipRoam。截图和照片也按普通文件原样处理。已在主 App 登录过的账号可直接后台上传，无需打开主界面；未登录或文件超过自动上传限制时，内容会保留，打开主 App 登录后导入待上传列表。后台上传失败的任务会保留，重新打开 App 登录后继续重试。
+- Android 和 iOS 可以通过系统分享菜单，将文字、链接或文件分享给 ClipRoam。截图和照片也按普通文件原样处理。分享入口保存内容后打开主 App，登录和初始化完成后自动导入待上传列表，复用现有上传流程。iOS 未能自动打开时，内容会保留，下次打开 App 后导入。
 - Android 点按图片或文件后，选择保存目录即可下载；下载中再次点按同一条目可取消。
 - iOS 的图片和文件目前下载到应用缓存，文件导出暂未支持。
 
@@ -133,9 +133,9 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 `pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-android.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
 
-iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。后台分享配置统一保存到容器内的 `files/share-auth/current`，由 Rust 加解密，不使用 Keychain Sharing。未签名 IPA 的构建不验证设备上的共享容器权限。
+iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。分享入口不保存登录凭据，登录和上传由主应用处理。未签名 IPA 的构建不验证设备上的共享容器权限。
 
-移动端分享只同步文本和文件。共用的 Rust 上传核心位于 `apps/app/src-tauri/share/core`；Android 由 Kotlin 管理 Worker，Rust 内部执行 HTTP；iOS 由 Swift 提供后台 URLSession HTTP 接口，逐次将响应交回同一 Rust 核心。Kotlin 与 Swift 入口分别位于 `share/plugin/android/` 和 `share/plugin/ios/`；目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。iOS 扩展的 Xcode 构建阶段会通过 `node apps/app/src-tauri/native/ios/prepare.cjs build-share-core` 生成并链接 Rust 静态库。
+移动端分享只同步文本和文件。Kotlin 与 Swift 接收并保存分享，随后打开主 App；主界面登录和初始化完成后，将内容导入现有待上传列表。分享入口不执行鉴权或后台上传。目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。
 
 ### 常见问题
 
@@ -145,7 +145,7 @@ iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再�
 
 **复制的内容没有进入历史**
 
-桌面端确认 App 正在运行且已开启“监听剪贴板”，再检查“待上传”和连接状态。手机端请使用“读取当前剪贴板”，或通过分享菜单上传；尚未登录或后台上传失败时，打开 ClipRoam 登录后继续处理。复制的文件也可能被过滤规则或服务器限制排除。
+桌面端确认 App 正在运行且已开启“监听剪贴板”，再检查“待上传”和连接状态。手机端请使用“读取当前剪贴板”，或通过分享菜单导入；打开 ClipRoam 登录后，在“待上传”中查看状态或重试失败项。复制的文件也可能被过滤规则或服务器限制排除。
 
 **历史中的文件无法下载**
 
