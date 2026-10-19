@@ -2,7 +2,7 @@
   "name": "cliproam",
   "displayName": "随心贴",
   "description": "在 VS Code 中查看跨设备剪贴板历史、添加选中文本。",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "publisher": "while",
   "private": true,
   "license": "UNLICENSED",
