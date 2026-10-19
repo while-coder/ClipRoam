@@ -33,7 +33,7 @@ pub(crate) fn native_get_platform_capabilities() -> PlatformCapabilities {
         image_clipboard: !mobile,
         native_file_export: !cfg!(target_os = "ios"),
         open_data_directory: !mobile,
-        share_receiver: cfg!(target_os = "android"),
+        share_receiver: mobile,
     }
 }
 

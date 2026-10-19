@@ -105,9 +105,9 @@ macOS 首次使用自动粘贴时，需要在“系统设置 → 隐私与安全
 
 - 在“剪贴板历史”界面点击“读取当前剪贴板”，导入当前复制的文字。
 - 点按历史中的文字，将它复制到系统剪贴板，再到其他应用中粘贴。
-- Android 可以通过系统分享菜单，将文字、图片或文件分享给ClipRoam。
+- Android 和 iOS 可以通过系统分享菜单，将文字、链接、图片或文件分享给 ClipRoam。iOS 分享完成后，打开 ClipRoam 自动导入。
 - Android 点按图片或文件后，选择保存目录即可下载；下载中再次点按同一条目可取消。
-- iOS 的图片和文件目前下载到应用缓存，系统分享和文件导出暂未支持。
+- iOS 的图片和文件目前下载到应用缓存，文件导出暂未支持。
 
 ### 浏览器端
 
@@ -131,7 +131,9 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 本地运行 `pnpm build:vscode` 构建，`pnpm package:vscode` 生成 `apps/vscode/dist/cliproam.vsix`。Release 工作流同时发布 VSIX；开发和能力说明见 [VS Code 扩展说明](apps/vscode/README.md)。
 
-`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
+`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-android.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
+
+iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具也必须保留两个 target 的 App Group 权限。未签名 IPA 的构建不验证设备上的共享容器权限。
 
 ### 常见问题
 
@@ -141,7 +143,7 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 **复制的内容没有进入历史**
 
-桌面端确认 App 正在运行且已开启“监听剪贴板”，再检查“待上传”和连接状态。手机端请使用“读取当前剪贴板”，或在 Android 上通过分享菜单导入。复制的文件也可能被过滤规则或服务器限制排除。
+桌面端确认 App 正在运行且已开启“监听剪贴板”，再检查“待上传”和连接状态。手机端请使用“读取当前剪贴板”，或通过分享菜单导入；iOS 分享后需打开 ClipRoam。复制的文件也可能被过滤规则或服务器限制排除。
 
 **历史中的文件无法下载**
 

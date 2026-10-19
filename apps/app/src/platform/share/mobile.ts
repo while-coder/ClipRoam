@@ -2,8 +2,8 @@ import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import type { ShareReceiver, SharedContent, ShareReceiverEvent } from "@cliproam/ui/share";
 import type { Unlisten } from "@cliproam/ui/native";
 
-/** Android ACTION_SEND inbox. Other native platforms currently report no share receiver. */
-export class AndroidShareReceiver implements ShareReceiver {
+/** Android share intents and the iOS Share Extension use the same native inbox. */
+export class MobileShareReceiver implements ShareReceiver {
   async isSupported(): Promise<boolean> {
     return (await invoke<{ shareReceiver: boolean }>("native_get_platform_capabilities")).shareReceiver;
   }

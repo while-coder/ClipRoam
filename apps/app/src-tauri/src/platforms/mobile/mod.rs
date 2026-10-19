@@ -1,9 +1,11 @@
 //! Android/iOS 共享实现：剪贴板由 clipboard 模块每 2 秒轮询，没有自动粘贴、托盘和
 //! 系统对话框。剪贴板读写通过 tauri clipboard-manager 插件，文件通过
-//! 系统分享接收（Android 的真实导入在 platforms/mobile/android 覆盖）。
+//! 系统分享接收（Android Intent 和 iOS Share Extension 共用收件箱导入流程）。
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
+
+mod shares;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
@@ -92,9 +94,7 @@ pub(crate) fn should_skip_clipboard_poll(_sequence: &mut u32) -> bool {
     false
 }
 pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    #[cfg(target_os = "android")]
-    let builder = builder.plugin(tauri_plugin_cliproam_share_receiver::init());
-    builder
+    builder.plugin(tauri_plugin_cliproam_share_receiver::init())
 }
 pub(crate) fn manage_platform_state(_app: &AppHandle) -> Result<(), String> {
     Ok(())

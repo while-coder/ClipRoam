@@ -84,7 +84,7 @@ jobs:
       version: ${{ needs.check.outputs.version }}
       asset-prefix: ClipRoam
       release-repository: while-coder/ClipRoam
-      init-command: pnpm tauri ios init --ci
+      init-command: pnpm ios:init
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
     secrets: inherit
 

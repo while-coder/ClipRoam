@@ -21,7 +21,7 @@ pub(crate) fn validate_component(value: &str) -> Result<(), String> {
     }
     Ok(())
 }
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn scope_directory(app: &AppHandle, scope: &str) -> Result<PathBuf, String> {
     validate_component(scope)?;
     Ok(app

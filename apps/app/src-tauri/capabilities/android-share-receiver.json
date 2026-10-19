@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "android-share-receiver",
-  "description": "Allows the ClipRoam main window to receive Android share intents",
+  "description": "Allows the ClipRoam main window to receive Android and iOS shares",
   "windows": ["main"],
-  "platforms": ["android"],
+  "platforms": ["android", "iOS"],
   "permissions": ["cliproam-share-receiver:default"]
 }

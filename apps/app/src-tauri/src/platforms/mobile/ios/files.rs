@@ -1,4 +1,4 @@
-use crate::files::{NativeShare, SaveTarget};
+use crate::files::SaveTarget;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 pub(crate) async fn save_dialog(
@@ -32,12 +32,4 @@ pub(crate) fn pick_files(
         .collect())
 }
 
-pub(crate) fn pending_shares(app: AppHandle, scope: String) -> Result<Vec<NativeShare>, String> {
-    let _ = (app, scope);
-    Ok(Vec::new())
-}
-
-pub(crate) fn ack_share(app: AppHandle, id: String) -> Result<(), String> {
-    let _ = (app, id);
-    Ok(())
-}
+pub(crate) use super::super::shares::{ack_share, pending_shares};

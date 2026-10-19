@@ -75,13 +75,20 @@ pub struct ImportedDocuments {
     pub paths: Vec<String>,
 }
 
+#[cfg(target_os = "android")]
 const PLUGIN_IDENTIFIER: &str = "com.whilecode.cliproam.share";
+
+#[cfg(target_os = "ios")]
+tauri::ios_plugin_binding!(init_plugin_cliproam_share_receiver);
 
 fn mobile_init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
     api: PluginApi<R, C>,
 ) -> Result<ShareReceiver<R>> {
+    #[cfg(target_os = "android")]
     let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ShareReceiverPlugin")?;
+    #[cfg(target_os = "ios")]
+    let handle = api.register_ios_plugin(init_plugin_cliproam_share_receiver)?;
     Ok(ShareReceiver(handle))
 }
 
