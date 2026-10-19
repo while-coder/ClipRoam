@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clipboard,
+  Copy,
   Image,
   Search,
   Check,
@@ -24,7 +25,7 @@ import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import FilePreview from "./FilePreview.vue";
-import TextPreview from "./TextPreview.vue";
+import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { setEntriesFavorite } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
@@ -373,7 +374,7 @@ function handleEntryClick(entry: LocalClipboardEntry, event: MouseEvent): void {
   }
   setAnchor(entry.id);
   if (isQuickPaste.value) return;
-  if (entry.kind === "text" || mobileLayout.value) openEntryPreview(entry);
+  if (mobileLayout.value) openEntryPreview(entry);
 }
 
 function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
@@ -384,7 +385,7 @@ function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
 function handleEntryKeydown(entry: LocalClipboardEntry, event: KeyboardEvent): void {
   if (event.key !== "Enter" && event.key !== " ") return;
   if (!selecting.value) {
-    if (!isQuickPaste.value && entry.kind === "text") {
+    if (!isQuickPaste.value) {
       event.preventDefault();
       event.stopPropagation();
       openEntryPreview(entry);
@@ -584,9 +585,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
-          @click.stop="openEntryPreview(entry)"
+          @click.stop="(mobileLayout || $event.detail === 0) && openEntryPreview(entry)"
           @mousedown.stop
-          @dblclick.stop
+          @dblclick.stop="!mobileLayout && openEntryPreview(entry)"
           @keydown.stop
           @touchstart.stop
         >
@@ -603,9 +604,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           type="button"
           :aria-label="`预览${entry.content}`"
           :title="`预览${entry.content}`"
-          @click.stop="openEntryPreview(entry)"
+          @click.stop="(mobileLayout || $event.detail === 0) && openEntryPreview(entry)"
           @mousedown.stop
-          @dblclick.stop
+          @dblclick.stop="!mobileLayout && openEntryPreview(entry)"
           @keydown.stop
           @touchstart.stop
         >
@@ -671,8 +672,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         </SButton>
       </div>
       <template v-else>
-      <span v-if="isQuickPaste">单击条目粘贴，点击图片或文件图标预览</span>
-      <span v-else-if="!mobileLayout">单击文字预览，双击图片或文件预览，右键打开菜单</span>
+      <span v-if="isQuickPaste">单击条目粘贴，{{ mobileLayout ? '单击' : '双击' }}图片或文件图标预览</span>
+      <span v-else-if="!mobileLayout">双击条目预览，右键打开菜单</span>
       <span v-if="!mobileLayout"><kbd>Esc</kbd> 关闭</span>
       <nav class="pagination-control" aria-label="历史记录分页">
         <button
@@ -729,14 +730,29 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </template>
     </SModal>
 
-    <TextPreview
+    <SModal
       v-if="previewEntry?.kind === 'text'"
       :key="previewEntry.id"
-      :entry="previewEntry"
-      :copying="activatingEntryIds.has(previewEntry.id)"
-      @copy="emit('activate', previewEntry, false)"
-      @close="closeEntryPreview"
-    />
+      :show="true"
+      title="文本预览"
+      width="760px"
+      @update:show="(value: boolean) => { if (!value) closeEntryPreview() }"
+    >
+      <TextPreview :text="previewEntry.content" />
+      <template #footer>
+        <SButton @click="closeEntryPreview">关闭</SButton>
+        <SButton
+          type="primary"
+          :disabled="activatingEntryIds.has(previewEntry.id)"
+          :aria-busy="activatingEntryIds.has(previewEntry.id)"
+          @click="emit('activate', previewEntry, false)"
+        >
+          <span v-if="activatingEntryIds.has(previewEntry.id)" class="s-spinner" aria-hidden="true" />
+          <Copy v-else :size="15" aria-hidden="true" />
+          复制到剪贴板
+        </SButton>
+      </template>
+    </SModal>
     <FilePreview
       v-else-if="previewEntry && (previewEntry.kind === 'files' || previewEntry.kind === 'image')"
       :key="previewEntry.id"

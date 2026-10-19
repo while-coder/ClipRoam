@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight, File, FileText, Image, Folder, FolderOpen } 
 import type { LocalClipboardEntry } from "../../types";
 import FileContentPreview from "./FileContentPreview.vue";
 import { filePreviewKind, type PreviewFile } from "./filePreview";
+import { useMobileLayout } from "../../platform/runtime";
 
 const props = defineProps<{ entry: LocalClipboardEntry }>();
 const emit = defineEmits<{ close: [] }>();
@@ -17,6 +18,7 @@ const expanded = ref(new Set<string>());
 const selected = ref<PreviewFile>();
 const opened = ref<PreviewFile>();
 const browsing = ref(false);
+const mobileLayout = useMobileLayout();
 let disposed = false;
 
 onMounted(async () => {
@@ -120,7 +122,7 @@ function fileIcon(name: string) {
     <div class="file-preview">
       <p class="file-preview-summary">{{ fileEntrySummary(entry) }}</p>
       <div v-if="browsing" class="file-preview-toolbar">
-        <span>{{ selected?.path || '双击文件预览，点击文件夹展开' }}</span>
+        <span>{{ selected?.path || (mobileLayout ? '单击文件预览，点击文件夹展开' : '双击文件预览，点击文件夹展开') }}</span>
         <SButton :disabled="!selected" @click="opened = selected">打开文件</SButton>
       </div>
       <div v-if="loading" class="preview-status" role="status">
@@ -151,8 +153,8 @@ function fileIcon(name: string) {
             :aria-pressed="selected?.path === row.path"
             :style="{ paddingLeft: `${12 + row.depth * 20}px` }"
             :title="row.path"
-            @click="selectFile(row)"
-            @dblclick="openFile(row)"
+            @click="mobileLayout ? openFile(row) : selectFile(row)"
+            @dblclick="!mobileLayout && openFile(row)"
             @keydown.enter.prevent="openFile(row)"
           >
             <span aria-hidden="true" />
