@@ -8,7 +8,7 @@
 | `../gen/apple/` | Xcode 主应用工程及生成的分享扩展 | 由 `pnpm ios:init` 生成并配置分享扩展；不直接维护这里的文件。 |
 | `android/app/` | Android 主应用定制源码与配置 | 保存应用 Gradle（签名及 HTTP）、MainActivity（返回键处理）和显示名资源；准备脚本覆盖到生成工程。 |
 | `android/prepare.cjs` | Android 工程准备脚本 | 复制定制文件并同步启动图标。其他工程文件由 Tauri 生成。 |
-| `android/sync-icons.cjs` | Android 启动图标同步 | 将 `android/icons/res/` 复制到生成工程；初始化和根目录 `pnpm sync:icons` 都会调用。 |
+| `android/sync-icons.cjs` | Android 图标生成和工程资源同步 | 生成 `android/icons/` 并将其中的 `res/` 复制到生成工程。 |
 | `windows/sync-icons.cjs` | Windows 图标生成 | 输出 `windows/icons/icon.ico`。 |
 | `macos/sync-icons.cjs` | macOS 图标生成 | 输出窗口 PNG，并调用 Swift 生成 Dock 和托盘图标。 |
 | `linux/sync-icons.cjs` | Linux 图标生成 | 输出 32、128、256 像素 PNG。 |
@@ -37,7 +37,7 @@ Android 显示名源文件位于 `android/app/src/main/res/values*/strings.xml`�
 
 ## 按平台生成图标
 
-源图与生成配置保留在 `apps/icon/`。`native/sync-icons.cjs` 提供统一入口、缓存校验和共用的 Tauri 图标生成逻辑；Windows、macOS、Linux 的输出处理分别位于各平台的 `sync-icons.cjs`，也可以直接通过 `node native/<平台>/sync-icons.cjs` 运行（在 `src-tauri/` 目录下执行）。输入没有变化且输出完整时复用已有结果，平台脚本修改后也会重新生成：
+源图与生成配置保留在 `apps/icon/`。五个平台统一使用 `native/sync-icons.cjs → <平台>/sync-icons.cjs → 共用生成函数`：入口负责平台分发，共用函数负责缓存和 Tauri CLI 调用，各平台脚本负责输入选择、输出处理及移动端工程资源同步。各平台脚本也可以直接通过 `node native/<平台>/sync-icons.cjs` 运行（在 `src-tauri/` 目录下执行）。输入没有变化且输出完整时复用已有结果，平台脚本修改后也会重新生成：
 
 | 目录 | 输出 |
 | --- | --- |

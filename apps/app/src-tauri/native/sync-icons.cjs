@@ -17,21 +17,10 @@ function filesIn(directory) {
 
 function syncNativeIcons(platform) {
   if (!platforms.includes(platform)) throw new Error(`不支持的图标平台：${platform}`);
-  if (["windows", "macos", "linux"].includes(platform)) {
-    return require(`./${platform}/sync-icons.cjs`).syncIcons();
-  }
-
-  return generateNativeIcons(platform, { generate({ generated, output }) {
-    fs.copyFileSync(path.join(generated, "icon.png"), path.join(output, "icon.png"));
-    if (platform === "android") {
-      fs.cpSync(path.join(generated, "android"), path.join(output, "res"), { recursive: true });
-    } else {
-      fs.cpSync(path.join(generated, "ios"), output, { recursive: true });
-    }
-  } });
+  return require(`./${platform}/sync-icons.cjs`).syncIcons();
 }
 
-function generateNativeIcons(platform, { inputs = [], generate }) {
+function generateNativeIcons(platform, { inputs = [], input = "icons.json", generate }) {
   const cli = require.resolve("@tauri-apps/cli/tauri.js", { paths: [app] });
   const source = path.join(root, "apps/icon");
   const hash = createHash("sha256").update(platform);
@@ -53,7 +42,6 @@ function generateNativeIcons(platform, { inputs = [], generate }) {
   fs.rmSync(output, { recursive: true, force: true });
   fs.mkdirSync(output, { recursive: true });
   const generated = path.join(temporary, "icons");
-  const input = platform === "ios" ? "icon-android.png" : "icons.json";
   execFileSync(process.execPath, [cli, "icon", path.join(source, input),
     "--output", generated, "--ios-color", "#0f172a"], { cwd: root, stdio: "inherit" });
 

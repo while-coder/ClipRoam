@@ -2,7 +2,7 @@
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { syncIosIcons } = require("./sync-icons.cjs");
+const { syncIcons } = require("./sync-icons.cjs");
 
 // Run after `tauri ios init`, which recreates the untracked Xcode project.
 function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate = true) {
@@ -63,7 +63,7 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
   const specPath = path.join(apple, "project.cliproam.json");
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2) + "\n");
   if (generate) {
-    syncIosIcons();
+    syncIcons(apple);
     execFileSync("xcodegen", ["generate", "--spec", specPath], { cwd: apple, stdio: "inherit" });
   }
   console.log("已配置 iOS Share Extension、App Group 和应用图标");

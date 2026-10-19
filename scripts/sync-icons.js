@@ -55,11 +55,8 @@ fs.copyFileSync(path.join(generatedIconsDirectory, "128x128.png"), favicon);
 fs.mkdirSync(path.dirname(sharedIcon), { recursive: true });
 fs.copyFileSync(path.join(generatedIconsDirectory, "128x128.png"), sharedIcon);
 // Generate each native platform into its own directory.
-for (const platform of ["windows", "linux"]) syncNativeIcons(platform);
+for (const platform of ["windows", "linux", "ios", "android"]) syncNativeIcons(platform);
 if (process.platform === "darwin") syncNativeIcons("macos");
-// iOS uses full-bleed artwork; system masking supplies the rounded corners.
-require("../apps/app/src-tauri/native/ios/sync-icons.cjs").syncIosIcons();
-require("../apps/app/src-tauri/native/android/sync-icons.cjs").syncAndroidIcons();
 console.log(`已更新 Web 图标：${path.relative(rootDirectory, favicon)}`);
 
 execFileSync(
