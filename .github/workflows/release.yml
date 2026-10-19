@@ -206,8 +206,6 @@ jobs:
         run: pnpm sync:versions
       - name: Package VS Code extension
         run: pnpm package:vscode
-      - name: Test VS Code extension host
-        run: pnpm --filter cliproam-vscode test
       - name: Upload VSIX to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

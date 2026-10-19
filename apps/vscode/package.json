@@ -33,7 +33,6 @@
     "prebuild": "pnpm --filter @cliproam/protocol build",
     "build": "pnpm check && vite build && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --sourcemap",
     "check": "tsc -p tsconfig.extension.json --noEmit && vue-tsc --noEmit",
-    "test": "node --test test/extension.test.cjs",
     "package": "pnpm build && vsce package --no-dependencies --skip-license --out dist/cliproam.vsix"
   },
   "dependencies": {

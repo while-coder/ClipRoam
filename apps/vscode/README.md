@@ -27,6 +27,5 @@ pnpm package:vscode
 
 VSIX 位于 `apps/vscode/dist/cliproam.vsix`。在 VS Code 扩展菜单中选择“从 VSIX 安装”。开发时选择仓库的 `Launch VS Code Extension` 调试配置，按 F5 启动扩展开发宿主。
 
-构建后可运行 `pnpm --filter cliproam-vscode test`，验证扩展宿主消息桥、选中文本暂存、重启恢复和导入确认。测试使用模拟 VS Code API；真实窗口的登录、同步和 Webview 行为需要在扩展开发宿主中验证。
 
 扩展通过受限消息桥调用 VS Code 文本剪贴板、文本编辑器和外部链接 API。Webview 仅允许加载打包资源，HTTP/WebSocket 连接用于访问用户配置的服务器。
