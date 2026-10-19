@@ -14,9 +14,9 @@
     "android:init": "tauri android init --ci",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build --apk --ci",
-    "ios:init": "tauri ios init --ci && node ../../scripts/prepare-ios.js",
-    "ios:dev": "node ../../scripts/prepare-ios.js && tauri ios dev",
-    "ios:build": "node ../../scripts/prepare-ios.js && tauri ios build --ci"
+    "ios:init": "tauri ios init --ci && node src-tauri/native/ios/prepare.cjs",
+    "ios:dev": "node src-tauri/native/ios/prepare.cjs && tauri ios dev",
+    "ios:build": "node src-tauri/native/ios/prepare.cjs && tauri ios build --ci"
   },
   "dependencies": {
     "@cliproam/ui": "workspace:*",

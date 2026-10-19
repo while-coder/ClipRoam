@@ -10,6 +10,6 @@ pub(crate) use super::{
     begin_window_drag, capture_paste_target, create_windows, deliver_paste, manage_platform_state,
     on_paste_window_focus, on_window_event, register_plugins, should_skip_clipboard_poll,
 };
-pub(crate) use files::{ack_share, pending_shares, pick_files, save_dialog};
+pub(crate) use files::{pick_files, save_dialog};
 
 pub(crate) use crate::platforms::files::{copy_file, create_directory, remove_file};

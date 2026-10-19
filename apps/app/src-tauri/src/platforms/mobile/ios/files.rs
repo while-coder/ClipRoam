@@ -31,5 +31,3 @@ pub(crate) fn pick_files(
         .map(|p| p.to_string_lossy().into_owned())
         .collect())
 }
-
-pub(crate) use super::super::shares::{ack_share, pending_shares};

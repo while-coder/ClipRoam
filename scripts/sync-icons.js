@@ -54,7 +54,7 @@ fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), favicon);
 fs.mkdirSync(path.dirname(sharedIcon), { recursive: true });
 fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), sharedIcon);
 // iOS uses full-bleed artwork; system masking supplies the rounded corners.
-require("./sync-ios-icons").syncIosIcons();
+require("../apps/app/src-tauri/native/ios/sync-icons.cjs").syncIosIcons();
 console.log(`已更新 Web 图标：${path.relative(rootDirectory, favicon)}`);
 
 execFileSync(

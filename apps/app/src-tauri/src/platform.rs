@@ -1,5 +1,5 @@
 //! 跨平台原生能力的统一函数声明与转发。系统实现只放在 platforms/。
-use crate::files::{NativeShare, SaveTarget};
+use crate::files::SaveTarget;
 use crate::{app::NotificationPayload, clipboard::RichText, platforms::implementation};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -124,13 +124,6 @@ pub(crate) fn pick_files(
     implementation::pick_files(app, mode, scope)
 }
 
-pub(crate) fn pending_shares(app: AppHandle, scope: String) -> Result<Vec<NativeShare>, String> {
-    implementation::pending_shares(app, scope)
-}
-
-pub(crate) fn ack_share(app: AppHandle, id: String) -> Result<(), String> {
-    implementation::ack_share(app, id)
-}
 
 /// name 为 Some 时，destination 是父目录；返回实际创建的路径或 URI。
 pub(crate) fn copy_file(

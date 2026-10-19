@@ -10,12 +10,12 @@
   },
   "bundle": {
     "resources": {
-      "infoplist/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
-      "infoplist/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
-      "infoplist/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
+      "native/ios/locales/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
+      "native/ios/locales/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
+      "native/ios/locales/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
     },
     "iOS": {
-      "infoPlist": "Info.plist",
+      "infoPlist": "native/ios/Info.plist",
       "minimumSystemVersion": "14.0"
     }
   }

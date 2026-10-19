@@ -5,7 +5,6 @@
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 
-mod shares;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};

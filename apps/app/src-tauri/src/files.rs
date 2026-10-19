@@ -183,26 +183,6 @@ pub(crate) fn native_pick_files(
     crate::platform::pick_files(app, mode, scope)
 }
 
-#[derive(Serialize)]
-pub(crate) struct NativeShare {
-    pub(crate) id: String,
-    pub(crate) text: Option<String>,
-    pub(crate) html: Option<String>,
-    pub(crate) images: Vec<String>,
-    pub(crate) paths: Vec<String>,
-}
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn native_pending_shares(
-    app: AppHandle,
-    scope: String,
-) -> Result<Vec<NativeShare>, String> {
-    crate::platform::pending_shares(app, scope)
-}
-#[tauri::command(rename_all = "camelCase", async)]
-pub(crate) fn native_ack_share(app: AppHandle, id: String) -> Result<(), String> {
-    crate::platform::ack_share(app, id)
-}
-
 pub(crate) fn modified_millis(metadata: &fs::Metadata) -> Option<u64> {
     metadata
         .modified()

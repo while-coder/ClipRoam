@@ -6,7 +6,10 @@ mod files;
 mod platform;
 mod platforms;
 mod window_mode;
+#[path = "../share/mod.rs"]
+mod share;
 use tauri::Manager;
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +23,8 @@ pub fn run() {
     let builder = platform::register_plugins(builder);
     builder
         .setup(|app| {
+            #[cfg(target_os = "android")]
+            share::attach(app.handle().clone());
             std::fs::create_dir_all(app.path().app_data_dir()?)?;
             app.manage(app::QuickPasteMode::default());
             app.manage(window_mode::WindowModeState::default());
@@ -61,8 +66,9 @@ pub fn run() {
             files::native_fs_remove,
             files::native_save_dialog,
             files::native_pick_files,
-            files::native_pending_shares,
-            files::native_ack_share,
+            share::native_pending_shares,
+            share::native_configure_share_session,
+            share::native_ack_share,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ClipRoam")

@@ -252,7 +252,7 @@ pub(crate) fn manage_platform_state(app: &AppHandle) -> Result<(), String> {
 }
 
 pub(crate) use super::capture_paste_target;
-pub(crate) use super::files::{ack_share, pending_shares, pick_files, save_dialog};
+pub(crate) use super::files::{pick_files, save_dialog};
 pub(crate) use super::show_main_window;
 
 pub(crate) use crate::platforms::files::{copy_file, create_directory, remove_file};

@@ -42,5 +42,5 @@ pub(crate) use super::{
     on_paste_window_focus, on_window_event, register_plugins, should_skip_clipboard_poll,
 };
 pub(crate) use files::{
-    ack_share, copy_file, create_directory, pending_shares, pick_files, remove_file, save_dialog,
+    copy_file, create_directory, pick_files, remove_file, save_dialog,
 };

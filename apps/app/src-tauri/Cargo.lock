@@ -584,9 +584,11 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "clipboard-win",
+ "cliproam-share-upload",
  "core-foundation",
  "core-graphics",
  "image",
+ "jni 0.21.1",
  "log",
  "objc2",
  "objc2-app-kit",
@@ -608,6 +610,22 @@ dependencies = [
  "tauri-plugin-updater",
  "uuid",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cliproam-share-upload"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "core-foundation",
+ "objc2",
+ "objc2-foundation",
+ "security-framework-sys",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
 ]
 
 [[package]]
@@ -4286,7 +4304,9 @@ dependencies = [
 name = "tauri-plugin-cliproam-share-receiver"
 version = "0.1.0"
 dependencies = [
+ "cliproam-share-upload",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.20",

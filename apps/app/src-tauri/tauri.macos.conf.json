@@ -1,9 +1,12 @@
 {
   "bundle": {
     "resources": {
-      "infoplist/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
-      "infoplist/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
-      "infoplist/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
+      "native/macos/locales/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
+      "native/macos/locales/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
+      "native/macos/locales/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
+    },
+    "macOS": {
+      "infoPlist": "native/macos/Info.plist"
     }
   }
 }

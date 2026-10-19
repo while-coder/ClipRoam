@@ -1,0 +1,196 @@
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use tauri::{
+    plugin::{Builder, PluginApi, PluginHandle, TauriPlugin},
+    AppHandle, Manager, Runtime,
+};
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    PluginInvoke(#[from] tauri::plugin::mobile::PluginInvokeError),
+    #[error(transparent)]
+    Tauri(#[from] tauri::Error),
+    #[error("{0}")]
+    Native(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedItem {
+    pub path: String,
+    pub name: String,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingShare {
+    pub id: String,
+    pub text: Option<String>,
+    pub html: Option<String>,
+    #[serde(default)]
+    pub items: Vec<SharedItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareUploadSession {
+    pub http_url: String,
+    pub token: String,
+    pub device_id: String,
+    pub scope: String,
+    pub file_limit: u64,
+    pub max_count: u64,
+}
+
+#[derive(Serialize)]
+struct NativeCall { input: serde_json::Value }
+
+
+#[derive(Deserialize)]
+pub struct DirectorySelection {
+    pub uri: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CopyFileRequest<'a> {
+    source: &'a str,
+    parent: &'a str,
+    name: &'a str,
+}
+#[derive(Serialize)]
+struct CreateDirectoryRequest<'a> {
+    parent: &'a str,
+    name: &'a str,
+}
+#[derive(Serialize)]
+struct RemoveDocumentRequest<'a> {
+    uri: &'a str,
+}
+#[derive(Deserialize)]
+pub struct DocumentResult {
+    pub uri: String,
+}
+
+#[derive(Serialize)]
+struct CopyDocumentsRequest<'a> {
+    uris: &'a [String],
+    directory: &'a str,
+}
+
+#[derive(Deserialize)]
+pub struct ImportedDocuments {
+    pub paths: Vec<String>,
+}
+
+#[cfg(target_os = "android")]
+const PLUGIN_IDENTIFIER: &str = "com.whilecode.cliproam.share";
+
+fn mobile_init<R: Runtime, C: DeserializeOwned>(
+    _app: &AppHandle<R>,
+    api: PluginApi<R, C>,
+) -> Result<ShareReceiver<R>> {
+    #[cfg(target_os = "android")]
+    { let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ShareReceiverPlugin")?; Ok(ShareReceiver(handle)) }
+    #[cfg(target_os = "ios")]
+    {
+        use tauri::Emitter;
+        let _=api;
+        let app=_app.clone();
+        cliproam_share_upload::ios::set_notify(Box::new(move||{let _=app.emit("cliproam://share-received",serde_json::json!({}));}));
+        _app.run_on_main_thread(||unsafe{cliproam_share_upload::ios::attach()})?;
+        Ok(ShareReceiver(std::marker::PhantomData))
+    }
+}
+
+#[cfg(target_os = "android")]
+pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
+#[cfg(target_os = "ios")]
+pub struct ShareReceiver<R: Runtime>(std::marker::PhantomData<R>);
+
+impl<R: Runtime> ShareReceiver<R> {
+    pub fn configure_session(&self, session: Option<ShareUploadSession>) -> Result<()> {
+        #[cfg(target_os = "android")]
+        { self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"configure","session":session}) }).map_err(Into::into) }
+        #[cfg(target_os = "ios")]
+        { cliproam_share_upload::ios::configure(session.map(serde_json::to_value).transpose().map_err(|e|Error::Native(e.to_string()))?).map_err(Error::Native) }
+    }
+    #[cfg(target_os = "android")]
+    pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
+        self.0
+            .run_mobile_plugin("copyDocuments", CopyDocumentsRequest { uris, directory })
+            .map_err(Into::into)
+    }
+    #[cfg(target_os = "android")]
+    pub fn pick_directory(&self) -> Result<DirectorySelection> {
+        self.0
+            .run_mobile_plugin("pickDirectory", ())
+            .map_err(Into::into)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn copy_file(&self, source: &str, parent: &str, name: &str) -> Result<DocumentResult> {
+        self.0
+            .run_mobile_plugin(
+                "copyFile",
+                CopyFileRequest {
+                    source,
+                    parent,
+                    name,
+                },
+            )
+            .map_err(Into::into)
+    }
+    #[cfg(target_os = "android")]
+    pub fn create_directory(&self, parent: &str, name: &str) -> Result<DocumentResult> {
+        self.0
+            .run_mobile_plugin("createDirectory", CreateDirectoryRequest { parent, name })
+            .map_err(Into::into)
+    }
+    #[cfg(target_os = "android")]
+    pub fn remove_document(&self, uri: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin("removeDocument", RemoveDocumentRequest { uri })
+            .map_err(Into::into)
+    }
+
+    pub fn pending(&self, scope: &str) -> Result<Vec<PendingShare>> {
+        #[cfg(target_os = "android")]
+        { self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"pending","scope":scope}) }).map_err(Into::into) }
+        #[cfg(target_os = "ios")]
+        { serde_json::from_value(cliproam_share_upload::ios::pending(scope).map_err(Error::Native)?).map_err(|e|Error::Native(e.to_string())) }
+    }
+
+    pub fn acknowledge(&self, id: &str) -> Result<()> {
+        #[cfg(target_os = "android")]
+        {
+        self.0
+            .run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"ack","id":id}) })
+            .map_err(Into::into)
+        }
+        #[cfg(target_os = "ios")]
+        { cliproam_share_upload::ios::acknowledge(id).map_err(Error::Native) }
+    }
+}
+
+pub trait ShareReceiverExt<R: Runtime> {
+    fn share_receiver(&self) -> &ShareReceiver<R>;
+}
+
+impl<R: Runtime, T: Manager<R>> ShareReceiverExt<R> for T {
+    fn share_receiver(&self) -> &ShareReceiver<R> {
+        self.state::<ShareReceiver<R>>().inner()
+    }
+}
+
+pub fn init<R: Runtime>() -> TauriPlugin<R> {
+    Builder::new("cliproam-share-receiver")
+        .setup(|app, api| {
+            app.manage(mobile_init(app, api)?);
+            Ok(())
+        })
+        .build()
+}
