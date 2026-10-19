@@ -14,7 +14,7 @@ val tauriProperties = Properties().apply {
     }
 }
 
-// 从 `<repo>/secrets/keystore.properties`（本地开发）或环境变量（CI）读取签名配置。
+// 从 `apps/app/secrets/keystore.properties`（本地开发）或环境变量（CI）读取签名配置。
 // 文件优先；CI 设置 ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD。
 val ksFile = rootProject.file("../../../secrets/keystore.properties")
 val keystoreProperties = Properties().apply {

@@ -68,7 +68,7 @@ jobs:
       version: ${{ needs.check.outputs.version }}
       asset-prefix: ClipRoam
       release-repository: while-coder/ClipRoam
-      init-command: pnpm tauri android init --ci
+      init-command: pnpm android:init
       build-command: pnpm tauri android build --apk --aab --ci
     secrets: inherit
 

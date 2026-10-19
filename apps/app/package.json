@@ -11,9 +11,9 @@
     "check": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
-    "android:init": "tauri android init --ci",
-    "android:dev": "tauri android dev",
-    "android:build": "tauri android build --apk --ci",
+    "android:init": "tauri android init --ci && node src-tauri/native/android/prepare.cjs",
+    "android:dev": "node src-tauri/native/android/prepare.cjs && tauri android dev",
+    "android:build": "node src-tauri/native/android/prepare.cjs && tauri android build --apk --ci",
     "ios:init": "tauri ios init --ci && node src-tauri/native/ios/prepare.cjs",
     "ios:dev": "node src-tauri/native/ios/prepare.cjs && tauri ios dev",
     "ios:build": "node src-tauri/native/ios/prepare.cjs && tauri ios build --ci"

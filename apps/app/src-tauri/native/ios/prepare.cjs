@@ -2,7 +2,51 @@
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { syncIosIcons } = require("./sync-icons.cjs");
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// Called by Xcode, whose environment selects the device/simulator architectures.
+function buildShareCore(env = process.env) {
+  for (const key of ["PROJECT_DIR", "CONFIGURATION", "EFFECTIVE_PLATFORM_NAME", "PLATFORM_NAME"]) {
+    if (!env[key]) throw new Error(`缺少 Xcode 构建环境变量：${key}`);
+  }
+  let targets;
+  if (env.PLATFORM_NAME === "iphoneos") {
+    targets = ["aarch64-apple-ios"];
+  } else if (env.PLATFORM_NAME === "iphonesimulator") {
+    const architectures = env.ARCHS?.trim().split(/\s+/).filter(Boolean) ?? [];
+    if (!architectures.length) throw new Error("缺少模拟器架构 ARCHS");
+    targets = [...new Set(architectures.map((arch) => {
+      if (arch === "arm64") return "aarch64-apple-ios-sim";
+      if (arch === "x86_64") return "x86_64-apple-ios";
+      throw new Error(`Unsupported simulator architecture: ${arch}`);
+    }))];
+  } else {
+    throw new Error(`Unsupported iOS platform: ${env.PLATFORM_NAME}`);
+  }
+  const root = path.resolve(__dirname, "../../../../..");
+  const manifest = path.join(root, "apps/app/src-tauri/share/core/Cargo.toml");
+  const buildDir = path.join(env.PROJECT_DIR, "share-core/target");
+  const output = path.join(env.PROJECT_DIR, "share-core", env.CONFIGURATION + env.EFFECTIVE_PLATFORM_NAME);
+  const cargoBin = path.join(env.CARGO_HOME || path.join(os.homedir(), ".cargo"), "bin");
+  const options = { cwd: root, stdio: "inherit", env: {
+    ...env, PATH: cargoBin + path.delimiter + (env.PATH || ""),
+  } };
+  fs.mkdirSync(output, { recursive: true });
+  const archives = targets.map((target) => {
+    execFileSync("rustup", ["target", "add", target], options);
+    execFileSync("cargo", ["build", "--manifest-path", manifest, "--target", target,
+      "--target-dir", buildDir, "--release", "--locked"], options);
+    return path.join(buildDir, target, "release/libcliproam_share_upload.a");
+  });
+  const library = path.join(output, "libcliproam_share_upload.a");
+  if (archives.length === 1) fs.copyFileSync(archives[0], library);
+  else execFileSync("lipo", ["-create", ...archives, "-output", library], options);
+}
 
 // Run after `tauri ios init`, which recreates the untracked Xcode project.
 function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate = true) {
@@ -38,7 +82,7 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
         type: "app-extension", platform: "iOS", deploymentTarget: "14.0",
         sources: [{ path: extension, excludes: ["*.plist", "*.entitlements"] }],
         preBuildScripts: [{ name: "Build shared Rust upload core", basedOnDependencyAnalysis: false,
-          script: `bash "${path.join(root, "apps/app/src-tauri/native/ios/build-share-core.sh")}"` }],
+          script: `${shellQuote(process.execPath)} ${shellQuote(__filename)} build-share-core` }],
         settings: { groups: ["app"], base: {
           PRODUCT_NAME: extension, PRODUCT_BUNDLE_IDENTIFIER: "com.whilecode.cliproam.share",
           SWIFT_VERSION: "5.0", APPLICATION_EXTENSION_API_ONLY: true,
@@ -80,5 +124,10 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
   return spec;
 }
 
-module.exports = { prepareIos };
-if (require.main === module) prepareIos();
+module.exports = { prepareIos, buildShareCore };
+if (require.main === module) {
+  const command = process.argv[2];
+  if (command === "build-share-core") buildShareCore();
+  else if (!command) prepareIos();
+  else throw new Error(`未知命令：${command}`);
+}

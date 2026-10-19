@@ -7,7 +7,7 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 - `../../packages/ui/src`：三端共用的登录和业务页面、账号状态、历史缓存、同步、捕获过滤、哈希、上传与下载队列，以及平台接口和共用 Web API 实现。
 - `src`：Tauri 入口壳、`NativeRust`、原生日志和更新器接入、快捷粘贴窗口、独立 Toast 窗口及其样式。快速粘贴视图通过共享 App 插槽接入；Toast 窗口单独加载，不初始化共享账号与同步业务。
 - `src-tauri/src`：原生命令与平台实现。Rust 提供系统剪贴板、图片格式适配、焦点与粘贴按键、文件字节读写、系统对话框、Android 分享/文件导出、窗口与托盘。
-- `src-tauri/native`：iOS、macOS 各自的配置和本地化资源，以及 iOS 扩展源文件和工程准备脚本；Android/iOS 工程、资源与分享代码的位置见[原生目录说明](src-tauri/native/README.md)。
+- `src-tauri/native`：Android、iOS、macOS 的原生源码、配置、资源与准备脚本。CI 分别执行 `android:init`、`ios:init` 生成工程，`src-tauri/gen` 不纳入 Git；详情见[原生目录说明](src-tauri/native/README.md)。
 
 入口先注入 `NativeRust`，再加载共用 App；浏览器开发预览使用共用 Web API 适配器。文件导出、账号数据库、同步和传输调度由共享 TS 代码负责。
 
@@ -15,7 +15,7 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 `productName` 固定为 `ClipRoam`，安装包、Release 标题和技术标识沿用英文名称，bundle ID 仍为 `com.whilecode.cliproam`。界面、窗口标题、通知和托盘中的应用名称跟随系统语言（浏览器中跟随浏览器语言）：中文显示名从本地化资源读取，其他语言回退为 ClipRoam。本次仅本地化应用名称，其他界面文案仍为中文。
 
-iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使用 `src-tauri/native/macos/locales/*.lproj/InfoPlist.strings`，分别维护系统显示名，Android 使用 `values/strings.xml` 和 `values-zh/strings.xml`，Linux 桌面入口使用 `Name`/`Name[zh]`。Windows 安装器、开始菜单和快捷方式名称保留 ClipRoam，运行时窗口及托盘名称按语言选择；不使用自定义 NSIS 模板。
+iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使用 `src-tauri/native/macos/locales/*.lproj/InfoPlist.strings`，分别维护系统显示名，Android 使用 `src-tauri/native/android/app/src/main/res/values*/strings.xml`，Linux 桌面入口使用 `Name`/`Name[zh]`。Windows 安装器、开始菜单和快捷方式名称保留 ClipRoam，运行时窗口及托盘名称按语言选择；不使用自定义 NSIS 模板。
 
 ## 本地数据
 
