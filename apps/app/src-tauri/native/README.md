@@ -13,6 +13,7 @@
 | `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
+| `macos/mac-icon.swift` | macOS 应用与托盘图标生成 | 根目录 `pnpm sync:icons` 在 macOS 上调用，输出 `icons/icon.icns` 和 `icons/tray-macos.png`。 |
 | `ios/ShareExtension/` | iOS 分享扩展的 Swift 生命周期入口 | `prepare.cjs` 复制到 Xcode 工程；上传实现位于 `../share/`。 |
 | `ios/prepare.cjs` | iOS 工程准备与扩展 Rust 构建脚本 | 默认配置 App Group、Keychain、分享扩展及静态库链接；Xcode 构建阶段调用 `build-share-core` 子命令编译 Rust 静态库。 |
 | `ios/sync-icons.cjs` | iOS 图标生成和 Xcode 资源同步 | `prepare.cjs` 和根目录 `pnpm sync:icons` 调用。 |

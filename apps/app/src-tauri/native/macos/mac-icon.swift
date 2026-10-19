@@ -4,7 +4,8 @@ import Foundation
 import CoreGraphics
 import ImageIO
 
-let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .appendingPathComponent("../../../../..").standardizedFileURL
 let icons = root.appendingPathComponent("apps/app/src-tauri/icons")
 
 guard let source = CGImageSourceCreateWithURL(root.appendingPathComponent("apps/icon/icon.png") as CFURL, nil),

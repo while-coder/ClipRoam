@@ -101,7 +101,7 @@ if (fs.existsSync(androidResourcesDirectory)) {
 }
 
 if (process.platform === "darwin") {
-  execFileSync("swift", [path.join(__dirname, "mac-icon.swift")], {
+  execFileSync("swift", [path.join(rootDirectory, "apps/app/src-tauri/native/macos/mac-icon.swift")], {
     cwd: rootDirectory,
     stdio: "inherit",
   });
