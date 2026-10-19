@@ -1,0 +1,50 @@
+<!doctype html><meta charset="utf-8"><pre id="result">RUNNING</pre>
+<script>
+addEventListener('error', event => { document.querySelector('#result').textContent = event.message; });
+addEventListener('unhandledrejection', event => { document.querySelector('#result').textContent = String(event.reason); });
+</script>
+<script type="module">
+import { highlightText } from '/@fs/E:/ClipRoam/packages/ui/src/components/preview/textHighlight.ts';
+import { languageForFile, highlightLimit } from '/@fs/E:/ClipRoam/packages/ui/src/components/preview/textLanguages.ts';
+import { renderMarkdown } from '/@fs/E:/ClipRoam/packages/ui/src/components/preview/markdown.ts';
+import { createApp, h, nextTick } from 'vue';
+import TextPreview from '/@fs/E:/ClipRoam/packages/ui/src/components/preview/TextPreview.vue';
+import MarkdownPreview from '/@fs/E:/ClipRoam/packages/ui/src/components/preview/MarkdownPreview.vue';
+const result = document.querySelector('#result');
+let count = 0;
+function check(value, label) { if (!value) throw new Error(label); count++; }
+try {
+  check(languageForFile('TEST.JSON') === 'json', 'file extension case');
+  check(languageForFile('readme.md') === 'markdown', 'markdown extension');
+  check(!languageForFile('unknown.exe'), 'unsupported extension');
+  check(highlightText('{"enabled":true}', 'json').html.includes('hljs-attr'), 'JSON highlight');
+  check(highlightText('<node enabled="true"/>', 'xml').html.includes('&lt;'), 'XML escaping');
+  check(highlightText('普通中文说明，没有代码。').language === 'plaintext', 'plain text fallback');
+  check(highlightText('function greet(name) { console.log("hello", name); return true; }').language !== 'plaintext', 'automatic language detection');
+  check(highlightText('<img src=x onerror=alert(1)>', 'unknown').html.startsWith('&lt;'), 'unknown language escape');
+  check(highlightText('x'.repeat(highlightLimit + 1), 'javascript').language === 'plaintext', 'large content fallback');
+  const markdown = '# Heading\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```json\n{"enabled":true}\n```\n\n<script>window.injected=true<\/script>\n<img src=x onerror="window.injected=true">\n[unsafe](javascript:alert(1))';
+  const html = renderMarkdown(markdown);
+  const content = document.createElement('div'); content.innerHTML = html;
+  check(!!content.querySelector('h1'), 'markdown heading');
+  check(!!content.querySelector('table'), 'markdown table');
+  check(!!content.querySelector('code .hljs-attr'), 'markdown code highlight');
+  check(!content.querySelector('script,[onerror],a[href^="javascript:"]'), 'markdown sanitation');
+  const host = document.createElement('div'); document.body.append(host);
+  const app = createApp({render: () => h(TextPreview, {text: '{"enabled":true}', fileName: 'settings.json'})}); app.mount(host);
+  await new Promise(resolve => setTimeout(resolve, 200)); await nextTick();
+  check(!!host.querySelector('.hljs-attr'), 'text component highlighting');
+  const select = host.querySelector('select'); select.value = 'plaintext'; select.dispatchEvent(new Event('change', {bubbles:true})); await nextTick();
+  check(!host.querySelector('.hljs-attr') && host.textContent.includes('enabled'), 'manual language switch'); app.unmount();
+  const mdHost = document.createElement('div'); document.body.append(mdHost);
+  const mdApp = createApp({render: () => h(MarkdownPreview, {text:'# Heading\n\n```js\nconst x = 1;\n```', fileName:'readme.md'})});
+  mdApp.component('SButton', {render() { return h('button', this.$attrs, this.$slots.default?.()); }}); mdApp.mount(mdHost);
+  await new Promise(resolve => setTimeout(resolve, 200)); await nextTick();
+  check(!!mdHost.querySelector('article h1'), 'markdown component preview');
+  mdHost.querySelector('button').click(); await nextTick();
+  check(!!mdHost.querySelector('.text-preview'), 'markdown source switch');
+  mdHost.querySelector('button').click(); await nextTick();
+  check(!!mdHost.querySelector('article h1'), 'markdown preview switch'); mdApp.unmount();
+  result.textContent = `PASSED ${count} preview assertions`; result.dataset.status = 'passed';
+} catch (error) { result.textContent = error.stack; result.dataset.status = 'failed'; }
+</script>

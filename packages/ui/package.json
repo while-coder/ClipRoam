@@ -26,16 +26,19 @@
     "vue": "^3.5.43"
   },
   "dependencies": {
+    "@cliproam/protocol": "workspace:*",
     "@qingfeng346/ui-kit": "link:../../../ui-kit/ui-kit",
+    "dompurify": "^3.4.13",
+    "highlight.js": "^11.12.0",
     "lucide-vue-next": "^0.468.0",
-    "@cliproam/protocol": "workspace:*"
+    "marked": "^18.0.10"
   },
   "ciDependencies": {
     "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
   },
   "devDependencies": {
-    "vue": "^3.5.43",
     "typescript": "~5.6.2",
+    "vue": "^3.5.43",
     "vue-tsc": "^2.1.10"
   }
 }

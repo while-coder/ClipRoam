@@ -1,8 +1,8 @@
 import { ClipboardKind } from "@cliproam/protocol";
+import { languageForFile } from "../../components/preview/textLanguages";
 
 export type PreviewFile = { name: string; path: string; fileId: string; size: number };
 
-const textExtensions = new Set(["txt", "log", "md", "csv", "json", "xml", "yaml", "yml", "ini", "conf"]);
 const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "bmp"]);
 
 export type FilePreviewKind = typeof ClipboardKind.Text | typeof ClipboardKind.Image;
@@ -10,7 +10,7 @@ export type FilePreviewKind = typeof ClipboardKind.Text | typeof ClipboardKind.I
 export function filePreviewKind(name: string): FilePreviewKind | undefined {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (!name.includes(".")) return undefined;
-  if (textExtensions.has(extension)) return ClipboardKind.Text;
+  if (languageForFile(name)) return ClipboardKind.Text;
   if (imageExtensions.has(extension)) return ClipboardKind.Image;
   return undefined;
 }

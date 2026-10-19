@@ -10,6 +10,8 @@ import { DownloadCancelledError } from "../downloads/downloadManager";
 import { decodePreviewText, filePreviewKind, type PreviewFile } from "./filePreview";
 import ImagePreview from "../../components/preview/ImagePreview.vue";
 import TextPreview from "../../components/preview/TextPreview.vue";
+import MarkdownPreview from "../../components/preview/MarkdownPreview.vue";
+import { languageForFile } from "../../components/preview/textLanguages";
 
 const props = defineProps<{ entryId: string; file: PreviewFile; image?: boolean; back?: boolean }>();
 const emit = defineEmits<{ close: []; back: [] }>();
@@ -113,7 +115,10 @@ onMounted(async () => {
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
     <ImagePreview v-else-if="kind === ClipboardKind.Image && source" :src="source" :title="file.name" />
-    <TextPreview v-else-if="kind === ClipboardKind.Text" :text="text" label="文件文本内容" empty-text="（空文件）">
+    <MarkdownPreview v-else-if="kind === ClipboardKind.Text && languageForFile(file.name) === 'markdown'" :text="text" :file-name="file.name">
+      <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
+    </MarkdownPreview>
+    <TextPreview v-else-if="kind === ClipboardKind.Text" :text="text" :file-name="file.name" label="文件文本内容" empty-text="（空文件）">
       <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
     </TextPreview>
     <template #footer>
