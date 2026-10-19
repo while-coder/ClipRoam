@@ -2,7 +2,7 @@
   "bundle": {
     "linux": {
       "deb": {
-        "desktopTemplate": "linux.desktop"
+        "desktopTemplate": "native/linux/linux.desktop"
       }
     }
   }

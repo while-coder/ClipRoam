@@ -1,6 +1,6 @@
 # 原生工程与平台资源
 
-从这里查找 Android、iOS 和 macOS 的工程与配置。`native/` 保存需要维护的源码、资源和准备脚本；`gen/` 是 CI 初始化时创建并实际参与构建的工程，不纳入 Git。
+从这里查找 Android、iOS、macOS 和 Linux 的工程与配置。`native/` 保存需要维护的源码、资源和准备脚本；`gen/` 是 CI 初始化时创建并实际参与构建的工程，不纳入 Git。
 
 | 目录 | 用途 | 修改方式 |
 | --- | --- | --- |
@@ -14,13 +14,14 @@
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `macos/mac-icon.swift` | macOS 应用与托盘图标生成 | 根目录 `pnpm sync:icons` 在 macOS 上调用，输出 `icons/icon.icns` 和 `icons/tray-macos.png`。 |
+| `linux/linux.desktop` | Linux 桌面入口模板 | 维护启动命令、图标及本地化显示名；由 `tauri.linux.conf.json` 的 `bundle.linux.deb.desktopTemplate` 引用。 |
 | `ios/ShareExtension/` | iOS 分享扩展的 Swift 生命周期入口 | `prepare.cjs` 复制到 Xcode 工程；上传实现位于 `../share/`。 |
 | `ios/prepare.cjs` | iOS 工程准备与扩展 Rust 构建脚本 | 默认配置 App Group、Keychain、分享扩展及静态库链接；Xcode 构建阶段调用 `build-share-core` 子命令编译 Rust 静态库。 |
 | `ios/sync-icons.cjs` | iOS 图标生成和 Xcode 资源同步 | `prepare.cjs` 和根目录 `pnpm sync:icons` 调用。 |
 | `../share/` | 分享功能的 Rust 核心和原生桥接 | 共用协议在 `core/`；Android 适配在 `android.rs`；Kotlin 入口与 iOS FFI 在 `plugin/`。 |
 | `../src/platforms/mobile/` | 主应用其他原生能力 | 剪贴板、文件选择与导出等 Rust 平台适配。 |
 
-Tauri 的 `tauri.android.conf.json`、`tauri.ios.conf.json`、`tauri.macos.conf.json` 仍在 `src-tauri/` 根目录，供 CLI 按平台自动加载。图标仍统一存放于 `../icons/`。
+Tauri 的 `tauri.android.conf.json`、`tauri.ios.conf.json`、`tauri.macos.conf.json`、`tauri.linux.conf.json` 仍在 `src-tauri/` 根目录，供 CLI 按平台自动加载。图标仍统一存放于 `../icons/`。
 
 在 `apps/app/` 执行：
 
