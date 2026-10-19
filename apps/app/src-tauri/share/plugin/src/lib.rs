@@ -5,6 +5,9 @@ use tauri::{
     AppHandle, Manager, Runtime,
 };
 
+#[cfg(target_os = "ios")]
+tauri::ios_plugin_binding!(init_plugin_cliproam_share_receiver);
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +43,9 @@ pub struct PendingShare {
 pub struct ShareUploadSession {
     pub http_url: String,
     pub token: String,
+    pub username: String,
     pub device_id: String,
+    pub device: serde_json::Value,
     pub scope: String,
     pub file_limit: u64,
     pub max_count: u64,
@@ -96,27 +101,14 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
     #[cfg(target_os = "android")]
     { let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ShareReceiverPlugin")?; Ok(ShareReceiver(handle)) }
     #[cfg(target_os = "ios")]
-    {
-        use tauri::Emitter;
-        let _=api;
-        let app=_app.clone();
-        cliproam_share_upload::ios::set_notify(Box::new(move||{let _=app.emit("cliproam://share-received",serde_json::json!({}));}));
-        _app.run_on_main_thread(||unsafe{cliproam_share_upload::ios::attach()})?;
-        Ok(ShareReceiver(std::marker::PhantomData))
-    }
+    { Ok(ShareReceiver(api.register_ios_plugin(init_plugin_cliproam_share_receiver)?)) }
 }
 
-#[cfg(target_os = "android")]
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
-#[cfg(target_os = "ios")]
-pub struct ShareReceiver<R: Runtime>(std::marker::PhantomData<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
     pub fn configure_session(&self, session: Option<ShareUploadSession>) -> Result<()> {
-        #[cfg(target_os = "android")]
-        { self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"configure","session":session}) }).map_err(Into::into) }
-        #[cfg(target_os = "ios")]
-        { cliproam_share_upload::ios::configure(session.map(serde_json::to_value).transpose().map_err(|e|Error::Native(e.to_string()))?).map_err(Error::Native) }
+        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"configure","session":session}) }).map_err(Into::into)
     }
     #[cfg(target_os = "android")]
     pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
@@ -158,21 +150,10 @@ impl<R: Runtime> ShareReceiver<R> {
     }
 
     pub fn pending(&self, scope: &str) -> Result<Vec<PendingShare>> {
-        #[cfg(target_os = "android")]
-        { self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"pending","scope":scope}) }).map_err(Into::into) }
-        #[cfg(target_os = "ios")]
-        { serde_json::from_value(cliproam_share_upload::ios::pending(scope).map_err(Error::Native)?).map_err(|e|Error::Native(e.to_string())) }
+        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"pending","scope":scope}) }).map_err(Into::into)
     }
-
     pub fn acknowledge(&self, id: &str) -> Result<()> {
-        #[cfg(target_os = "android")]
-        {
-        self.0
-            .run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"ack","id":id}) })
-            .map_err(Into::into)
-        }
-        #[cfg(target_os = "ios")]
-        { cliproam_share_upload::ios::acknowledge(id).map_err(Error::Native) }
+        self.0.run_mobile_plugin("call", NativeCall { input: serde_json::json!({"command":"ack","id":id}) }).map_err(Into::into)
     }
 }
 

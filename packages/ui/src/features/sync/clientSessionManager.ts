@@ -135,7 +135,8 @@ export class ClientSessionManager {
       const device = await session.start(() => getDevice());
       const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
       await shareReceiver.configureSession?.({
-        httpUrl, token: config.sessionToken, deviceId: device.id, scope: profileName(session.accountKey),
+        httpUrl, token: config.sessionToken, username: config.username,
+        deviceId: device.id, device, scope: profileName(session.accountKey),
         fileLimit: session.preferences.autoUploadLimitMb * 1024 * 1024,
         maxCount: session.preferences.maxCaptureFileCount,
       }).catch((error) => showNotification({ message: `分享直接上传初始化失败：${errorMessage(error)}`, tone: "error" }));

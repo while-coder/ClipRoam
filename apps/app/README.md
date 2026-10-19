@@ -6,7 +6,7 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 - `../../packages/ui/src`：三端共用的登录和业务页面、账号状态、历史缓存、同步、捕获过滤、哈希、上传与下载队列，以及平台接口和共用 Web API 实现。
 - `src`：Tauri 入口壳、`NativeRust`、原生日志和更新器接入、快捷粘贴窗口、独立 Toast 窗口及其样式。快速粘贴视图通过共享 App 插槽接入；Toast 窗口单独加载，不初始化共享账号与同步业务。
-- `src-tauri/src`：原生命令与平台实现。Rust 提供系统剪贴板、图片格式适配、焦点与粘贴按键、文件字节读写、系统对话框、Android 分享/文件导出、窗口与托盘。
+- `src-tauri/src`：原生命令与平台实现。Rust 提供系统剪贴板、图片格式适配、焦点与粘贴按键、文件字节读写、系统对话框、Android 文件导出、窗口与托盘；系统分享由 Kotlin / Swift 接收，上传业务统一由 `src-tauri/share/core` 处理。
 - `src-tauri/native`：Android、iOS、macOS 的原生源码、配置、资源与准备脚本。CI 分别执行 `android:init`、`ios:init` 生成工程，`src-tauri/gen` 不纳入 Git；详情见[原生目录说明](src-tauri/native/README.md)。
 
 入口先注入 `NativeRust`，再加载共用 App；浏览器开发预览使用共用 Web API 适配器。文件导出、账号数据库、同步和传输调度由共享 TS 代码负责。
@@ -19,7 +19,9 @@ iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使�
 
 ## 本地数据
 
-登录配置只包含服务器地址及协议、用户名和 sessionToken，使用 AES-GCM 加密后保存到 localStorage，每次保存使用新的随机 IV。随机密钥保存在同一应用的 localStorage，目的是避免直接保存明文；这不提供系统钥匙串级别的隔离。退出登录删除登录配置，配置或密钥损坏后可重新登录覆盖。
+主界面登录配置包含服务器地址及协议、用户名和 sessionToken，使用 AES-GCM 加密后保存到 IndexedDB 的 `cliproam-global/meta`，每次保存使用新的随机 IV。随机密钥保存在同一数据库，目的是避免直接保存明文；这不提供系统钥匙串级别的隔离。退出登录删除当前登录配置，配置或密钥损坏后可重新登录覆盖。
+
+移动端同时保存一份后台分享上传配置到 `files/share-auth/current`，包含服务器 URL、session token、用户名、设备信息、账号范围及上传限制。Android 使用应用私有目录，iOS 使用 App Group 共享容器。两端统一由 Rust 使用固定密钥和随机 nonce 进行 AES-GCM 加解密，无需 KeyStore / Keychain；固定密钥可以从程序中提取。详见[分享上传配置](src-tauri/share/README.md#分享上传配置)。
 
 历史缓存、待上传队列、账号偏好、设备标识和下载记录使用 IndexedDB，账号数据按服务器与用户名隔离。桌面文件内容保存在应用目录，浏览器文件内容保存为 IndexedDB Blob。没有旧 SQLite、旧配置或钥匙串数据导入流程；升级后需要重新登录，历史从服务器重新获取。
 

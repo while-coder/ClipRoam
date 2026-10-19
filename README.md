@@ -133,9 +133,9 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 `pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-android.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
 
-iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group、Keychain Sharing 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group，并共享 `$(AppIdentifierPrefix)com.whilecode.cliproam.share-auth` Keychain 访问组；安装时签名工具必须保留这些权限。未签名 IPA 的构建不验证设备上的共享容器与 Keychain 权限。
+iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。后台分享配置统一保存到容器内的 `files/share-auth/current`，由 Rust 加解密，不使用 Keychain Sharing。未签名 IPA 的构建不验证设备上的共享容器权限。
 
-移动端分享只同步文本和文件。共用的 Rust 上传核心位于 `apps/app/src-tauri/share/core`，Rust 平台适配分别位于 `share/android/` 和 `share/ios/`，Kotlin 与 Swift 入口分别位于 `share/plugin/android/` 和 `share/plugin/ios/`；目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。iOS 扩展的 Xcode 构建阶段会通过 `node apps/app/src-tauri/native/ios/prepare.cjs build-share-core` 生成并链接 Rust 静态库。
+移动端分享只同步文本和文件。共用的 Rust 上传核心位于 `apps/app/src-tauri/share/core`；Android 由 Kotlin 管理 Worker，Rust 内部执行 HTTP；iOS 由 Swift 提供后台 URLSession HTTP 接口，逐次将响应交回同一 Rust 核心。Kotlin 与 Swift 入口分别位于 `share/plugin/android/` 和 `share/plugin/ios/`；目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。iOS 扩展的 Xcode 构建阶段会通过 `node apps/app/src-tauri/native/ios/prepare.cjs build-share-core` 生成并链接 Rust 静态库。
 
 ### 常见问题
 

@@ -1,5 +1,5 @@
-//! Portable share-upload state machine. Swift/Android only execute the returned
-//! file-backed HTTP requests with their OS background transfer APIs. Credentials
+//! Portable share-upload state machine. Android executes HTTP in Rust; iOS
+//! submits file-backed HTTP requests through its native background bridge. Credentials
 //! are passed per call and never persisted in a plan or request body.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -13,10 +13,9 @@ use std::{
 };
 
 const CHUNK_SIZE: u64 = 128 * 1024;
-#[cfg(target_os = "ios")]
-// Also compiled into the standalone static library used by the share extension.
-#[path = "../../ios/mod.rs"]
-pub mod ios;
+pub mod auth;
+mod mobile;
+pub mod upload;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,12 +67,28 @@ fn io(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 fn atomic(path: &Path, data: &[u8]) -> Result<()> {
-    let temp = path.with_extension("tmp");
-    let mut file = fs::File::create(&temp).map_err(io)?;
-    file.write_all(data).map_err(io)?;
-    file.sync_all().map_err(io)?;
-    // rename replaces atomically on the two mobile targets (POSIX).
-    fs::rename(&temp, path).map_err(io)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(io)?;
+        file.write_all(data).map_err(io)?;
+        file.sync_all().map_err(io)?;
+        drop(file);
+        fs::rename(&temp, path).map_err(io)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
 }
 fn save(directory: &Path, plan: &Plan) -> Result<()> {
     atomic(
@@ -338,12 +353,8 @@ fn advance(directory: &Path, status: u64, body: &str) -> Result<Value> {
 }
 
 fn dispatch(input: Value) -> Result<Value> {
-    #[cfg(target_os = "ios")]
-    if input["command"]
-        .as_str()
-        .is_some_and(|c| c.starts_with("ios."))
-    {
-        return ios::dispatch(input);
+    if input.get("files").is_some() {
+        return mobile::dispatch(input);
     }
     let directory = Path::new(input["directory"].as_str().ok_or("缺少分享缓存目录")?);
     match input["command"].as_str().ok_or("缺少操作")? {

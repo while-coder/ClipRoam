@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import type { ShareReceiver, SharedContent, ShareReceiverEvent, ShareUploadSession } from "@cliproam/ui/share";
 import type { Unlisten } from "@cliproam/ui/native";
 
@@ -10,7 +9,8 @@ export class MobileShareReceiver implements ShareReceiver {
     return (await invoke<{ shareReceiver: boolean }>("native_get_platform_capabilities")).shareReceiver;
   }
   async listen(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> {
-    return listen<ShareReceiverEvent>("cliproam://share-received", (event) => handler(event.payload));
+    const listener = await addPluginListener<ShareReceiverEvent>("cliproam-share-receiver", "share-received", handler);
+    return () => { void listener.unregister(); };
   }
   pending(scope: string): Promise<SharedContent[]> { return invoke("native_pending_shares", { scope }); }
   acknowledge(id: string): Promise<void> { return invoke("native_ack_share", { id }); }

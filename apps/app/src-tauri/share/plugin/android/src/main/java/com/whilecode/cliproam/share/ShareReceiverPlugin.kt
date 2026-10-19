@@ -62,11 +62,19 @@ class CopyDocumentsArgs {
 class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    override fun load(webView: WebView) {
+        ShareNative.onChanged = { activity.runOnUiThread { trigger("share-received", JSObject()) } }
+    }
+
     override fun onResume() {
-        scope.launch { ShareNative.call(activity, "{\"command\":\"resume\"}") }
+        scope.launch {
+            try { ShareNative.dispatch(activity, "{\"command\":\"resume\"}") }
+            catch (error: Exception) { android.util.Log.w("ClipRoam", "无法调度分享上传", error) }
+        }
     }
 
     override fun onDestroy() {
+        ShareNative.onChanged = null
         scope.cancel()
     }
 
@@ -74,9 +82,13 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
     fun call(invoke: Invoke) {
         val args = invoke.parseArgs(ShareCallArgs::class.java)
         scope.launch {
-            val result = jsonMapper().readTree(ShareNative.call(activity, JSONObject(args.input).toString()))
-            if (result.path("ok").asBoolean()) invoke.resolveObject(result.path("value"))
-            else invoke.reject(result.path("error").asText("分享处理失败"))
+            try {
+                val result = jsonMapper().readTree(ShareNative.dispatch(activity, JSONObject(args.input).toString()))
+                if (result.path("ok").asBoolean()) invoke.resolveObject(result.path("value"))
+                else invoke.reject(result.path("error").asText("分享处理失败"))
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: "无法调度分享上传")
+            }
         }
     }
 

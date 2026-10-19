@@ -23,8 +23,6 @@ pub fn run() {
     let builder = platform::register_plugins(builder);
     builder
         .setup(|app| {
-            #[cfg(target_os = "android")]
-            share::attach(app.handle().clone());
             std::fs::create_dir_all(app.path().app_data_dir()?)?;
             app.manage(app::QuickPasteMode::default());
             app.manage(window_mode::WindowModeState::default());
