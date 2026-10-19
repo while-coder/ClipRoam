@@ -1,35 +1,42 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 
 defineProps<{ src: string; title: string }>();
 const error = ref("");
-onBeforeUnmount(() => resetPreviewGesture());
-
-// 预览缩放/平移：desktop 滚轮缩放、左键拖拽平移；移动端双指捏合缩放、单指拖拽；
-// 双击复位。全部走 transform，不产生滚动条。
 const previewZoom = ref(1);
 const previewPanX = ref(0);
 const previewPanY = ref(0);
+const previewImageSize = ref({ width: 0, height: 0 });
 const PREVIEW_ZOOM_MIN = 0.25;
 const PREVIEW_ZOOM_MAX = 6;
-const previewPointers = new Map<number, { x: number; y: number; type: string }>();
-let previewPanDrag: { id: number; startX: number; startY: number; panX: number; panY: number } | null = null;
-let previewPinch: { distance: number; zoom: number } | null = null;
-// stage/img 的布局尺寸：平移边界要用，手势开始与图片加载时读一次，之后纯算术。
+type PreviewPoint = { x: number; y: number };
+const previewPointers = new Map<number, PreviewPoint>();
 const previewStageElement = ref<HTMLElement>();
 const previewImageElement = ref<HTMLImageElement>();
-let previewMetrics: { contentW: number; contentH: number; imgW: number; imgH: number } | null = null;
-function clampPreviewZoom(value: number): number {
-  return Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, value));
-}
+let previewMetrics: { contentW: number; contentH: number; centerX: number; centerY: number } | null = null;
+let previewResizeObserver: ResizeObserver | undefined;
+
+onMounted(() => {
+  previewResizeObserver = new ResizeObserver(() => {
+    readPreviewMetrics();
+    clampPreviewPan();
+  });
+  if (previewStageElement.value) previewResizeObserver.observe(previewStageElement.value);
+});
+onBeforeUnmount(() => {
+  resetPreviewGesture();
+  previewResizeObserver?.disconnect();
+});
 
 function resetPreviewTransform(): void {
+  resetPreviewGesture();
   previewZoom.value = 1;
   previewPanX.value = 0;
   previewPanY.value = 0;
+  readPreviewMetrics();
 }
 
-/** 读取 stage 内容区与图片的布局尺寸，作为平移边界计算的基准。 */
+/** 从原始尺寸等比适配，避免 Grid 固有尺寸和 object-fit 的留白影响显示与拖拽边界。 */
 function readPreviewMetrics(): void {
   const stage = previewStageElement.value;
   const image = previewImageElement.value;
@@ -38,111 +45,125 @@ function readPreviewMetrics(): void {
     return;
   }
   const padding = getComputedStyle(stage);
+  const left = parseFloat(padding.paddingLeft);
+  const top = parseFloat(padding.paddingTop);
+  const contentW = Math.max(0, stage.clientWidth - left - parseFloat(padding.paddingRight));
+  const contentH = Math.max(0, stage.clientHeight - top - parseFloat(padding.paddingBottom));
+  const rect = stage.getBoundingClientRect();
   previewMetrics = {
-    contentW: stage.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight),
-    contentH: stage.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom),
-    imgW: image.offsetWidth,
-    imgH: image.offsetHeight,
+    contentW, contentH,
+    centerX: rect.left + stage.clientLeft + left + contentW / 2,
+    centerY: rect.top + stage.clientTop + top + contentH / 2,
   };
+  if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+    const fit = Math.min(1, contentW / image.naturalWidth, contentH / image.naturalHeight);
+    previewImageSize.value = { width: image.naturalWidth * fit, height: image.naturalHeight * fit };
+  }
 }
 
-/** 平移限制在「缩放后的图片不被拖出 stage 内容区」范围内；尺寸未知时不作限制。 */
 function clampPreviewPan(): void {
   if (!previewMetrics) return;
-  const limitX = Math.max(0, (previewMetrics.imgW * previewZoom.value - previewMetrics.contentW) / 2);
-  const limitY = Math.max(0, (previewMetrics.imgH * previewZoom.value - previewMetrics.contentH) / 2);
+  const limitX = Math.max(0, (previewImageSize.value.width * previewZoom.value - previewMetrics.contentW) / 2);
+  const limitY = Math.max(0, (previewImageSize.value.height * previewZoom.value - previewMetrics.contentH) / 2);
   previewPanX.value = Math.min(limitX, Math.max(-limitX, previewPanX.value));
   previewPanY.value = Math.min(limitY, Math.max(-limitY, previewPanY.value));
 }
 
+/** 将旧锚点下的图片内容移到新锚点；坐标以预览内容区中心为原点。 */
+function zoomPreviewAt(zoom: number, fromX: number, fromY: number, toX = fromX, toY = fromY): void {
+  if (!Number.isFinite(zoom)) return;
+  const next = Math.min(PREVIEW_ZOOM_MAX, Math.max(PREVIEW_ZOOM_MIN, zoom));
+  const ratio = next / previewZoom.value;
+  previewPanX.value = toX - (fromX - previewPanX.value) * ratio;
+  previewPanY.value = toY - (fromY - previewPanY.value) * ratio;
+  previewZoom.value = next;
+  clampPreviewPan();
+}
+
 function onPreviewWheel(event: WheelEvent): void {
   readPreviewMetrics();
-  previewZoom.value = clampPreviewZoom(previewZoom.value * Math.exp(-event.deltaY * 0.002));
-  clampPreviewPan();
+  if (!previewMetrics) return;
+  // WheelEvent 的行/页单位不能直接当像素使用。
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? previewMetrics.contentH : 1;
+  const factor = Math.exp(Math.max(-20, Math.min(20, -event.deltaY * unit * 0.002)));
+  zoomPreviewAt(previewZoom.value * factor,
+    event.clientX - previewMetrics.centerX, event.clientY - previewMetrics.centerY);
 }
 
 function onPreviewImageLoad(): void {
-  readPreviewMetrics();
-  clampPreviewPan();
+  resetPreviewTransform();
 }
 
-function previewPointersDistance(): number {
-  const [first, second] = [...previewPointers.values()];
-  return Math.hypot(first.x - second.x, first.y - second.y);
-}
-
-/** 仅剩一根指针且不在捏合时，把它设为新的平移基线（避免松指后跳位）。 */
-function syncPreviewPanDrag(): void {
-  if (previewPointers.size !== 1 || previewPinch) {
-    previewPanDrag = null;
-    return;
-  }
-  const [id, point] = [...previewPointers.entries()][0];
-  previewPanDrag = { id, startX: point.x, startY: point.y, panX: previewPanX.value, panY: previewPanY.value };
+function previewPinchPoints(): { distance: number; x: number; y: number } | undefined {
+  const [first, second] = previewPointers.values();
+  if (!first || !second) return;
+  return {
+    distance: Math.hypot(first.x - second.x, first.y - second.y),
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
 }
 
 function detachPreviewPointerListeners(): void {
   window.removeEventListener("pointermove", onPreviewPointerMove);
   window.removeEventListener("pointerup", onPreviewPointerUp);
   window.removeEventListener("pointercancel", onPreviewPointerUp);
+  window.removeEventListener("blur", resetPreviewGesture);
 }
 
-/** 清掉手势状态与 window 监听；关闭预览与组件卸载时调用。 */
+function releasePreviewPointer(id: number): void {
+  const stage = previewStageElement.value;
+  if (stage?.hasPointerCapture(id)) stage.releasePointerCapture(id);
+}
+
 function resetPreviewGesture(): void {
+  const ids = [...previewPointers.keys()];
   previewPointers.clear();
-  previewPanDrag = null;
-  previewPinch = null;
+  for (const id of ids) releasePreviewPointer(id);
   detachPreviewPointerListeners();
 }
 
 function onPreviewPointerDown(event: PointerEvent): void {
   if (event.button !== 0) return;
-  // 指针可能在窗口外松开、收不到 pointerup（鼠标 pointerId 恒定）：残留的幽灵
-  // 记录会让本次手势被误判成双指捏合，表现为拖不动。同类型非 touch 只有一个活跃指针。
-  if (event.pointerType !== "touch") {
-    for (const [id, point] of [...previewPointers.entries()]) {
-      if (point.type === event.pointerType) previewPointers.delete(id);
-    }
-    if (previewPointers.size < 2) previewPinch = null;
-  }
-  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
-  if (previewPointers.size === 2) {
-    previewPinch = { distance: previewPointersDistance(), zoom: previewZoom.value };
-    previewPanDrag = null;
-  } else {
-    syncPreviewPanDrag();
-  }
-  // move/up 挂 window：拖出 stage 或窗口边缘都不丢事件（比 setPointerCapture 稳）。
+  if (event.pointerType !== "touch") resetPreviewGesture();
   readPreviewMetrics();
+  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  previewStageElement.value?.setPointerCapture(event.pointerId);
   window.addEventListener("pointermove", onPreviewPointerMove);
   window.addEventListener("pointerup", onPreviewPointerUp);
   window.addEventListener("pointercancel", onPreviewPointerUp);
+  window.addEventListener("blur", resetPreviewGesture);
 }
 
 function onPreviewPointerMove(event: PointerEvent): void {
-  if (!previewPointers.has(event.pointerId)) return;
-  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
-  if (previewPinch && previewPointers.size >= 2) {
-    previewZoom.value = clampPreviewZoom(previewPinch.zoom * (previewPointersDistance() / previewPinch.distance));
-    clampPreviewPan();
-  } else if (previewPanDrag?.id === event.pointerId) {
-    previewPanX.value = previewPanDrag.panX + event.clientX - previewPanDrag.startX;
-    previewPanY.value = previewPanDrag.panY + event.clientY - previewPanDrag.startY;
+  const previous = previewPointers.get(event.pointerId);
+  if (!previous) return;
+  if (event.pointerType !== "touch" && (event.buttons & 1) === 0) {
+    onPreviewPointerUp(event);
+    return;
+  }
+  const before = previewPinchPoints();
+  previewPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const after = previewPinchPoints();
+  if (before && after && previewMetrics) {
+    // 逐帧使用当前两指作基线，换指和到达缩放边界后均可立即反向操作。
+    const ratio = before.distance > 0 && after.distance > 0 ? after.distance / before.distance : 1;
+    zoomPreviewAt(previewZoom.value * ratio,
+      before.x - previewMetrics.centerX, before.y - previewMetrics.centerY,
+      after.x - previewMetrics.centerX, after.y - previewMetrics.centerY);
+  } else if (previewPointers.size === 1) {
+    // 使用相邻事件的位移，边界外的距离不累积成反向拖动的死区。
+    previewPanX.value += event.clientX - previous.x;
+    previewPanY.value += event.clientY - previous.y;
     clampPreviewPan();
   }
 }
 
 function onPreviewPointerUp(event: PointerEvent): void {
-  previewPointers.delete(event.pointerId);
-  if (previewPointers.size < 2) previewPinch = null;
-  if (previewPanDrag?.id === event.pointerId) previewPanDrag = null;
-  if (previewPointers.size > 0) {
-    syncPreviewPanDrag();
-    return;
-  }
-  detachPreviewPointerListeners();
+  if (!previewPointers.delete(event.pointerId)) return;
+  releasePreviewPointer(event.pointerId);
+  if (previewPointers.size === 0) detachPreviewPointerListeners();
 }
-
 </script>
 
 <template>
@@ -153,13 +174,18 @@ function onPreviewPointerUp(event: PointerEvent): void {
     class="image-preview-stage"
     @wheel.prevent="onPreviewWheel"
     @pointerdown="onPreviewPointerDown"
+    @lostpointercapture="onPreviewPointerUp"
     @dblclick="resetPreviewTransform"
   >
     <img
       ref="previewImageElement"
       :src="src"
       :alt="title"
-      :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})` }"
+      :style="{
+        width: `${previewImageSize.width}px`, height: `${previewImageSize.height}px`,
+        marginLeft: `${-previewImageSize.width / 2}px`, marginTop: `${-previewImageSize.height / 2}px`,
+        transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})`,
+      }"
       draggable="false"
       @load="onPreviewImageLoad"
       @error="error = '图片加载失败'"
@@ -170,11 +196,10 @@ function onPreviewPointerUp(event: PointerEvent): void {
 <style scoped>
 .preview-status { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 160px; color: var(--color-secondary-text); }
 .image-preview-stage {
-  display: grid;
-  place-items: center;
-  min-height: 0;
-  /* 预览已是 SModal 内容：高度自算（视口 - 标题栏/内边距），img max-height:100% 才有约束。 */
+  position: relative;
+  min-height: 80px;
   height: min(640px, calc(100vh - 200px));
+  height: min(640px, calc(100dvh - 200px));
   padding: 20px;
   /* 缩放/平移全走 transform：溢出即裁剪，不给 scale 生成滚动条。 */
   overflow: hidden;
@@ -184,5 +209,5 @@ function onPreviewPointerUp(event: PointerEvent): void {
   background: radial-gradient(circle at center, #17233c, #050a14 74%);
 }
 .image-preview-stage:active { cursor: grabbing; }
-.image-preview-stage img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; }
+.image-preview-stage img { position: absolute; left: 50%; top: 50%; display: block; max-width: none; max-height: none; user-select: none; }
 </style>
