@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ClipboardKind } from "@cliproam/protocol";
 import { parseLocalDate, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
@@ -560,7 +561,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         v-for="entry in pageEntries"
         :key="entry.id"
         class="history-item"
-        :class="{ selected: selecting ? selectedIds.has(entry.id) : selectedEntryId === entry.id, 'image-entry': entry.kind === 'image', 'selection-item': selecting }"
+        :class="{ selected: selecting ? selectedIds.has(entry.id) : selectedEntryId === entry.id, 'image-entry': entry.kind === ClipboardKind.Image, 'selection-item': selecting }"
         :role="selecting ? 'checkbox' : 'button'"
         :aria-checked="selecting ? selectedIds.has(entry.id) : undefined"
         :tabindex="deleting || (!selecting && activatingEntryIds.has(entry.id)) ? -1 : 0"
@@ -580,7 +581,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <Check v-if="selectedIds.has(entry.id)" :size="16" />
         </span>
         <button
-          v-else-if="entry.kind === 'image' && isQuickPaste"
+          v-else-if="entry.kind === ClipboardKind.Image && isQuickPaste"
           class="image-thumbnail"
           type="button"
           :aria-label="`预览${entry.content}`"
@@ -594,12 +595,12 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" :alt="entry.content" loading="lazy" />
           <Image v-else :size="18" aria-hidden="true" />
         </button>
-        <span v-else-if="entry.kind === 'image'" class="image-thumbnail" aria-hidden="true">
+        <span v-else-if="entry.kind === ClipboardKind.Image" class="image-thumbnail" aria-hidden="true">
           <img v-if="thumbnailSource(entry)" :src="thumbnailSource(entry)" alt="" loading="lazy" />
           <Image v-else :size="18" />
         </span>
         <button
-          v-else-if="entry.kind === 'files' && isQuickPaste"
+          v-else-if="entry.kind === ClipboardKind.Files && isQuickPaste"
           class="file-preview-trigger"
           type="button"
           :aria-label="`预览${entry.content}`"
@@ -731,7 +732,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     </SModal>
 
     <SModal
-      v-if="previewEntry?.kind === 'text'"
+      v-if="previewEntry?.kind === ClipboardKind.Text"
       :key="previewEntry.id"
       :show="true"
       title="文本预览"
@@ -754,7 +755,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </template>
     </SModal>
     <FilePreview
-      v-else-if="previewEntry && (previewEntry.kind === 'files' || previewEntry.kind === 'image')"
+      v-else-if="previewEntry && (previewEntry.kind === ClipboardKind.Files || previewEntry.kind === ClipboardKind.Image)"
       :key="previewEntry.id"
       :entry="previewEntry"
       @close="closeEntryPreview"

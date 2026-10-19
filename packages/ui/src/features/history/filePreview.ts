@@ -1,13 +1,17 @@
+import { ClipboardKind } from "@cliproam/protocol";
+
 export type PreviewFile = { name: string; path: string; fileId: string; size: number };
 
 const textExtensions = new Set(["txt", "log", "md", "csv", "json", "xml", "yaml", "yml", "ini", "conf"]);
 const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "bmp"]);
 
-export function filePreviewKind(name: string): "text" | "image" | undefined {
+export type FilePreviewKind = typeof ClipboardKind.Text | typeof ClipboardKind.Image;
+
+export function filePreviewKind(name: string): FilePreviewKind | undefined {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (!name.includes(".")) return undefined;
-  if (textExtensions.has(extension)) return "text";
-  if (imageExtensions.has(extension)) return "image";
+  if (textExtensions.has(extension)) return ClipboardKind.Text;
+  if (imageExtensions.has(extension)) return ClipboardKind.Image;
   return undefined;
 }
 

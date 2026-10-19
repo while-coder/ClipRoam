@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ClipboardKind } from "@cliproam/protocol";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Copy, Download } from "lucide-vue-next";
 import { getAccountSession } from "../../accountSession";
@@ -7,12 +8,12 @@ import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
 import { decodePreviewText, filePreviewKind, type PreviewFile } from "./filePreview";
-import ImagePreview from "./ImagePreview.vue";
-import TextContentPreview from "../../components/preview/TextPreview.vue";
+import ImagePreview from "../../components/preview/ImagePreview.vue";
+import TextPreview from "../../components/preview/TextPreview.vue";
 
 const props = defineProps<{ entryId: string; file: PreviewFile; image?: boolean; back?: boolean }>();
 const emit = defineEmits<{ close: []; back: [] }>();
-const kind = props.image ? "image" : filePreviewKind(props.file.name);
+const kind = props.image ? ClipboardKind.Image : filePreviewKind(props.file.name);
 const loading = ref(false);
 const error = ref("");
 const text = ref("");
@@ -22,7 +23,7 @@ const truncated = ref(false);
 const saving = ref(false);
 const copying = ref(false);
 const { platformCapabilities } = usePlatform();
-const canCopy = computed(() => kind === "text" || (kind === "image"
+const canCopy = computed(() => kind === ClipboardKind.Text || (kind === ClipboardKind.Image
   && platformCapabilities.value.imageClipboard
   && (isNative || (typeof navigator.clipboard?.write === "function"
     && typeof ClipboardItem !== "undefined" && typeof createImageBitmap === "function"))));
@@ -37,9 +38,9 @@ async function copyToClipboard(): Promise<void> {
     // Copy the complete file, even when the text preview only shows its beginning.
     const bytes = await session.files.read(props.file.fileId, 0, props.file.size);
     session.signal.throwIfAborted();
-    await clipboardPlatform.write(kind === "image"
-      ? { kind: "image", bytes }
-      : { kind: "text", text: decodePreviewText(bytes) }, false);
+    await clipboardPlatform.write(kind === ClipboardKind.Image
+      ? { kind: ClipboardKind.Image, bytes }
+      : { kind: ClipboardKind.Text, text: decodePreviewText(bytes) }, false);
     if (!session.signal.aborted) showNotification({ message: "已复制到系统剪贴板", tone: "success" });
   } catch (cause) {
     if (!session.signal.aborted) showNotification({ message: `复制失败：${errorMessage(cause)}`, tone: "error" });
@@ -62,7 +63,7 @@ async function downloadFile(): Promise<void> {
     // Export this file alone, including when it was opened from a directory.
     const fileEntry = props.image ? entry : {
       ...entry,
-      kind: "files" as const,
+      kind: ClipboardKind.Files,
       fileInfo: { [props.file.name]: { f: props.file.fileId, s: props.file.size } },
       imageInfo: undefined,
       sources: undefined,
@@ -87,7 +88,7 @@ onMounted(async () => {
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
     if (disposed) return;
     session.signal.throwIfAborted();
-    if (kind === "image") {
+    if (kind === ClipboardKind.Image) {
       const path = await session.files.resolve(props.file.fileId);
       if (!path) throw new Error("图片文件不可用");
       const url = await previewSource(path);
@@ -107,14 +108,14 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal :show="true" :title="file.name" :width="kind === 'image' ? '980px' : '760px'" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal :show="true" :title="file.name" :width="kind === ClipboardKind.Image ? '980px' : '760px'" @update:show="(value: boolean) => { if (!value) emit('close') }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
-    <ImagePreview v-else-if="kind === 'image' && source" :src="source" :title="file.name" />
-    <TextContentPreview v-else-if="kind === 'text'" :text="text" label="文件文本内容" empty-text="（空文件）">
+    <ImagePreview v-else-if="kind === ClipboardKind.Image && source" :src="source" :title="file.name" />
+    <TextPreview v-else-if="kind === ClipboardKind.Text" :text="text" label="文件文本内容" empty-text="（空文件）">
       <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
-    </TextContentPreview>
+    </TextPreview>
     <template #footer>
       <SButton v-if="back" @click="emit('back')">返回文件列表</SButton>
       <SButton v-if="canCopy" :loading="copying" :disabled="loading || copying || !!error" @click="copyToClipboard">

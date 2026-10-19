@@ -2,7 +2,7 @@
 import { errorMessage, formatFileSize, fileEntrySummary } from "../../utils";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { fullEntry } from "./useHistorySync";
-import { isFileNode, type FileInfo, type TreeNode } from "@cliproam/protocol";
+import { ClipboardKind, isFileNode, type FileInfo, type TreeNode } from "@cliproam/protocol";
 import { ChevronDown, ChevronRight, File, FileText, Image, Folder, FolderOpen } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 import FileContentPreview from "./FileContentPreview.vue";
@@ -26,7 +26,7 @@ onMounted(async () => {
     // 列表只有摘要；先读取完整结构，实际打开文件时再加载内容。
     const entry = await fullEntry(props.entry);
     if (disposed) return;
-    if (entry.kind === "image") {
+    if (entry.kind === ClipboardKind.Image) {
       if (!entry.imageInfo) throw new Error("图片文件信息不可用");
       opened.value = { name: entry.content, path: entry.content, fileId: entry.imageInfo.fileId, size: entry.imageInfo.size };
       return;
@@ -103,7 +103,7 @@ function openFile(row: PreviewRow): void {
 
 function fileIcon(name: string) {
   const kind = filePreviewKind(name);
-  return kind === "image" ? Image : kind === "text" ? FileText : File;
+  return kind === ClipboardKind.Image ? Image : kind === ClipboardKind.Text ? FileText : File;
 }
 </script>
 
@@ -113,7 +113,7 @@ function fileIcon(name: string) {
     :key="opened.path"
     :entry-id="entry.id"
     :file="opened"
-    :image="entry.kind === 'image'"
+    :image="entry.kind === ClipboardKind.Image"
     :back="browsing"
     @back="opened = undefined"
     @close="emit('close')"
