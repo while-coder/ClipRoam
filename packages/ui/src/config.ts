@@ -13,12 +13,11 @@ export const DESKTOP_CAPABILITIES: PlatformCapabilities = {
   imageClipboard: true,
   nativeFileExport: true,
   openDataDirectory: true,
-  shareReceiver: false,
 };
 
 export const BROWSER_CAPABILITIES: PlatformCapabilities = {
   mobile: false, clipboardMonitoring: false, globalShortcut: false, automaticPaste: false,
-  fileClipboard: false, imageClipboard: true, nativeFileExport: true, openDataDirectory: false, shareReceiver: false,
+  fileClipboard: false, imageClipboard: true, nativeFileExport: true, openDataDirectory: false,
 };
 
 // 三端共用的账号偏好默认值，由各客户端的 native 能力决定是否启用。

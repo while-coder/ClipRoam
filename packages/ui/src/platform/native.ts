@@ -1,7 +1,6 @@
 import type { PlatformCapabilities, NotificationPayload } from "../types";
-import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
+import type { ClipboardData, ClipboardWrite } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { ShareReceiverEvent } from "../types";
 import type { Ref } from "vue";
 
 export type DeviceInfo = {
@@ -47,7 +46,6 @@ export interface NativePlatform {
   showPasteWindow(): Promise<void>;
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
-  listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;
@@ -58,8 +56,6 @@ export interface NativePlatform {
   readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
   writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void>;
   watchClipboard(scope: string, enabled: boolean): Promise<void>;
-  pendingShares(scope: string): Promise<SharedContent[]>;
-  acknowledgeShare(id: string): Promise<void>;
   pickFiles(mode: string, scope: string): Promise<PickedFiles>;
   getPaths(): Promise<{ appDir: string }>;
   statFiles(paths: string[]): Promise<(FileStat | null)[]>;
@@ -81,6 +77,6 @@ export function configureNative(platform: NativePlatform): void {
   native = platform;
 }
 
-export type { PlatformCapabilities, NotificationPayload, NotificationOptions, ShareReceiverEvent } from "../types";
-export type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
+export type { PlatformCapabilities, NotificationPayload, NotificationOptions } from "../types";
+export type { ClipboardData, ClipboardWrite } from "./clipboard";
 export type { FileStat, SaveTarget } from "./files";

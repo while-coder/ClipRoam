@@ -2,10 +2,13 @@ import { createApp } from "vue";
 import { createUiKit } from "@qingfeng346/ui-kit";
 import { configureNative } from "@cliproam/ui/native";
 import { NativePwa } from "./native";
+import { configureShareReceiver } from "@cliproam/ui/share";
+import { PwaShareReceiver } from "./share/receiver";
 import "@cliproam/ui/styles.css";
 
 async function start(): Promise<void> {
   configureNative(new NativePwa());
+  configureShareReceiver(new PwaShareReceiver(new URL(import.meta.env.BASE_URL, window.location.href).href));
   const { default: App } = await import("./App.vue");
   createApp(App).use(createUiKit()).mount("#app");
 }

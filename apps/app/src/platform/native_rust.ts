@@ -1,10 +1,9 @@
-import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, SharedContent,
-  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten, ShareReceiverEvent } from "@cliproam/ui/native";
+import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite,
+  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getEnvironmentInfo } from "@cliproam/ui/device-info";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { addPluginListener } from "@tauri-apps/api/core";
 import * as shortcuts from "../features/quick-paste/quickPasteShortcut";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -40,10 +39,6 @@ export class NativeRust implements NativePlatform {
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
     return getCurrentWindow().onFocusChanged(({payload}) => handler(payload));
   }
-  async listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> {
-    const listener = await addPluginListener("cliproam-share-receiver", "received", handler);
-    return () => { void listener.unregister(); };
-  }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
   async getDeviceInfo(): Promise<DeviceInfo> {
@@ -63,8 +58,6 @@ export class NativeRust implements NativePlatform {
     return this.invoke("native_write_clipboard", {payload:encoded,synthesize});
   }
   watchClipboard(scope: string, enabled: boolean): Promise<void> { return this.invoke("native_watch_clipboard", {scope,enabled}); }
-  pendingShares(scope: string): Promise<SharedContent[]> { return this.invoke("native_pending_shares", {scope}); }
-  acknowledgeShare(id: string): Promise<void> { return this.invoke("native_ack_share", {id}); }
   async pickFiles(mode: string, scope: string): Promise<PickedFiles> { return {paths:await this.invoke<string[]>("native_pick_files", {mode,scope})}; }
   getPaths(): Promise<{ appDir: string }> { return this.invoke("native_paths"); }
   statFiles(paths: string[]): Promise<(FileStat | null)[]> { return this.invoke("native_fs_stat", {paths}); }

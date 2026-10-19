@@ -1,8 +1,8 @@
 import { BROWSER_CAPABILITIES } from "../config";
 import { toast } from "@qingfeng346/ui-kit";
 import { getBrowserInfo, getEnvironmentInfo } from "./deviceInfo";
-import type { PlatformCapabilities, ShareReceiverEvent, NotificationPayload } from "../types";
-import type { ClipboardData, ClipboardWrite, SharedContent } from "./clipboard";
+import type { PlatformCapabilities, NotificationPayload } from "../types";
+import type { ClipboardData, ClipboardWrite } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
 
@@ -27,7 +27,6 @@ export class NativeWeb implements NativePlatform {
     window.addEventListener("focus", focus); window.addEventListener("blur", blur);
     return () => { window.removeEventListener("focus", focus); window.removeEventListener("blur", blur); };
   }
-  async listenShares(_handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> { return () => {}; }
   async getCapabilities(): Promise<PlatformCapabilities> { return {...BROWSER_CAPABILITIES}; }
   async getDeviceInfo(): Promise<DeviceInfo> {
     return {
@@ -64,8 +63,6 @@ export class NativeWeb implements NativePlatform {
     } else throw new Error("浏览器不支持系统文件剪贴板，请下载文件");
   }
   async watchClipboard(_scope: string, _enabled: boolean): Promise<void> {}
-  async pendingShares(_scope: string): Promise<SharedContent[]> { return []; }
-  async acknowledgeShare(_id: string): Promise<void> {}
   async pickFiles(mode: string, _scope: string): Promise<PickedFiles> {
     const files = await new Promise<File[]>((resolve) => {
       const input = document.createElement("input"); input.type = "file"; input.multiple = true;

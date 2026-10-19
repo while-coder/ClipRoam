@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { saveShare, shareFromForm } from "./shareInbox";
+import { saveShare, shareFromForm } from "./share/inbox";
 
 const worker = self as unknown as ServiceWorkerGlobalScope;
 const scope = worker.registration.scope;

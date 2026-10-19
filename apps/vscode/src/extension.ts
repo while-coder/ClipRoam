@@ -2,16 +2,13 @@ import * as vscode from "vscode";
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname, platform, release, arch, homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-
-type PendingSelection = { id: string; text: string; scope?: string };
-const PENDING_SELECTIONS_KEY = "cliproam.pending-selections";
+import { VscodeShareInbox } from "./shareInbox";
 
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let editor = vscode.window.activeTextEditor;
   let ready: Promise<void>;
-  let pendingSelectionWork: Promise<unknown> = Promise.resolve();
+  const shares = new VscodeShareInbox(context.globalState);
   const saveTargets = new Map<string, { uri: vscode.Uri; single: boolean }>();
 
   function exportPath(value: unknown): { uri: vscode.Uri; data: Record<string, unknown> } {
@@ -23,13 +20,6 @@ export function activate(context: vscode.ExtensionContext): void {
       typeof part !== "string" || !part || part === "." || part === ".." || /[<>:"/\\|?*\x00-\x1f]/.test(part))) throw new Error("保存位置或文件路径无效");
     if (target.single && parts.length !== 1) throw new Error("单文件保存不支持子目录");
     return { uri: target.single ? target.uri : vscode.Uri.joinPath(target.uri, ...parts), data };
-  }
-
-  function updatePendingSelections(transform: (pending: PendingSelection[]) => PendingSelection[]): Promise<void> {
-    const work = pendingSelectionWork.then(() => context.globalState.update(PENDING_SELECTIONS_KEY,
-      transform(context.globalState.get<PendingSelection[]>(PENDING_SELECTIONS_KEY, []))));
-    pendingSelectionWork = work.catch(() => undefined);
-    return work;
   }
 
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((active) => {
@@ -125,17 +115,11 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       case "shares.pending": {
         if (typeof value !== "string" || !value) throw new Error("账号档案无效");
-        let selected: PendingSelection[] = [];
-        await updatePendingSelections((pending) => {
-          const claimed = pending.map((item) => item.scope ? item : { ...item, scope: value });
-          selected = claimed.filter((item) => item.scope === value);
-          return claimed;
-        });
-        return selected.map(({ id, text }) => ({ id, text, images: [], paths: [] }));
+        return shares.pending(value);
       }
       case "shares.acknowledge":
         if (typeof value !== "string") throw new Error("待处理文本标识无效");
-        return updatePendingSelections((pending) => pending.filter((item) => item.id !== value));
+        return shares.acknowledge(value);
       case "device.info": return {
         deviceName: `${hostname()} (VS Code)`, osType: platform(), osVersion: release(), architecture: arch(),
       };
@@ -158,7 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
   command("cliproam.open", open);
   command("cliproam.captureSelection", async () => {
     const text = selectionText();
-    await updatePendingSelections((pending) => [...pending, { id: randomUUID(), text }]);
+    await shares.enqueue(text);
     const current = await open();
     await current.webview.postMessage({ type: "sharesChanged" });
     void vscode.window.showInformationMessage("选中文本已暂存，进入主界面后自动加入历史");

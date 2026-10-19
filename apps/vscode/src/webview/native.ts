@@ -1,5 +1,5 @@
 import { NativeWeb } from "@cliproam/ui/native-web";
-import type { ClipboardData, ClipboardWrite, DeviceInfo, DirectoryEntry, PlatformCapabilities, SaveTarget, SharedContent, ShareReceiverEvent, Unlisten } from "@cliproam/ui/native";
+import type { ClipboardData, ClipboardWrite, DeviceInfo, DirectoryEntry, PlatformCapabilities, SaveTarget } from "@cliproam/ui/native";
 import { bytesToBase64 } from "@cliproam/ui/bytes";
 import { request } from "./bridge";
 import packageInfo from "../../package.json";
@@ -10,7 +10,7 @@ export class NativeVscode extends NativeWeb {
     return { ...await super.getDeviceInfo(), ...await request<Partial<DeviceInfo>>("device.info"), appVersion: packageInfo.version };
   }
   async getCapabilities(): Promise<PlatformCapabilities> {
-    return { ...await super.getCapabilities(), imageClipboard: false, nativeFileExport: true, shareReceiver: true };
+    return { ...await super.getCapabilities(), imageClipboard: false, nativeFileExport: true };
   }
   async selectSaveTarget(single: boolean, fileName: string): Promise<SaveTarget | null> {
     return request("files.selectSaveTarget", { single, fileName });
@@ -47,15 +47,6 @@ export class NativeVscode extends NativeWeb {
       await request("files.release", target.value);
     }
   }
-  async listenShares(handler: (event: ShareReceiverEvent) => void): Promise<Unlisten> {
-    const listener = ({ data }: MessageEvent): void => {
-      if (data?.type === "sharesChanged") handler({});
-    };
-    window.addEventListener("message", listener);
-    return () => window.removeEventListener("message", listener);
-  }
-  async pendingShares(scope: string): Promise<SharedContent[]> { return request("shares.pending", scope); }
-  async acknowledgeShare(id: string): Promise<void> { await request("shares.acknowledge", id); }
   async openExternalUrl(url: string): Promise<void> { await request("external.open", url); }
   async readClipboard(_textOnly: boolean): Promise<ClipboardData | null> {
     const text = await request<string>("clipboard.read");

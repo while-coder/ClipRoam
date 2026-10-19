@@ -7,6 +7,7 @@
     "./styles.css": "./src/styles.css",
     "./app": "./src/App.vue",
     "./native": "./src/platform/native.ts",
+    "./share": "./src/platform/share.ts",
     "./native-web": "./src/platform/native_web.ts",
     "./device-info": "./src/platform/deviceInfo.ts",
     "./account-session": "./src/accountSession.ts",

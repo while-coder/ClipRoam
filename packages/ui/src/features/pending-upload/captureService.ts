@@ -183,26 +183,6 @@ export class CaptureService {
     this.changed();
   }
 
-  async consumeShares(): Promise<{ shares: number; texts: number; images: number; files: number }> {
-    const result = { shares: 0, texts: 0, images: 0, files: 0 };
-    const shares = await clipboardPlatform.shares(profileName(this.session.accountKey));
-    for (const share of shares) {
-      try {
-        if (share.text) { await this.capture({ kind: "text", text: share.text, html: share.html }, `${share.id}:text`); result.texts++; }
-        for (let i = 0; i < share.images.length; i++) {
-          const image = await this.session.files.readImage(share.images[i]!);
-          await this.capture(image, `${share.id}:image:${i}`); result.images++;
-        }
-        if (share.paths.length) { await this.capture({ kind: "files", paths: share.paths }, `${share.id}:files`); result.files += share.paths.length; }
-        if (share.files?.length) { await this.captureFiles(share.files, `${share.id}:browser-files`); result.files += share.files.length; }
-        result.shares++;
-      } catch (error) { this.error(`分享导入失败：${String(error)}`); continue; }
-      this.session.signal.throwIfAborted();
-      await clipboardPlatform.acknowledgeShare(share.id);
-    }
-    return result;
-  }
-
   async writeEntry(entryId: string, synthesize = false): Promise<void> {
     const entry = await this.session.history.get(entryId);
     this.session.signal.throwIfAborted();

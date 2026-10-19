@@ -28,6 +28,7 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
+import { useShareReceiver } from "./features/shares/useShareReceiver";
 import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, provideMobileLayout } from "./platform/runtime";
 import { getDevice, readSavedAccounts, removeSavedAccounts } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
@@ -61,7 +62,6 @@ import {
 } from "./features/downloads/useDownloads";
 import type {
   AccountPreferences,
-  ShareImportSummary,
   SyncConfig,
 } from "./types";
 
@@ -108,11 +108,11 @@ const savedSessionConfig = ref<SyncConfig>();
 const savedAccounts = ref<SyncConfig[]>([]);
 const savedConfigReadFailed = ref(false);
 let authenticationController: AbortController | undefined;
-const importingShare = ref(false);
+const { importingShare } = useShareReceiver(computed(() =>
+  !initializing.value && hasSavedSyncConfig.value && !setupVisible.value && !isQuickPaste.value && Boolean(getActiveConfig()?.sessionToken),
+));
 let unlisteners: Unlisten[] = [];
 let ageRefreshTimer: number | undefined;
-let shareReceiverListener: Unlisten | undefined;
-let shareConsumeRequested = false;
 
 // 搜索焦点操作通过当前历史视图执行。
 initHistorySync({
@@ -199,35 +199,6 @@ async function clearSavedAccounts(config?: SyncConfig, wholeServer = false): Pro
   }
 }
 
-function shareImportMessage(summary: ShareImportSummary): string {
-  const parts = [
-    summary.texts ? `${summary.texts} 条文字` : "",
-    summary.images ? `${summary.images} 张图片` : "",
-    summary.files ? `${summary.files} 个文件` : "",
-  ].filter(Boolean);
-  return parts.length ? `已接收${parts.join("、")}` : "";
-}
-
-async function consumeMobileShares(): Promise<void> {
-  // 未登录只保留分享 inbox，登录成功后再导入并确认消费。
-  if (!platformCapabilities.value.shareReceiver || !hasSavedSyncConfig.value || !getActiveConfig()?.sessionToken) return;
-  shareConsumeRequested = true;
-  if (importingShare.value) return;
-  importingShare.value = true;
-  try {
-    // 导入期间又收到分享时再拉一次，避免 received 事件被并发保护丢掉。
-    while (shareConsumeRequested && getActiveConfig()?.sessionToken) {
-      shareConsumeRequested = false;
-      const summary = await getAccountSession()!.capture.consumeShares();
-      if (summary.shares) showNotification({ message: shareImportMessage(summary), tone: "success" });
-    }
-  } catch (error) {
-    showNotification({ message: `接收系统分享失败：${errorMessage(error)}，请重新分享`, tone: "error" });
-  } finally {
-    importingShare.value = false;
-  }
-}
-
 function closeSetup(): void {
   if (testingConnection.value || !hasSavedSyncConfig.value) return;
   setupVisible.value = false;
@@ -296,7 +267,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     savedSessionConfig.value = undefined;
     hasSavedSyncConfig.value = true;
     setupVisible.value = false;
-    await consumeMobileShares();
     await nextTick();
     await focusSearchInput();
   } catch (error) {
@@ -363,7 +333,6 @@ async function restoreSavedSession(selectedConfig?: SyncConfig): Promise<void> {
     savedSessionConfig.value = undefined;
     hasSavedSyncConfig.value = true;
     setupVisible.value = false;
-    await consumeMobileShares();
     await nextTick();
     await focusSearchInput();
   } catch (error) {
@@ -465,25 +434,6 @@ async function initializeNativeServices(): Promise<void> {
   await refreshDownloadTasks().catch(() => undefined);
 }
 
-async function initializeShareReceiver(): Promise<void> {
-  if (platformCapabilities.value.shareReceiver) {
-    try {
-      shareReceiverListener = await native.listenShares(
-        (payload) => {
-          if (payload.error) {
-            showNotification({ message: `接收系统分享失败：${payload.error}，请重新分享`, tone: "error" });
-          } else {
-            void consumeMobileShares();
-          }
-        },
-      );
-      await consumeMobileShares();
-    } catch (error) {
-      showNotification({ message: `系统分享接收初始化失败：${errorMessage(error)}`, tone: "error" });
-    }
-  }
-}
-
 async function enableAccountShortcuts(): Promise<void> {
   if (platformCapabilities.value.globalShortcut) {
     const registered = await native.quickPasteShortcut?.initialize();
@@ -540,7 +490,6 @@ onMounted(async () => {
   void refreshPendingCount();
   if (!accountRuntimeError.value) {
     void initializeNativeServices();
-    void initializeShareReceiver();
   }
 
   await nextTick();
@@ -558,7 +507,6 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeys);
   document.removeEventListener("contextmenu", handleContextMenu);
   unlisteners.forEach((unlisten) => unlisten());
-  shareReceiverListener?.();
   void stop();
   void native.quickPasteShortcut?.dispose();
 });

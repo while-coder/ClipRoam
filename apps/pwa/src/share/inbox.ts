@@ -1,3 +1,4 @@
+/** Persistent Web Share Target payload, available before authentication. */
 export type PendingShare = { id: string; text?: string; files: File[]; createdAt: number };
 
 /** Separate from account storage: shares survive login and are removed only after import. */
