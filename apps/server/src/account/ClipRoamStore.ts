@@ -7,7 +7,7 @@ import type {
   EntryPublishInput,
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
-import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS } from "../app/ServerConfig.js";
+import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS, type ServerConfig, type UserTransferOverrides } from "../app/ServerConfig.js";
 import { FileStore } from "../files/FileStore.js";
 import { userDirectory } from "../DataPaths.js";
 import { AccountStore, type AdminUserSummary, type AuthenticatedUser, type AuthSession } from "./AccountStore.js";
@@ -76,6 +76,11 @@ export class ClipRoamStore {
   files(): FileStore { return this.#files; }
   listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }
   hasUser(userId: string): boolean { return this.#accounts.hasUser(userId); }
+  getTransferSettings(userId: string): UserTransferOverrides | undefined { return this.#accounts.getTransferSettings(userId); }
+  resolveTransferSettings(userId: string, defaults: ServerConfig): ServerConfig {
+    return { ...defaults, ...this.getTransferSettings(userId) };
+  }
+  setTransferSettings(userId: string, settings: UserTransferOverrides | null): void { this.#accounts.setTransferSettings(userId, settings); }
   resetPassword(userId: string, newPassword: string): Promise<boolean> {
     return this.#accounts.resetPassword(userId, newPassword);
   }

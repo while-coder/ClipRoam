@@ -35,12 +35,12 @@ export class ClipRoamServer {
       authenticateSession: (token) => this.#auth.authenticateSession(token),
       getDevice: (userId, deviceId) => this.#store.getDevice(userId, deviceId),
       recordDeviceOnline: (userId, deviceId) => this.#store.recordDeviceOnline(userId, deviceId),
-      serverSettings: () => serverSettings(this.config),
+      serverSettings: (userId) => serverSettings(this.#configForUser(userId)),
     });
     this.#relays = new FileRelayService();
     this.#uploads = new UploadService(
       this.#store.files(),
-      config,
+      (userId) => this.#configForUser(userId),
       this.#publishFileAvailability.bind(this),
     );
   }
@@ -98,8 +98,8 @@ export class ClipRoamServer {
     registerEntryRoutes(this.#app, {
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
-      maxHistoryEntries: () => this.config.maxHistoryEntries,
-      maxCaptureFileCount: () => this.config.maxCaptureFileCount,
+      maxHistoryEntries: (userId) => this.#configForUser(userId).maxHistoryEntries,
+      maxCaptureFileCount: (userId) => this.#configForUser(userId).maxCaptureFileCount,
     });
     registerDeviceRoutes(this.#app, {
       store: this.#store,
@@ -109,7 +109,7 @@ export class ClipRoamServer {
     registerAuthRoutes(this.#app, {
       auth: this.#auth,
       onPasswordChanged: (userId) => this.#sockets.disconnectUser(userId, "Password changed"),
-      serverSettings: () => serverSettings(this.config),
+      serverSettings: (userId) => serverSettings(this.#configForUser(userId)),
     });
     this.#app.get("/health", async () => ({ status: "ok", service: "cliproam-server" }));
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));
@@ -117,7 +117,12 @@ export class ClipRoamServer {
       admin: this.#admin,
       tls: this.#tls,
       config: this.config,
-      onSettingsChanged: () => this.#sockets.broadcastAll({ type: "settings.updated", settings: serverSettings(this.config) }),
+      onSettingsChanged: (userId) => {
+        const users = userId ? [{ id: userId }] : this.#store.listUsers();
+        for (const user of users) {
+          this.#sockets.broadcast(user.id, { type: "settings.updated", settings: serverSettings(this.#configForUser(user.id)) });
+        }
+      },
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },
@@ -128,6 +133,10 @@ export class ClipRoamServer {
     this.#app.addHook("onClose", async () => {
       this.#store.close();
     });
+  }
+
+  #configForUser(userId: string): ServerConfig {
+    return this.#store.resolveTransferSettings(userId, this.config);
   }
 
   #publishFileAvailability(fileId: string): void {

@@ -11,9 +11,12 @@ import {
   type AdminDevice,
   type AdminUser,
 } from "../../shared/api.js";
+import TransferSettingsForm from "../transfer/TransferSettingsForm.vue";
 import { errorMessage } from "../../shared/errorMessage.js";
 
 const users = ref<AdminUser[]>([]);
+const configuringUser = ref<AdminUser>();
+const settingsBusy = ref(false);
 const loading = ref(true);
 const submitting = ref(false);
 const error = ref("");
@@ -246,6 +249,7 @@ onUnmounted(() => clearTimeout(searchTimer));
             <td>{{ formatDateTime(user.createdAt) }}</td>
             <td>{{ user.activeSessions }}</td>
             <td class="row-actions">
+              <SButton :disabled="submitting" @click="configuringUser = user">传输设置</SButton>
               <SButton :disabled="submitting" @click="requestDeviceManagement(user)">设备</SButton>
               <SButton :disabled="submitting" @click="requestPasswordReset(user)">重置密码</SButton>
               <SButton type="error" :disabled="submitting" @click="removeUser(user)">删除</SButton>
@@ -256,6 +260,21 @@ onUnmounted(() => clearTimeout(searchTimer));
 
       <SAlert v-if="error" type="error">{{ error }}</SAlert>
     </SCard>
+
+    <SModal
+      :show="!!configuringUser"
+      :title="configuringUser ? `${configuringUser.username} 的传输设置` : ''"
+      width="760px"
+      :closable="!settingsBusy"
+      :mask-closable="!settingsBusy"
+      :close-on-esc="!settingsBusy"
+      @update:show="(value: boolean) => { if (!value && !settingsBusy) configuringUser = undefined }"
+    >
+      <TransferSettingsForm v-if="configuringUser" :key="configuringUser.id" :user-id="configuringUser.id" @busy="settingsBusy = $event" />
+      <template #footer>
+        <SButton :disabled="settingsBusy" @click="configuringUser = undefined">关闭</SButton>
+      </template>
+    </SModal>
 
     <SModal
       :show="!!resettingUser"

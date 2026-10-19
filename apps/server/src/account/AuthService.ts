@@ -2,7 +2,7 @@ import { AuthCredentialsSchema, AuthVerifyCredentialsSchema, ChangePasswordSchem
 import { ClipRoamStore, InvalidCredentialsError, UsernameTakenError } from "./ClipRoamStore.js";
 import type { AuthenticatedUser } from "./AccountStore.js";
 
-export type HttpResult = { statusCode: number; payload: unknown };
+export type HttpResult = { statusCode: number; payload: unknown; userId?: string };
 
 export class AuthService {
   constructor(private readonly store: ClipRoamStore) {}
@@ -19,7 +19,7 @@ export class AuthService {
       const deviceId = parsed.data.device.id;
       const session = await this.store.register(parsed.data.username, parsed.data.password, deviceId);
       this.store.upsertDevice(session.user.id, parsed.data.device);
-      return { statusCode: 201, payload: { ...session, user: { username: session.user.username } } };
+      return { statusCode: 201, userId: session.user.id, payload: { ...session, user: { username: session.user.username } } };
     } catch (error) {
       if (error instanceof UsernameTakenError) {
         return { statusCode: 409, payload: { code: "USERNAME_TAKEN", message: error.message } };
@@ -37,7 +37,7 @@ export class AuthService {
     try {
       const session = await this.store.login(parsed.data.username, parsed.data.password, parsed.data.device.id);
       this.store.upsertDevice(session.user.id, parsed.data.device);
-      return { statusCode: 200, payload: { ...session, user: { username: session.user.username } } };
+      return { statusCode: 200, userId: session.user.id, payload: { ...session, user: { username: session.user.username } } };
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
         return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: error.message } };
@@ -54,7 +54,7 @@ export class AuthService {
     try {
       const session = this.store.verify(parsed.data.username, parsed.data.sessionToken, parsed.data.device.id);
       this.store.upsertDevice(session.user.id, parsed.data.device);
-      return { statusCode: 200, payload: { ...session, user: { username: session.user.username } } };
+      return { statusCode: 200, userId: session.user.id, payload: { ...session, user: { username: session.user.username } } };
     } catch (error) {
       if (error instanceof InvalidCredentialsError) {
         return { statusCode: 401, payload: { code: "INVALID_CREDENTIALS", message: "登录已失效，请重新登录" } };

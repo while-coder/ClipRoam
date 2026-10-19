@@ -3,7 +3,7 @@ import type { ServerMessage } from "@cliproam/protocol";
 import type { AdminService } from "../../admin/AdminService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
-import { updateTransferSettings, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
+import { updateTransferSettings, validateUserTransferOverrides, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
 
 const ADMIN_SESSION_COOKIE = "cliproam_admin";
 // 与管理后台会话有效期保持同一来源（ServerConfig 的 const），单位换算为秒。
@@ -13,7 +13,7 @@ export type AdminRouteDeps = {
   admin: AdminService;
   tls: TlsCertificateService;
   config: ServerConfig;
-  onSettingsChanged: () => void;
+  onSettingsChanged: (userId?: string) => void;
   store: ClipRoamStore;
   broadcast: (userId: string, message: ServerMessage) => void;
   disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
@@ -134,6 +134,46 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     }
     disconnectUser(userId, "Account deleted");
     return { ok: true };
+  });
+
+  app.get("/admin-api/users/:userId/transfer-settings", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    const custom = store.getTransferSettings(userId);
+    return { transfer: { ...config, ...custom }, overrides: custom ?? {}, defaults: config, customized: !!custom };
+  });
+
+  app.put("/admin-api/users/:userId/transfer-settings", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    try {
+      const overrides = validateUserTransferOverrides(request.body);
+      store.setTransferSettings(userId, overrides);
+      deps.onSettingsChanged(userId);
+      return { transfer: { ...config, ...overrides }, overrides, defaults: config, customized: Object.keys(overrides).length > 0 };
+    } catch (error) {
+      return reply.code(400).send({
+        code: "INVALID_TRANSFER_SETTINGS",
+        message: error instanceof Error ? error.message : "传输配置无效。",
+      });
+    }
+  });
+
+  app.delete("/admin-api/users/:userId/transfer-settings", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const { userId } = request.params as { userId: string };
+    if (!store.hasUser(userId)) {
+      return reply.code(404).send({ code: "USER_NOT_FOUND", message: "用户不存在或已被删除。" });
+    }
+    store.setTransferSettings(userId, null);
+    deps.onSettingsChanged(userId);
+    return { transfer: config, overrides: {}, defaults: config, customized: false };
   });
 
   app.put("/admin-api/users/:userId/password", async (request, reply) => {

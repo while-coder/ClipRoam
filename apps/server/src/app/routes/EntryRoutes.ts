@@ -25,8 +25,8 @@ export type EntryRouteDeps = {
   store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite">;
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
-  maxHistoryEntries: () => number;
-  maxCaptureFileCount: () => number;
+  maxHistoryEntries: (userId: string) => number;
+  maxCaptureFileCount: (userId: string) => number;
 };
 
 // Entries are pure request/response over HTTP; the WebSocket only carries
@@ -66,7 +66,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
   app.post("/entries", { bodyLimit: MAX_PUBLISH_BYTES }, async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
-    if (!fileTreeWithinLimits(request.body, maxCaptureFileCount())) {
+    if (!fileTreeWithinLimits(request.body, maxCaptureFileCount(user.id))) {
       return reply.code(413).send({ message: "文件数量、目录深度或目录节点数超过服务器上限" });
     }
     const body = parseOr400(reply, EntryPublishRequestSchema, request.body, "剪贴板参数无效");
@@ -81,7 +81,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     broadcast(user.id, { type: "clipboard.created", entry: storedEntry });
     // The history cap may have evicted the oldest entries to make room; every
     // device prunes its local copy on this push so it follows the server.
-    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries())) {
+    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
       broadcast(user.id, { type: "clipboard.deleted", entryId });
     }
     return { entry: storedEntry } satisfies EntryPublishResponse;
@@ -116,7 +116,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (entries.length) broadcast(user.id, {
       type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
     });
-    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries())) {
+    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
       broadcast(user.id, { type: "clipboard.deleted", entryId });
     }
     return reply.code(204).send();

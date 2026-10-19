@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ServerSettings } from "@cliproam/protocol";
-import type { AuthService } from "../../account/AuthService.js";
+import type { AuthService, HttpResult } from "../../account/AuthService.js";
 
 export type AuthRouteDeps = {
   auth: Pick<AuthService, "register" | "login" | "changePassword" | "verify">;
@@ -11,29 +11,29 @@ export type AuthRouteDeps = {
   // auto-upload tier and local history mirror at or below the server's caps.
   // A getter on purpose: admin settings changes apply to new logins without
   // a restart.
-  serverSettings: () => ServerSettings;
+  serverSettings: (userId: string) => ServerSettings;
 };
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
   const { auth, onPasswordChanged, serverSettings } = deps;
-  const withServerSettings = (payload: unknown) =>
-    typeof payload === "object" && payload !== null ? { ...(payload as object), settings: serverSettings() } : payload;
+  const withServerSettings = ({ payload, userId }: HttpResult) =>
+    userId ? { ...(payload as object), settings: serverSettings(userId) } : payload;
 
   app.post("/auth/register", async (request, reply) => {
     const result = await auth.register(request.body);
     // Register answers 201, login 200 — both carry the server settings.
-    return reply.code(result.statusCode).send(result.statusCode === 200 || result.statusCode === 201 ? withServerSettings(result.payload) : result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 || result.statusCode === 201 ? withServerSettings(result) : result.payload);
   });
 
   app.post("/auth/login", async (request, reply) => {
     const result = await auth.login(request.body);
-    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result) : result.payload);
   });
 
   // 恢复已有会话并刷新设备信息；不签发新 token，也不延长会话有效期。
   app.post("/auth/verify", async (request, reply) => {
     const result = auth.verify(request.body);
-    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result.payload) : result.payload);
+    return reply.code(result.statusCode).send(result.statusCode === 200 ? withServerSettings(result) : result.payload);
   });
 
   app.post("/auth/password", async (request, reply) => {

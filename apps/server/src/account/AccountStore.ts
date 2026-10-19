@@ -7,7 +7,7 @@ export type AuthSession = Omit<AuthResponse, "settings" | "user"> & { user: Acco
 import type Database from "better-sqlite3";
 import { escapeLike, openDatabase, withTransaction } from "../sqlite.js";
 import { accountsDatabasePath } from "../DataPaths.js";
-import { ACCOUNT_SESSION_LIFETIME_MS, PASSWORD_KEY_LENGTH } from "../app/ServerConfig.js";
+import { ACCOUNT_SESSION_LIFETIME_MS, PASSWORD_KEY_LENGTH, validateUserTransferOverrides, type UserTransferOverrides } from "../app/ServerConfig.js";
 
 const scryptAsync = promisify(scrypt);
 
@@ -52,6 +52,10 @@ export class AccountStore {
       );
       CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+      CREATE TABLE IF NOT EXISTS user_transfer_settings (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        settings_json TEXT NOT NULL
+      );
     `);
     this.#database.exec("CREATE UNIQUE INDEX IF NOT EXISTS sessions_user_device_id ON sessions(user_id, device_id)");
     this.#removeExpiredSessions(new Date());
@@ -174,6 +178,24 @@ export class AccountStore {
 
   hasUser(userId: string): boolean {
     return !!this.#database.prepare("SELECT 1 FROM users WHERE id = ?").get(userId);
+  }
+
+  getTransferSettings(userId: string): UserTransferOverrides | undefined {
+    const row = this.#database.prepare("SELECT settings_json FROM user_transfer_settings WHERE user_id = ?")
+      .get(userId) as { settings_json: string } | undefined;
+    return row ? validateUserTransferOverrides(JSON.parse(row.settings_json)) : undefined;
+  }
+
+  setTransferSettings(userId: string, settings: UserTransferOverrides | null): void {
+    const overrides = settings === null ? {} : validateUserTransferOverrides(settings);
+    if (Object.keys(overrides).length === 0) {
+      this.#database.prepare("DELETE FROM user_transfer_settings WHERE user_id = ?").run(userId);
+      return;
+    }
+    this.#database.prepare(`
+      INSERT INTO user_transfer_settings (user_id, settings_json) VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET settings_json = excluded.settings_json
+    `).run(userId, JSON.stringify(overrides));
   }
 
   // Administrator-initiated reset: no current-password check, and every

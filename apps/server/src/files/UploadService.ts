@@ -25,11 +25,11 @@ type Ledger = { size: number; chunkCount: number; bitmap: Buffer };
 export class UploadService {
   constructor(
     private readonly files: FileStore,
-    private readonly config: ServerConfig,
+    private readonly configForUser: (userId: string) => ServerConfig,
     private readonly fileStored: (fileId: string) => void,
   ) {}
 
-  begin(fileId: string, size: number, kind: UploadKind = ClipboardKind.Files): UploadBeginResponse {
+  begin(userId: string, fileId: string, size: number, kind: UploadKind = ClipboardKind.Files): UploadBeginResponse {
     // Content the server already holds needs no transfer at all — even when it
     // exceeds a limit that was lowered after it was stored. Availability was
     // broadcast exactly once when the content was promoted, so repeat answers
@@ -37,7 +37,8 @@ export class UploadService {
     if (this.files.has(fileId)) {
       return { status: "stored", fileId };
     }
-    const limitMb = kind === ClipboardKind.Image ? this.config.maxStoredImageMb : this.config.maxStoredFileMb;
+    const config = this.configForUser(userId);
+    const limitMb = kind === ClipboardKind.Image ? config.maxStoredImageMb : config.maxStoredFileMb;
     if (size >= limitMb * MEGABYTE) throw new UploadHttpError(413, kind === ClipboardKind.Image ? "图片超过服务器存储上限" : "文件超过服务器存储上限");
     const chunkCount = Math.ceil(size / FILE_CHUNK_SIZE);
     // An empty content has no chunks: the buffer is complete on arrival, so it
@@ -50,7 +51,7 @@ export class UploadService {
       return { status: "stored", fileId };
     }
 
-    const ledger = this.#usableLedger(fileId, size, chunkCount);
+    const ledger = this.#usableLedger(fileId, size, chunkCount, config.resumableUploadTtlHours);
     if (!ledger) {
       this.#startLedger(fileId, size, chunkCount);
       return {
@@ -153,13 +154,13 @@ export class UploadService {
   // A ledger that disagrees with the declared size cannot describe the same
   // content, one whose bytes were swept or truncated cannot be trusted, and one
   // past the resumable window is treated as fresh — all three start over.
-  #usableLedger(fileId: string, size: number, chunkCount: number): Ledger | undefined {
+  #usableLedger(fileId: string, size: number, chunkCount: number, ttlHours: number): Ledger | undefined {
     const ledger = this.files.uploadLedger(fileId);
     if (!ledger || ledger.size !== size || ledger.chunkCount !== chunkCount) return undefined;
-    if (this.config.resumableUploadTtlHours === 0) return undefined;
+    if (ttlHours === 0) return undefined;
     try {
       const stats = statSync(this.files.partialPath(fileId));
-      if (stats.size !== size || Date.now() - stats.mtimeMs > this.config.resumableUploadTtlHours * HOUR) return undefined;
+      if (stats.size !== size || Date.now() - stats.mtimeMs > ttlHours * HOUR) return undefined;
     } catch {
       return undefined;
     }

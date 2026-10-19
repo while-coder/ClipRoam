@@ -44,6 +44,20 @@ export type ServerConfig = {
   maxCaptureFileCount: number;
 };
 
+export type UserTransferOverrides = Partial<ServerConfig>;
+
+// Missing/null fields inherit the live global value; zero remains an explicit override.
+export function validateUserTransferOverrides(values: unknown): UserTransferOverrides {
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("配置必须是对象。");
+  const input = values as Record<string, unknown>;
+  const overrides: UserTransferOverrides = {};
+  for (const key of Object.keys(SETTING_CONSTRAINTS) as Array<keyof ServerConfig>) {
+    if (input[key] === undefined || input[key] === null) continue;
+    overrides[key] = validateSetting(input[key], key, SETTING_CONSTRAINTS[key]);
+  }
+  return overrides;
+}
+
 export function loadServerConfig(): ServerConfig {
   return {
     maxStoredFileMb: SETTING_CONSTRAINTS.maxStoredFileMb.default,
@@ -56,7 +70,14 @@ export function loadServerConfig(): ServerConfig {
 }
 
 export function updateTransferSettings(config: ServerConfig, values: unknown): ServerConfig {
-  if (!values || typeof values !== "object") throw new Error("配置必须是对象。");
+  const next = validateTransferSettings(values);
+  writeSettings(next);
+  Object.assign(config, next);
+  return config;
+}
+
+export function validateTransferSettings(values: unknown): ServerConfig {
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("配置必须是对象。");
   const input = values as Record<string, unknown>;
   const next: ServerConfig = {
     maxStoredFileMb: validateSetting(input.maxStoredFileMb, "服务器文件上限（MB）", SETTING_CONSTRAINTS.maxStoredFileMb),
@@ -65,9 +86,7 @@ export function updateTransferSettings(config: ServerConfig, values: unknown): S
     maxHistoryEntries: validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries),
     maxCaptureFileCount: validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount),
   };
-  writeSettings(next);
-  Object.assign(config, next);
-  return config;
+  return next;
 }
 
 function readTransferSettings(): Partial<ServerConfig> {
