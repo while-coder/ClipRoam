@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ClipboardKind } from "@cliproam/protocol";
 import { parseLocalDate, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { native } from "../../platform/native";
 import {
@@ -288,14 +288,31 @@ function handleSelectionBack(): void {
   if (!deleting.value) deleteTargets.value = [];
   clearSelection();
 }
-onMounted(() => {
+function attachSelectionListeners(): void {
   document.addEventListener("keydown", handleSelectionKeys, true);
   window.addEventListener("popstate", handleSelectionBack);
-});
-onBeforeUnmount(() => {
+}
+function leaveHistory(): void {
   document.removeEventListener("keydown", handleSelectionKeys, true);
   window.removeEventListener("popstate", handleSelectionBack);
+  cancelLongPress();
+  closeEntryMenu();
+  previewEntry.value = undefined;
+  if (!deleting.value) deleteTargets.value = [];
   clearSelection();
+}
+onMounted(attachSelectionListeners);
+onBeforeUnmount(leaveHistory);
+let wasDeactivated = false;
+onDeactivated(() => {
+  wasDeactivated = true;
+  leaveHistory();
+});
+onActivated(() => {
+  // The initial mount already fetches; menu returns retain the page while refreshing.
+  if (!wasDeactivated) return;
+  attachSelectionListeners();
+  void fetchPage(currentPage.value);
 });
 
 // An invalid custom range matches nothing — the backend never sees it.

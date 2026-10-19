@@ -551,25 +551,27 @@ onBeforeUnmount(() => {
     :connected="connected"
     :connection-status="connectionStatus"
   >
-    <HistoryView
-      v-if="activeView === 'history'"
-      v-show="!isQuickPaste"
-      ref="historyView"
-      :fetch-history-page="fetchHistoryPage"
-      :revision="historyRevision"
-      :devices-by-id="devicesById"
-      :current-time="currentTime"
-      :importing-share="importingShare"
-      :activating-entry-ids="activatingEntryIds"
-      :saving-entry-id="savingEntryId"
-      :ensure-local-files="ensureLocalFiles"
-      :remove-entries="removeEntries"
-      @activate="activateFromView"
-      @save="saveEntry"
-    />
+    <KeepAlive>
+      <HistoryView
+        v-if="activeView === 'history'"
+        v-show="!isQuickPaste"
+        ref="historyView"
+        :fetch-history-page="fetchHistoryPage"
+        :revision="historyRevision"
+        :devices-by-id="devicesById"
+        :current-time="currentTime"
+        :importing-share="importingShare"
+        :activating-entry-ids="activatingEntryIds"
+        :saving-entry-id="savingEntryId"
+        :ensure-local-files="ensureLocalFiles"
+        :remove-entries="removeEntries"
+        @activate="activateFromView"
+        @save="saveEntry"
+      />
+    </KeepAlive>
 
     <PendingUploadsView
-      v-else-if="activeView === 'pending-upload'"
+      v-if="activeView === 'pending-upload'"
       v-show="!isQuickPaste"
       :entries="pendingEntries"
       :devices-by-id="devicesById"
@@ -594,7 +596,7 @@ onBeforeUnmount(() => {
     />
 
     <DownloadsView
-      v-else
+      v-else-if="activeView === 'downloads'"
       v-show="!isQuickPaste"
       :records="downloadRecords"
       @cancel-record="cancelDownloadRecord($event)"
