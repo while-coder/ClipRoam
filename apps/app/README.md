@@ -1,4 +1,4 @@
-# 随心贴客户端
+# ClipRoam客户端
 
 Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗口与快速粘贴共用一个原生窗口，由 TS 切换标题栏、尺寸、位置和置顶状态。
 
@@ -12,7 +12,7 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 ## 应用名称与语言
 
-`productName` 固定为 `ClipRoam`，安装包、Release 标题和技术标识沿用英文名称，bundle ID 仍为 `com.whilecode.cliproam`。界面、窗口标题、通知和托盘中的应用名称跟随系统语言（浏览器中跟随浏览器语言）：中文显示「随心贴」，其他语言回退为 ClipRoam。本次仅本地化应用名称，其他界面文案仍为中文。
+`productName` 固定为 `ClipRoam`，安装包、Release 标题和技术标识沿用英文名称，bundle ID 仍为 `com.whilecode.cliproam`。界面、窗口标题、通知和托盘中的应用名称跟随系统语言（浏览器中跟随浏览器语言）：中文显示名从本地化资源读取，其他语言回退为 ClipRoam。本次仅本地化应用名称，其他界面文案仍为中文。
 
 macOS/iOS 使用 `infoplist/*.lproj/InfoPlist.strings` 提供系统显示名，Android 使用 `values/strings.xml` 和 `values-zh/strings.xml`，Linux 桌面入口使用 `Name`/`Name[zh]`。Windows 安装器、开始菜单和快捷方式名称保留 ClipRoam，运行时窗口及托盘名称按语言选择；不使用自定义 NSIS 模板。
 

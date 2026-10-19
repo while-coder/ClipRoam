@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { VscodeShareInbox } from "./shareInbox";
 
 export function activate(context: vscode.ExtensionContext): void {
+  const displayName = vscode.l10n.t("ClipRoam");
   let panel: vscode.WebviewPanel | undefined;
   let editor = vscode.window.activeTextEditor;
   let ready: Promise<void>;
@@ -29,13 +30,13 @@ export function activate(context: vscode.ExtensionContext): void {
   async function open(): Promise<vscode.WebviewPanel> {
     if (panel) { panel.reveal(panel.viewColumn); await ready; return panel; }
     const resourceRoot = vscode.Uri.joinPath(context.extensionUri, "dist", "webview");
-    const current = vscode.window.createWebviewPanel("cliproam.history", "随心贴", vscode.ViewColumn.Beside, {
+    const current = vscode.window.createWebviewPanel("cliproam.history", displayName, vscode.ViewColumn.Beside, {
       enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [resourceRoot],
     });
     panel = current;
     let markReady!: () => void;
     let rejectReady!: (error: Error) => void;
-    const readyTimeout = setTimeout(() => rejectReady(new Error("随心贴 界面加载超时，请关闭标签页后重试")), 30_000);
+    const readyTimeout = setTimeout(() => rejectReady(new Error("ClipRoam 界面加载超时，请关闭标签页后重试")), 30_000);
     ready = new Promise<void>((resolve, reject) => {
       markReady = () => { clearTimeout(readyTimeout); resolve(); };
       rejectReady = (error) => { clearTimeout(readyTimeout); reject(error); };
@@ -56,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     current.onDidDispose(() => {
       listener.dispose();
-      rejectReady(new Error("随心贴 标签页已关闭"));
+      rejectReady(new Error("ClipRoam 标签页已关闭"));
       if (panel === current) panel = undefined;
       saveTargets.clear();
     }, undefined, context.subscriptions);
@@ -121,6 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (typeof value !== "string") throw new Error("待处理文本标识无效");
         return shares.acknowledge(value);
       case "device.info": return {
+        systemLocale: vscode.env.language,
         deviceName: `${hostname()} (VS Code)`, osType: platform(), osVersion: release(), architecture: arch(),
       };
       case "external.open": {

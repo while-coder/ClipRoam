@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "随心贴",
+        "title": "ClipRoam",
         "width": 960,
         "height": 700,
         "minWidth": 840,
@@ -28,7 +28,7 @@
       {
         "label": "toast",
         "create": false,
-        "title": "随心贴",
+        "title": "ClipRoam",
         "width": 380,
         "height": 104,
         "resizable": false,

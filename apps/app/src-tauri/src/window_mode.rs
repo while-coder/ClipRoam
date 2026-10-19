@@ -159,11 +159,12 @@ fn apply_mode(
             geometry.main = None;
             geometry.quick = false;
         }
-        window.set_title(title.as_deref().unwrap_or(if quick {
+        let default_title = if quick {
             crate::branding::quick_paste_title()
         } else {
-            crate::branding::app_name()
-        }))?;
+            crate::branding::app_name().to_string()
+        };
+        window.set_title(title.as_deref().unwrap_or(&default_title))?;
         Ok(())
     })();
     configure.map_err(|error| error.to_string())?;

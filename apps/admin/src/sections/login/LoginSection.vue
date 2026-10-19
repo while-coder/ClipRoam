@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayName } from "../../branding";
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { login as submitLogin } from "../../shared/api.js";
@@ -32,7 +33,7 @@ async function login(): Promise<void> {
 
 <template>
   <SCard class="login-card" aria-labelledby="login-title">
-    <p class="eyebrow">随心贴管理后台</p>
+    <p class="eyebrow">{{ displayName }} 管理后台</p>
     <h1 id="login-title">管理后台</h1>
     <p class="muted">使用服务端配置的管理员密码登录。</p>
     <form @submit.prevent="login">

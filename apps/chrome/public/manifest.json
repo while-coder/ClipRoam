@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "随心贴",
+  "name": "__MSG_displayName__",
+  "default_locale": "en",
   "description": "保存剪贴板历史，并在自己的设备之间同步文字、图片和文件。",
   "version": "0.2.5",
   "icons": {
@@ -10,7 +11,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "随心贴",
+    "default_title": "__MSG_displayName__",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png"

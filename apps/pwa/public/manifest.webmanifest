@@ -1,7 +1,8 @@
 {
   "id": "./",
-  "name": "随心贴",
-  "short_name": "随心贴",
+  "lang": "zh-CN",
+  "name": "ClipRoam",
+  "short_name": "ClipRoam",
   "description": "保存剪贴板历史，并在自己的设备之间同步文字、图片和文件。",
   "start_url": "./",
   "scope": "./",

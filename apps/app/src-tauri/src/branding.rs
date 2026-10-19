@@ -18,10 +18,14 @@ pub(crate) fn app_name() -> &'static str {
     }
 }
 
-pub(crate) fn quick_paste_title() -> &'static str {
-    if is_chinese() {
-        "随心贴 - 快速粘贴"
-    } else {
-        "ClipRoam - Quick Paste"
-    }
+pub(crate) fn quick_paste_title() -> String {
+    format!(
+        "{} - {}",
+        app_name(),
+        if is_chinese() {
+            "快速粘贴"
+        } else {
+            "Quick Paste"
+        }
+    )
 }

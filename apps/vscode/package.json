@@ -1,6 +1,7 @@
 {
   "name": "cliproam",
-  "displayName": "随心贴",
+  "displayName": "%displayName%",
+  "l10n": "./l10n",
   "description": "在 VS Code 中查看跨设备剪贴板历史、添加选中文本。",
   "version": "0.2.5",
   "publisher": "while",
@@ -14,8 +15,8 @@
   "icon": "public/cliproam-icon.png",
   "contributes": {
     "commands": [
-      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "随心贴", "icon": "public/cliproam-icon.png" },
-      { "command": "cliproam.captureSelection", "title": "添加到随心贴历史", "category": "随心贴" }
+      { "command": "cliproam.open", "title": "%open.title%", "category": "%displayName%", "icon": "public/cliproam-icon.png" },
+      { "command": "cliproam.captureSelection", "title": "%captureSelection.title%", "category": "%displayName%" }
     ],
     "menus": {
       "title": [

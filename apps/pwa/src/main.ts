@@ -1,12 +1,17 @@
 import { createApp } from "vue";
 import { createUiKit } from "@qingfeng346/ui-kit";
 import { configureNative } from "@cliproam/ui/native";
+import { isChinese } from "@cliproam/ui/branding";
 import { NativePwa } from "./native";
 import { configureShareReceiver } from "@cliproam/ui/share";
 import { PwaShareReceiver } from "./share/receiver";
 import "@cliproam/ui/styles.css";
 
 async function start(): Promise<void> {
+  if (isChinese.value) {
+    const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (manifest) manifest.href = `${import.meta.env.BASE_URL}manifest.zh.webmanifest`;
+  }
   configureNative(new NativePwa());
   configureShareReceiver(new PwaShareReceiver(new URL(import.meta.env.BASE_URL, window.location.href).href));
   const { default: App } = await import("./App.vue");
