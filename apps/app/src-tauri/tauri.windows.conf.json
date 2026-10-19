@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "icon": [
+      "native/windows/icons/icon.ico"
+    ]
+  }
+}

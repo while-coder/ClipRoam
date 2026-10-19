@@ -7,6 +7,10 @@
     },
     "macOS": {
       "infoPlist": "native/macos/Info.plist"
-    }
+    },
+    "icon": [
+      "native/macos/icons/32x32.png",
+      "native/macos/icons/icon.icns"
+    ]
   }
 }

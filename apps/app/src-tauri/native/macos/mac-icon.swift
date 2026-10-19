@@ -6,7 +6,8 @@ import ImageIO
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     .appendingPathComponent("../../../../..").standardizedFileURL
-let icons = root.appendingPathComponent("apps/app/src-tauri/icons")
+let icons = root.appendingPathComponent("apps/app/src-tauri/native/macos/icons")
+try FileManager.default.createDirectory(at: icons, withIntermediateDirectories: true)
 
 guard let source = CGImageSourceCreateWithURL(root.appendingPathComponent("apps/icon/icon.png") as CFURL, nil),
       let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
@@ -95,7 +96,7 @@ output.append(chunkHeader("TOC ", tableOfContents.count + 8))
 output.append(tableOfContents)
 output.append(chunks)
 try output.write(to: icons.appendingPathComponent("icon.icns"), options: .atomic)
-print("Generated icons/icon.icns (856/1024 artwork, transparent padding)")
+print("Generated native/macos/icons/icon.icns (856/1024 artwork, transparent padding)")
 
 // Render the same ClipRoam artwork for the 18 pt menu bar slot at 2x resolution.
 // A 1 pt transparent inset keeps it clear of the menu bar edges.
@@ -112,4 +113,4 @@ guard let trayImage = trayContext.makeImage(),
 }
 CGImageDestinationAddImage(trayDestination, trayImage, nil)
 guard CGImageDestinationFinalize(trayDestination) else { fatalError("Cannot write macOS tray icon") }
-print("Generated icons/tray-macos.png (same ClipRoam artwork, 18 pt at 2x)")
+print("Generated native/macos/icons/tray-macos.png (same ClipRoam artwork, 18 pt at 2x)")

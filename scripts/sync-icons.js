@@ -9,7 +9,8 @@ const appDirectory = path.join(rootDirectory, "apps", "app");
 const sourceIcon = path.join(rootDirectory, "apps", "icon", "icon.png");
 const iconManifest = path.join(rootDirectory, "apps", "icon", "icons.json");
 const androidIcon = path.join(rootDirectory, "apps", "icon", "icon-android.png");
-const tauriIconsDirectory = path.join(appDirectory, "src-tauri", "icons");
+const generatedIconsDirectory = path.join(rootDirectory, ".tmp", "app-icons");
+const { syncNativeIcons } = require("../apps/app/src-tauri/native/sync-icons.cjs");
 const favicon = path.join(appDirectory, "public", "cliproam-icon.png");
 const sharedIcon = path.join(rootDirectory, "packages", "ui", "src", "assets", "cliproam-icon.png");
 const browserIconsDirectory = path.join(rootDirectory, ".tmp", "browser-icons");
@@ -43,16 +44,19 @@ execFileSync(
     "icon",
     iconManifest,
     "--output",
-    tauriIconsDirectory,
+    generatedIconsDirectory,
     "--ios-color",
     "#0f172a",
   ],
   { cwd: rootDirectory, stdio: "inherit" },
 );
 
-fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), favicon);
+fs.copyFileSync(path.join(generatedIconsDirectory, "128x128.png"), favicon);
 fs.mkdirSync(path.dirname(sharedIcon), { recursive: true });
-fs.copyFileSync(path.join(tauriIconsDirectory, "128x128.png"), sharedIcon);
+fs.copyFileSync(path.join(generatedIconsDirectory, "128x128.png"), sharedIcon);
+// Generate each native platform into its own directory.
+for (const platform of ["windows", "linux"]) syncNativeIcons(platform);
+if (process.platform === "darwin") syncNativeIcons("macos");
 // iOS uses full-bleed artwork; system masking supplies the rounded corners.
 require("../apps/app/src-tauri/native/ios/sync-icons.cjs").syncIosIcons();
 require("../apps/app/src-tauri/native/android/sync-icons.cjs").syncAndroidIcons();
@@ -98,13 +102,6 @@ if (fs.existsSync(androidResourcesDirectory)) {
   console.log(
     `Tauri 已更新 Android 图标：${path.relative(rootDirectory, androidResourcesDirectory)}`,
   );
-}
-
-if (process.platform === "darwin") {
-  execFileSync("swift", [path.join(rootDirectory, "apps/app/src-tauri/native/macos/mac-icon.swift")], {
-    cwd: rootDirectory,
-    stdio: "inherit",
-  });
 }
 
 console.log(`已从 ${path.relative(rootDirectory, sourceIcon)} 刷新全部图标`);

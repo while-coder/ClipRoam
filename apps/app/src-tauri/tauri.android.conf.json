@@ -12,6 +12,9 @@
   "bundle": {
     "android": {
       "minSdkVersion": 24
-    }
+    },
+    "icon": [
+      "native/android/icons/icon.png"
+    ]
   }
 }

@@ -193,7 +193,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let menu = Menu::with_items(app, &[&show_main, &quit])?;
     #[cfg(target_os = "macos")]
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../../../icons/tray-macos.png"))?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../../../native/macos/icons/tray-macos.png"))?;
     #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()

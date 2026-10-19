@@ -17,6 +17,9 @@
     "iOS": {
       "infoPlist": "native/ios/Info.plist",
       "minimumSystemVersion": "14.0"
-    }
+    },
+    "icon": [
+      "native/ios/icons/icon.png"
+    ]
   }
 }

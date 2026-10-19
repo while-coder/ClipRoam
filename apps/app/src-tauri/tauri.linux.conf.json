@@ -4,6 +4,11 @@
       "deb": {
         "desktopTemplate": "native/linux/linux.desktop"
       }
-    }
+    },
+    "icon": [
+      "native/linux/icons/32x32.png",
+      "native/linux/icons/128x128.png",
+      "native/linux/icons/128x128@2x.png"
+    ]
   }
 }

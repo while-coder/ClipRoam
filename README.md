@@ -131,7 +131,7 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 本地运行 `pnpm build:vscode` 构建，`pnpm package:vscode` 生成 `apps/vscode/dist/cliproam.vsix`。Release 工作流同时发布 VSIX；开发和能力说明见 [VS Code 扩展说明](apps/vscode/README.md)。
 
-`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-android.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。
+`pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-android.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。原生图标按平台输出到 `apps/app/src-tauri/native/{windows,macos,linux,android,ios}/icons/`，不纳入 Git；开发、打包和 Cargo 构建前会自动生成，详见[原生目录说明](apps/app/src-tauri/native/README.md)。
 
 iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。分享入口不保存登录凭据，登录和上传由主应用处理。未签名 IPA 的构建不验证设备上的共享容器权限。
 
