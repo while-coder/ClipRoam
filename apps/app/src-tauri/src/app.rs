@@ -161,7 +161,7 @@ pub(crate) fn native_show_notification(
         title: title
             .filter(|title| !title.trim().is_empty())
             .map(|title| title.trim().to_string())
-            .unwrap_or_else(|| "ClipRoam".to_string()),
+            .unwrap_or_else(|| "随心贴".to_string()),
         tone: match tone.as_deref() {
             Some(tone @ ("success" | "error" | "info")) => tone.to_string(),
             _ => "info".to_string(),

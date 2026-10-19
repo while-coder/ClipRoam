@@ -64,7 +64,7 @@ pub fn run() {
             files::native_ack_share,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building ClipRoam")
+        .expect("error while building 随心贴")
         .run(|_app, _event| {
             // 程序坞点击与托盘点击使用同一恢复流程，包含取消最小化及退出快捷粘贴模式。
             #[cfg(target_os = "macos")]

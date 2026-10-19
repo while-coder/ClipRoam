@@ -1,4 +1,4 @@
-import { computed, inject, provide, ref, type InjectionKey, type Ref } from "vue";
+import { computed, inject, onBeforeUnmount, provide, ref, type InjectionKey, type Ref } from "vue";
 import { native } from "./native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
 import { toast } from "@qingfeng346/ui-kit";
@@ -19,8 +19,16 @@ export const isMobile = computed(() => platformCapabilities.value.mobile);
 const mobileLayoutKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol("mobileLayout");
 
 /** 布局可随视口变化，不改变剪贴板、文件等平台能力。 */
-export function provideMobileLayout(mobileLayout: Readonly<Ref<boolean>>): void {
+export function provideMobileLayout(): Readonly<Ref<boolean>> {
+  const narrowViewport = window.matchMedia("(max-width: 768px)");
+  const mobileLayout = ref(narrowViewport.matches);
+  const updateLayout = (event: MediaQueryListEvent): void => {
+    mobileLayout.value = event.matches;
+  };
+  narrowViewport.addEventListener("change", updateLayout);
+  onBeforeUnmount(() => narrowViewport.removeEventListener("change", updateLayout));
   provide(mobileLayoutKey, mobileLayout);
+  return mobileLayout;
 }
 
 export function useMobileLayout(): Readonly<Ref<boolean>> {
@@ -69,7 +77,7 @@ export function showNotification(options: NotificationOptions): void {
   if (!normalized) return;
   const payload: NotificationPayload = {
     message: normalized,
-    title: options.title?.trim() || "ClipRoam",
+    title: options.title?.trim() || "随心贴",
     tone: options.tone ?? "info",
   };
   if (isMobile.value) {

@@ -51,7 +51,7 @@ fn ensure_accessibility_access() -> Result<(), String> {
         .output();
     let settings_opened = matches!(settings, Ok(ref output) if output.status.success());
     Err(format!(
-        "内容已复制。{}请在「辅助功能」中允许 ClipRoam；若已开启仍无效，请完全退出 ClipRoam，删除旧条目后点 + 添加当前应用，再启动重试。",
+        "内容已复制。{}请在「辅助功能」中允许 随心贴；若已开启仍无效，请完全退出 随心贴，删除旧条目后点 + 添加当前应用，再启动重试。",
         if settings_opened { "已打开权限设置。" } else { "设置路径：系统设置 → 隐私与安全性 → 辅助功能。" },
     ))
 }
@@ -62,7 +62,7 @@ fn ensure_accessibility_access() -> Result<(), String> {
     Ok(())
 }
 
-/// 直接为 ClipRoam 请求辅助功能权限，原生按键投递不依赖 System Events 自动化。
+/// 直接为 随心贴 请求辅助功能权限，原生按键投递不依赖 System Events 自动化。
 #[cfg(target_os = "macos")]
 mod accessibility {
     use std::os::raw::c_void;
@@ -223,7 +223,7 @@ fn reactivate_paste_target(_app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 弹出粘贴窗口前的前台是否就是 ClipRoam 自己（如在主窗口前台按了快捷键）。
+/// 弹出粘贴窗口前的前台是否就是 随心贴 自己（如在主窗口前台按了快捷键）。
 /// 此时没有可粘贴的外部目标。
 fn paste_target_is_self(app: &AppHandle) -> bool {
     let own_pid = std::process::id() as i32;
@@ -241,7 +241,7 @@ pub(crate) fn deliver_paste(window: &tauri::WebviewWindow, synthesize: bool) -> 
     if !synthesize {
         return Ok(());
     }
-    // 目标是 ClipRoam 自己时没有可自动粘贴的外部输入处；合成 Cmd+V 只会把
+    // 目标是 随心贴 自己时没有可自动粘贴的外部输入处；合成 Cmd+V 只会把
     // 内容送进主窗口搜索框并把主界面带到前台。此时仅复制到剪贴板，收起
     // 快速粘贴界面，用户可在真正的目标应用里手动 Cmd+V。
     if paste_target_is_self(window.app_handle()) {

@@ -1,10 +1,7 @@
 import { NativeWeb } from "@cliproam/ui/native-web";
 import type { ClipboardData, ClipboardWrite, DeviceInfo, PlatformCapabilities } from "@cliproam/ui/native";
-import { ref } from "vue";
 import { request } from "./bridge";
 import packageInfo from "../../package.json";
-
-export const copiedText = ref<string>();
 
 export class NativeVscode extends NativeWeb {
   async getAppVersion(): Promise<string> { return packageInfo.version; }
@@ -22,6 +19,5 @@ export class NativeVscode extends NativeWeb {
   async writeClipboard(payload: ClipboardWrite, _synthesize: boolean): Promise<void> {
     if (payload.kind !== "text") throw new Error("VS Code 扩展仅支持文本剪贴板；图片和文件可在历史中预览或下载到缓存");
     await request("clipboard.write", payload.text);
-    copiedText.value = payload.text;
   }
 }

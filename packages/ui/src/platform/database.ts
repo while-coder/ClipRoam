@@ -20,7 +20,7 @@ function database(name: string, stores: readonly string[]): Promise<IDBDatabase>
     request.onblocked = () => {
       blocked = true;
       openings.delete(name);
-      reject(new Error("请关闭其他 ClipRoam 页面后重试数据库升级"));
+      reject(new Error("请关闭其他 随心贴 页面后重试数据库升级"));
     };
     request.onsuccess = () => {
       const db = request.result;

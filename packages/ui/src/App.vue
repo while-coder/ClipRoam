@@ -28,7 +28,7 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, useMobileLayout } from "./platform/runtime";
+import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, provideMobileLayout } from "./platform/runtime";
 import { getDevice, readSavedAccounts, removeSavedAccounts } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
 import {
@@ -85,7 +85,7 @@ const {
 } = clientSessionManager;
 
 const { platformCapabilities, setPlatformCapabilities } = usePlatform();
-const mobileLayout = useMobileLayout();
+const mobileLayout = provideMobileLayout();
 const { initAppVersion } = useAppVersion();
 const uploadTasks = computed(() => getAccountSession()?.uploads.tasks.value ?? []);
 const activeUploadCount = computed(() => getAccountSession()?.uploads.activeCount.value ?? 0);
@@ -432,7 +432,7 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
 function readableStartupError(error: unknown): string {
   const message = errorMessage(error);
   if (message.includes("state not managed for field `state`")) {
-    return "应用初始化尚未完成，请从托盘退出 ClipRoam 后重新启动";
+    return "应用初始化尚未完成，请从托盘退出 随心贴 后重新启动";
   }
   return message || "未知错误";
 }
@@ -563,7 +563,7 @@ onBeforeUnmount(() => {
   <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': mobileLayout }">
     <section class="setup-loading-content" role="status" aria-live="polite">
       <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
-      <strong>ClipRoam</strong>
+      <strong>随心贴</strong>
       <span>正在读取连接配置…</span>
     </section>
   </main>

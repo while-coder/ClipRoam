@@ -1,8 +1,1 @@
 body { padding: 0; }
-.vscode-shell { display: flex; flex-direction: column; height: 100%; }
-.vscode-content { flex: 1; min-height: 0; position: relative; }
-.vscode-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-border); }
-.vscode-toolbar button { padding: 8px 12px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); cursor: pointer; }
-.vscode-toolbar button:hover:not(:disabled) { border-color: var(--color-accent); }
-.vscode-toolbar span { font-size: 13px; color: var(--color-secondary-text); }
-.vscode-toolbar .failed { color: var(--vscode-errorForeground, #f87171); }

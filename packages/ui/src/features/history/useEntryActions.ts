@@ -66,7 +66,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
   try {
     if (!platformCapabilities.value.nativeFileExport) {
       await downloadEntry(entry.id, session);
-      showNotification({ message: "内容已下载到应用缓存，可在 ClipRoam 中离线使用", tone: "success" });
+      showNotification({ message: "内容已下载到应用缓存，可在 随心贴 中离线使用", tone: "success" });
     } else {
       await session.start(() => session.ready);
       const preparation = await session.acquire(session.downloads.prepareSave(entry.id), (value) => {

@@ -32,7 +32,7 @@ const mobilePages = computed(() => [
       <header class="sidebar-brand">
         <span class="brand-mark"><Clipboard :size="17" /></span>
         <span>
-          <strong>ClipRoam</strong>
+          <strong>随心贴</strong>
           <small>剪贴板工作区</small>
         </span>
       </header>

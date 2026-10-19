@@ -160,9 +160,9 @@ fn apply_mode(
             geometry.quick = false;
         }
         window.set_title(title.as_deref().unwrap_or(if quick {
-            "ClipRoam - 快速粘贴"
+            "随心贴 - 快速粘贴"
         } else {
-            "ClipRoam"
+            "随心贴"
         }))?;
         Ok(())
     })();

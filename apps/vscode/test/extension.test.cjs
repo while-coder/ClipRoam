@@ -6,12 +6,11 @@ const path = require("node:path");
 
 function setup() {
   const commands = new Map();
-  const sent = [], errors = [], edits = [];
+  const sent = [], errors = [], notices = [];
   const editor = {
     document: { isClosed: false, getText: () => "selected code" },
     selections: [{ start: 0, end: 3 }, { start: 8, end: 10 }],
     viewColumn: 1,
-    edit: async (callback) => { callback({ replace: (...args) => edits.push(args) }); return true; },
   };
   let receive, dispose, activeChanged;
   let clipboard = "clipboard text";
@@ -33,9 +32,8 @@ function setup() {
       activeTextEditor: editor,
       onDidChangeActiveTextEditor: (handler) => { activeChanged = handler; return { dispose() {} }; },
       createWebviewPanel: () => panel,
-      showTextDocument: async () => editor,
       showErrorMessage: (text) => errors.push(text),
-      showInformationMessage() {},
+      showInformationMessage: (text) => notices.push(text),
     },
     commands: { registerCommand: (name, handler) => { commands.set(name, handler); return { dispose() {} }; } },
     ViewColumn: { Beside: 2 },
@@ -54,7 +52,7 @@ function setup() {
     exports, module, require: (name) => name === "vscode" ? vscode : require(name), setTimeout, clearTimeout,
   });
   module.exports.activate({ extensionUri: { fsPath: path.join(__dirname, "..") }, subscriptions: [] });
-  return { commands, panel, sent, errors, edits, editor, receive: (...args) => receive(...args), blur: () => activeChanged(undefined) };
+  return { commands, panel, sent, errors, notices, editor, receive: (...args) => receive(...args), blur: () => activeChanged(undefined) };
 }
 
 test("loads packaged assets with CSP and allows only the supported message operations", async () => {
@@ -73,16 +71,21 @@ test("loads packaged assets with CSP and allows only the supported message opera
   app.panel.dispose();
 });
 
-test("inserts literal text at every editor selection after the webview takes focus", async () => {
+test("captures all editor selections after the webview takes focus and reports success", async () => {
   const app = setup();
-  await app.commands.get("cliproam.insertHistory")();
+  await app.commands.get("cliproam.open")();
   app.blur();
-  await app.receive({ type: "request", id: 1, operation: "editor.insert", value: "${literal}" });
-  assert.equal(app.edits.length, 2);
-  assert.equal(app.edits[0][1], "${literal}");
+  const work = app.commands.get("cliproam.captureSelection")();
+  await new Promise((resolve) => setImmediate(resolve));
+  const capture = app.sent.find((message) => message.type === "captureSelection");
+  assert.equal(capture.text, "selected code\nselected code");
+  await app.receive({ type: "captured", id: capture.id });
+  await work;
+  assert.equal(app.errors.length, 0);
+  assert.match(app.notices[0], /随心贴 上传队列/);
   app.editor.document.isClosed = true;
-  await app.receive({ type: "request", id: 2, operation: "editor.insert", value: "code" });
-  assert.match(app.sent.at(-1).error, /打开/);
+  await app.commands.get("cliproam.captureSelection")();
+  assert.match(app.errors.at(-1), /打开/);
   app.panel.dispose();
 });
 

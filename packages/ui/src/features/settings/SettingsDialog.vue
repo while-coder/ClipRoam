@@ -150,7 +150,7 @@ const currentServer = computed(() => {
             <div class="settings-page">
               <header class="settings-page-header">
                 <h3>关于</h3>
-                <p>了解 ClipRoam，获取帮助与参与改进。</p>
+                <p>了解 随心贴，获取帮助与参与改进。</p>
               </header>
 
               <AboutPanel>

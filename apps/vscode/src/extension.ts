@@ -16,13 +16,13 @@ export function activate(context: vscode.ExtensionContext): void {
   async function open(): Promise<vscode.WebviewPanel> {
     if (panel) { panel.reveal(panel.viewColumn); await ready; return panel; }
     const resourceRoot = vscode.Uri.joinPath(context.extensionUri, "dist", "webview");
-    const current = vscode.window.createWebviewPanel("cliproam.history", "ClipRoam", vscode.ViewColumn.Beside, {
+    const current = vscode.window.createWebviewPanel("cliproam.history", "随心贴", vscode.ViewColumn.Beside, {
       enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [resourceRoot],
     });
     panel = current;
     let markReady!: () => void;
     let rejectReady!: (error: Error) => void;
-    const readyTimeout = setTimeout(() => rejectReady(new Error("ClipRoam 界面加载超时，请关闭标签页后重试")), 30_000);
+    const readyTimeout = setTimeout(() => rejectReady(new Error("随心贴 界面加载超时，请关闭标签页后重试")), 30_000);
     ready = new Promise<void>((resolve, reject) => {
       markReady = () => { clearTimeout(readyTimeout); resolve(); };
       rejectReady = (error) => { clearTimeout(readyTimeout); reject(error); };
@@ -51,10 +51,10 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     current.onDidDispose(() => {
       listener.dispose();
-      rejectReady(new Error("ClipRoam 标签页已关闭"));
+      rejectReady(new Error("随心贴 标签页已关闭"));
       if (panel === current) panel = undefined;
       for (const capture of captures.values()) {
-        clearTimeout(capture.timer); capture.reject(new Error("ClipRoam 标签页已关闭"));
+        clearTimeout(capture.timer); capture.reject(new Error("随心贴 标签页已关闭"));
       }
       captures.clear();
     }, undefined, context.subscriptions);
@@ -83,17 +83,6 @@ export function activate(context: vscode.ExtensionContext): void {
       case "clipboard.write":
         if (typeof value !== "string") throw new Error("剪贴板文本无效");
         return vscode.env.clipboard.writeText(value);
-      case "editor.selection": return selectionText();
-      case "editor.insert": {
-        if (typeof value !== "string") throw new Error("插入文本无效");
-        const target = editor;
-        if (!target || target.document.isClosed) throw new Error("请先打开要插入文本的编辑器");
-        const selections = [...target.selections];
-        const active = await vscode.window.showTextDocument(target.document, target.viewColumn);
-        const inserted = await active.edit((edit) => { for (const selection of selections) edit.replace(selection, value); });
-        if (!inserted) throw new Error("无法插入文本，请检查文件是否只读");
-        return;
-      }
       case "device.info": return {
         deviceName: `${hostname()} (VS Code)`, osType: platform(), osVersion: release(), architecture: arch(),
       };
@@ -114,7 +103,6 @@ export function activate(context: vscode.ExtensionContext): void {
     }));
   }
   command("cliproam.open", open);
-  command("cliproam.insertHistory", async () => { await (await open()).webview.postMessage({ type: "insertHistory" }); });
   command("cliproam.captureSelection", async () => {
     const text = selectionText();
     const current = await open();
@@ -123,10 +111,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const timer = setTimeout(() => { captures.delete(id); reject(new Error("保存选中文本超时，请重试")); }, 30_000);
       captures.set(id, { resolve, reject, timer });
       void current.webview.postMessage({ type: "captureSelection", id, text }).then((sent) => {
-        if (!sent) { clearTimeout(timer); captures.delete(id); reject(new Error("ClipRoam 界面不可用")); }
+        if (!sent) { clearTimeout(timer); captures.delete(id); reject(new Error("随心贴 界面不可用")); }
       });
     });
-    void vscode.window.showInformationMessage("已加入 ClipRoam 上传队列");
+    void vscode.window.showInformationMessage("已加入 随心贴 上传队列");
   });
   context.subscriptions.push({ dispose: () => panel?.dispose() });
 }

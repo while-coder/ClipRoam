@@ -44,7 +44,7 @@ async function signOut(): Promise<void> {
 
   <div v-else class="layout" :class="{ collapsed }">
     <aside class="sidebar" aria-label="管理导航">
-      <p class="eyebrow brand">CLIPROAM ADMIN</p>
+      <p class="eyebrow brand">随心贴管理后台</p>
       <nav class="menu">
         <RouterLink v-for="item in menuItems" :key="item.to" :to="item.to" class="menu-item" active-class="active">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="d in item.paths" :key="d" :d="d" /></svg>

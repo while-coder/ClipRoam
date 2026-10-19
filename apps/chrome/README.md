@@ -1,4 +1,4 @@
-# ClipRoam Chrome 扩展壳
+# 随心贴 Chrome 扩展壳
 
 Manifest V3 弹出页和选项页注入 `NativeChrome` 后加载 `@cliproam/ui/app`，共用登录、历史、设置、同步与传输逻辑。`NativeChrome` 继承共用 Web API 适配器，后续扩展专有 API 在本项目接入。
 

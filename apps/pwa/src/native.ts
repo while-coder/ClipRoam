@@ -6,6 +6,6 @@ import packageInfo from "../package.json";
 export class NativePwa extends NativeWeb {
   async getAppVersion(): Promise<string> { return packageInfo.version; }
   async getDeviceInfo(): Promise<DeviceInfo> {
-    return {...await super.getDeviceInfo(),deviceName:"ClipRoam PWA",appVersion:packageInfo.version};
+    return {...await super.getDeviceInfo(),deviceName:"随心贴 PWA",appVersion:packageInfo.version};
   }
 }

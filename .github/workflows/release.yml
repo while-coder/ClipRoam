@@ -39,7 +39,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ needs.check.outputs.tag }}
           target: ${{ github.sha }}
-          title: ClipRoam v${{ needs.check.outputs.version }}
+          title: 随心贴 v${{ needs.check.outputs.version }}
           notes: ${{ needs.check.outputs.notes }}
 
   desktop:
@@ -50,7 +50,7 @@ jobs:
       cargo-lock-path: apps/app/src-tauri/Cargo.lock
       cargo-target-path: apps/app/src-tauri/target
       tag-name: ${{ needs.check.outputs.tag }}
-      release-name: ClipRoam v${{ needs.check.outputs.version }}
+      release-name: 随心贴 v${{ needs.check.outputs.version }}
       release-body: ${{ needs.check.outputs.notes }}
       release-owner: while-coder
       release-repo: ClipRoam
@@ -66,7 +66,7 @@ jobs:
       cargo-target-path: apps/app/src-tauri/target
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
-      asset-prefix: ClipRoam
+      asset-prefix: 随心贴
       release-repository: while-coder/ClipRoam
       init-command: pnpm tauri android init --ci
       build-command: pnpm tauri android build --apk --aab --ci
@@ -82,7 +82,7 @@ jobs:
       cargo-target-path: apps/app/src-tauri/target
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
-      asset-prefix: ClipRoam
+      asset-prefix: 随心贴
       release-repository: while-coder/ClipRoam
       init-command: pnpm tauri ios init --ci
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
@@ -93,7 +93,7 @@ jobs:
     if: ${{ !cancelled() && needs.desktop.result == 'success' }}
     uses: while-coder/workflows/.github/workflows/tauri-updater-manifest.yml@main
     with:
-      product-prefix: ClipRoam
+      product-prefix: 随心贴
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
       release-notes: ${{ needs.check.outputs.notes }}

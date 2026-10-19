@@ -39,11 +39,11 @@ function supportsWindowMode(): boolean {
 
 async function restoreMainWindow(): Promise<void> {
   if (isQuickPaste.value) {
-    await setWindowMode({ mode: "main", title: "ClipRoam", visible: false });
+    await setWindowMode({ mode: "main", title: "随心贴", visible: false });
     setQuickPasteView(false);
     await nextTick();
   }
-  await setWindowMode({ mode: "main", title: "ClipRoam" });
+  await setWindowMode({ mode: "main", title: "随心贴" });
 }
 
 export function showMainWindow(options: { focusSearch?: boolean } = {}): Promise<void> {
@@ -63,11 +63,11 @@ export function showPasteWindow(): Promise<void> {
     // the original external paste target on macOS.
     await invoke<void>("native_capture_paste_target");
     try {
-      await setWindowMode({ mode: "quickPaste", title: "ClipRoam - 快速粘贴", visible: false });
+      await setWindowMode({ mode: "quickPaste", title: "随心贴 - 快速粘贴", visible: false });
       setQuickPasteView(true);
       await nextTick();
       session.signal.throwIfAborted();
-      await setWindowMode({ mode: "quickPaste", title: "ClipRoam - 快速粘贴", position: { kind: "cursor" } });
+      await setWindowMode({ mode: "quickPaste", title: "随心贴 - 快速粘贴", position: { kind: "cursor" } });
       session.signal.throwIfAborted();
       focusSearch();
     } catch (error) {

@@ -1,4 +1,4 @@
-# ClipRoam Firefox 扩展
+# 随心贴 Firefox 扩展
 
 Manifest V3 弹出页和选项页通过 `NativeFirefox` 加载共享的 `@cliproam/ui/app`，共用登录、历史、设置、同步和传输逻辑。
 

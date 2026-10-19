@@ -1,7 +1,7 @@
 {
   "name": "cliproam-vscode",
-  "displayName": "ClipRoam",
-  "description": "在 VS Code 中查看跨设备剪贴板历史、保存选中文本并插入代码片段。",
+  "displayName": "随心贴",
+  "description": "在 VS Code 中查看跨设备剪贴板历史、添加选中文本。",
   "version": "0.2.4",
   "publisher": "while-coder",
   "private": true,
@@ -14,9 +14,8 @@
   "icon": "public/cliproam-icon.png",
   "contributes": {
     "commands": [
-      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "ClipRoam", "icon": "public/cliproam-icon.png" },
-      { "command": "cliproam.captureSelection", "title": "保存选中文本", "category": "ClipRoam" },
-      { "command": "cliproam.insertHistory", "title": "从历史插入文本", "category": "ClipRoam" }
+      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "随心贴", "icon": "public/cliproam-icon.png" },
+      { "command": "cliproam.captureSelection", "title": "添加到随心贴历史", "category": "随心贴" }
     ],
     "menus": {
       "title": [
@@ -26,8 +25,7 @@
         { "command": "cliproam.open", "group": "navigation@1" }
       ],
       "editor/context": [
-        { "command": "cliproam.captureSelection", "when": "editorHasSelection", "group": "9_cliproam" },
-        { "command": "cliproam.insertHistory", "when": "editorTextFocus", "group": "9_cliproam" }
+        { "command": "cliproam.captureSelection", "when": "editorHasSelection", "group": "9_cliproam" }
       ]
     }
   },
