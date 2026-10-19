@@ -1,9 +1,4 @@
-const COMMANDS: &[&str] = &[
-    "pending",
-    "acknowledge",
-    "register_listener",
-    "remove_listener",
-];
+const COMMANDS: &[&str] = &["register_listener", "remove_listener"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)
