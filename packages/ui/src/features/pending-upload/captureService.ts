@@ -148,7 +148,8 @@ export class CaptureService {
   }
 
   /** Browser/extension callers can pass File objects without any native bridge. */
-  async captureFiles(files: File[]): Promise<void> {
+  async captureFiles(files: File[], captureId?: string): Promise<void> {
+    if (captureId && await this.session.database.get("captures", captureId)) return;
     const info: FileInfo = Object.create(null);
     let count = 0;
     for (const file of files) {
@@ -178,7 +179,7 @@ export class CaptureService {
     if (!count) throw new Error("没有可用的文件");
     this.session.state.localClipboardRevision++;
     await this.session.pendingUploads.enqueue({ id: "", version: 0, kind: "files", content: Object.keys(info).join("、"),
-      fileInfo: info, sourceDeviceId: "", createdAt: new Date().toISOString() });
+      fileInfo: info, sourceDeviceId: "", createdAt: new Date().toISOString() }, captureId);
     this.changed();
   }
 
@@ -193,6 +194,7 @@ export class CaptureService {
           await this.capture(image, `${share.id}:image:${i}`); result.images++;
         }
         if (share.paths.length) { await this.capture({ kind: "files", paths: share.paths }, `${share.id}:files`); result.files += share.paths.length; }
+        if (share.files?.length) { await this.captureFiles(share.files, `${share.id}:browser-files`); result.files += share.files.length; }
         result.shares++;
       } catch (error) { this.error(`分享导入失败：${String(error)}`); continue; }
       this.session.signal.throwIfAborted();

@@ -209,7 +209,7 @@ function shareImportMessage(summary: ShareImportSummary): string {
 }
 
 async function consumeMobileShares(): Promise<void> {
-  // 未登录只保留原生 inbox，登录成功后再导入并确认消费。
+  // 未登录只保留分享 inbox，登录成功后再导入并确认消费。
   if (!platformCapabilities.value.shareReceiver || !hasSavedSyncConfig.value || !getActiveConfig()?.sessionToken) return;
   shareConsumeRequested = true;
   if (importingShare.value) return;
@@ -463,7 +463,9 @@ async function initializeNativeServices(): Promise<void> {
 
   // 窗口打开时先拉一次全量任务快照（此后靠上面的事件跟进）。
   await refreshDownloadTasks().catch(() => undefined);
+}
 
+async function initializeShareReceiver(): Promise<void> {
   if (platformCapabilities.value.shareReceiver) {
     try {
       shareReceiverListener = await native.listenShares(
@@ -536,7 +538,10 @@ onMounted(async () => {
   // The history view fetches its first page itself (revision watch with
   // `immediate`); only the pending badge needs an initial query.
   void refreshPendingCount();
-  if (!accountRuntimeError.value) void initializeNativeServices();
+  if (!accountRuntimeError.value) {
+    void initializeNativeServices();
+    void initializeShareReceiver();
+  }
 
   await nextTick();
   setupWizard.value?.setFields(config ?? undefined);

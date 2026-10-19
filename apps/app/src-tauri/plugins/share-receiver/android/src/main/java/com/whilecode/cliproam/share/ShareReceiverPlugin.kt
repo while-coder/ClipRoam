@@ -262,12 +262,15 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
         if (!directory.mkdirs()) throw IllegalStateException("无法创建系统分享缓存")
 
         try {
+            // Payload names must never collide with the inbox's manifest.json metadata.
+            val filesDirectory = File(directory, "files")
+            if (!filesDirectory.mkdirs()) throw IllegalStateException("无法创建分享文件缓存")
             val items = uris.mapIndexed { index, uri ->
                 val mimeType = activity.contentResolver.getType(uri)
                     ?: intent.type
                     ?: "application/octet-stream"
-                val name = uniqueName(directory, displayName(uri, mimeType, index))
-                val target = File(directory, name)
+                val name = uniqueName(filesDirectory, displayName(uri, mimeType, index))
+                val target = File(filesDirectory, name)
                 activity.contentResolver.openInputStream(uri).use { input ->
                     if (input == null) throw IllegalArgumentException("无法读取分享文件：$name")
                     target.outputStream().use(input::copyTo)

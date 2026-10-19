@@ -11,3 +11,8 @@ async function start(): Promise<void> {
 }
 
 void start();
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, {type:"module"})
+    .catch((error) => console.error("系统分享服务注册失败", error));
+}

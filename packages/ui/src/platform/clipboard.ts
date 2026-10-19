@@ -6,7 +6,7 @@ export type ClipboardData =
   | { kind: "image"; data: string; width: number; height: number; thumbnail: string };
 export type ClipboardCapture = { id: string; signature: string; data: ClipboardData };
 export type ClipboardEvent = { scope: string; capture: ClipboardCapture };
-export type SharedContent = { id: string; text?: string; html?: string; images: string[]; paths: string[] };
+export type SharedContent = { id: string; text?: string; html?: string; images: string[]; paths: string[]; files?: File[] };
 export type ClipboardWrite = { kind: "text"; text: string; html?: string; rtf?: string }
   | { kind: "files"; paths: string[] } | { kind: "image"; bytes: Uint8Array };
 

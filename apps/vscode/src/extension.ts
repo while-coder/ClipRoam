@@ -1,13 +1,36 @@
 import * as vscode from "vscode";
-import { readFile } from "node:fs/promises";
-import { hostname, platform, release, arch } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
+import { hostname, platform, release, arch, homedir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+type PendingSelection = { id: string; text: string; scope?: string };
+const PENDING_SELECTIONS_KEY = "cliproam.pending-selections";
 
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let editor = vscode.window.activeTextEditor;
   let ready: Promise<void>;
-  let nextId = 0;
-  const captures = new Map<number, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  let pendingSelectionWork: Promise<unknown> = Promise.resolve();
+  const saveTargets = new Map<string, { uri: vscode.Uri; single: boolean }>();
+
+  function exportPath(value: unknown): { uri: vscode.Uri; data: Record<string, unknown> } {
+    if (!value || typeof value !== "object") throw new Error("导出参数无效");
+    const data = value as Record<string, unknown>;
+    const target = typeof data.target === "string" ? saveTargets.get(data.target) : undefined;
+    const parts = data.path;
+    if (!target || !Array.isArray(parts) || !parts.length || parts.some((part) =>
+      typeof part !== "string" || !part || part === "." || part === ".." || /[<>:"/\\|?*\x00-\x1f]/.test(part))) throw new Error("保存位置或文件路径无效");
+    if (target.single && parts.length !== 1) throw new Error("单文件保存不支持子目录");
+    return { uri: target.single ? target.uri : vscode.Uri.joinPath(target.uri, ...parts), data };
+  }
+
+  function updatePendingSelections(transform: (pending: PendingSelection[]) => PendingSelection[]): Promise<void> {
+    const work = pendingSelectionWork.then(() => context.globalState.update(PENDING_SELECTIONS_KEY,
+      transform(context.globalState.get<PendingSelection[]>(PENDING_SELECTIONS_KEY, []))));
+    pendingSelectionWork = work.catch(() => undefined);
+    return work;
+  }
 
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((active) => {
     if (active) editor = active;
@@ -33,14 +56,6 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!message || typeof message !== "object") return;
       const data = message as Record<string, unknown>;
       if (data.type === "ready") { markReady(); return; }
-      if (data.type === "captured" && typeof data.id === "number") {
-        const capture = captures.get(data.id);
-        if (!capture) return;
-        captures.delete(data.id); clearTimeout(capture.timer);
-        if (typeof data.error === "string") capture.reject(new Error(data.error));
-        else capture.resolve();
-        return;
-      }
       if (data.type !== "request" || typeof data.id !== "number" || typeof data.operation !== "string") return;
       try {
         const value = await perform(data.operation, data.value);
@@ -53,10 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
       listener.dispose();
       rejectReady(new Error("随心贴 标签页已关闭"));
       if (panel === current) panel = undefined;
-      for (const capture of captures.values()) {
-        clearTimeout(capture.timer); capture.reject(new Error("随心贴 标签页已关闭"));
-      }
-      captures.clear();
+      saveTargets.clear();
     }, undefined, context.subscriptions);
     try {
       const html = await readFile(vscode.Uri.joinPath(resourceRoot, "index.html").fsPath, "utf8");
@@ -83,6 +95,47 @@ export function activate(context: vscode.ExtensionContext): void {
       case "clipboard.write":
         if (typeof value !== "string") throw new Error("剪贴板文本无效");
         return vscode.env.clipboard.writeText(value);
+      case "files.selectSaveTarget": {
+        if (!value || typeof value !== "object") throw new Error("保存参数无效");
+        const { single, fileName } = value as Record<string, unknown>;
+        if (typeof single !== "boolean" || typeof fileName !== "string" || !fileName || /[<>:"/\\|?*\x00-\x1f]/.test(fileName) || fileName === "." || fileName === "..") throw new Error("保存文件名无效");
+        const uri = single
+          ? await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(join(homedir(), fileName)), saveLabel: "保存" })
+          : (await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: "保存到此文件夹" }))?.[0];
+        if (!uri) return null;
+        if (uri.scheme !== "file") throw new Error("请选择本机保存位置");
+        saveTargets.set(uri.fsPath, { uri, single });
+        return { kind: "path", value: uri.fsPath };
+      }
+      case "files.createDirectory": {
+        const { uri, data } = exportPath(value);
+        if (saveTargets.get(data.target as string)!.single) throw new Error("单文件保存不支持创建目录");
+        await vscode.workspace.fs.createDirectory(uri);
+        return;
+      }
+      case "files.write": {
+        const { uri, data } = exportPath(value);
+        if (typeof data.data !== "string" || typeof data.append !== "boolean") throw new Error("文件内容无效");
+        await writeFile(uri.fsPath, Buffer.from(data.data, "base64"), { flag: data.append ? "a" : "w" });
+        return;
+      }
+      case "files.release":
+        if (typeof value !== "string") throw new Error("保存位置标识无效");
+        saveTargets.delete(value);
+        return;
+      case "shares.pending": {
+        if (typeof value !== "string" || !value) throw new Error("账号档案无效");
+        let selected: PendingSelection[] = [];
+        await updatePendingSelections((pending) => {
+          const claimed = pending.map((item) => item.scope ? item : { ...item, scope: value });
+          selected = claimed.filter((item) => item.scope === value);
+          return claimed;
+        });
+        return selected.map(({ id, text }) => ({ id, text, images: [], paths: [] }));
+      }
+      case "shares.acknowledge":
+        if (typeof value !== "string") throw new Error("待处理文本标识无效");
+        return updatePendingSelections((pending) => pending.filter((item) => item.id !== value));
       case "device.info": return {
         deviceName: `${hostname()} (VS Code)`, osType: platform(), osVersion: release(), architecture: arch(),
       };
@@ -105,16 +158,10 @@ export function activate(context: vscode.ExtensionContext): void {
   command("cliproam.open", open);
   command("cliproam.captureSelection", async () => {
     const text = selectionText();
+    await updatePendingSelections((pending) => [...pending, { id: randomUUID(), text }]);
     const current = await open();
-    const id = ++nextId;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { captures.delete(id); reject(new Error("保存选中文本超时，请重试")); }, 30_000);
-      captures.set(id, { resolve, reject, timer });
-      void current.webview.postMessage({ type: "captureSelection", id, text }).then((sent) => {
-        if (!sent) { clearTimeout(timer); captures.delete(id); reject(new Error("随心贴 界面不可用")); }
-      });
-    });
-    void vscode.window.showInformationMessage("已加入 随心贴 上传队列");
+    await current.webview.postMessage({ type: "sharesChanged" });
+    void vscode.window.showInformationMessage("选中文本已暂存，进入主界面后自动加入历史");
   });
   context.subscriptions.push({ dispose: () => panel?.dispose() });
 }

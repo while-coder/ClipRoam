@@ -191,7 +191,7 @@ export class AccountFiles {
   }
 
   async export(entry: StoredEntry, target: SaveTarget, signal: AbortSignal, ensureFile?: (fileId: string) => Promise<void>): Promise<number> {
-    if (target.kind === "browserDirectory") {
+    if (target.kind === "browserDirectory" || (!isNative && target.kind === "path")) {
       const database = this.database;
       const stream = async (fileId: string): Promise<ReadableStream<Uint8Array>> => {
         signal.throwIfAborted();
