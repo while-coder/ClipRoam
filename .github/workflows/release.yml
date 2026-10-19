@@ -66,7 +66,7 @@ jobs:
       cargo-target-path: apps/app/src-tauri/target
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
-      asset-prefix: 随心贴
+      asset-prefix: ClipRoam
       release-repository: while-coder/ClipRoam
       init-command: pnpm tauri android init --ci
       build-command: pnpm tauri android build --apk --aab --ci
@@ -82,18 +82,32 @@ jobs:
       cargo-target-path: apps/app/src-tauri/target
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
-      asset-prefix: 随心贴
+      asset-prefix: ClipRoam
       release-repository: while-coder/ClipRoam
       init-command: pnpm tauri ios init --ci
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
     secrets: inherit
 
-  publish-manifest:
-    needs: [check, desktop, android, ios]
+  normalize-linux-assets:
+    needs: [check, desktop]
     if: ${{ !cancelled() && needs.desktop.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: while-coder/workflows/.github/actions/rename-tauri-assets@main
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        with:
+          product-prefix: ClipRoam
+          version: ${{ needs.check.outputs.version }}
+          tag: ${{ needs.check.outputs.tag }}
+
+  publish-manifest:
+    needs: [check, desktop, android, ios, normalize-linux-assets]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.normalize-linux-assets.result == 'success' }}
     uses: while-coder/workflows/.github/workflows/tauri-updater-manifest.yml@main
     with:
-      product-prefix: 随心贴
+      product-prefix: ClipRoam
+      source-product-name: 随心贴
       tag-name: ${{ needs.check.outputs.tag }}
       version: ${{ needs.check.outputs.version }}
       release-notes: ${{ needs.check.outputs.notes }}

@@ -1,0 +1,10 @@
+{
+  "productName": "ClipRoam",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux.desktop"
+      }
+    }
+  }
+}

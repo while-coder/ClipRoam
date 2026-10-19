@@ -10,6 +10,14 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 入口先注入 `NativeRust`，再加载共用 App；浏览器开发预览使用共用 Web API 适配器。文件导出、账号数据库、同步和传输调度由共享 TS 代码负责。
 
+## 应用名称与升级兼容
+
+中文显示名为「随心贴」，英文名和技术标识继续使用 ClipRoam。`mainBinaryName` 固定为 `cliproam`；bundle ID、更新地址、签名公钥及数据目录沿用旧版配置。
+
+Windows 的 `installer.nsi` 基于 Tauri CLI 2.11.4 模板，仅将安装标识与显示名分开：安装目录、注册表键和快捷方式文件名继续使用 ClipRoam，安装器和卸载列表显示「随心贴」。升级 Tauri CLI 时需同步检查此模板。Linux 使用平台配置保留 ClipRoam 包名，并通过 `linux.desktop` 设置中文显示名；AppImage 也复用这个桌面文件。
+
+发布时先规范化 Linux 产物，再将中文名称生成的 Windows/macOS 产物转为原有 `ClipRoam_...` 文件名，更新清单继续发布到原来的 `updater/latest.json`。发布版本号必须高于已发布版本；实际覆盖升级和签名校验仍需使用正式签名安装包验证。
+
 ## 本地数据
 
 登录配置只包含服务器地址及协议、用户名和 sessionToken，使用 AES-GCM 加密后保存到 localStorage，每次保存使用新的随机 IV。随机密钥保存在同一应用的 localStorage，目的是避免直接保存明文；这不提供系统钥匙串级别的隔离。退出登录删除登录配置，配置或密钥损坏后可重新登录覆盖。
