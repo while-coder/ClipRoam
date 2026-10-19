@@ -13,6 +13,7 @@ const tauriIconsDirectory = path.join(appDirectory, "src-tauri", "icons");
 const favicon = path.join(appDirectory, "public", "cliproam-icon.png");
 const sharedIcon = path.join(rootDirectory, "packages", "ui", "src", "assets", "cliproam-icon.png");
 const browserIconsDirectory = path.join(rootDirectory, ".tmp", "browser-icons");
+const maskableIconsDirectory = path.join(rootDirectory, ".tmp", "maskable-icons");
 const browserIconSizes = [16, 32, 48, 128, 192, 512];
 const androidResourcesDirectory = path.join(
   appDirectory,
@@ -71,6 +72,22 @@ for (const platform of ["pwa", "chrome", "firefox", "vscode"]) {
   }
   console.log(`已更新 ${platform} 图标：${path.relative(rootDirectory, publicDirectory)}`);
 }
+
+// Reuse the full-bleed Android artwork so launchers can apply their own mask
+// without adding a white background around the transparent desktop icon.
+execFileSync(
+  process.execPath,
+  [tauriCli, "icon", androidIcon, "--output", maskableIconsDirectory,
+    ...[192, 512].flatMap((size) => ["--png", String(size)])],
+  { cwd: rootDirectory, stdio: "inherit" },
+);
+for (const size of [192, 512]) {
+  fs.copyFileSync(
+    path.join(maskableIconsDirectory, `${size}x${size}.png`),
+    path.join(rootDirectory, "apps", "pwa", "public", "icons", `icon-maskable-${size}.png`),
+  );
+}
+console.log("已更新 PWA 自适应图标");
 
 if (fs.existsSync(androidResourcesDirectory)) {
   // The Android source fills the adaptive layer and keeps its artwork inside
