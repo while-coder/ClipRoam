@@ -51,8 +51,9 @@ fn ensure_accessibility_access() -> Result<(), String> {
         .output();
     let settings_opened = matches!(settings, Ok(ref output) if output.status.success());
     Err(format!(
-        "内容已复制。{}请在「辅助功能」中允许 随心贴；若已开启仍无效，请完全退出 随心贴，删除旧条目后点 + 添加当前应用，再启动重试。",
+        "内容已复制。{}请在「辅助功能」中允许 {app_name}；若已开启仍无效，请完全退出 {app_name}，删除旧条目后点 + 添加当前应用，再启动重试。",
         if settings_opened { "已打开权限设置。" } else { "设置路径：系统设置 → 隐私与安全性 → 辅助功能。" },
+        app_name = crate::branding::app_name(),
     ))
 }
 

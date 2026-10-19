@@ -160,9 +160,9 @@ fn apply_mode(
             geometry.quick = false;
         }
         window.set_title(title.as_deref().unwrap_or(if quick {
-            "随心贴 - 快速粘贴"
+            crate::branding::quick_paste_title()
         } else {
-            "随心贴"
+            crate::branding::app_name()
         }))?;
         Ok(())
     })();

@@ -10,13 +10,11 @@ Vue + TypeScript 实现界面和业务逻辑，Tauri 提供原生能力。主窗
 
 入口先注入 `NativeRust`，再加载共用 App；浏览器开发预览使用共用 Web API 适配器。文件导出、账号数据库、同步和传输调度由共享 TS 代码负责。
 
-## 应用名称与升级兼容
+## 应用名称与语言
 
-中文显示名为「随心贴」，英文名和技术标识继续使用 ClipRoam。`mainBinaryName` 固定为 `cliproam`；bundle ID、更新地址、签名公钥及数据目录沿用旧版配置。
+`productName` 固定为 `ClipRoam`，安装包、Release 标题和技术标识沿用英文名称，bundle ID 仍为 `com.whilecode.cliproam`。界面、窗口标题、通知和托盘中的应用名称跟随系统语言（浏览器中跟随浏览器语言）：中文显示「随心贴」，其他语言回退为 ClipRoam。本次仅本地化应用名称，其他界面文案仍为中文。
 
-Windows 的 `installer.nsi` 基于 Tauri CLI 2.11.4 模板，仅将安装标识与显示名分开：安装目录、注册表键和快捷方式文件名继续使用 ClipRoam，安装器和卸载列表显示「随心贴」。升级 Tauri CLI 时需同步检查此模板。Linux 使用平台配置保留 ClipRoam 包名，并通过 `linux.desktop` 设置中文显示名；AppImage 也复用这个桌面文件。
-
-发布时先规范化 Linux 产物，再将中文名称生成的 Windows/macOS 产物转为原有 `ClipRoam_...` 文件名，更新清单继续发布到原来的 `updater/latest.json`。发布版本号必须高于已发布版本；实际覆盖升级和签名校验仍需使用正式签名安装包验证。
+macOS/iOS 使用 `infoplist/*.lproj/InfoPlist.strings` 提供系统显示名，Android 使用 `values/strings.xml` 和 `values-zh/strings.xml`，Linux 桌面入口使用 `Name`/`Name[zh]`。Windows 安装器、开始菜单和快捷方式名称保留 ClipRoam，运行时窗口及托盘名称按语言选择；不使用自定义 NSIS 模板。
 
 ## 本地数据
 

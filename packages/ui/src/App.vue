@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { appName } from "./branding";
+
 import { errorMessage } from "./utils";
 import { clientSessionManager, archiveKeyFor } from "./features/sync/clientSessionManager";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -64,6 +66,8 @@ import type {
   AccountPreferences,
   SyncConfig,
 } from "./types";
+
+watch(appName, (name) => { document.title = name; }, { immediate: true });
 
 const {
   currentUsername,
@@ -401,7 +405,7 @@ function withStartupTimeout<T>(promise: Promise<T>, message: string): Promise<T>
 function readableStartupError(error: unknown): string {
   const message = errorMessage(error);
   if (message.includes("state not managed for field `state`")) {
-    return "应用初始化尚未完成，请从托盘退出 随心贴 后重新启动";
+    return `应用初始化尚未完成，请从托盘退出 ${appName.value} 后重新启动`;
   }
   return message || "未知错误";
 }
@@ -516,7 +520,7 @@ onBeforeUnmount(() => {
   <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': mobileLayout }">
     <section class="setup-loading-content" role="status" aria-live="polite">
       <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
-      <strong>随心贴</strong>
+      <strong>{{ appName }}</strong>
       <span>正在读取连接配置…</span>
     </section>
   </main>

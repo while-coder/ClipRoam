@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appName } from "@cliproam/ui/branding";
 import { Bug, RefreshCw } from "lucide-vue-next";
 import { onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -39,7 +40,7 @@ async function openDebugTools(): Promise<void> {
         <label class="setting-switch" for="autostart">
           <span class="setting-switch-copy">
             <strong>开机启动</strong>
-            <small>登录系统后自动启动 随心贴，点击保存后生效。</small>
+            <small>登录系统后自动启动 {{ appName }}，点击保存后生效。</small>
           </span>
           <SSwitch
             id="autostart"
@@ -110,7 +111,7 @@ async function openDebugTools(): Promise<void> {
             <p>配置当前设备的全局快捷操作，不会同步到其他设备。</p>
           </header>
           <SCard title="快捷粘贴">
-            <p class="settings-section-desc">在其他应用中按下快捷键，打开 随心贴 快捷粘贴窗口。</p>
+            <p class="settings-section-desc">在其他应用中按下快捷键，打开 {{ appName }} 快捷粘贴窗口。</p>
             <div class="shortcut-setting-row">
               <div>
                 <strong>全局快捷键</strong>

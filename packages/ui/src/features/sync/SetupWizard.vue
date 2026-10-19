@@ -12,6 +12,7 @@ export type SetupDraft = {
 </script>
 
 <script setup lang="ts">
+import { appName } from "../../branding";
 import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
 import { ArrowLeft, Server, ShieldCheck, Trash2 } from "lucide-vue-next";
@@ -228,7 +229,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
     <div class="setup-intro">
       <div class="setup-brand">
         <span class="setup-icon" aria-hidden="true"><Server :size="20" /></span>
-        <span class="setup-eyebrow">{{ verifyingSession ? "正在恢复登录" : "随心贴" }}</span>
+        <span class="setup-eyebrow">{{ verifyingSession ? "正在恢复登录" : appName }}</span>
       </div>
       <h1>{{ authMode === "login" ? "登录同步服务器" : "创建同步账号" }}</h1>
       <p>每个账号拥有独立的剪贴板内容和设备列表。</p>

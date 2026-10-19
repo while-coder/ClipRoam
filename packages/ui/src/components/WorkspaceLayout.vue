@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appName } from "../branding";
 import { computed } from "vue";
 import { Clipboard, Cloud, CloudOff, CloudUpload, Download, MonitorSmartphone, Upload } from "lucide-vue-next";
 import type { WorkspaceView } from "../types";
@@ -32,7 +33,7 @@ const mobilePages = computed(() => [
       <header class="sidebar-brand">
         <span class="brand-mark"><Clipboard :size="17" /></span>
         <span>
-          <strong>随心贴</strong>
+          <strong>{{ appName }}</strong>
           <small>剪贴板工作区</small>
         </span>
       </header>

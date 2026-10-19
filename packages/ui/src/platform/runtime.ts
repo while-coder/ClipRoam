@@ -1,3 +1,4 @@
+import { appName } from "../branding";
 import { computed, inject, onBeforeUnmount, provide, ref, type InjectionKey, type Ref } from "vue";
 import { native } from "./native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
@@ -77,7 +78,7 @@ export function showNotification(options: NotificationOptions): void {
   if (!normalized) return;
   const payload: NotificationPayload = {
     message: normalized,
-    title: options.title?.trim() || "随心贴",
+    title: options.title?.trim() || appName.value,
     tone: options.tone ?? "info",
   };
   if (isMobile.value) {

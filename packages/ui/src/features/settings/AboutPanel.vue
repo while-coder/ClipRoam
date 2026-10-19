@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appName } from "../../branding";
 import { BookOpen, ExternalLink, Github, MessageSquare, Package } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
 import { native, type DeviceInfo } from "../../platform/native";
@@ -39,7 +40,7 @@ const feedbackUrl = computed(() => {
   const url = new URL(`${projectUrl}/issues/new`);
   url.searchParams.set("body", [
     "### 使用环境",
-    `- 随心贴 版本：${appVersion.value || deviceInfo.value?.appVersion || "未知"}`,
+    `- ${appName.value} 版本：${appVersion.value || deviceInfo.value?.appVersion || "未知"}`,
     `- 系统 / 浏览器及版本：${operatingSystem.value}`,
     ...(deviceInfo.value?.architecture ? [`- 处理器架构：${deviceInfo.value.architecture}`] : []),
     "",
@@ -81,7 +82,7 @@ async function openLink(url: string): Promise<void> {
   <SCard class="about-product">
     <img class="about-product-mark" :src="productIcon" alt="" />
     <div class="about-product-copy">
-      <h4>随心贴</h4>
+      <h4>{{ appName }}</h4>
       <p>保存每一次复制，让文字、图片和文件在你的设备之间漫游。</p>
     </div>
     <span class="about-version">v{{ appVersion || "…" }}</span>

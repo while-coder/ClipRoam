@@ -9,6 +9,11 @@
     ]
   },
   "bundle": {
+    "resources": {
+      "infoplist/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings",
+      "infoplist/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
+      "infoplist/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
+    },
     "iOS": {
       "minimumSystemVersion": "14.0"
     }

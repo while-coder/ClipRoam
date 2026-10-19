@@ -1,4 +1,5 @@
 import { nextTick } from "vue";
+import { appName, quickPasteTitle } from "@cliproam/ui/branding";
 import { invoke } from "@tauri-apps/api/core";
 import { native } from "@cliproam/ui/native";
 import { isMobile, isQuickPaste, isNative } from "@cliproam/ui/platform";
@@ -39,11 +40,11 @@ function supportsWindowMode(): boolean {
 
 async function restoreMainWindow(): Promise<void> {
   if (isQuickPaste.value) {
-    await setWindowMode({ mode: "main", title: "随心贴", visible: false });
+    await setWindowMode({ mode: "main", title: appName.value, visible: false });
     setQuickPasteView(false);
     await nextTick();
   }
-  await setWindowMode({ mode: "main", title: "随心贴" });
+  await setWindowMode({ mode: "main", title: appName.value });
 }
 
 export function showMainWindow(options: { focusSearch?: boolean } = {}): Promise<void> {
@@ -63,11 +64,11 @@ export function showPasteWindow(): Promise<void> {
     // the original external paste target on macOS.
     await invoke<void>("native_capture_paste_target");
     try {
-      await setWindowMode({ mode: "quickPaste", title: "随心贴 - 快速粘贴", visible: false });
+      await setWindowMode({ mode: "quickPaste", title: quickPasteTitle.value, visible: false });
       setQuickPasteView(true);
       await nextTick();
       session.signal.throwIfAborted();
-      await setWindowMode({ mode: "quickPaste", title: "随心贴 - 快速粘贴", position: { kind: "cursor" } });
+      await setWindowMode({ mode: "quickPaste", title: quickPasteTitle.value, position: { kind: "cursor" } });
       session.signal.throwIfAborted();
       focusSearch();
     } catch (error) {

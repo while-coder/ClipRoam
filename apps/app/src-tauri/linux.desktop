@@ -6,7 +6,8 @@ Comment={{comment}}
 Exec={{exec}}
 StartupWMClass={{exec}}
 Icon={{icon}}
-Name=随心贴
+Name=ClipRoam
+Name[zh]=随心贴
 Terminal=false
 Type=Application
 {{#if mime_type}}

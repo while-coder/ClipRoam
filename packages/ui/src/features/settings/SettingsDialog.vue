@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appName } from "../../branding";
 import { Check } from "lucide-vue-next";
 import { computed } from "vue";
 import type { SettingsPage } from "../../types";
@@ -150,7 +151,7 @@ const currentServer = computed(() => {
             <div class="settings-page">
               <header class="settings-page-header">
                 <h3>关于</h3>
-                <p>了解 随心贴，获取帮助与参与改进。</p>
+                <p>了解 {{ appName }}，获取帮助与参与改进。</p>
               </header>
 
               <AboutPanel>

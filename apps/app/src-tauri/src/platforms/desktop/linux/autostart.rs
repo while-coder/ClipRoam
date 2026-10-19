@@ -31,7 +31,8 @@ fn desktop_content() -> Result<String, String> {
     Ok(format!(
         r#"[Desktop Entry]
 Type=Application
-Name=随心贴
+Name=ClipRoam
+Name[zh]=随心贴
 Exec="{exe}"
 Terminal=false
 X-GNOME-Autostart-enabled=true

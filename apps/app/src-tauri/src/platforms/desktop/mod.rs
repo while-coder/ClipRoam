@@ -148,7 +148,7 @@ pub(crate) fn create_windows(app: &AppHandle) -> Result<(), Box<dyn std::error::
         } else {
             builder
         };
-        builder.build()?;
+        builder.title(crate::branding::app_name()).build()?;
     }
     Ok(())
 }
@@ -176,8 +176,21 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
 
-    let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN, "显示主界面", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT, "退出", true, None::<&str>)?;
+    let chinese = crate::branding::is_chinese();
+    let show_main = MenuItem::with_id(
+        app,
+        TRAY_SHOW_MAIN,
+        if chinese { "显示主界面" } else { "Show Main Window" },
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        TRAY_QUIT,
+        if chinese { "退出" } else { "Quit" },
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(app, &[&show_main, &quit])?;
     #[cfg(target_os = "macos")]
     let icon = tauri::image::Image::from_bytes(include_bytes!("../../../icons/tray-macos.png"))?;
@@ -189,7 +202,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("随心贴")
+        .tooltip(crate::branding::app_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

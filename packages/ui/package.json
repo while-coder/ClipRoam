@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./branding": "./src/branding.ts",
     "./styles.css": "./src/styles.css",
     "./app": "./src/App.vue",
     "./native": "./src/platform/native.ts",

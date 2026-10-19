@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "ClipRoam";
+"CFBundleName" = "ClipRoam";
+"NSLocalNetworkUsageDescription" = "ClipRoam needs access to your local network to connect to your clipboard sync server.";
