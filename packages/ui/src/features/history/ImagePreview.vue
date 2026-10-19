@@ -1,34 +1,9 @@
 <script setup lang="ts">
-import { errorMessage } from "../../utils";
-import { onBeforeUnmount, onMounted, ref } from "vue";
-import { previewSource } from "../../platform/runtime";
-import type { LocalClipboardEntry } from "../../types";
+import { onBeforeUnmount, ref } from "vue";
 
-const props = defineProps<{
-  entry: LocalClipboardEntry;
-  ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
-}>();
-const emit = defineEmits<{ close: [] }>();
-const previewImage = ref<LocalClipboardEntry>();
-const loading = ref(true);
+defineProps<{ src: string; title: string }>();
 const error = ref("");
-const previewUrl = ref("");
-let disposed = false;
-
-onMounted(async () => {
-  try {
-    const entry = await props.ensureLocalFiles(props.entry);
-    if (disposed) return;
-    if (!entry.summary.previewPath) throw new Error("图片文件不可用");
-    previewUrl.value = await previewSource(entry.summary.previewPath);
-    previewImage.value = entry;
-  } catch (cause) {
-    if (!disposed) error.value = `无法预览图片：${errorMessage(cause)}`;
-  } finally {
-    if (!disposed) loading.value = false;
-  }
-});
-onBeforeUnmount(() => { disposed = true; resetPreviewGesture(); });
+onBeforeUnmount(() => resetPreviewGesture());
 
 // 预览缩放/平移：desktop 滚轮缩放、左键拖拽平移；移动端双指捏合缩放、单指拖拽；
 // 双击复位。全部走 transform，不产生滚动条。
@@ -171,35 +146,25 @@ function onPreviewPointerUp(event: PointerEvent): void {
 </script>
 
 <template>
-    <SModal
-      :show="true"
-      :title="entry.content"
-      width="980px"
-      @update:show="(value: boolean) => { if (!value) emit('close') }"
-    >
-      <div v-if="loading" class="preview-status" role="status">
-        <span class="s-spinner" aria-hidden="true" />正在加载图片…
-      </div>
-      <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
-      <div
-        v-else-if="previewImage"
-        ref="previewStageElement"
-        class="image-preview-stage"
-        @wheel.prevent="onPreviewWheel"
-        @pointerdown="onPreviewPointerDown"
-        @dblclick="resetPreviewTransform"
-      >
-        <img
-          ref="previewImageElement"
-          :src="previewUrl"
-          :alt="previewImage.content"
-          :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})` }"
-          draggable="false"
-          @load="onPreviewImageLoad"
-          @error="error = '图片加载失败'"
-        />
-      </div>
-    </SModal>
+  <div v-if="error" class="preview-status" role="alert">{{ error }}</div>
+  <div
+    v-else
+    ref="previewStageElement"
+    class="image-preview-stage"
+    @wheel.prevent="onPreviewWheel"
+    @pointerdown="onPreviewPointerDown"
+    @dblclick="resetPreviewTransform"
+  >
+    <img
+      ref="previewImageElement"
+      :src="src"
+      :alt="title"
+      :style="{ transform: `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})` }"
+      draggable="false"
+      @load="onPreviewImageLoad"
+      @error="error = '图片加载失败'"
+    />
+  </div>
 </template>
 
 <style scoped>

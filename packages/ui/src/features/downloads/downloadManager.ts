@@ -143,6 +143,16 @@ export class DownloadManager {
     return this.session.history.getEntry(entry.id);
   }
 
+  /** Preview one file without downloading the rest of its directory tree. */
+  async ensureLocalFile(entryId: string, fileId: string): Promise<void> {
+    this.session.signal.throwIfAborted();
+    if (await this.session.files.resolve(fileId)) return;
+    const outcome = await this.batch(entryId, crypto.randomUUID(), undefined, fileId);
+    this.session.history.invalidate();
+    if (outcome.cancelled) throw new DownloadCancelledError("已取消下载");
+    if (outcome.failedCount) throw new Error("文件下载失败，请在下载列表中查看详情");
+  }
+
   refresh(): void { this.#publish(); }
 
   async restore(): Promise<void> {
@@ -198,10 +208,11 @@ export class DownloadManager {
     }
   }
 
-  async batch(entryId: string, requestId: string, saveId?: string): Promise<{ cancelled: boolean; failedCount: number; total: number }> {
+  async batch(entryId: string, requestId: string, saveId?: string, previewFileId?: string): Promise<{ cancelled: boolean; failedCount: number; total: number }> {
     this.session.signal.throwIfAborted();
     const entry = await this.session.history.get(entryId);
-    const files = entryContents(entry).filter((file) => file.fileId);
+    const files = entryContents(entry).filter((file) => file.fileId && (!previewFileId || file.fileId === previewFileId));
+    if (previewFileId && !files.length) throw new Error("记录中不存在此文件");
     const record: DownloadRecord = {
       id: requestId, entryId, label: entry.content, size: files.reduce((sum,file) => sum + file.size, 0), fileCount: files.length,
       status: "queued", createdMs: Date.now(), finishedMs: null, receivedBytes: 0, destination: "", error: null, files: [],

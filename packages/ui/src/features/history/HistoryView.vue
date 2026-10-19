@@ -23,7 +23,6 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
-import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
 import TextPreview from "./TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
@@ -738,15 +737,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       @copy="emit('activate', previewEntry, false)"
       @close="closeEntryPreview"
     />
-    <ImagePreview
-      v-else-if="previewEntry?.kind === 'image'"
-      :key="previewEntry.id"
-      :entry="previewEntry"
-      :ensure-local-files="ensureLocalFiles"
-      @close="closeEntryPreview"
-    />
     <FilePreview
-      v-else-if="previewEntry?.kind === 'files'"
+      v-else-if="previewEntry && (previewEntry.kind === 'files' || previewEntry.kind === 'image')"
       :key="previewEntry.id"
       :entry="previewEntry"
       @close="closeEntryPreview"
