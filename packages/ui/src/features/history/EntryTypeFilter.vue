@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { Check, ChevronDown } from "lucide-vue-next";
-import { isMobile } from "../../platform/runtime";
+import { useMobileLayout } from "../../platform/runtime";
 import { usePopoverMenu } from "./usePopoverMenu";
 import type { EntryFilter } from "../../types";
 
 defineProps<{ dropdown?: boolean }>();
+const mobileLayout = useMobileLayout();
 const model = defineModel<EntryFilter>({ required: true });
 const labels: Record<EntryFilter, string> = { all: "全部", text: "文本", files: "文件", image: "图片" };
 const options = Object.values(labels);
@@ -43,7 +44,7 @@ function update(value: string[]): void {
     :title="`类型筛选：${labels[model]}`"
   />
   <button
-    v-else-if="isMobile"
+    v-else-if="mobileLayout"
     ref="trigger"
     class="entry-type-trigger"
     type="button"
@@ -60,7 +61,7 @@ function update(value: string[]): void {
   </button>
   <STagFilter v-else class="entry-type-filter" :value="[labels[model]]" :options="options" :multiple="false" @update:value="update" />
   <SSelect
-    v-if="!isMobile && !dropdown"
+    v-if="!mobileLayout && !dropdown"
     v-model:value="model"
     class="entry-type-select entry-type-compact"
     :options="dropdownOptions"
@@ -70,7 +71,7 @@ function update(value: string[]): void {
   />
   <Teleport to="body">
     <div
-      v-if="isMobile && !dropdown && menuOpen"
+      v-if="mobileLayout && !dropdown && menuOpen"
       ref="menu"
       class="entry-type-menu"
       role="listbox"

@@ -28,8 +28,8 @@ import {
   savingEntryId,
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
-import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion } from "./platform/runtime";
-import { getDevice } from "./platform/storage";
+import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, useMobileLayout } from "./platform/runtime";
+import { getDevice, readSavedAccounts, removeSavedAccounts } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
 import {
   fetchHistoryPage,
@@ -84,7 +84,8 @@ const {
   stop,
 } = clientSessionManager;
 
-const { platformCapabilities, isMobile, setPlatformCapabilities } = usePlatform();
+const { platformCapabilities, setPlatformCapabilities } = usePlatform();
+const mobileLayout = useMobileLayout();
 const { initAppVersion } = useAppVersion();
 const uploadTasks = computed(() => getAccountSession()?.uploads.tasks.value ?? []);
 const activeUploadCount = computed(() => getAccountSession()?.uploads.activeCount.value ?? 0);
@@ -104,6 +105,7 @@ const accountRuntimeError = ref("");
 const testingConnection = ref(false);
 const verifyingSession = ref(false);
 const savedSessionConfig = ref<SyncConfig>();
+const savedAccounts = ref<SyncConfig[]>([]);
 const savedConfigReadFailed = ref(false);
 let authenticationController: AbortController | undefined;
 const importingShare = ref(false);
@@ -130,7 +132,7 @@ initialize({
     hasSavedSyncConfig.value = false;
     savedSessionConfig.value = undefined;
     if (!alreadyRelogging) {
-      void persistSyncConfig(expiredConfig).catch((error) => {
+      void persistSyncConfig(expiredConfig).then(refreshSavedAccounts).catch((error) => {
         if (getActiveConfig() === expiredConfig) showNotification({ message: errorMessage(error), tone: "error" });
       });
       void nextTick(() => setupWizard.value?.setFields(expiredConfig));
@@ -166,10 +168,36 @@ initSettings({
 });
 
 watch(setupVisible, (visible) => {
+  if (visible) void refreshSavedAccounts();
   if (visible && isQuickPaste.value) {
     void native.showMainWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));
   }
 });
+
+async function refreshSavedAccounts(): Promise<void> {
+  try {
+    savedAccounts.value = await readSavedAccounts();
+  } catch (error) {
+    setupError.value = `无法读取登录记录：${errorMessage(error)}`;
+  }
+}
+
+async function clearSavedAccounts(config?: SyncConfig, wholeServer = false): Promise<void> {
+  if (testingConnection.value) return;
+  testingConnection.value = true;
+  try {
+    await removeSavedAccounts(config, wholeServer);
+    if (!config || (savedSessionConfig.value?.serverAddress === config.serverAddress
+      && savedSessionConfig.value?.serverProtocol === config.serverProtocol
+      && (wholeServer || savedSessionConfig.value?.username === config.username))) savedSessionConfig.value = undefined;
+    setupError.value = "";
+    await refreshSavedAccounts();
+  } catch (error) {
+    setupError.value = `清理登录记录失败：${errorMessage(error)}`;
+  } finally {
+    testingConnection.value = false;
+  }
+}
 
 function shareImportMessage(summary: ShareImportSummary): string {
   const parts = [
@@ -311,9 +339,9 @@ async function retrySavedConfig(): Promise<void> {
   if (recovered) await restoreSavedSession();
 }
 
-async function restoreSavedSession(): Promise<void> {
+async function restoreSavedSession(selectedConfig?: SyncConfig): Promise<void> {
   if (accountRuntimeError.value) { setupError.value = accountRuntimeError.value; return; }
-  const config = savedSessionConfig.value;
+  const config = selectedConfig ?? savedSessionConfig.value;
   if (!config || testingConnection.value) return;
   setupError.value = "";
   testingConnection.value = true;
@@ -323,9 +351,13 @@ async function restoreSavedSession(): Promise<void> {
   try {
     const verified = await verifyAccountSession(config, await getDevice(), controller.signal);
     controller.signal.throwIfAborted();
+    const verifiedConfig = { ...config, username: verified.user.username, sessionToken: verified.sessionToken };
+    await persistSyncConfig(verifiedConfig);
+    setActiveConfig(verifiedConfig);
+    currentUsername.value = verifiedConfig.username;
     const preferences = await loadAccountPreferences();
     await persistAccountPreferences(applyServerSettings(preferences, verified.settings));
-    await start(config);
+    await start(verifiedConfig);
     await enableAccountShortcuts();
     controller.signal.throwIfAborted();
     savedSessionConfig.value = undefined;
@@ -347,6 +379,7 @@ async function restoreSavedSession(): Promise<void> {
       setActiveConfig(expiredConfig);
       try {
         await persistSyncConfig(expiredConfig);
+        await refreshSavedAccounts();
       } catch (clearError) {
         setupError.value = `${message}；${errorMessage(clearError)}`;
       }
@@ -527,7 +560,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': isMobile }">
+  <main v-if="initializing" class="setup-shell setup-loading" :class="{ 'mobile-shell': mobileLayout }">
     <section class="setup-loading-content" role="status" aria-live="polite">
       <span class="setup-icon" aria-hidden="true"><LoaderCircle :size="24" class="spin" /></span>
       <strong>ClipRoam</strong>
@@ -535,17 +568,20 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
-  <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': isMobile }">
+  <main v-else-if="setupVisible" class="setup-shell" :class="{ 'mobile-shell': mobileLayout }">
     <SetupWizard
       ref="setupWizard"
       :has-saved-sync-config="hasSavedSyncConfig"
       :busy="testingConnection"
       :error="setupError"
       :verifying-session="verifyingSession"
-      :saved-session="savedSessionConfig"
+      :saved-accounts="savedAccounts"
       :can-retry-saved-config="savedConfigReadFailed"
       @submit="connectAndSave"
       @retry-session="restoreSavedSession"
+      @remove-account="clearSavedAccounts"
+      @remove-server="clearSavedAccounts($event, true)"
+      @clear-accounts="clearSavedAccounts()"
       @retry-saved-config="retrySavedConfig"
       @close="closeSetup"
       @reset-error="setupError = ''"
@@ -554,7 +590,7 @@ onBeforeUnmount(() => {
 
   <WorkspaceLayout v-else :key="activeAccountSession?.id ?? 'signed-out'"
     v-model:active-view="activeView"
-    :mobile="isMobile"
+    :mobile="mobileLayout"
     :quick-paste="isQuickPaste"
     :pending-count="pendingCount"
     :active-upload-count="activeUploadCount"
@@ -623,18 +659,18 @@ onBeforeUnmount(() => {
       }"
     />
 
-    <EntryDownloadToasts v-if="isMobile && !isQuickPaste" mobile />
+    <EntryDownloadToasts v-if="mobileLayout && !isQuickPaste" mobile />
 
     <template #overlays>
-      <slot v-if="!isQuickPaste && !isMobile && settingsVisible" name="settings" :current-username="currentUsername">
+      <slot v-if="!isQuickPaste && !mobileLayout && settingsVisible" name="settings" :current-username="currentUsername">
         <SettingsDialog :current-username="currentUsername" />
       </slot>
-      <MobileSettingsDialog v-if="!isQuickPaste && isMobile && settingsVisible" :current-username="currentUsername" />
+      <MobileSettingsDialog v-if="!isQuickPaste && mobileLayout && settingsVisible" :current-username="currentUsername" />
     </template>
   </WorkspaceLayout>
 
   <slot name="native-overlays" />
 
-  <EntryDownloadToasts v-if="!isMobile" />
+  <EntryDownloadToasts v-if="!mobileLayout" />
   <SMessageHost />
 </template>

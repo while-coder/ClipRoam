@@ -213,7 +213,7 @@ async function changePassword(): Promise<void> {
   }
 }
 
-async function signOut(switchingServer = false): Promise<void> {
+async function signOut(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
   const { settingsVisible, savingSettings, changingPassword, settingsError } = session.state;
@@ -222,8 +222,7 @@ async function signOut(switchingServer = false): Promise<void> {
   if (!activeConfig || savingSettings.value || changingPassword.value) return;
   savingSettings.value = true;
   settingsError.value = "";
-  // 只清 sessionToken：服务器地址与用户名保留在配置里，登录页据此回填。
-  // Rust 侧把空 token 视为未登录——没有活动档案，捕获与查询一并停用。
+  // 退出清掉当前 token，保留服务器地址和用户名供下次登录或切换账号。
   const signedOutConfig: SyncConfig = { ...activeConfig, sessionToken: "" };
   try {
     await session.start(() => requireBridge().persistSyncConfig(signedOutConfig));
@@ -235,8 +234,8 @@ async function signOut(switchingServer = false): Promise<void> {
     requireBridge().markSignedOut();
     settingsVisible.value = false;
     requireBridge().openSetup({
-      config: switchingServer ? { ...signedOutConfig, serverAddress: "", username: "" } : signedOutConfig,
-      message: switchingServer ? "请输入新的服务器地址并登录" : "",
+      config: signedOutConfig,
+      message: "",
       focus: "server",
     });
   } catch (error) {
@@ -244,10 +243,6 @@ async function signOut(switchingServer = false): Promise<void> {
   } finally {
     savingSettings.value = false;
   }
-}
-
-function switchServer(): Promise<void> {
-  return signOut(true);
 }
 
 export {
@@ -270,6 +265,5 @@ export {
   saveSettings,
   changePassword,
   signOut,
-  switchServer,
   cancelSettingsRequests,
 };

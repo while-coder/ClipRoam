@@ -5,7 +5,7 @@ import ServerLimitsCard from "./ServerLimitsCard.vue";
 import {
   changePassword, changingPassword, closeSettings, currentPassword, newPassword,
   confirmNewPassword, passwordChangeError, savingSettings, settingsError, signOut,
-  switchServer, validateNewPassword, validatePasswordConfirmation,
+  validateNewPassword, validatePasswordConfirmation,
 } from "./useSettings";
 
 const { getActiveConfig } = clientSessionManager;
@@ -23,7 +23,6 @@ const serverAddress = getActiveConfig()?.serverAddress ?? "";
         <p>当前登录：{{ currentUsername }}</p>
         <p class="mobile-server-address">服务器：{{ serverAddress }}</p>
         <div class="mobile-account-actions">
-          <SButton :disabled="busy" @click="switchServer()">切换服务器</SButton>
           <SButton type="error" :disabled="busy" @click="signOut()">退出账号</SButton>
         </div>
       </SCard>

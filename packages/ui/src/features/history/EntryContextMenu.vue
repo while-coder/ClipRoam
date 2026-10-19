@@ -3,6 +3,7 @@ import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Copy, Download, Trash2, ListChecks, Star } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
+import { useMobileLayout } from "../../platform/runtime";
 
 /**
  * 历史条目的右键/长按菜单（复制、下载、删除）。定位来自触发点
@@ -30,6 +31,7 @@ const emit = defineEmits<{
 }>();
 
 const menu = ref<HTMLElement>();
+const mobileLayout = useMobileLayout();
 const menuStyle = ref<Record<string, string>>({});
 const saving = computed(() => props.savingEntryId === props.entry.id);
 const saveLabel = computed(() => saveEntryLabel(props.entry, props.savingEntryId));
@@ -67,11 +69,10 @@ function requestRemove(entry: LocalClipboardEntry): void {
 // 右键点可能贴近屏幕右/下边缘，先按(宽, 项数×高)估算 clamp，渲染后再按
 // 实际尺寸修正一次，保证菜单完整落在视口内。
 const MENU_WIDTH = 180;
-const MENU_ITEM_HEIGHT = props.isMobile ? 44 : 36;
 
 function positionMenu(): void {
   const rect = menu.value?.getBoundingClientRect();
-  const height = rect?.height ?? MENU_ITEM_HEIGHT * 4 + 10;
+  const height = rect?.height ?? (mobileLayout.value ? 44 : 36) * 4 + 10;
   const left = Math.max(8, Math.min(props.x, window.innerWidth - MENU_WIDTH - 8));
   const top = Math.max(8, Math.min(props.y, window.innerHeight - height - 8));
   menuStyle.value = { left: `${left}px`, top: `${top}px`, width: `${MENU_WIDTH}px` };
@@ -156,12 +157,12 @@ onBeforeUnmount(() => {
     <div
       ref="menu"
       class="entry-context-menu"
-      :class="{ 'mobile-entry-context-menu': isMobile }"
+      :class="{ 'mobile-entry-context-menu': mobileLayout }"
       role="menu"
       :aria-label="`条目操作：${entry.content}`"
       :style="menuStyle"
       @keydown="handleMenuKeydown"
-      @contextmenu="isMobile && $event.preventDefault()"
+      @contextmenu="mobileLayout && $event.preventDefault()"
     >
       <SButton v-if="canCopy && !multiple" type="text" block role="menuitem" :disabled="activating" @click="onActivate(entry)">
         <span v-if="activating" class="s-spinner" aria-hidden="true" />

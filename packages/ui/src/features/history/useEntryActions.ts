@@ -92,7 +92,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 }
 
 /**
- * 快速粘贴模式单击条目触发粘贴；主界面双击文字或菜单操作触发复制。
+ * 快速粘贴模式单击条目触发粘贴；主界面预览或菜单操作触发复制。
  */
 export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean): void {
   if (viaClick) {

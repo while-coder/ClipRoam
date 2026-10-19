@@ -13,6 +13,7 @@ import {
   ListChecks,
   Trash2,
   Star,
+  RefreshCw,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -24,10 +25,11 @@ import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import ImagePreview from "./ImagePreview.vue";
 import FilePreview from "./FilePreview.vue";
+import TextPreview from "./TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { setEntriesFavorite } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
-import { usePlatform, showNotification } from "../../platform/runtime";
+import { usePlatform, useMobileLayout, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
 import type {
   Device,
@@ -61,6 +63,7 @@ const emit = defineEmits<{
 }>();
 
 const { isMobile } = usePlatform();
+const mobileLayout = useMobileLayout();
 const isQuickPaste = computed(() => props.quickPaste === true);
 
 const query = ref("");
@@ -174,6 +177,17 @@ const {
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },
 });
 
+const refreshing = ref(false);
+async function refreshCurrentPage(): Promise<void> {
+  if (refreshing.value || timeRangeError.value) return;
+  refreshing.value = true;
+  try {
+    await fetchPage(currentPage.value);
+  } finally {
+    refreshing.value = false;
+  }
+}
+
 const { selecting, selectedIds, allSelected, start: startSelection, toggle: toggleSelection, toggleAll, clear: clearSelection, setAnchor } = useHistorySelection(computed(() => pageEntries.value.map((entry) => entry.id)));
 const selectedCount = computed(() => selectedIds.value.size);
 watch(pageEntries, (entries) => {
@@ -250,9 +264,9 @@ function handleSelectionKeys(event: KeyboardEvent): void {
 
 // A mobile browser back action first leaves selection, without leaving the app.
 let selectionHistoryActive = false;
-watch(selecting, (active) => {
-  if (!isMobile.value) return;
-  if (active) {
+watch([selecting, mobileLayout], ([active, mobile]) => {
+  if (active && mobile) {
+    if (selectionHistoryActive) return;
     window.history.pushState({ ...window.history.state, cliproamHistorySelection: true }, "");
     selectionHistoryActive = true;
   } else if (selectionHistoryActive) {
@@ -305,7 +319,7 @@ function thumbnailSource(entry: LocalClipboardEntry): string | undefined {
 }
 
 async function startWindowDrag(event: MouseEvent): Promise<void> {
-  if (isMobile.value || event.button !== 0) return;
+  if (mobileLayout.value || event.button !== 0) return;
   const target = event.target as HTMLElement;
   if (target.closest("button, input, select, textarea, kbd, [role='button']")) return;
   await native.startWindowDrag();
@@ -330,7 +344,6 @@ function focusSearchInput(): void {
 }
 
 function openEntryPreview(entry: LocalClipboardEntry): void {
-  if (entry.kind === "text") return;
   previewEntry.value = entry;
 }
 
@@ -360,19 +373,25 @@ function handleEntryClick(entry: LocalClipboardEntry, event: MouseEvent): void {
     return;
   }
   setAnchor(entry.id);
-  if (!isMobile.value) return;
-  if (entry.kind === "text") emit("activate", entry, false);
-  else openEntryPreview(entry);
+  if (isQuickPaste.value) return;
+  if (entry.kind === "text" || mobileLayout.value) openEntryPreview(entry);
 }
 
 function handleEntryDoubleClick(entry: LocalClipboardEntry): void {
-  if (selecting.value || isQuickPaste.value || isMobile.value || longPressFired) return;
-  if (entry.kind === "text") emit("activate", entry, false);
-  else if (!isMobile.value) openEntryPreview(entry);
+  if (selecting.value || isQuickPaste.value || mobileLayout.value || longPressFired) return;
+  openEntryPreview(entry);
 }
 
 function handleEntryKeydown(entry: LocalClipboardEntry, event: KeyboardEvent): void {
-  if (!selecting.value || (event.key !== "Enter" && event.key !== " ")) return;
+  if (event.key !== "Enter" && event.key !== " ") return;
+  if (!selecting.value) {
+    if (!isQuickPaste.value && entry.kind === "text") {
+      event.preventDefault();
+      event.stopPropagation();
+      openEntryPreview(entry);
+    }
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   toggleSelection(entry.id, event.shiftKey, event.ctrlKey || event.metaKey);
@@ -389,7 +408,7 @@ let longPressY = 0;
 
 function openEntryMenu(entry: LocalClipboardEntry, x: number, y: number): void {
   if (isQuickPaste.value || deleting.value) return;
-  if (isMobile.value) longPressFired = true;
+  if (mobileLayout.value) longPressFired = true;
   const now = Date.now();
   if (now - lastMenuOpenedAt < 600 && menuEntry.value?.id === entry.id) return;
   lastMenuOpenedAt = now;
@@ -409,7 +428,7 @@ function cancelLongPress(): void {
 
 function handleEntryTouchStart(entry: LocalClipboardEntry, event: TouchEvent): void {
   cancelLongPress();
-  if (!isMobile.value || event.touches.length !== 1) {
+  if (!mobileLayout.value || event.touches.length !== 1) {
     return;
   }
   longPressFired = false;
@@ -470,12 +489,12 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       >
         <span v-if="capturingClipboard" class="s-spinner" aria-hidden="true" />
         <Clipboard v-else :size="15" aria-hidden="true" />
-        <span>{{ isMobile ? '读取剪贴板' : '读取当前剪贴板' }}</span>
+        <span>{{ mobileLayout ? '读取剪贴板' : '读取当前剪贴板' }}</span>
       </SButton>
     </template>
     <template #toolbar>
     <section class="toolbar" @mousedown.left="isQuickPaste && startWindowDrag($event)">
-      <div v-if="isMobile && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
+      <div v-if="mobileLayout && importingShare" class="mobile-share-status" role="status" aria-live="polite" aria-atomic="true">
         <span class="s-spinner" aria-hidden="true" />
         <span>正在接收系统分享…</span>
       </div>
@@ -495,6 +514,18 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           />
           <kbd>Enter</kbd>
         </label>
+        <SButton
+          class="history-refresh"
+          aria-label="刷新剪贴板历史"
+          title="刷新剪贴板历史"
+          :aria-busy="refreshing"
+          :disabled="refreshing || Boolean(timeRangeError)"
+          @click="refreshCurrentPage"
+          @keydown.stop
+        >
+          <span v-if="refreshing" class="s-spinner" aria-hidden="true" />
+          <RefreshCw v-else :size="15" aria-hidden="true" />
+        </SButton>
       </div>
       <div class="filter-row" role="group" aria-label="剪贴板筛选">
         <div class="filter-scroll" :class="{ 'has-device-filter': devices.length > 0 }">
@@ -520,7 +551,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           ><Star :size="13" :fill="favoriteOnly ? 'currentColor' : 'none'" aria-hidden="true" /><span>已收藏</span></button>
         </div>
       </div>
-      <p v-if="isMobile" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击文字复制，单击图片或文件预览，长按打开菜单" }}</p>
+      <p v-if="mobileLayout" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击条目预览，长按打开菜单" }}</p>
     </section>
     </template>
 
@@ -534,7 +565,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         :aria-checked="selecting ? selectedIds.has(entry.id) : undefined"
         :tabindex="deleting || (!selecting && activatingEntryIds.has(entry.id)) ? -1 : 0"
         :aria-disabled="deleting || (!selecting && activatingEntryIds.has(entry.id))"
-        @mouseenter="!isMobile && !selecting && (selectedEntryId = entry.id)"
+        @mouseenter="!mobileLayout && !selecting && (selectedEntryId = entry.id)"
         @mousedown.left="handleEntryMouseDown(entry, $event)"
         @click="handleEntryClick(entry, $event)"
         @keydown="handleEntryKeydown(entry, $event)"
@@ -622,7 +653,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       <SEmpty v-if="!manifestTotal" class="empty-state">
         <Search :size="28" aria-hidden="true" />
         <strong>{{ timeRangeError ? "日期区间无效" : favoriteOnly ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (favoriteOnly ? "点击条目的星标收藏，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : isMobile ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <span>{{ timeRangeError || (favoriteOnly ? "点击条目的星标收藏，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
       </SEmpty>
     </section>
@@ -642,8 +673,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </div>
       <template v-else>
       <span v-if="isQuickPaste">单击条目粘贴，点击图片或文件图标预览</span>
-      <span v-else-if="!isMobile">双击图片或文件预览，双击文字复制，右键打开菜单</span>
-      <span v-if="!isMobile"><kbd>Esc</kbd> 关闭</span>
+      <span v-else-if="!mobileLayout">单击文字预览，双击图片或文件预览，右键打开菜单</span>
+      <span v-if="!mobileLayout"><kbd>Esc</kbd> 关闭</span>
       <nav class="pagination-control" aria-label="历史记录分页">
         <button
           class="pagination-button"
@@ -655,7 +686,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         >
           <ChevronLeft :size="15" aria-hidden="true" />
         </button>
-        <span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条 · {{ isMobile ? `${currentPage} / ${pageCount}` : `第 ${currentPage} / ${pageCount} 页` }}</span>
+        <span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条 · {{ mobileLayout ? `${currentPage} / ${pageCount}` : `第 ${currentPage} / ${pageCount} 页` }}</span>
         <button
           class="pagination-button"
           type="button"
@@ -699,8 +730,16 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       </template>
     </SModal>
 
+    <TextPreview
+      v-if="previewEntry?.kind === 'text'"
+      :key="previewEntry.id"
+      :entry="previewEntry"
+      :copying="activatingEntryIds.has(previewEntry.id)"
+      @copy="emit('activate', previewEntry, false)"
+      @close="closeEntryPreview"
+    />
     <ImagePreview
-      v-if="previewEntry?.kind === 'image'"
+      v-else-if="previewEntry?.kind === 'image'"
       :key="previewEntry.id"
       :entry="previewEntry"
       :ensure-local-files="ensureLocalFiles"
@@ -717,6 +756,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
 <style scoped>
 .toolbar { container: history-toolbar / inline-size; }
+.history-refresh.s-button { flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
 .favorite-filter { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; height: 27px; margin-left: 5px; padding: 0 9px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; background: rgba(255, 255, 255, 0.04); color: #cbd5e1; font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .favorite-filter[aria-pressed="true"] { color: var(--sui-primary); background: var(--sui-bg-active); border-color: var(--sui-primary); }
 .entry-favorite { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
@@ -727,7 +767,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 .entry-favorite:disabled { opacity: 0.5; cursor: wait; }
 :global(.mobile-app .history-item), :global(.mobile-app .history-item.image-entry) { grid-template-columns: 36px minmax(0, 1fr) auto; }
 :global(.mobile-app .history-item.selection-item) { grid-template-columns: 22px minmax(0, 1fr) auto; }
-:global(.mobile-app .filter-scroll .favorite-filter) { width: 44px; height: 44px; margin-left: 0; padding-inline: 9px; border-radius: 5px; }
+:global(.mobile-app .filter-scroll .favorite-filter) { width: 32px; height: 32px; margin-left: 0; padding-inline: 0; border-radius: 5px; }
 :global(.mobile-app .favorite-filter span) { display: none; }
 :global(.mobile-app .favorite-filter svg) { width: 17px; height: 17px; }
 :global(.mobile-app .entry-favorite) { min-width: 44px; min-height: 44px; }
@@ -753,8 +793,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
   .favorite-filter { flex: 0 0 32px; width: 32px; height: 27px; padding: 0; border-radius: 6px; }
   .favorite-filter span { display: none; }
 }
-:global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px; }
-:global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; }
+:global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
+:global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)) 32px; }
 :global(.mobile-app .filter-scroll .time-filter-control),
 :global(.mobile-app .filter-scroll .device-filter-control) { width: auto; }
 :global(.mobile-app .filter-scroll .time-filter-control .time-filter-trigger),

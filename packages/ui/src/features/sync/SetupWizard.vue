@@ -14,7 +14,7 @@ export type SetupDraft = {
 <script setup lang="ts">
 import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
-import { ArrowLeft, Server, ShieldCheck } from "lucide-vue-next";
+import { ArrowLeft, Server, ShieldCheck, Trash2 } from "lucide-vue-next";
 import { normalizeServerAddress } from "./authApi";
 import { DEFAULT_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../config";
 import type { SyncConfig } from "../../types";
@@ -24,7 +24,7 @@ const props = defineProps<{
   busy: boolean;
   error: string;
   verifyingSession: boolean;
-  savedSession?: SyncConfig;
+  savedAccounts: SyncConfig[];
   canRetrySavedConfig?: boolean;
 }>();
 
@@ -32,7 +32,10 @@ const emit = defineEmits<{
   submit: [draft: SetupDraft];
   close: [];
   "reset-error": [];
-  "retry-session": [];
+  "retry-session": [config: SyncConfig];
+  "remove-account": [config: SyncConfig];
+  "remove-server": [config: SyncConfig];
+  "clear-accounts": [];
   "retry-saved-config": [];
 }>();
 
@@ -44,17 +47,26 @@ const authMode = ref<AuthMode>("login");
 const serverFieldError = ref("");
 const usernameFieldError = ref("");
 const passwordFieldError = ref("");
-const matchesSavedSession = computed(() => {
-  const config = props.savedSession;
-  if (!config || authMode.value !== "login") return false;
+const serverOptions = computed(() => [...new Set(props.savedAccounts.map((account) => `${account.serverProtocol}://${account.serverAddress}`))]
+  .map((value) => ({ label: value, value })));
+const currentServerAccounts = computed(() => {
   try {
-    return normalizeServerAddress(setupServerAddress.value) === normalizeServerAddress(config.serverAddress)
-      && setupServerProtocol.value === config.serverProtocol
-      && setupUsername.value.trim() === config.username;
+    const address = normalizeServerAddress(setupServerAddress.value);
+    return props.savedAccounts.filter((account) => account.serverAddress === address && account.serverProtocol === setupServerProtocol.value);
   } catch {
-    return false;
+    return [];
   }
 });
+const accountOptions = computed(() => currentServerAccounts.value.map((account) => ({
+  label: `${account.username} · ${account.sessionToken ? '可直接登录' : '需输入密码'}`,
+  value: account.username,
+})));
+const selectedAccount = computed(() => currentServerAccounts.value.find((account) => account.username === setupUsername.value.trim()));
+const matchingSavedSession = computed(() => {
+  if (authMode.value !== "login") return undefined;
+  return selectedAccount.value?.sessionToken ? selectedAccount.value : undefined;
+});
+const matchesSavedSession = computed(() => Boolean(matchingSavedSession.value));
 const sessionVerificationError = computed(() => props.error.startsWith("服务器尚未支持登录状态验证")
   ? "服务器暂不支持自动登录，请输入密码登录，或更新服务器。"
   : "");
@@ -81,6 +93,50 @@ function setFields(config?: SyncConfig): void {
   serverFieldError.value = "";
   usernameFieldError.value = "";
   passwordFieldError.value = "";
+}
+
+function resetCredentials(): void {
+  setupPassword.value = "";
+  usernameFieldError.value = "";
+  passwordFieldError.value = "";
+  emit("reset-error");
+}
+
+function fillServerAccount(): void {
+  setupUsername.value = authMode.value === "login" ? currentServerAccounts.value[0]?.username ?? "" : "";
+  resetCredentials();
+}
+
+function selectServer(value: string): void {
+  const account = props.savedAccounts.find((account) => `${account.serverProtocol}://${account.serverAddress}` === value);
+  if (!account) return;
+  setupServerAddress.value = account.serverAddress;
+  setupServerProtocol.value = account.serverProtocol;
+  serverFieldError.value = "";
+  fillServerAccount();
+}
+
+function updateServerAddress(value: string): void {
+  setupServerAddress.value = value;
+  serverFieldError.value = "";
+  // 手动输入已知地址时也回填协议；同一地址有两种协议时优先保留当前选择。
+  try {
+    const address = normalizeServerAddress(value);
+    const account = props.savedAccounts.find((account) => account.serverAddress === address && account.serverProtocol === setupServerProtocol.value)
+      ?? props.savedAccounts.find((account) => account.serverAddress === address);
+    if (account) setupServerProtocol.value = account.serverProtocol;
+  } catch { /* 地址仍在输入中。 */ }
+  fillServerAccount();
+}
+
+function updateServerProtocol(value: ServerProtocol): void {
+  setupServerProtocol.value = value;
+  fillServerAccount();
+}
+
+function selectAccount(username: string): void {
+  setupUsername.value = username;
+  resetCredentials();
 }
 
 function validateServerField(): string | undefined {
@@ -127,8 +183,8 @@ function submit(): void {
   const usernameValid = validateUsernameField();
   const passwordValid = validatePasswordField();
   if (!serverAddress || !usernameValid || !passwordValid) return;
-  if (canUseSavedSession.value) {
-    emit("retry-session");
+  if (canUseSavedSession.value && matchingSavedSession.value) {
+    emit("retry-session", matchingSavedSession.value);
     return;
   }
   emit("submit", {
@@ -185,44 +241,65 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
       </div>
 
       <div class="server-connection-fields">
-        <SFormItem label="服务器地址" :error="serverFieldError">
-          <SInput
-            id="server-address"
-            ref="serverInput"
-            v-model:value="setupServerAddress"
-            type="text"
-            inputmode="text"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="192.168.1.20:4810"
-            :disabled="busy"
-            :invalid="Boolean(serverFieldError)"
-            @blur="validateServerField"
-          />
-        </SFormItem>
         <SFormItem label="协议">
           <SSelect
             id="server-protocol"
-            v-model:value="setupServerProtocol"
+            :value="setupServerProtocol"
             :options="[{ label: 'HTTP', value: 'http' }, { label: 'HTTPS', value: 'https' }]"
             :disabled="busy"
+            @update:value="updateServerProtocol"
           />
+        </SFormItem>
+        <SFormItem label="服务器地址" :error="serverFieldError">
+          <div class="login-choice-field">
+            <SInput
+              id="server-address"
+              ref="serverInput"
+              :value="setupServerAddress"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="选择或输入 IP:端口"
+              :disabled="busy"
+              :invalid="Boolean(serverFieldError)"
+              @update:value="updateServerAddress"
+              @blur="validateServerField"
+            >
+              <template v-if="serverOptions.length" #suffix>
+                <SSelect class="login-choice-menu" :value="`${setupServerProtocol}://${setupServerAddress}`" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择已保存的服务器" title="选择已保存的服务器" @select="selectServer" />
+              </template>
+            </SInput>
+            <SIconButton v-if="currentServerAccounts.length" :size="36" :disabled="busy" title="删除此服务器的全部登录记录" aria-label="删除此服务器的全部登录记录" @click="emit('remove-server', currentServerAccounts[0]!)">
+              <Trash2 :size="16" aria-hidden="true" />
+            </SIconButton>
+          </div>
         </SFormItem>
       </div>
       <p class="connection-hint">{{ protocolHint }}</p>
 
       <SFormItem label="账号" :error="usernameFieldError">
-        <SInput
-          id="account-username"
-          v-model:value="setupUsername"
-          type="text"
-          autocomplete="username"
-          spellcheck="false"
-          placeholder="请输入账号"
-          :disabled="busy"
-          :invalid="Boolean(usernameFieldError)"
-          @blur="validateUsernameField"
-        />
+        <div class="login-choice-field">
+          <SInput
+            id="account-username"
+            :value="setupUsername"
+            type="text"
+            autocomplete="username"
+            spellcheck="false"
+            placeholder="选择或输入账号"
+            :disabled="busy"
+            :invalid="Boolean(usernameFieldError)"
+            @update:value="selectAccount"
+            @blur="validateUsernameField"
+          >
+            <template v-if="authMode === 'login'" #suffix>
+              <SSelect class="login-choice-menu" :value="setupUsername" :options="accountOptions.length ? accountOptions : [{ label: '此服务器暂无记录，请手动输入账号', value: '', disabled: true }]" :menu-width="280" :disabled="busy" aria-label="选择此服务器的已存账号" title="选择已保存的账号" @select="selectAccount" />
+            </template>
+          </SInput>
+          <SIconButton v-if="authMode === 'login' && selectedAccount" :size="36" :disabled="busy" title="删除此账号的登录记录" aria-label="删除此账号的登录记录" @click="emit('remove-account', selectedAccount)">
+            <Trash2 :size="16" aria-hidden="true" />
+          </SIconButton>
+        </div>
       </SFormItem>
 
       <SFormItem label="密码" :hint="passwordHint" :error="passwordFieldError">
@@ -251,6 +328,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
           ? (verifyingSession ? "正在验证登录状态…" : authMode === "login" ? "正在登录…" : "正在创建账号…")
           : (authMode === "login" ? "登录" : "创建账号") }}
       </SButton>
+      <SButton v-if="authMode === 'login' && savedAccounts.length" type="text" :disabled="busy" block @click="emit('clear-accounts')">清空所有登录记录</SButton>
     </SForm>
   </section>
 

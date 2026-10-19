@@ -92,7 +92,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .setup-content {
   display: grid;
   align-content: safe center;
-  width: min(100% - 48px, 420px);
+  width: min(100% - 32px, 480px);
   margin: 0 auto;
   min-height: 0;
   padding: 16px 0 12px;
@@ -170,10 +170,22 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .auth-mode-switch button.active { color: #dbeafe; background: var(--color-primary); }
 .server-connection-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
+  grid-template-columns: 84px minmax(0, 1fr);
   align-items: start;
-  gap: 10px;
+  gap: 8px;
 }
+.setup-form .server-connection-fields .s-input { font-size: 14px; }
+.setup-form .server-connection-fields .s-select { font-size: 13px; gap: 4px; }
+.login-choice-field { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.login-choice-field > .s-input-wrap { flex: 1; min-width: 0; }
+.login-choice-field .s-input-suffix { right: 2px; pointer-events: auto; }
+.login-choice-menu.s-single-select { width: 32px; }
+.setup-form .login-choice-menu .s-select { justify-content: center; min-height: 30px; padding: 0; border: 0; background: transparent; }
+.login-choice-menu .s-multi-select-value { display: none; }
+.mobile-shell .login-choice-field > .s-icon-button { min-width: 44px; min-height: 44px; }
+.mobile-shell .login-choice-field .s-input-wrap.has-suffix .s-input { padding-right: 40px; }
+.mobile-shell .login-choice-menu.s-single-select { width: 36px; }
+.mobile-shell .setup-form .login-choice-menu .s-select { min-height: 44px; }
 .setup-form label {
   margin-top: 3px;
   color: #cbd5e1;
@@ -436,7 +448,7 @@ button.image-thumbnail { cursor: zoom-in; }
 .pagination-button:hover:not(:disabled) { color: #e2e8f0; background: rgba(255, 255, 255, 0.09); }
 .pagination-button:disabled { opacity: 0.4; cursor: default; }
 .pagination-status { color: #94a3b8; white-space: nowrap; }
-.mobile-app .pagination-button { justify-content: center; width: 44px; min-height: 44px; padding: 0; border-radius: 5px; }
+.mobile-app .pagination-button { justify-content: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
 
 .app-shell {
   position: relative;
@@ -721,7 +733,7 @@ button:focus-visible, [role="button"]:focus-visible {
   font-size: 10px;
   line-height: 1.4;
 }
-.mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 44px; }
+.mobile-app .history-content { grid-template-rows: 40px auto minmax(0, 1fr) 36px; }
 .mobile-app .history-content[data-history-selecting] { grid-template-rows: 40px auto minmax(0, 1fr) auto; }
 .mobile-app .pending-content { grid-template-rows: 40px minmax(0, 1fr); }
 .mobile-app .pending-content.has-footer { grid-template-rows: 40px minmax(0, 1fr) 36px; }
@@ -767,14 +779,14 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-app .filter-scroll .time-filter-label,
 .mobile-app .filter-scroll .device-filter-label { display: none; }
 .mobile-app .filter-scroll .time-filter-control,
-.mobile-app .filter-scroll .device-filter-control { height: 44px; margin-left: 0; padding-left: 0; border-left: 0; }
+.mobile-app .filter-scroll .device-filter-control { height: 32px; margin-left: 0; padding-left: 0; border-left: 0; }
 .mobile-app .filter-scroll .entry-type-trigger,
 .mobile-app .filter-scroll .time-filter-trigger,
-.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 44px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
+.mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 32px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll .time-filter-trigger,
 .mobile-app .filter-scroll .device-filter-trigger { padding: 0; }
 .mobile-app .filter-scroll .time-filter-trigger .s-select,
-.mobile-app .filter-scroll .device-filter-trigger .s-select { min-height: 44px; height: 44px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
+.mobile-app .filter-scroll .device-filter-trigger .s-select { min-height: 32px; height: 32px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll button:active,
 .mobile-app .filter-scroll button[aria-expanded="true"] { color: var(--color-foreground); background: var(--sui-bg-active); border-color: var(--sui-border-strong); }
 .mobile-app .filter-scroll button > svg { flex-shrink: 0; }

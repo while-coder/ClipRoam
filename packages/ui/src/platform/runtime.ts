@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, inject, provide, ref, type InjectionKey, type Ref } from "vue";
 import { native } from "./native";
 import { DESKTOP_CAPABILITIES, BROWSER_CAPABILITIES } from "../config";
 import { toast } from "@qingfeng346/ui-kit";
@@ -15,6 +15,17 @@ export const isQuickPaste = ref(false);
 const platformCapabilities = ref<PlatformCapabilities>(isNative ? DESKTOP_CAPABILITIES : BROWSER_CAPABILITIES);
 /** 模块级单例：后台模块（引擎、条目动作）不经过 usePlatform() 也要读移动端分支。 */
 export const isMobile = computed(() => platformCapabilities.value.mobile);
+
+const mobileLayoutKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol("mobileLayout");
+
+/** 布局可随视口变化，不改变剪贴板、文件等平台能力。 */
+export function provideMobileLayout(mobileLayout: Readonly<Ref<boolean>>): void {
+  provide(mobileLayoutKey, mobileLayout);
+}
+
+export function useMobileLayout(): Readonly<Ref<boolean>> {
+  return inject(mobileLayoutKey, isMobile);
+}
 
 export function usePlatform() {
   return {

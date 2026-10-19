@@ -14,11 +14,17 @@
   "icon": "public/cliproam-icon.png",
   "contributes": {
     "commands": [
-      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "ClipRoam" },
+      { "command": "cliproam.open", "title": "打开剪贴板历史", "category": "ClipRoam", "icon": "public/cliproam-icon.png" },
       { "command": "cliproam.captureSelection", "title": "保存选中文本", "category": "ClipRoam" },
       { "command": "cliproam.insertHistory", "title": "从历史插入文本", "category": "ClipRoam" }
     ],
     "menus": {
+      "title": [
+        { "command": "cliproam.open", "group": "navigation@50" }
+      ],
+      "editor/title": [
+        { "command": "cliproam.open", "group": "navigation@1" }
+      ],
       "editor/context": [
         { "command": "cliproam.captureSelection", "when": "editorHasSelection", "group": "9_cliproam" },
         { "command": "cliproam.insertHistory", "when": "editorTextFocus", "group": "9_cliproam" }
