@@ -11,7 +11,7 @@
       <string>zh-Hant</string>
     </array>
     <!-- 客户端支持直连用户任填的明文 HTTP 服务器（默认 http://ip:port），
-         macOS 的 ATS 默认拦截非 HTTPS 连接，这里整体放行，
+         iOS / macOS 的 ATS 默认拦截非 HTTPS 连接，这里整体放行，
          与 Android 的 usesCleartextTraffic="true" 对应。 -->
     <key>NSAppTransportSecurity</key>
     <dict>

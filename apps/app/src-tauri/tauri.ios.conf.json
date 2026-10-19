@@ -15,6 +15,7 @@
       "infoplist/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
     },
     "iOS": {
+      "infoPlist": "Info.plist",
       "minimumSystemVersion": "14.0"
     }
   }
