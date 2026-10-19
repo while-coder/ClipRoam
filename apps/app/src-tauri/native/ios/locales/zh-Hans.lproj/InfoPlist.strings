@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "随心贴";
+"CFBundleName" = "ClipRoam";
+"NSLocalNetworkUsageDescription" = "ClipRoam需要访问本地网络以连接你的剪贴板同步服务器。";
