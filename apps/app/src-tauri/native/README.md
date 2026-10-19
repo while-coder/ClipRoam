@@ -10,13 +10,12 @@
 | `android/prepare.cjs` | Android 工程准备脚本 | 复制定制文件并同步启动图标。其他工程文件由 Tauri 生成。 |
 | `android/sync-icons.cjs` | Android 图标生成和工程资源同步 | 生成 `android/icons/` 并将其中的 `res/` 复制到生成工程。 |
 | `windows/sync-icons.cjs` | Windows 图标生成 | 输出 `windows/icons/icon.ico`。 |
-| `macos/sync-icons.cjs` | macOS 图标生成 | 输出窗口 PNG，并调用 Swift 生成 Dock 和托盘图标。 |
+| `macos/sync-icons.cjs` | macOS 图标生成 | 输出窗口 PNG，并执行内嵌的 Swift 代码生成 Dock 和托盘图标。 |
 | `linux/sync-icons.cjs` | Linux 图标生成 | 输出 32、128、256 像素 PNG。 |
 | `ios/Info.plist` | iOS 主应用的附加配置 | 维护 iOS 的语言、HTTP ATS 和局域网权限；由 `tauri.ios.conf.json` 引用。 |
 | `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
-| `macos/mac-icon.swift` | macOS 应用与托盘图标生成 | 根目录 `pnpm sync:icons` 在 macOS 上调用，输出 `macos/icons/icon.icns` 和 `macos/icons/tray-macos.png`。 |
 | `linux/linux.desktop` | Linux 桌面入口模板 | 维护启动命令、图标及本地化显示名；由 `tauri.linux.conf.json` 的 `bundle.linux.deb.desktopTemplate` 引用。 |
 | `../share/plugin/ios/Sources/SharePlugin.swift` | iOS 分享扩展、主应用插件与共用收件箱 | `ios/prepare.cjs` 将文件复制到扩展工程并启用 `CLIPROAM_SHARE_EXTENSION`；Swift Package 编译主应用插件分支。 |
 | `ios/prepare.cjs` | iOS 工程准备脚本 | 配置 App Group、分享扩展与共用的 Swift 收件箱源码。 |
