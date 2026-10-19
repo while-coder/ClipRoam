@@ -14,6 +14,8 @@ use std::{
 
 const CHUNK_SIZE: u64 = 128 * 1024;
 #[cfg(target_os = "ios")]
+// Also compiled into the standalone static library used by the share extension.
+#[path = "../../ios/mod.rs"]
 pub mod ios;
 
 #[derive(Deserialize, Serialize)]
@@ -399,6 +401,3 @@ pub unsafe extern "C" fn cliproam_share_free(output: *mut c_char) {
         drop(CString::from_raw(output));
     }
 }
-
-#[cfg(test)]
-mod tests;

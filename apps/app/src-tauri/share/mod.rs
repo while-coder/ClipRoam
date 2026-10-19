@@ -5,8 +5,6 @@ use tauri::AppHandle;
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-mod jni;
-#[cfg(target_os = "android")]
 pub(crate) use android::attach;
 #[cfg(mobile)]
 mod inbox;

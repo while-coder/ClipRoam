@@ -135,7 +135,7 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group、Keychain Sharing 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group，并共享 `$(AppIdentifierPrefix)com.whilecode.cliproam.share-auth` Keychain 访问组；安装时签名工具必须保留这些权限。未签名 IPA 的构建不验证设备上的共享容器与 Keychain 权限。
 
-移动端分享只同步文本和文件。共用的 Rust 上传核心位于 `apps/app/src-tauri/share/core`；iOS 的分享接收、Keychain 和 URLSession 实现，以及 Android 的 JNI 系统适配也在 Rust 中，Swift/Kotlin 仅转发生命周期入口。iOS 扩展的 Xcode 构建阶段会通过 `node apps/app/src-tauri/native/ios/prepare.cjs build-share-core` 生成并链接 Rust 静态库。可用 `cargo test --manifest-path apps/app/src-tauri/share/core/Cargo.toml` 运行上传核心测试。
+移动端分享只同步文本和文件。共用的 Rust 上传核心位于 `apps/app/src-tauri/share/core`，Rust 平台适配分别位于 `share/android/` 和 `share/ios/`，Kotlin 与 Swift 入口分别位于 `share/plugin/android/` 和 `share/plugin/ios/`；目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。iOS 扩展的 Xcode 构建阶段会通过 `node apps/app/src-tauri/native/ios/prepare.cjs build-share-core` 生成并链接 Rust 静态库。
 
 ### 常见问题
 

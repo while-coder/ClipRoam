@@ -1,4 +1,4 @@
-use jni::{
+use ::jni::{
     objects::{JObject, JString},
     sys::jstring,
     JNIEnv,
@@ -14,7 +14,7 @@ pub extern "system" fn Java_com_whilecode_cliproam_share_ShareNative_call(
     let result = (|| {
         let input: String = env.get_string(&input).map_err(|e| e.to_string())?.into();
         let input = serde_json::from_str(&input).map_err(|e| e.to_string())?;
-        super::android::dispatch(&mut env, &context, input)
+        super::dispatch(&mut env, &context, input)
     })();
     let output = match result {
         Ok(value) => serde_json::json!({"ok":true,"value":value}).to_string(),

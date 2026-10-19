@@ -1,5 +1,7 @@
 //! Android system adapter. Kotlin only forwards Activity/Worker lifecycle calls.
-use jni::{
+mod jni;
+
+use ::jni::{
     objects::{JByteArray, JObject, JString, JValue},
     JNIEnv,
 };
