@@ -1,6 +1,7 @@
 //! Portable share-upload state machine. Android executes HTTP in Rust; iOS
 //! submits file-backed HTTP requests through its native background bridge. Credentials
-//! are passed per call and never persisted in a plan or request body.
+//! are kept out of upload plans. Auth request bodies are private temporary files
+//! required by background URLSession and are removed after their response.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,6 +24,8 @@ struct Session {
     http_url: String,
     token: String,
     device_id: String,
+    username: String,
+    device: Value,
     scope: String,
     file_limit: u64,
     max_count: usize,
@@ -75,11 +78,14 @@ fn atomic(path: &Path, data: &[u8]) -> Result<()> {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .map_err(io)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp).map_err(io)?;
         file.write_all(data).map_err(io)?;
         file.sync_all().map_err(io)?;
         drop(file);

@@ -55,7 +55,7 @@ public final class ShareHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDe
                     defer { self.starting.remove(id) }
                     do {
                         if tasks.isEmpty && !self.active.contains(id) {
-                            let result = try ShareCore.call(["command": "step", "id": id])
+                            let result = try ShareCore.call(["command": "start_share", "id": id])
                             try self.submit(result, id: id)
                         }
                         completion(nil)
@@ -77,13 +77,15 @@ public final class ShareHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDe
         }
         guard let address = request["url"] as? String, let url = URL(string: address),
               let body = request["bodyPath"] as? String,
-              let method = request["method"] as? String else { throw ShareCore.failure("HTTP 请求结构无效") }
+              let method = request["method"] as? String,
+              let callbackId = request["callbackId"] as? String else { throw ShareCore.failure("HTTP 请求结构无效") }
         var native = URLRequest(url: url)
         native.httpMethod = method
         native.timeoutInterval = 120
         for (name, value) in request["headers"] as? [String: String] ?? [:] { native.setValue(value, forHTTPHeaderField: name) }
         let task = session(id).uploadTask(with: native, fromFile: URL(fileURLWithPath: body))
-        task.taskDescription = id
+        let callback = try JSONSerialization.data(withJSONObject: ["id": id, "callbackId": callbackId])
+        task.taskDescription = String(decoding: callback, as: UTF8.self)
         active.insert(id)
         task.resume()
     }
@@ -108,13 +110,19 @@ public final class ShareHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDe
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let key = "\(session.configuration.identifier ?? ""):\(task.taskIdentifier)"
         let data = responses.removeValue(forKey: key) ?? Data()
-        guard let id = task.taskDescription else { return }
+        guard let description = task.taskDescription,
+              let callback = try? JSONSerialization.jsonObject(with: Data(description.utf8)) as? [String: String],
+              let id = callback["id"], let callbackId = callback["callbackId"] else { return }
         active.remove(id)
+        var input: [String: Any] = ["command": "http_response", "id": id, "callbackId": callbackId]
+        if data.count > maximumResponseBytes { input["error"] = "服务器响应过大" }
+        else if let error = error { input["error"] = error.localizedDescription }
+        else if let response = task.response as? HTTPURLResponse {
+            input["status"] = response.statusCode
+            input["body"] = String(decoding: data, as: UTF8.self)
+        } else { input["error"] = "服务器响应缺失" }
         do {
-            if data.count > maximumResponseBytes { throw ShareCore.failure("服务器响应过大") }
-            if let error = error { throw error }
-            guard let response = task.response as? HTTPURLResponse else { throw ShareCore.failure("服务器响应缺失") }
-            let next = try ShareCore.call(["command": "response", "id": id, "status": response.statusCode, "body": String(decoding: data, as: UTF8.self)])
+            let next = try ShareCore.call(input)
             try submit(next, id: id)
         } catch { fail(id, error) }
     }

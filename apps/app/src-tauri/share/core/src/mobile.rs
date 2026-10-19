@@ -22,9 +22,6 @@ fn manifest(directory: &Path) -> Result<Value> {
     };
     serde_json::from_slice(&fs::read(path).map_err(io)?).map_err(io)
 }
-fn next(task: &upload::Task) -> Result<Value> {
-    Ok(json!({"request":task.next_request()?}))
-}
 fn resume(files: &Path, inbox: &Path, session: &Value) -> Result<Value> {
     let mut jobs = Vec::new();
     for entry in fs::read_dir(inbox).map_err(io)? {
@@ -136,24 +133,56 @@ pub(super) fn dispatch(input: Value) -> Result<Value> {
                     }
                     Ok(json!({}))
                 }
-                "step" => {
-                    let result = (|| {
-                        if !directory.join("upload.json").exists() {
-                            task.prepare(manifest(&directory)?)?;
+                "start_share" => {
+                    let share = if input["share"].is_null() {
+                        manifest(&directory)
+                    } else {
+                        Ok(input["share"].clone())
+                    };
+                    let login = input.get("login").filter(|value| !value.is_null()).cloned();
+                    #[cfg(target_os = "ios")]
+                    {
+                        let result = share.and_then(|share| task.start_share(share, login));
+                        if let Err(error) = &result {
+                            let _ = task.fail(error);
                         }
-                        next(&task)
-                    })();
-                    if let Err(error) = &result {
-                        let _ = task.fail(error);
-                        let _ = fs::remove_file(directory.join("native"));
+                        Ok(json!({"request":result?}))
                     }
-                    result
+                    #[cfg(not(target_os = "ios"))]
+                    {
+                        if !directory.exists() && input["share"].is_null() {
+                            return Ok(json!({"status":"success"}));
+                        }
+                        let outcome = match share {
+                            Ok(share) => {
+                                task.run(share, login, input["attempt"].as_u64().unwrap_or(0))
+                            }
+                            Err(error) => {
+                                let _ = task.fail(&error);
+                                upload::Outcome::Failed
+                            }
+                        };
+                        Ok(json!({"status":outcome}))
+                    }
                 }
-                "response" => {
-                    let result = task.on_response(upload::HttpResponse {
-                        status: input["status"].as_u64().ok_or("HTTP 状态缺失")? as u16,
-                        body: input["body"].as_str().ok_or("HTTP 响应缺失")?.into(),
-                    });
+                "http_response" => {
+                    let result = (|| {
+                        let callback_id =
+                            input["callbackId"].as_str().ok_or("HTTP callbackId 缺失")?;
+                        if let Some(error) = input["error"].as_str() {
+                            return Err(error.to_owned());
+                        }
+                        task.http_response(
+                            callback_id,
+                            upload::HttpResponse {
+                                status: input["status"]
+                                    .as_u64()
+                                    .and_then(|n| u16::try_from(n).ok())
+                                    .ok_or("HTTP 状态无效")?,
+                                body: input["body"].as_str().ok_or("HTTP 响应缺失")?.into(),
+                            },
+                        )
+                    })();
                     if let Err(error) = &result {
                         let _ = task.fail(error);
                     }
@@ -162,23 +191,6 @@ pub(super) fn dispatch(input: Value) -> Result<Value> {
                 "error" => {
                     task.fail(input["error"].as_str().unwrap_or("网络请求失败"))?;
                     Ok(json!({}))
-                }
-                #[cfg(not(target_os = "ios"))]
-                "upload" => {
-                    if !directory.exists() {
-                        return Ok(json!({"status":"success"}));
-                    }
-                    let outcome = match manifest(&directory) {
-                        Ok(share) => task.run(share, input["attempt"].as_u64().unwrap_or(0)),
-                        Err(error) => {
-                            let _ = task.fail(&error);
-                            upload::Outcome::Failed
-                        }
-                    };
-                    if !directory.join("upload.json").exists() {
-                        let _ = fs::remove_file(directory.join("native"));
-                    }
-                    Ok(json!({"status":outcome}))
                 }
                 _ => Err("未知分享操作".into()),
             }

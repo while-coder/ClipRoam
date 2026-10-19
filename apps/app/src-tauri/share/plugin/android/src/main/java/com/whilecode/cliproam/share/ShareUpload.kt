@@ -52,7 +52,7 @@ internal object ShareNative {
 
 class ShareUploadWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
-        val input = JSONObject().put("command", "upload").put("id", inputData.getString("id")).put("attempt", runAttemptCount)
+        val input = JSONObject().put("command", "start_share").put("id", inputData.getString("id")).put("attempt", runAttemptCount)
         return try {
             val output = JSONObject(ShareNative.dispatch(applicationContext, input.toString()))
             when (output.optJSONObject("value")?.optString("status")) {
