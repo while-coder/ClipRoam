@@ -2,9 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Launch Web/Pwa",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:1431",
+      "webRoot": "${workspaceFolder}/apps/pwa",
+      "preLaunchTask": "pwa:dev"
+    },
+    {
       "name": "Launch VS Code Extension",
       "type": "extensionHost",
       "request": "launch",
+      "runtimeExecutable": "${execPath}",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}/apps/vscode"],
       "outFiles": ["${workspaceFolder}/apps/vscode/dist/extension.js"],
       "preLaunchTask": "build:vscode"
