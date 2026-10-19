@@ -7,10 +7,11 @@ import { isNative, previewSource, showNotification, usePlatform } from "../../pl
 import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
-import { decodePreviewText, filePreviewKind, type PreviewFile } from "./filePreview";
+import { audioMimeType, decodePreviewText, filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
 import ImagePreview from "../../components/preview/ImagePreview.vue";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import MarkdownPreview from "../../components/preview/MarkdownPreview.vue";
+import AudioPreview from "../../components/preview/AudioPreview.vue";
 import { languageForFile } from "../../components/preview/textLanguages";
 
 const props = defineProps<{ entryId: string; file: PreviewFile; image?: boolean; back?: boolean }>();
@@ -30,7 +31,11 @@ const canCopy = computed(() => kind === ClipboardKind.Text || (kind === Clipboar
   && (isNative || (typeof navigator.clipboard?.write === "function"
     && typeof ClipboardItem !== "undefined" && typeof createImageBitmap === "function"))));
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; });
+let audioUrl: string | undefined;
+onBeforeUnmount(() => {
+  disposed = true;
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+});
 
 async function copyToClipboard(): Promise<void> {
   const session = getAccountSession();
@@ -95,6 +100,12 @@ onMounted(async () => {
       if (!path) throw new Error("图片文件不可用");
       const url = await previewSource(path);
       if (!disposed) source.value = url;
+    } else if (kind === FilePreviewKind.Audio) {
+      // A typed Blob also works for original files outside the desktop asset scope.
+      const bytes = await session.files.read(props.file.fileId, 0, props.file.size);
+      if (disposed) return;
+      audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMimeType(props.file.name) }));
+      source.value = audioUrl;
     } else {
       const bytes = await session.files.read(props.file.fileId, 0, Math.min(props.file.size, textLimit));
       if (disposed) return;
@@ -115,6 +126,7 @@ onMounted(async () => {
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
     <ImagePreview v-else-if="kind === ClipboardKind.Image && source" :src="source" :title="file.name" />
+    <AudioPreview v-else-if="kind === FilePreviewKind.Audio && source" :src="source" :title="file.name" />
     <MarkdownPreview v-else-if="kind === ClipboardKind.Text && languageForFile(file.name) === 'markdown'" :text="text" :file-name="file.name">
       <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
     </MarkdownPreview>

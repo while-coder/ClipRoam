@@ -4,14 +4,29 @@ import { languageForFile } from "../../components/preview/textLanguages";
 export type PreviewFile = { name: string; path: string; fileId: string; size: number };
 
 const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "bmp"]);
+const audioTypes: Record<string, string> = {
+  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", oga: "audio/ogg",
+  opus: "audio/ogg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac", weba: "audio/webm",
+};
 
-export type FilePreviewKind = typeof ClipboardKind.Text | typeof ClipboardKind.Image;
+export const FilePreviewKind = {
+  Text: ClipboardKind.Text,
+  Image: ClipboardKind.Image,
+  Audio: "audio",
+} as const;
+export type FilePreviewKind = typeof FilePreviewKind[keyof typeof FilePreviewKind];
+
+export function audioMimeType(name: string): string | undefined {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  return Object.prototype.hasOwnProperty.call(audioTypes, extension) ? audioTypes[extension] : undefined;
+}
 
 export function filePreviewKind(name: string): FilePreviewKind | undefined {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (!name.includes(".")) return undefined;
   if (languageForFile(name)) return ClipboardKind.Text;
   if (imageExtensions.has(extension)) return ClipboardKind.Image;
+  if (audioMimeType(name)) return FilePreviewKind.Audio;
   return undefined;
 }
 
