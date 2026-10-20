@@ -25,6 +25,18 @@ pub struct SharedItem {
     pub name: String,
 }
 
+/// Metadata read from the installed app through Kotlin / Swift.
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_brand: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub android_api_level: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_build_number: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingShare {
@@ -104,6 +116,13 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
+    pub async fn device_metadata(&self) -> Result<DeviceMetadata> {
+        self.0
+            .run_mobile_plugin_async("deviceMetadata", ())
+            .await
+            .map_err(Into::into)
+    }
+
     #[cfg(target_os = "android")]
     pub fn copy_documents(&self, uris: &[String], directory: &str) -> Result<ImportedDocuments> {
         self.0

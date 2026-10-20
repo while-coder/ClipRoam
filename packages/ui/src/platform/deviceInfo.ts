@@ -12,8 +12,11 @@ export function decodeDevice(device: WireDevice): Device {
     // One unreadable payload must not hide the device or break the device list.
   }
   const details: Partial<DeviceInfo> = {};
-  for (const key of ["deviceAlias", "deviceName", "deviceModel", "cpu", "osType", "osVersion", "appVersion", "architecture", "username", "language", "timeZone", "systemLocale"] as const) {
+  for (const key of ["deviceAlias", "deviceName", "deviceModel", "deviceBrand", "deviceMarketName", "appBuildNumber", "cpu", "osType", "osVersion", "appVersion", "architecture", "username", "language", "timeZone", "systemLocale"] as const) {
     if (typeof info[key] === "string") details[key] = info[key];
+  }
+  if (typeof info.androidApiLevel === "number" && Number.isSafeInteger(info.androidApiLevel) && info.androidApiLevel > 0) {
+    details.androidApiLevel = info.androidApiLevel;
   }
   if (typeof info.memoryTotalBytes === "number" && Number.isSafeInteger(info.memoryTotalBytes) && info.memoryTotalBytes > 0) {
     details.memoryTotalBytes = info.memoryTotalBytes;

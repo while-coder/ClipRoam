@@ -21,6 +21,8 @@ Android 的 `ShareActivity` 接收 `SEND` / `SEND_MULTIPLE`，将临时 URI 对�
 
 iOS 的 Share Extension 将临时附件复制到 App Group 容器的 `ShareInbox/<分享ID>/`，再原子写入 `manifest.json`。扩展沿响应链找到应用 URL 打开器，使用 `cliproam://share` 跳转主 App。主应用在 `native/ios/Info.plist` 注册该 URL Scheme；跳转未成功时，扩展提示内容已保存，用户下次打开主 App 后继续导入。该跳转方式需要在目标 iOS 版本上做真机验证。
 
+App Group 默认使用 `group.com.whilecode.cliproam`。SideStore 重签名会追加 Team ID；共用收件箱代码从各自的 `embedded.mobileprovision` 读取带该前缀的实际授权组名。主应用与分享扩展必须获得同一组的授权，安装时须保留分享扩展。此适配需要重新构建 IPA，仅刷新旧包的签名不会更新代码。
+
 图片与其他文件都按原文件保存，不在分享入口转换、哈希或上传。没有提交清单的目录不会被导入。
 
 ## 主应用导入

@@ -16,13 +16,17 @@ const status = computed(() => !props.connected || props.device.online === undefi
       <div><dt>设备别名</dt><dd>{{ device.deviceAlias || '未设置' }} <STag v-if="currentDevice" type="info" size="small">当前设备</STag></dd></div>
       <div><dt>系统设备名</dt><dd>{{ device.deviceName || '未知' }}</dd></div>
       <div><dt>设备状态</dt><dd><span class="device-status" :class="{ online: connected && device.online === true, offline: connected && device.online === false }"><span class="status-dot" aria-hidden="true" />{{ status }}</span></dd></div>
-      <div><dt>设备型号</dt><dd>{{ device.deviceModel || '未知' }}</dd></div>
+      <div v-if="device.deviceBrand"><dt>设备品牌</dt><dd>{{ device.deviceBrand }}</dd></div>
+      <div v-if="device.deviceMarketName"><dt>商品型号</dt><dd>{{ device.deviceMarketName }}</dd></div>
+      <div><dt>系统型号</dt><dd>{{ device.deviceModel || '未知' }}</dd></div>
       <div><dt>处理器</dt><dd>{{ device.cpu || '未知' }}</dd></div>
       <div><dt>处理器架构</dt><dd>{{ device.architecture || '未知' }}</dd></div>
       <div><dt>物理内存</dt><dd>{{ device.memoryTotalBytes ? formatFileSize(device.memoryTotalBytes) : '未知' }}</dd></div>
       <div><dt>系统 / 浏览器</dt><dd>{{ device.platform || '未知' }}</dd></div>
       <div><dt>系统 / 浏览器版本</dt><dd>{{ device.osVersion || '未知' }}</dd></div>
+      <div v-if="device.androidApiLevel"><dt>Android API Level</dt><dd>{{ device.androidApiLevel }}</dd></div>
       <div><dt>应用版本</dt><dd>{{ device.appVersion || '未知' }}</dd></div>
+      <div v-if="device.appBuildNumber"><dt>应用构建号</dt><dd>{{ device.appBuildNumber }}</dd></div>
       <div><dt>系统用户名</dt><dd>{{ device.username || '未知' }}</dd></div>
       <div><dt>首选语言</dt><dd>{{ device.language || '未知' }}</dd></div>
       <div><dt>系统区域设置</dt><dd>{{ device.systemLocale || '未知' }}</dd></div>

@@ -160,3 +160,28 @@ pub(crate) fn read_device_model() -> Option<String> {
         }
     })
 }
+
+pub(crate) fn read_device_market_name() -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        implementation::read_device_market_name()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+#[cfg(mobile)]
+pub(crate) async fn read_mobile_device_info(
+    app: &AppHandle,
+) -> tauri_plugin_cliproam_share_receiver::DeviceMetadata {
+    use tauri_plugin_cliproam_share_receiver::ShareReceiverExt;
+    app.share_receiver()
+        .device_metadata()
+        .await
+        .unwrap_or_else(|error| {
+            log::warn!("Unable to read mobile device metadata: {error}");
+            Default::default()
+        })
+}

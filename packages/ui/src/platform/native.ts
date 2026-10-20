@@ -10,6 +10,13 @@ export type DeviceInfo = {
   deviceName: string;
   /** Hardware model reported by the OS; omitted when unavailable. */
   deviceModel?: string;
+  /** Consumer brand reported by the mobile OS. */
+  deviceBrand?: string;
+  /** Marketing model name from vendor properties, when available. */
+  deviceMarketName?: string;
+  androidApiLevel?: number;
+  /** Installed Android versionCode / iOS CFBundleVersion. */
+  appBuildNumber?: string;
   /** Total physical memory in bytes; omitted when unavailable. */
   memoryTotalBytes?: number;
   cpu: string;

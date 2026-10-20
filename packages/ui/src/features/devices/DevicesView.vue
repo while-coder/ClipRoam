@@ -145,7 +145,8 @@ onBeforeUnmount(() => { disposed = true; });
           </button>
         </div>
         <dl class="device-details">
-          <div><dt>设备型号</dt><dd>{{ device.deviceModel || '未知' }}</dd></div>
+          <div v-if="device.deviceBrand"><dt>设备品牌</dt><dd>{{ device.deviceBrand }}</dd></div>
+          <div><dt>设备型号</dt><dd>{{ device.deviceMarketName || device.deviceModel || '未知' }}</dd></div>
           <div><dt>系统 / 浏览器</dt><dd>{{ device.platform }} · {{ device.osVersion || '未知' }}</dd></div>
           <div><dt>应用版本</dt><dd>{{ device.appVersion || '未知' }}</dd></div>
           <div class="device-id"><dt>设备 ID</dt><dd>{{ device.id }}</dd></div>

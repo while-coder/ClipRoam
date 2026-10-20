@@ -24,14 +24,33 @@ struct PendingShare: Codable {
 
 // Compiled into both the main-app plugin and the Share Extension.
 enum ShareInbox {
+    private static let appGroup = "group.com.whilecode.cliproam"
+
+    private static let appGroups: [String] = {
+        // SideStore appends the signing team's ID to App Groups. Read each
+        // target's profile so the app and extension use the authorized name.
+        guard let profile = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: profile),
+              let start = data.range(of: Data("<plist".utf8)),
+              let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: data.subdata(in: start.lowerBound..<end.upperBound), options: [], format: nil
+              ) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any],
+              let groups = entitlements["com.apple.security.application-groups"] as? [String]
+        else { return [appGroup] }
+        let matching = groups.filter { $0 == appGroup || $0.hasPrefix(appGroup + ".") }.sorted()
+        return matching.isEmpty ? [appGroup] : matching
+    }()
+
     static func failure(_ message: String) -> NSError {
         NSError(domain: "ClipRoam.Share", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     static func root() throws -> URL {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.whilecode.cliproam"
-        ) else { throw failure("无法访问分享收件箱，请检查 App Group 签名配置") }
+        guard let container = appGroups.lazy.compactMap({
+            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
+        }).first else { throw failure("无法访问分享收件箱，请检查 App Group 签名配置") }
         let root = container.appendingPathComponent("ShareInbox", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
@@ -196,6 +215,15 @@ private struct AcknowledgeArgs: Decodable {
 
 private final class SharePlugin: Plugin {
     private var observer: NSObjectProtocol?
+
+    @objc func deviceMetadata(_ invoke: Invoke) {
+        var result: JSObject = ["deviceBrand": "Apple"]
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !build.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result["appBuildNumber"] = build
+        }
+        invoke.resolve(result)
+    }
 
     override func load(webview: WKWebView) {
         observer = NotificationCenter.default.addObserver(

@@ -193,10 +193,13 @@ fn read_device_name() -> String {
 }
 
 #[tauri::command]
-pub(crate) fn native_get_device_info(app: AppHandle) -> Result<DeviceInfo, String> {
+pub(crate) async fn native_get_device_info(app: AppHandle) -> Result<DeviceInfo, String> {
     Ok(DeviceInfo {
         device_name: read_device_name(),
         device_model: platform::read_device_model(),
+        device_market_name: platform::read_device_market_name(),
+        #[cfg(mobile)]
+        mobile: platform::read_mobile_device_info(&app).await,
         memory_total_bytes: platform::read_memory_total_bytes(),
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "未知".to_string()),
         os_type: tauri_plugin_os::platform().to_string(),
@@ -227,6 +230,11 @@ pub(crate) struct DeviceInfo {
     device_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_market_name: Option<String>,
+    #[cfg(mobile)]
+    #[serde(flatten)]
+    mobile: tauri_plugin_cliproam_share_receiver::DeviceMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     memory_total_bytes: Option<u64>,
     cpu: String,

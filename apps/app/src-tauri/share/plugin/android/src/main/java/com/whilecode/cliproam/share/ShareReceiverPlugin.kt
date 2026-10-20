@@ -5,6 +5,8 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import androidx.core.content.pm.PackageInfoCompat
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
@@ -68,6 +70,22 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onDestroy() {
         scope.cancel()
+    }
+
+    @Command
+    fun deviceMetadata(invoke: Invoke) {
+        val result = JSObject()
+        Build.BRAND.trim().takeIf { it.isNotEmpty() && !it.equals(Build.UNKNOWN, ignoreCase = true) }
+            ?.let { result.put("deviceBrand", it) }
+        result.put("androidApiLevel", Build.VERSION.SDK_INT)
+        try {
+            @Suppress("DEPRECATION")
+            val info = activity.packageManager.getPackageInfo(activity.packageName, 0)
+            result.put("appBuildNumber", PackageInfoCompat.getLongVersionCode(info).toString())
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            // Keep hardware / OS metadata even if package metadata is unavailable.
+        }
+        invoke.resolve(result)
     }
 
     @Command
