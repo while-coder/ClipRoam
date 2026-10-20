@@ -67,7 +67,7 @@ export async function captureCurrentClipboard(): Promise<void> {
   }
 }
 
-export async function captureFilesFromPicker(mode: "file" | "folder"): Promise<void> {
+export async function captureFilesFromPicker(mode: "file" | "folder" | "image"): Promise<void> {
   if (uploadingFiles.value) return;
   uploadingFiles.value = true;
   try {

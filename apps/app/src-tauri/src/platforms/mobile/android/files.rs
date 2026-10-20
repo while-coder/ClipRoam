@@ -19,9 +19,12 @@ pub(crate) fn pick_files(
     mode: String,
     scope: String,
 ) -> Result<Vec<String>, String> {
-    let dialog = app.dialog().file();
+    let mut dialog = app.dialog().file();
     if mode == "folder" {
         return Err("android 暂不支持文件夹导入，请选择文件".to_string());
+    }
+    if mode == "image" {
+        dialog = dialog.set_picker_mode(tauri_plugin_dialog::PickerMode::Image);
     }
     let selected = dialog.blocking_pick_files();
     let paths = super::resolve_picker_paths(&app, selected.unwrap_or_default(), &scope)?;
@@ -30,7 +33,6 @@ pub(crate) fn pick_files(
         .map(|p| p.to_string_lossy().into_owned())
         .collect())
 }
-
 
 fn document_name(name: Option<&str>) -> Result<&str, String> {
     let name = name.ok_or("系统目录需要指定子项名称")?;

@@ -80,7 +80,7 @@ export async function saveEntry(entry: LocalClipboardEntry): Promise<void> {
 
       const saved = await session.downloads.finishSave(preparation.saveId);
       saveId = undefined;
-      if (isMobile.value) showNotification({ message: "已保存到所选目录", tone: "success" });
+      if (isMobile.value) showNotification({ message: "文件已保存，可在系统“文件”应用或文件管理器中查看", tone: "success" });
       else if (saved > 0) showNotification({ message: `已保存 ${saved} 个文件`, tone: "success" });
     }
   } catch (error) {

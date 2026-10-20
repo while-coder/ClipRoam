@@ -67,6 +67,7 @@ export class NativeWeb implements NativePlatform {
     const files = await new Promise<File[]>((resolve) => {
       const input = document.createElement("input"); input.type = "file"; input.multiple = true;
       if (mode === "folder") input.webkitdirectory = true;
+      if (mode === "image") input.accept = "image/*";
       input.addEventListener("change", () => {resolve([...input.files ?? []]);input.remove();}, {once:true});
       input.addEventListener("cancel", () => {resolve([]);input.remove();}, {once:true});
       input.style.display = "none"; document.body.append(input); input.click();
