@@ -16,6 +16,7 @@ function filesIn(directory) {
 }
 
 function syncNativeIcons(platform) {
+  platform = ({ win32: "windows", darwin: "macos" })[platform] || platform;
   if (!platforms.includes(platform)) throw new Error(`不支持的图标平台：${platform}`);
   return require(`./${platform}/sync-icons.cjs`).syncIcons();
 }
@@ -55,7 +56,6 @@ function generateNativeIcons(platform, { inputs = [], input = "icons.json", gene
 
 module.exports = { syncNativeIcons, generateNativeIcons };
 if (require.main === module) {
-  const platform = process.argv[2] || process.env.TAURI_ENV_PLATFORM ||
-    ({ win32: "windows", darwin: "macos", linux: "linux" })[process.platform];
+  const platform = process.argv[2] || process.env.TAURI_ENV_PLATFORM || process.platform;
   syncNativeIcons(platform);
 }
