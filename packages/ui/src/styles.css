@@ -785,6 +785,7 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-app .filter-scroll .device-filter-trigger { width: 100%; min-width: 0; max-width: none; height: 32px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll .time-filter-trigger,
 .mobile-app .filter-scroll .device-filter-trigger { padding: 0; }
+.mobile-app .filter-scroll .entry-type-select .s-select,
 .mobile-app .filter-scroll .time-filter-trigger .s-select,
 .mobile-app .filter-scroll .device-filter-trigger .s-select { min-height: 32px; height: 32px; gap: 4px; padding-inline: 9px; font-size: 12px; border-radius: 5px; }
 .mobile-app .filter-scroll button:active,

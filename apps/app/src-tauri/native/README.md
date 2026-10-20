@@ -17,8 +17,8 @@
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `linux/linux.desktop` | Linux 桌面入口模板 | 维护启动命令、图标及本地化显示名；由 `tauri.linux.conf.json` 的 `bundle.linux.deb.desktopTemplate` 引用。 |
-| `../share/plugin/ios/Sources/SharePlugin.swift` | iOS 分享扩展、主应用插件与共用收件箱 | `ios/prepare.cjs` 将文件复制到扩展工程并启用 `CLIPROAM_SHARE_EXTENSION`；Swift Package 编译主应用插件分支。 |
-| `ios/prepare.cjs` | iOS 工程准备脚本 | 配置 App Group、分享扩展与共用的 Swift 收件箱源码。 |
+| `../share/plugin/ios/Sources/SharePlugin.swift` | iOS 分享扩展、操作扩展、主应用插件与共用收件箱 | `ios/prepare.cjs` 将文件复制到两个扩展工程并启用 `CLIPROAM_SHARE_EXTENSION`；Swift Package 编译主应用插件分支。 |
+| `ios/prepare.cjs` | iOS 工程准备脚本 | 配置 App Group、分享扩展、操作扩展与共用的 Swift 收件箱源码。 |
 | `ios/sync-icons.cjs` | iOS 图标生成和 Xcode 资源同步 | `prepare.cjs` 和根目录 `pnpm sync:icons` 调用。 |
 | `../share/` | 分享接收与收件箱桥接 | Kotlin / Swift 保存内容并打开主 App，Rust 命令读取与确认收件箱，上传复用共用 TS 待上传队列。 |
 | `../src/platforms/mobile/` | 主应用其他原生能力 | 剪贴板、文件选择与导出等 Rust 平台适配。 |

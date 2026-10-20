@@ -823,6 +823,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 }
 :global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
 :global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)) 32px; }
+:global(.mobile-app .filter-scroll .entry-type-select.s-single-select),
 :global(.mobile-app .filter-scroll .time-filter-control),
 :global(.mobile-app .filter-scroll .device-filter-control) { width: auto; }
 :global(.mobile-app .filter-scroll .time-filter-control .time-filter-trigger),

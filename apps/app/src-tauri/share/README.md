@@ -23,6 +23,8 @@ iOS 的 Share Extension 将临时附件复制到 App Group 容器的 `ShareInbox
 
 App Group 默认使用 `group.com.whilecode.cliproam`。SideStore 重签名会追加 Team ID；共用收件箱代码从各自的 `embedded.mobileprovision` 读取带该前缀的实际授权组名。主应用与分享扩展必须获得同一组的授权，安装时须保留分享扩展。此适配需要重新构建 IPA，仅刷新旧包的签名不会更新代码。
 
+iOS 同时提供上方 App 区域的分享入口 `ClipRoamShare`（`com.apple.share-services`）和下方操作列表的「保存到 ClipRoam」`ClipRoamAction`（`com.apple.ui-services`）。两个扩展复用同一份 Swift 源码、内容类型规则及 App Group 收件箱；后续导入流程相同。安装新 IPA 时需保留两个扩展，可在系统分享面板的「编辑操作」中启用操作入口。
+
 图片与其他文件都按原文件保存，不在分享入口转换、哈希或上传。没有提交清单的目录不会被导入。
 
 ## 主应用导入
@@ -37,7 +39,7 @@ App Group 默认使用 `group.com.whilecode.cliproam`。SideStore 重签名会�
 
 ## 构建
 
-Android 插件作为 Gradle library 编译，接收 Activity、主应用插件和文件名处理合并在 `ShareReceiverPlugin.kt`。iOS 共用收件箱、分享扩展和主应用插件合并在 `Sources/SharePlugin.swift`；准备脚本 `../native/ios/prepare.cjs` 将此文件复制到生成的分享扩展，并启用 `CLIPROAM_SHARE_EXTENSION` 编译条件，只编译扩展入口与共用收件箱。主应用通过 Swift Package 编译同一文件中的插件入口与共用收件箱。扩展不链接 Tauri 或独立 Rust 静态库。
+Android 插件作为 Gradle library 编译，接收 Activity、主应用插件和文件名处理合并在 `ShareReceiverPlugin.kt`。iOS 共用收件箱、扩展接收和主应用插件合并在 `Sources/SharePlugin.swift`；准备脚本 `../native/ios/prepare.cjs` 将此文件分别复制到生成的分享扩展和操作扩展，并启用 `CLIPROAM_SHARE_EXTENSION` 编译条件，只编译扩展入口与共用收件箱。主应用通过 Swift Package 编译同一文件中的插件入口与共用收件箱。扩展不链接 Tauri 或独立 Rust 静态库。
 
 生成工程位于 `../gen/`，不直接维护。构建入口仍为 `pnpm --filter @cliproam/app android:init` / `ios:init` 及对应的 `dev` / `build` 命令。
 

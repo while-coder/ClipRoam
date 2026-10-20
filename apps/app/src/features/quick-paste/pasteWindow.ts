@@ -40,7 +40,8 @@ function supportsWindowMode(): boolean {
 
 async function restoreMainWindow(): Promise<void> {
   if (isQuickPaste.value) {
-    await setWindowMode({ mode: "main", title: appName.value, visible: false });
+    // The tray may already have restored the native window. Do not hide it
+    // again and wait for an IPC response from the hidden webview.
     setQuickPasteView(false);
     await nextTick();
   }

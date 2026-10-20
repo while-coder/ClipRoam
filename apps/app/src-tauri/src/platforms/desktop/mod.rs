@@ -165,9 +165,20 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window is unavailable".to_string())?;
-    window
-        .emit("cliproam://show-main", ())
-        .map_err(|error| error.to_string())
+    // A hidden webview may defer JS events/IPC callbacks. Restore the native
+    // window first so opening from the tray does not depend on JS waking up.
+    // Keep these operations off the event loop, just like native_set_window_mode.
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::window_mode::restore_main_window(&window).and_then(|()| {
+            window
+                .emit("cliproam://show-main", ())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = result {
+            log::warn!("[window] failed to restore main window: {error}");
+        }
+    });
+    Ok(())
 }
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {

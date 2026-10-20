@@ -79,6 +79,11 @@ pub(crate) async fn native_set_window_mode(
 }
 
 #[cfg(desktop)]
+pub(crate) fn restore_main_window(window: &WebviewWindow) -> Result<(), String> {
+    apply_mode(window, WindowMode::Main, None, None, true)
+}
+
+#[cfg(desktop)]
 fn apply_mode(
     window: &WebviewWindow,
     mode: WindowMode,
