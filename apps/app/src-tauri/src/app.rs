@@ -115,21 +115,32 @@ pub(crate) fn native_capture_paste_target(app: AppHandle) -> Result<(), String> 
 #[tauri::command]
 pub(crate) async fn native_register_quick_paste_shortcut(
     app: AppHandle,
-    shortcut: String,
+    shortcut: Option<String>,
 ) -> Result<(), String> {
     #[cfg(desktop)]
     {
-        use tauri_plugin_global_shortcut::GlobalShortcutExt;
-        app.global_shortcut()
-            .register(shortcut.as_str())
-            .map_err(|error| error.to_string())?;
-        log::debug!("[quick-paste] native shortcut registered");
-        Ok(())
+        crate::shortcuts::set_shortcut(&app, shortcut, false)
     }
     #[cfg(mobile)]
     {
         let _ = (app, shortcut);
         Err("移动端不支持全局快捷键".to_string())
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn native_set_boss_key(
+    app: AppHandle,
+    shortcut: Option<String>,
+) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        crate::shortcuts::set_shortcut(&app, shortcut, true)
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, shortcut);
+        Err("移动端不支持全局快捷键".into())
     }
 }
 

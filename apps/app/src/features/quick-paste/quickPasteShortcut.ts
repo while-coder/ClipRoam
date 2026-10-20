@@ -19,8 +19,6 @@ function readSavedShortcut(): string {
 }
 
 let savedShortcut = readSavedShortcut();
-let registeredShortcut = "";
-let shortcutApi: typeof import("@tauri-apps/plugin-global-shortcut") | undefined;
 let refreshQueue: Promise<void> = Promise.resolve();
 
 export const quickPasteShortcut = ref(savedShortcut);
@@ -54,41 +52,7 @@ async function applyShortcut(shortcut: string, persist: boolean): Promise<boolea
     }
 
     try {
-      shortcutApi ??= await import("@tauri-apps/plugin-global-shortcut");
-      if (registeredShortcut === normalized && await shortcutApi.isRegistered(normalized)) {
-        applied = true;
-      } else {
-        const previous = registeredShortcut;
-        if (previous) await shortcutApi!.unregister(previous).catch(() => undefined);
-        try {
-          await registerShortcut(normalized);
-          registeredShortcut = normalized;
-          applied = true;
-        } catch (error) {
-          // A repeated registration by this process can report an error on
-          // Windows even though the shortcut remains active.
-          if (await shortcutApi.isRegistered(normalized).catch(() => false)) {
-            registeredShortcut = normalized;
-            applied = true;
-          } else {
-            if (previous) {
-              await registerShortcut(previous).then(
-                () => { registeredShortcut = previous; },
-                () => { registeredShortcut = ""; },
-              );
-            }
-            console.error("注册快捷粘贴快捷键失败：", normalized, error);
-          }
-        }
-      }
-
-      if (!applied) {
-        quickPasteShortcutStatus.value = {
-          state: "error",
-          message: "注册失败，可能与系统或其他程序冲突，请换一组",
-        };
-        return;
-      }
+      await registerShortcut(normalized);
 
       if (persist) {
         window.localStorage.setItem(STORAGE_KEY, normalized);
@@ -99,10 +63,11 @@ async function applyShortcut(shortcut: string, persist: boolean): Promise<boolea
         state: "ok",
         message: `已生效：${displayShortcut(normalized)}`,
       };
+      applied = true;
     } catch (error) {
       quickPasteShortcutStatus.value = {
         state: "error",
-        message: `快捷键初始化失败：${errorMessage(error)}`,
+        message: `快捷键注册失败，请检查是否冲突：${errorMessage(error)}`,
       };
     }
   };
@@ -124,8 +89,5 @@ export function saveQuickPasteShortcut(): Promise<boolean> {
 
 export async function disposeQuickPasteShortcut(): Promise<void> {
   await refreshQueue;
-  if (shortcutApi && registeredShortcut) {
-    await shortcutApi!.unregister(registeredShortcut).catch(() => undefined);
-  }
-  registeredShortcut = "";
+  await invoke("native_register_quick_paste_shortcut", { shortcut: null }).catch(() => undefined);
 }

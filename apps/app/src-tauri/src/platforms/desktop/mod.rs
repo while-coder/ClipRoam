@@ -28,21 +28,7 @@ pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let _ = crate::platform::show_main_window(app);
         }))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        return;
-                    }
-                    log::debug!("[quick-paste] native shortcut pressed");
-                    if let Some(window) = app.get_webview_window("main") {
-                        if let Err(error) = window.emit("cliproam://show-paste", ()) {
-                            log::warn!("[quick-paste] failed to dispatch shortcut: {error}");
-                        }
-                    }
-                })
-                .build(),
-        )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
 }

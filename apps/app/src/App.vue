@@ -4,6 +4,19 @@ import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
 import { isNative, isQuickPaste } from "@cliproam/ui/platform";
 import UpdaterDialog from "./features/updater/UpdaterDialog.vue";
+import { onMounted } from "vue";
+import { native } from "@cliproam/ui/native";
+import { initializeBossKey } from "./features/settings/bossKey";
+
+onMounted(async () => {
+  if (isNative) {
+    try {
+      if ((await native.getCapabilities()).globalShortcut) await initializeBossKey();
+    } catch (error) {
+      console.warn("老板键初始化失败", error);
+    }
+  }
+});
 </script>
 
 <template>

@@ -6,6 +6,8 @@ mod files;
 mod platform;
 mod platforms;
 mod window_mode;
+#[cfg(desktop)]
+mod shortcuts;
 #[path = "../share/mod.rs"]
 mod share;
 use tauri::Manager;
@@ -25,6 +27,8 @@ pub fn run() {
         .setup(|app| {
             std::fs::create_dir_all(app.path().app_data_dir()?)?;
             app.manage(app::QuickPasteMode::default());
+            #[cfg(desktop)]
+            app.manage(shortcuts::ShortcutState::default());
             app.manage(window_mode::WindowModeState::default());
             app.manage(clipboard::ClipboardState::default());
             platform::manage_platform_state(app.handle())?;
@@ -48,6 +52,7 @@ pub fn run() {
             window_mode::native_set_window_mode,
             app::native_capture_paste_target,
             app::native_register_quick_paste_shortcut,
+            app::native_set_boss_key,
             app::native_show_notification,
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,

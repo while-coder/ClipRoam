@@ -6,6 +6,7 @@ import { native } from "@cliproam/ui/native";
 import { usePlatform } from "@cliproam/ui/platform";
 import { errorMessage } from "@cliproam/ui/errors";
 import { displayShortcut, quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, resetQuickPasteShortcutDraft, saveQuickPasteShortcut } from "../quick-paste/quickPasteShortcut";
+import { bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, resetBossKeyDraft, saveBossKey } from "./bossKey";
 
 export function useRustSettings() {
   const { isMobile, platformCapabilities } = usePlatform();
@@ -17,6 +18,7 @@ export function useRustSettings() {
   const serverMaxFileMb = computed(() => getSettingsPreferences().serverMaxFileMb);
   watch(serverMaxFileMb, (max) => { autoUploadLimitMb.value = Math.min(autoUploadLimitMb.value, max); });
   const recordingQuickPasteShortcut = ref(false);
+  const recordingBossKey = ref(false);
   const busy = computed(() => savingSettings.value || changingPassword.value);
   const autostartEnabled = ref(false);
   const autostartLoading = ref(false);
@@ -40,7 +42,12 @@ export function useRustSettings() {
     }
   }, { immediate: true });
   resetQuickPasteShortcutDraft();
-  watch(settingsPage, () => { recordingQuickPasteShortcut.value = false; });
+  resetBossKeyDraft();
+  watch(settingsPage, () => {
+    recordingQuickPasteShortcut.value = false;
+    recordingBossKey.value = false;
+  });
+  watch(bossKeyEnabled, () => { recordingBossKey.value = false; });
   const { updaterSupported, updateStatus, updateStatusText, checkForUpdate } = useTauriUpdater();
   const autoUploadLimitOptions = computed(() => {
     const max = serverMaxFileMb.value;
@@ -78,12 +85,15 @@ export function useRustSettings() {
     return tokens[code] ?? "";
   }
 
-  function recordQuickPasteShortcut(event: KeyboardEvent): void {
-    if (!recordingQuickPasteShortcut.value) return;
+  function recordShortcut(event: KeyboardEvent, bossKey = false): void {
+    const recording = bossKey ? recordingBossKey : recordingQuickPasteShortcut;
+    const shortcut = bossKey ? bossKeyShortcut : quickPasteShortcut;
+    const status = bossKey ? bossKeyStatus : quickPasteShortcutStatus;
+    if (!recording.value) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.code === "Escape") {
-      recordingQuickPasteShortcut.value = false;
+      recording.value = false;
       return;
     }
     const token = shortcutKeyToken(event);
@@ -94,16 +104,19 @@ export function useRustSettings() {
     if (event.shiftKey) modifiers.push("Shift");
     if (event.altKey) modifiers.push("Alt");
     if (!modifiers.length && !/^F\d{1,2}$/.test(token)) {
-      quickPasteShortcutStatus.value = {
+      status.value = {
         state: "error",
         message: "请至少按住 Ctrl、Alt 或 Command，再按一个主键",
       };
       return;
     }
-    quickPasteShortcut.value = [...modifiers, token].join("+");
-    quickPasteShortcutStatus.value = { state: "idle", message: "点击保存后生效" };
-    recordingQuickPasteShortcut.value = false;
+    shortcut.value = [...modifiers, token].join("+");
+    status.value = { state: "idle", message: "点击保存后生效" };
+    recording.value = false;
   }
+
+  function recordQuickPasteShortcut(event: KeyboardEvent): void { recordShortcut(event); }
+  function recordBossKey(event: KeyboardEvent): void { recordShortcut(event, true); }
 
   function selectQuickPasteShortcut(shortcut: string): void {
     quickPasteShortcut.value = shortcut;
@@ -142,6 +155,9 @@ export function useRustSettings() {
         if (platformCapabilities.value.globalShortcut && settingsPage.value === "shortcuts" && !await saveQuickPasteShortcut()) {
           throw new Error(quickPasteShortcutStatus.value.message);
         }
+        if (platformCapabilities.value.globalShortcut && settingsPage.value === "shortcuts" && !await saveBossKey()) {
+          throw new Error(bossKeyStatus.value.message);
+        }
       },
     });
   }
@@ -151,6 +167,7 @@ export function useRustSettings() {
     watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
+    bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,
     updaterSupported, updateStatus, updateStatusText, checkForUpdate, openAppDataDirectory, saveSettings,
   };
 }

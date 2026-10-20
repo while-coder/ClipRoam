@@ -19,6 +19,8 @@ iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使�
 
 ## 本地数据
 
+桌面端支持全局老板键，默认 `Alt+Shift+H`（macOS 为 `Option+Shift+H`）：窗口可见且未最小化时隐藏，再次按下恢复主界面。可在“设置 → 快捷键”关闭或录制新组合，保存后生效；配置仅保存在当前设备。老板键由原生端处理，不依赖后台 WebView 回调；新组合注册失败时保留旧组合，且不能与快捷粘贴共用组合。
+
 主界面登录配置包含服务器地址及协议、用户名和 sessionToken，使用 AES-GCM 加密后保存到 IndexedDB 的 `cliproam-global/meta`，每次保存使用新的随机 IV。随机密钥保存在同一数据库，目的是避免直接保存明文；这不提供系统钥匙串级别的隔离。退出登录删除当前登录配置，配置或密钥损坏后可重新登录覆盖。
 
 移动端分享入口只保存文本和附件，然后打开主 App。登录和初始化完成后导入当前账号的待上传列表；分享入口不额外保存登录凭据。iOS 使用 App Group 在扩展与主应用之间共享收件箱。详见[移动端分享说明](src-tauri/share/README.md)。

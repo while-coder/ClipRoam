@@ -15,6 +15,7 @@ const {
     watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
+    bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,
     updaterSupported, updateStatus, updateStatusText, checkForUpdate, openAppDataDirectory, saveSettings,
 } = useRustSettings();
 
@@ -121,7 +122,7 @@ async function openDebugTools(): Promise<void> {
                 class="shortcut-recorder"
                 :class="{ recording: recordingQuickPasteShortcut }"
                 type="button"
-                :disabled="savingSettings || quickPasteShortcutRefreshing"
+                :disabled="savingSettings || quickPasteShortcutRefreshing || bossKeyRefreshing"
                 :aria-label="recordingQuickPasteShortcut ? '正在录制快捷粘贴快捷键' : `当前快捷键 ${displayShortcut(quickPasteShortcut)}`"
                 @click="recordingQuickPasteShortcut = true"
                 @blur="recordingQuickPasteShortcut = false"
@@ -137,7 +138,7 @@ async function openDebugTools(): Promise<void> {
                 :key="preset"
                 type="button"
                 :class="{ active: quickPasteShortcut === preset }"
-                :disabled="savingSettings || quickPasteShortcutRefreshing"
+                :disabled="savingSettings || quickPasteShortcutRefreshing || bossKeyRefreshing"
                 @click="selectQuickPasteShortcut(preset)"
               >
                 {{ displayShortcut(preset) }}
@@ -145,6 +146,36 @@ async function openDebugTools(): Promise<void> {
             </div>
             <p v-if="quickPasteShortcutStatus.message" class="shortcut-status" :class="quickPasteShortcutStatus.state" :role="quickPasteShortcutStatus.state === 'error' ? 'alert' : 'status'" aria-live="polite">
               {{ quickPasteShortcutStatus.message }}
+            </p>
+          </SCard>
+          <SCard title="老板键">
+            <label class="setting-switch" for="boss-key-enabled">
+              <span class="setting-switch-copy">
+                <strong>启用老板键</strong>
+                <small>一键隐藏窗口，再按一次恢复主界面；点击保存后生效。</small>
+              </span>
+              <SSwitch id="boss-key-enabled" v-model:value="bossKeyEnabled" :disabled="savingSettings || bossKeyRefreshing" />
+            </label>
+            <div class="shortcut-setting-row">
+              <div>
+                <strong>全局快捷键</strong>
+                <small>点击右侧按钮录制组合键；Esc 取消录制。</small>
+              </div>
+              <button
+                class="shortcut-recorder"
+                :class="{ recording: recordingBossKey }"
+                type="button"
+                :disabled="!bossKeyEnabled || savingSettings || bossKeyRefreshing || quickPasteShortcutRefreshing"
+                :aria-label="recordingBossKey ? '正在录制老板键' : `当前老板键 ${displayShortcut(bossKeyShortcut)}`"
+                @click="recordingBossKey = true"
+                @blur="recordingBossKey = false"
+                @keydown="recordBossKey"
+              >
+                {{ recordingBossKey ? "按下组合键…" : displayShortcut(bossKeyShortcut) }}
+              </button>
+            </div>
+            <p v-if="bossKeyStatus.message" class="shortcut-status" :class="bossKeyStatus.state" :role="bossKeyStatus.state === 'error' ? 'alert' : 'status'" aria-live="polite">
+              {{ bossKeyStatus.message }}
             </p>
           </SCard>
         </div>
