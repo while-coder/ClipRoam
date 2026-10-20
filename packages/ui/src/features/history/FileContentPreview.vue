@@ -121,7 +121,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal :show="true" :title="file.name" :width="kind === ClipboardKind.Image ? '980px' : '760px'" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal :show="true" :title="file.name" :width="kind === ClipboardKind.Image ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image" @update:show="(value: boolean) => { if (!value) emit('close') }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>

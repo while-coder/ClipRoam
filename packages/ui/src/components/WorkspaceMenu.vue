@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { clientSessionManager } from "../features/sync/clientSessionManager";
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { FilePlus, FolderPlus, ImagePlus, Menu, Settings2 } from "lucide-vue-next";
+import { FilePlus, FolderPlus, Menu, Settings2 } from "lucide-vue-next";
 import { isMobile } from "../platform/runtime";
+import { FilePickerMode } from "../platform/native";
 import { openSettings } from "../features/settings/useSettings";
 import { uploadingFiles, captureFilesFromPicker } from "../features/pending-upload/usePendingUploads";
 
@@ -69,13 +70,10 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
     </button>
     <div v-if="open" ref="menu" class="workspace-menu-popover" role="menu" aria-label="工作区操作" @keydown="handleKeydown">
       <span class="workspace-menu-status" :class="connectionStatus.tone" :title="connectionStatus.title" role="status">{{ connectionStatus.label }}</span>
-      <button v-if="isMobile" type="button" role="menuitem" :disabled="uploadingFiles" @click="run(() => captureFilesFromPicker('image'))">
-        <ImagePlus :size="18" aria-hidden="true" /><span>上传照片</span>
-      </button>
-      <button type="button" role="menuitem" :disabled="uploadingFiles" @click="run(() => captureFilesFromPicker('file'))">
+      <button type="button" role="menuitem" :disabled="uploadingFiles" @click="run(() => captureFilesFromPicker(FilePickerMode.File))">
         <FilePlus :size="18" aria-hidden="true" /><span>上传文件</span>
       </button>
-      <button type="button" role="menuitem" :disabled="uploadingFiles || isMobile" :title="isMobile ? '移动端暂不支持上传文件夹' : undefined" @click="run(() => captureFilesFromPicker('folder'))">
+      <button type="button" role="menuitem" :disabled="uploadingFiles || isMobile" :title="isMobile ? '移动端暂不支持上传文件夹' : undefined" @click="run(() => captureFilesFromPicker(FilePickerMode.Folder))">
         <FolderPlus :size="18" aria-hidden="true" /><span>上传文件夹<small v-if="isMobile">当前设备不支持</small></span>
       </button>
       <button type="button" role="menuitem" @click="run(openSettings)">

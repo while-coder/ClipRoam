@@ -1,3 +1,5 @@
 "CFBundleDisplayName" = "随心贴";
 "CFBundleName" = "随心贴";
+"NSCameraUsageDescription" = "随心贴使用相機拍攝你選擇上傳的照片或影片。";
+"NSMicrophoneUsageDescription" = "随心贴使用麥克風錄製你選擇上傳的影片中的聲音。";
 "NSLocalNetworkUsageDescription" = "随心贴需要存取區域網路，以連線至你的剪貼簿同步伺服器。";

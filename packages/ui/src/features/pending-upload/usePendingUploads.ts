@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { getAccountSession } from "../../accountSession";
 import { showNotification } from "../../platform/runtime";
 import type { LocalClipboardEntry } from "../../types";
+import type { FilePickerMode } from "../../platform/native";
 
 /** UI bindings follow the active account's shared manager. */
 export const pendingEntries = computed(() => getAccountSession()?.pendingUploads.entries.value ?? []);
@@ -67,7 +68,7 @@ export async function captureCurrentClipboard(): Promise<void> {
   }
 }
 
-export async function captureFilesFromPicker(mode: "file" | "folder" | "image"): Promise<void> {
+export async function captureFilesFromPicker(mode: FilePickerMode): Promise<void> {
   if (uploadingFiles.value) return;
   uploadingFiles.value = true;
   try {

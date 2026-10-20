@@ -20,6 +20,8 @@ export type DeviceInfo = {
   systemLocale?: string;
 };
 export type PickedFiles = { paths?: string[]; files?: File[] };
+export const FilePickerMode = { File: "file", Folder: "folder" } as const;
+export type FilePickerMode = typeof FilePickerMode[keyof typeof FilePickerMode];
 export type Unlisten = () => void;
 export type DirectoryEntry = { path: string[]; stream?: ReadableStream<Uint8Array> };
 
@@ -56,7 +58,7 @@ export interface NativePlatform {
   readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
   writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void>;
   watchClipboard(scope: string, enabled: boolean): Promise<void>;
-  pickFiles(mode: string, scope: string): Promise<PickedFiles>;
+  pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles>;
   getPaths(): Promise<{ appDir: string }>;
   statFiles(paths: string[]): Promise<(FileStat | null)[]>;
   listFiles(path: string): Promise<FileStat[]>;

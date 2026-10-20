@@ -5,6 +5,8 @@ import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../.
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
 import { applicationDatabase, type FileHashRecord } from "../../platform/database";
+import { isNative } from "../../platform/runtime";
+import type { FilePickerMode } from "../../platform/native";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
@@ -140,14 +142,14 @@ export class CaptureService {
     if (!data) return false; await this.capture(data); return true;
   }
 
-  async pickFiles(mode: string): Promise<boolean> {
+  async pickFiles(mode: FilePickerMode): Promise<boolean> {
     const picked = await clipboardPlatform.pickFiles(mode,profileName(this.session.accountKey));
     if (picked.files?.length) { await this.captureFiles(picked.files); return true; }
     if (picked.paths?.length) { await this.capture({kind:"files",paths:picked.paths}); return true; }
     return false;
   }
 
-  /** Browser/extension callers can pass File objects without any native bridge. */
+  /** WebKit's native file input and browsers both return File objects. */
   async captureFiles(files: File[], captureId?: string): Promise<void> {
     if (captureId && await this.session.database.get("captures", captureId)) return;
     const info: FileInfo = Object.create(null);
@@ -171,9 +173,20 @@ export class CaptureService {
         this.session.signal.throwIfAborted(); hash.update(new Uint8Array(await file.slice(offset,offset + 128 * 1024).arrayBuffer()));
       }
       const fileId = hash.digest();
-      await this.session.database.batch([
-        {name:"blobs",id:fileId,value:file},
-      ]);
+      if (isNative) {
+        const writer = await this.session.files.writer(fileId, file.size, true);
+        try {
+          for (let offset = 0; offset < file.size; offset += 128 * 1024) {
+            this.session.signal.throwIfAborted();
+            await writer.append(new Uint8Array(await file.slice(offset,offset + 128 * 1024).arrayBuffer()));
+          }
+          this.session.signal.throwIfAborted();
+          await writer.commit();
+        } catch (error) {
+          await writer.abort().catch(() => undefined);
+          throw error;
+        }
+      } else await this.session.database.put("blobs", fileId, file);
       parent[name] = { f: fileId, s: file.size };
     }
     if (!count) throw new Error("没有可用的文件");

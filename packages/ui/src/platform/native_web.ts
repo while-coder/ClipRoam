@@ -5,6 +5,18 @@ import type { PlatformCapabilities, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
+import { FilePickerMode } from "./native";
+
+/** Keep the native WebKit source menu and camera/file selection behavior. */
+export function pickBrowserFiles(mode: FilePickerMode): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input"); input.type = "file"; input.multiple = true;
+    if (mode === FilePickerMode.Folder) input.webkitdirectory = true;
+    input.addEventListener("change", () => {resolve([...input.files ?? []]);input.remove();}, {once:true});
+    input.addEventListener("cancel", () => {resolve([]);input.remove();}, {once:true});
+    input.style.display = "none"; document.body.append(input); input.click();
+  });
+}
 
 /** Browser operations use Web APIs without loading Tauri. */
 export class NativeWeb implements NativePlatform {
@@ -63,16 +75,8 @@ export class NativeWeb implements NativePlatform {
     } else throw new Error("浏览器不支持系统文件剪贴板，请下载文件");
   }
   async watchClipboard(_scope: string, _enabled: boolean): Promise<void> {}
-  async pickFiles(mode: string, _scope: string): Promise<PickedFiles> {
-    const files = await new Promise<File[]>((resolve) => {
-      const input = document.createElement("input"); input.type = "file"; input.multiple = true;
-      if (mode === "folder") input.webkitdirectory = true;
-      if (mode === "image") input.accept = "image/*";
-      input.addEventListener("change", () => {resolve([...input.files ?? []]);input.remove();}, {once:true});
-      input.addEventListener("cancel", () => {resolve([]);input.remove();}, {once:true});
-      input.style.display = "none"; document.body.append(input); input.click();
-    });
-    return {files};
+  async pickFiles(mode: FilePickerMode, _scope: string): Promise<PickedFiles> {
+    return {files: await pickBrowserFiles(mode)};
   }
   async getPaths(): Promise<{ appDir: string }> { return this.unavailable(); }
   async statFiles(_paths: string[]): Promise<(FileStat | null)[]> { return this.unavailable(); }

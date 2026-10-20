@@ -2,6 +2,8 @@ import type { PlatformCapabilities, NotificationPayload, ClipboardData, Clipboar
   FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getEnvironmentInfo } from "@cliproam/ui/device-info";
+import { pickBrowserFiles } from "@cliproam/ui/native-web";
+import { FilePickerMode } from "@cliproam/ui/native";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import * as shortcuts from "../features/quick-paste/quickPasteShortcut";
@@ -15,6 +17,7 @@ async function listenRust<T>(event: string, handler: (payload: T) => void): Prom
 
 /** Custom Rust commands and their serialized payloads are contained here. */
 export class NativeRust implements NativePlatform {
+  private osType = "";
   readonly kind = "rust";
   readonly clipboardMonitoring = true;
   readonly quickPasteShortcut = {
@@ -42,7 +45,9 @@ export class NativeRust implements NativePlatform {
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
   async getDeviceInfo(): Promise<DeviceInfo> {
-    return { ...await this.invoke<Omit<DeviceInfo, "language" | "timeZone">>("native_get_device_info"), ...getEnvironmentInfo() };
+    const info = await this.invoke<Omit<DeviceInfo, "language" | "timeZone">>("native_get_device_info");
+    this.osType = info.osType;
+    return { ...info, ...getEnvironmentInfo() };
   }
   openAppDataDir(): Promise<void> { return this.invoke("native_open_app_data_dir"); }
   startWindowDrag(): Promise<void> { return this.invoke("native_start_window_drag"); }
@@ -58,7 +63,12 @@ export class NativeRust implements NativePlatform {
     return this.invoke("native_write_clipboard", {payload:encoded,synthesize});
   }
   watchClipboard(scope: string, enabled: boolean): Promise<void> { return this.invoke("native_watch_clipboard", {scope,enabled}); }
-  async pickFiles(mode: string, scope: string): Promise<PickedFiles> { return {paths:await this.invoke<string[]>("native_pick_files", {mode,scope})}; }
+  async pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles> {
+    // getDeviceInfo runs before mounting the app. Open synchronously from the
+    // tap so WebKit retains the user gesture required by its file input.
+    if (this.osType === "ios" && mode === FilePickerMode.File) return {files: await pickBrowserFiles(mode)};
+    return {paths:await this.invoke<string[]>("native_pick_files", {mode,scope})};
+  }
   getPaths(): Promise<{ appDir: string }> { return this.invoke("native_paths"); }
   statFiles(paths: string[]): Promise<(FileStat | null)[]> { return this.invoke("native_fs_stat", {paths}); }
   listFiles(path: string): Promise<FileStat[]> { return this.invoke("native_fs_list", {path}); }

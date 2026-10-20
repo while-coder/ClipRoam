@@ -43,12 +43,9 @@ pub(crate) fn pick_files(
     mode: String,
     scope: String,
 ) -> Result<Vec<String>, String> {
-    let mut dialog = app.dialog().file();
+    let dialog = app.dialog().file();
     if mode == "folder" {
         return Err("ios 暂不支持文件夹导入，请选择文件".to_string());
-    }
-    if mode == "image" {
-        dialog = dialog.set_picker_mode(tauri_plugin_dialog::PickerMode::Image);
     }
     let selected = dialog.blocking_pick_files();
     let _ = scope;

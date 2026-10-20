@@ -197,7 +197,9 @@ function onPreviewPointerUp(event: PointerEvent): void {
 .preview-status { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 160px; color: var(--color-secondary-text); }
 .image-preview-stage {
   position: relative;
-  min-height: 80px;
+  /* 随弹窗 body 收缩，确保尺寸测量和拖拽边界对应实际可见区域。 */
+  flex: 1 1 auto;
+  min-height: 0;
   height: min(640px, calc(100vh - 200px));
   height: min(640px, calc(100dvh - 200px));
   padding: 20px;

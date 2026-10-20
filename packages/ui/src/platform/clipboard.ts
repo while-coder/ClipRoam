@@ -1,4 +1,4 @@
-import { native } from "./native";
+import { native, type FilePickerMode } from "./native";
 
 export type ClipboardData =
   | { kind: "text"; text: string; html?: string; rtf?: string }
@@ -15,6 +15,6 @@ export const clipboardPlatform = {
   subscribe: (changed: (event: ClipboardEvent) => void) => native.listen("cliproam://clipboard-changed", changed),
   watch: (scope: string, enabled: boolean): Promise<void> => native.watchClipboard(scope, enabled),
   readText: (): Promise<ClipboardData | null> => native.readClipboard(true),
-  pickFiles: (mode: string, scope: string) => native.pickFiles(mode, scope),
+  pickFiles: (mode: FilePickerMode, scope: string) => native.pickFiles(mode, scope),
   write: (payload: ClipboardWrite, synthesize: boolean): Promise<void> => native.writeClipboard(payload, synthesize),
 };

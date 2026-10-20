@@ -1,3 +1,5 @@
 "CFBundleDisplayName" = "ClipRoam";
 "CFBundleName" = "ClipRoam";
+"NSCameraUsageDescription" = "ClipRoam uses the camera to take photos or record videos you choose to upload.";
+"NSMicrophoneUsageDescription" = "ClipRoam uses the microphone to record audio in videos you choose to upload.";
 "NSLocalNetworkUsageDescription" = "ClipRoam needs access to your local network to connect to your clipboard sync server.";
