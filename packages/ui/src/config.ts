@@ -24,7 +24,7 @@ export const BROWSER_CAPABILITIES: PlatformCapabilities = {
 export const DEFAULT_AUTO_UPLOAD_LIMIT_MB = 50;
 export const DEFAULT_AUTO_UPLOAD_LIMIT = DEFAULT_AUTO_UPLOAD_LIMIT_MB * 1024 * 1024;
 export const DEFAULT_AUTO_RECEIVE_CLIPBOARD = true;
-// 是否监听本机剪贴板（与 Rust 侧 default_watch_clipboard 一致）。
+// 是否默认监听本机剪贴板的各类内容。
 export const DEFAULT_WATCH_CLIPBOARD = true;
 // 捕获文件/文件夹时按名称跳过的默认过滤模式（与 Rust 侧 default_exclude_patterns 一致）。
 export const DEFAULT_EXCLUDE_PATTERNS = ["node_modules"];
@@ -36,12 +36,32 @@ const DEFAULT_MAX_CAPTURE_FILE_COUNT = 1000;
 export function defaultAccountPreferences(): AccountPreferences {
   return {
     autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-    autoReceiveClipboard: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
-    watchClipboard: DEFAULT_WATCH_CLIPBOARD,
+    autoReceiveClipboardText: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+    autoReceiveClipboardImage: DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+    watchClipboardText: DEFAULT_WATCH_CLIPBOARD,
+    watchClipboardImage: DEFAULT_WATCH_CLIPBOARD,
+    watchClipboardFiles: DEFAULT_WATCH_CLIPBOARD,
     excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS],
     serverMaxFileMb: DEFAULT_SERVER_MAX_FILE_MB,
     serverMaxImageMb: 10,
     serverMaxHistoryEntries: 3000,
     maxCaptureFileCount: DEFAULT_MAX_CAPTURE_FILE_COUNT,
+  };
+}
+
+/** Each new option inherits its former master switch until explicitly saved. */
+export function normalizeAccountPreferences(stored?: Partial<AccountPreferences> & {
+  autoReceiveClipboard?: boolean; watchClipboard?: boolean;
+}): AccountPreferences {
+  const { autoReceiveClipboard, watchClipboard, ...preferences } = stored ?? {};
+  const defaults = defaultAccountPreferences();
+  return {
+    ...defaults,
+    ...preferences,
+    autoReceiveClipboardText: preferences.autoReceiveClipboardText ?? autoReceiveClipboard ?? defaults.autoReceiveClipboardText,
+    autoReceiveClipboardImage: preferences.autoReceiveClipboardImage ?? autoReceiveClipboard ?? defaults.autoReceiveClipboardImage,
+    watchClipboardText: preferences.watchClipboardText ?? watchClipboard ?? defaults.watchClipboardText,
+    watchClipboardImage: preferences.watchClipboardImage ?? watchClipboard ?? defaults.watchClipboardImage,
+    watchClipboardFiles: preferences.watchClipboardFiles ?? watchClipboard ?? defaults.watchClipboardFiles,
   };
 }

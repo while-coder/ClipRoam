@@ -17,6 +17,10 @@ export class CaptureService {
     if (clipboardPlatform.monitoringAvailable) {
       await this.session.ownAsync(clipboardPlatform.subscribe(({scope, capture}) => {
         if (scope !== profileName(this.session.accountKey) || this.session.signal.aborted) return;
+        const preferences = this.session.preferences;
+        const enabled = capture.data.kind === "text" ? preferences.watchClipboardText
+          : capture.data.kind === "image" ? preferences.watchClipboardImage : preferences.watchClipboardFiles;
+        if (!enabled) return;
         void this.capture(capture.data, capture.id).catch((error) => {
           if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`);
         });
@@ -27,7 +31,9 @@ export class CaptureService {
   }
 
   async updateWatch(): Promise<void> {
-    await clipboardPlatform.watch(profileName(this.session.accountKey),this.session.preferences.watchClipboard);
+    const preferences = this.session.preferences;
+    const kinds = { text: preferences.watchClipboardText, image: preferences.watchClipboardImage, files: preferences.watchClipboardFiles };
+    await clipboardPlatform.watch(profileName(this.session.accountKey), kinds.text || kinds.image || kinds.files, kinds);
   }
 
   capture(data: ClipboardData, captureId?: string): Promise<void> {

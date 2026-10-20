@@ -255,12 +255,11 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       ...accountPreferences,
       // 自动上传档位不能超过服务器单文件上限：登录响应带回，随偏好持久化。
       autoUploadLimitMb: DEFAULT_AUTO_UPLOAD_LIMIT_MB,
-      autoReceiveClipboard: sameArchive
-        ? accountPreferences.autoReceiveClipboard
-        : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
-      watchClipboard: sameArchive
-        ? accountPreferences.watchClipboard
-        : DEFAULT_WATCH_CLIPBOARD,
+      autoReceiveClipboardText: sameArchive ? accountPreferences.autoReceiveClipboardText : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+      autoReceiveClipboardImage: sameArchive ? accountPreferences.autoReceiveClipboardImage : DEFAULT_AUTO_RECEIVE_CLIPBOARD,
+      watchClipboardText: sameArchive ? accountPreferences.watchClipboardText : DEFAULT_WATCH_CLIPBOARD,
+      watchClipboardImage: sameArchive ? accountPreferences.watchClipboardImage : DEFAULT_WATCH_CLIPBOARD,
+      watchClipboardFiles: sameArchive ? accountPreferences.watchClipboardFiles : DEFAULT_WATCH_CLIPBOARD,
       excludePatterns: sameArchive
         ? accountPreferences.excludePatterns
         : [...DEFAULT_EXCLUDE_PATTERNS],

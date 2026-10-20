@@ -11,8 +11,8 @@ import "./styles.css";
 defineProps<{ currentUsername: string }>();
 const {
     autostartEnabled, autostartLoading, autostartLoaded, autostartError,
-    isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboard,
-    watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
+    isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboardText, autoReceiveClipboardImage,
+    watchClipboardText, watchClipboardImage, watchClipboardFiles, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
     bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,
@@ -54,30 +54,50 @@ async function openDebugTools(): Promise<void> {
       </SCard>
       <SCard title="剪贴板漫游">
         <p class="settings-section-desc">{{ isMobile
-          ? "开启监听后自动记录本机剪贴板文本，也可点击“读取当前剪贴板”导入；其他设备的内容同步到历史，点按文本即可复制。"
+          ? "点击“读取当前剪贴板”导入文字；其他设备的内容同步到历史，点按文字即可复制。"
           : "本机复制的内容自动记入历史并同步；其他设备复制的内容可直接更新本机剪贴板。" }}</p>
-        <label v-if="platformCapabilities.clipboardMonitoring" class="setting-switch" for="watch-clipboard">
-          <span class="setting-switch-copy">
-            <strong>监听剪贴板</strong>
-            <small>关闭后本机复制不再自动记入历史，只接收其他设备同步过来的内容。</small>
-          </span>
-          <SSwitch
-            id="watch-clipboard"
-            v-model:value="watchClipboard"
-            :disabled="savingSettings"
-          />
-        </label>
-        <label v-if="!isMobile" class="setting-switch" for="auto-receive-clipboard">
-          <span class="setting-switch-copy">
-            <strong>自动接收剪贴板</strong>
-            <small>支持文本、富文本和图片；文件与文件夹只同步到历史，需手动选择粘贴。</small>
-          </span>
-          <SSwitch
-            id="auto-receive-clipboard"
-            v-model:value="autoReceiveClipboard"
-            :disabled="savingSettings"
-          />
-        </label>
+        <fieldset v-if="platformCapabilities.clipboardMonitoring" class="clipboard-settings-group">
+          <legend>监听剪贴板</legend>
+          <label class="setting-switch" for="watch-clipboard-text">
+            <span class="setting-switch-copy">
+              <strong>文字</strong>
+              <small>自动记录本机复制的文字和富文本并同步。</small>
+            </span>
+            <SSwitch id="watch-clipboard-text" v-model:value="watchClipboardText" :disabled="savingSettings" />
+          </label>
+          <label v-if="platformCapabilities.imageClipboard" class="setting-switch" for="watch-clipboard-image">
+            <span class="setting-switch-copy">
+              <strong>截图</strong>
+              <small>自动记录本机复制的截图和图片并同步。</small>
+            </span>
+            <SSwitch id="watch-clipboard-image" v-model:value="watchClipboardImage" :disabled="savingSettings" />
+          </label>
+          <label v-if="platformCapabilities.fileClipboard" class="setting-switch" for="watch-clipboard-files">
+            <span class="setting-switch-copy">
+              <strong>文件</strong>
+              <small>自动记录本机复制的文件和文件夹并同步。</small>
+            </span>
+            <SSwitch id="watch-clipboard-files" v-model:value="watchClipboardFiles" :disabled="savingSettings" />
+          </label>
+        </fieldset>
+        <fieldset v-if="!isMobile" class="clipboard-settings-group">
+          <legend>自动接收剪贴板</legend>
+          <label class="setting-switch" for="auto-receive-clipboard-text">
+            <span class="setting-switch-copy">
+              <strong>文字</strong>
+              <small>将其他设备复制的文字和富文本自动写入本机剪贴板。</small>
+            </span>
+            <SSwitch id="auto-receive-clipboard-text" v-model:value="autoReceiveClipboardText" :disabled="savingSettings" />
+          </label>
+          <label v-if="platformCapabilities.imageClipboard" class="setting-switch" for="auto-receive-clipboard-image">
+            <span class="setting-switch-copy">
+              <strong>截图</strong>
+              <small>将其他设备复制的截图和图片自动写入本机剪贴板。</small>
+            </span>
+            <SSwitch id="auto-receive-clipboard-image" v-model:value="autoReceiveClipboardImage" :disabled="savingSettings" />
+          </label>
+        </fieldset>
+        <p v-if="!isMobile" class="settings-section-desc">文件与文件夹只同步到历史，需手动选择粘贴。以上设置点击保存后生效。</p>
       </SCard>
       <SCard title="文件同步">
         <p class="settings-section-desc">配置当前设备普通文件的自动上传大小上限。截图等剪贴板图片按服务器独立上限自动上传。</p>

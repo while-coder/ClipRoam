@@ -259,16 +259,35 @@ pub(crate) fn native_read_clipboard(
 ) -> Result<Option<ClipboardData>, String> {
     Ok(read(&app, text_only)?.map(|(data, _)| data))
 }
+#[derive(Deserialize)]
+pub(crate) struct ClipboardWatchOptions {
+    text: bool,
+    image: bool,
+    files: bool,
+}
+
+impl ClipboardWatchOptions {
+    fn allows(&self, data: &ClipboardData) -> bool {
+        match data {
+            ClipboardData::Text { .. } => self.text,
+            ClipboardData::Image { .. } => self.image,
+            ClipboardData::Files { .. } => self.files,
+        }
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) fn native_watch_clipboard(
     app: AppHandle,
     state: State<'_, ClipboardState>,
     scope: String,
     enabled: bool,
+    kinds: Option<ClipboardWatchOptions>,
 ) -> Result<(), String> {
     // Mobile clipboard access must follow an explicit user action, even when
     // an existing account still has clipboard monitoring enabled.
     let enabled = enabled && !cfg!(any(target_os = "android", target_os = "ios"));
+    let kinds = kinds.unwrap_or(ClipboardWatchOptions { text: true, image: true, files: true });
     let mut monitor = state.monitor.lock().map_err(|e| e.to_string())?;
     if !enabled && monitor.as_ref().is_some_and(|(active, _)| active != &scope) {
         return Ok(());
@@ -304,7 +323,10 @@ pub(crate) fn native_watch_clipboard(
             match if skip { Ok(None) } else { read(&app, false) } {
                 Ok(Some((data, signature))) => {
                     if let Ok(mut previous) = state.signature.lock() {
-                        if *previous != signature {
+                        // Disabled kinds must never be persisted in the capture inbox.
+                        if !kinds.allows(&data) {
+                            *previous = signature;
+                        } else if *previous != signature {
                             let id = uuid::Uuid::new_v4().to_string();
                             let capture = Capture {
                                 id: id.clone(),

@@ -1,4 +1,4 @@
-import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite,
+import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, ClipboardWatchOptions,
   FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getEnvironmentInfo } from "@cliproam/ui/device-info";
@@ -69,7 +69,7 @@ export class NativeRust implements NativePlatform {
     const encoded = payload.kind === "image" ? {kind:"image",data:bytesToBase64(payload.bytes)} : payload;
     return this.invoke("native_write_clipboard", {payload:encoded,synthesize});
   }
-  watchClipboard(scope: string, enabled: boolean): Promise<void> { return this.invoke("native_watch_clipboard", {scope,enabled}); }
+  watchClipboard(scope: string, enabled: boolean, kinds?: ClipboardWatchOptions): Promise<void> { return this.invoke("native_watch_clipboard", {scope,enabled,kinds}); }
   async pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles> {
     // getDeviceInfo runs before mounting the app. Open synchronously from the
     // tap so WebKit retains the user gesture required by its file input.

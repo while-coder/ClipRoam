@@ -21,9 +21,12 @@ export type SyncConfig = {
 /** 账号偏好：跟随历史档案存储，换账号登录互不污染。 */
 export type AccountPreferences = {
   autoUploadLimitMb: number;
-  autoReceiveClipboard: boolean;
-  /** 是否监听本机剪贴板（自动捕获复制内容进历史）；关闭后仅接收同步内容。 */
-  watchClipboard: boolean;
+  autoReceiveClipboardText: boolean;
+  autoReceiveClipboardImage: boolean;
+  /** 自动捕获复制内容进历史，文件选项包含文件夹。 */
+  watchClipboardText: boolean;
+  watchClipboardImage: boolean;
+  watchClipboardFiles: boolean;
   excludePatterns: string[];
   /** 服务器下发的单文件存储上限（MB），连接及配置变更时刷新。 */
   serverMaxFileMb: number;

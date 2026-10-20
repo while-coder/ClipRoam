@@ -12,8 +12,11 @@ export function useRustSettings() {
   const { isMobile, platformCapabilities } = usePlatform();
   const preferences = getSettingsPreferences();
   const autoUploadLimitMb = ref(Math.min(preferences.autoUploadLimitMb, preferences.serverMaxFileMb));
-  const autoReceiveClipboard = ref(preferences.autoReceiveClipboard);
-  const watchClipboard = ref(preferences.watchClipboard);
+  const autoReceiveClipboardText = ref(preferences.autoReceiveClipboardText);
+  const autoReceiveClipboardImage = ref(preferences.autoReceiveClipboardImage);
+  const watchClipboardText = ref(preferences.watchClipboardText);
+  const watchClipboardImage = ref(preferences.watchClipboardImage);
+  const watchClipboardFiles = ref(preferences.watchClipboardFiles);
   const excludePatternsInput = ref(preferences.excludePatterns.join("\n"));
   const serverMaxFileMb = computed(() => getSettingsPreferences().serverMaxFileMb);
   watch(serverMaxFileMb, (max) => { autoUploadLimitMb.value = Math.min(autoUploadLimitMb.value, max); });
@@ -134,8 +137,11 @@ export function useRustSettings() {
       preferences: {
         ...getSettingsPreferences(),
         autoUploadLimitMb: autoUploadLimitMb.value,
-        autoReceiveClipboard: autoReceiveClipboard.value,
-        watchClipboard: watchClipboard.value,
+        autoReceiveClipboardText: autoReceiveClipboardText.value,
+        autoReceiveClipboardImage: autoReceiveClipboardImage.value,
+        watchClipboardText: watchClipboardText.value,
+        watchClipboardImage: watchClipboardImage.value,
+        watchClipboardFiles: watchClipboardFiles.value,
         excludePatterns: [...new Set(excludePatternsInput.value.split("\n").map(value => value.trim()).filter(Boolean))],
       },
       beforeSave: async () => {
@@ -163,8 +169,8 @@ export function useRustSettings() {
   }
   return {
     autostartEnabled, autostartLoading, autostartLoaded, autostartError,
-    isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboard,
-    watchClipboard, excludePatternsInput, recordingQuickPasteShortcut, busy,
+    isMobile, platformCapabilities, autoUploadLimitMb, autoReceiveClipboardText, autoReceiveClipboardImage,
+    watchClipboardText, watchClipboardImage, watchClipboardFiles, excludePatternsInput, recordingQuickPasteShortcut, busy,
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
     bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,

@@ -43,6 +43,7 @@ const currentServer = computed(() => {
 
 <template>
     <SModal
+      class="settings-modal"
       :show="true"
       title="本机偏好"
       width="820px"

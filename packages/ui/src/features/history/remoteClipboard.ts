@@ -17,10 +17,18 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
   const session = getAccountSession();
   const config = clientSessionManager.getActiveConfig();
   const client = clientSessionManager.getConnection();
+  let kind: "text" | "image" | "files" | undefined;
+  const receiveEnabled = () => {
+    const preferences = clientSessionManager.getActivePreferences();
+    if (kind === "text") return preferences.autoReceiveClipboardText;
+    if (kind === "image") return preferences.autoReceiveClipboardImage;
+    if (kind === "files") return false;
+    return preferences.autoReceiveClipboardText || preferences.autoReceiveClipboardImage;
+  };
   if (
     isMobile.value
     || !platformCapabilities.value.automaticPaste
-    || !clientSessionManager.getActivePreferences().autoReceiveClipboard
+    || !receiveEnabled()
     || !session
     || !client
   ) return;
@@ -30,9 +38,10 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
   try {
     // Push supplies the same identity/revision pair as a manifest page.
     const [entry] = await session.history.fetchHistoryInfo([manifestEntry]);
-    if (!entry || entry.kind === "files") return;
+    if (!entry) return;
+    kind = entry.kind;
     let localEntry = entry;
-    if (clientSessionManager.getActiveConfig() !== config || !clientSessionManager.getActivePreferences().autoReceiveClipboard) return;
+    if (clientSessionManager.getActiveConfig() !== config || !receiveEnabled()) return;
     if (entry.kind === "image") localEntry = await ensureLocalFiles(localEntry, session);
 
     // A newer remote activation or a real local copy wins while an image is
@@ -41,7 +50,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
       activationRevision !== session.state.remoteActivationRevision
       || startingLocalRevision !== session.state.localClipboardRevision
       || clientSessionManager.getActiveConfig() !== config
-      || !clientSessionManager.getActivePreferences().autoReceiveClipboard
+      || !receiveEnabled()
     ) return;
     await session.capture.writeEntry(localEntry.id);
   } catch (error) {
@@ -49,7 +58,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
       !session.signal.aborted
       && activationRevision === session.state.remoteActivationRevision
       && clientSessionManager.getActiveConfig() === config
-      && clientSessionManager.getActivePreferences().autoReceiveClipboard
+      && receiveEnabled()
     ) {
       showNotification({ message: `自动接收剪贴板失败：${errorMessage(error)}`, tone: "error" });
     }

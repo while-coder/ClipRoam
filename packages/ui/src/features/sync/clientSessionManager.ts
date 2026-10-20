@@ -6,7 +6,7 @@ import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
 import { decodeDevice } from "../../platform/deviceInfo";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
-import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
+import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences, normalizeAccountPreferences } from "../../config";
 import { isMobile, showNotification } from "../../platform/runtime";
 import { getServerUrls } from "./authApi";
 import { applyServerSettings } from "./serverSettings";
@@ -73,7 +73,7 @@ export class ClientSessionManager {
     if (!config?.username) return defaultAccountPreferences();
     const key = archiveKeyFor(config);
     const stored = await new AccountDatabase(key).get<Partial<AccountPreferences>>("settings", "preferences");
-    return { ...defaultAccountPreferences(), ...stored };
+    return normalizeAccountPreferences(stored);
   };
 
   persistAccountPreferences = async (preferences: AccountPreferences): Promise<void> => {

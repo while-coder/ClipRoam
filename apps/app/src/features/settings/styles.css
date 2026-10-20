@@ -1,3 +1,18 @@
+.clipboard-settings-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.clipboard-settings-group legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+}
 .setting-switch {
   display: flex;
   align-items: center;
