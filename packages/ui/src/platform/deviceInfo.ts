@@ -1,4 +1,31 @@
 import type { DeviceInfo } from "./native";
+import type { Device as WireDevice } from "@cliproam/protocol";
+import type { Device } from "../types";
+
+/** The server treats deviceInfo as opaque text; decoding belongs to the client. */
+export function decodeDevice(device: WireDevice): Device {
+  let info: Record<string, unknown> = {};
+  try {
+    const value: unknown = JSON.parse(device.deviceInfo);
+    if (value && typeof value === "object" && !Array.isArray(value)) info = value as Record<string, unknown>;
+  } catch {
+    // One unreadable payload must not hide the device or break the device list.
+  }
+  const details: Partial<DeviceInfo> = {};
+  for (const key of ["deviceAlias", "deviceName", "deviceModel", "cpu", "osType", "osVersion", "appVersion", "architecture", "username", "language", "timeZone", "systemLocale"] as const) {
+    if (typeof info[key] === "string") details[key] = info[key];
+  }
+  if (typeof info.memoryTotalBytes === "number" && Number.isSafeInteger(info.memoryTotalBytes) && info.memoryTotalBytes > 0) {
+    details.memoryTotalBytes = info.memoryTotalBytes;
+  }
+  return {
+    ...details,
+    ...device,
+    name: details.deviceAlias?.trim() || (typeof info.name === "string" ? info.name.trim() : "") || details.deviceName || device.id,
+    // Existing stored payloads used platform before native DeviceInfo was serialized directly.
+    platform: details.osType || (typeof info.platform === "string" ? info.platform : "未知"),
+  };
+}
 
 /** Read live browser/WebView settings; OS-specific information comes from Rust. */
 export function getEnvironmentInfo(): Pick<DeviceInfo, "language" | "timeZone"> {

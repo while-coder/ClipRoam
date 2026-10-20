@@ -104,9 +104,9 @@ async function loadDeviceIdentity(): Promise<void> {
 
   try {
     const identity = await session.start(() => getDeviceIdentity());
-    savedDeviceAlias.value = identity.deviceAlias;
-    deviceAliasInput.value = identity.deviceAlias;
-    systemDeviceName.value = identity.systemDeviceName;
+    savedDeviceAlias.value = identity.deviceInfo.deviceAlias ?? "";
+    deviceAliasInput.value = identity.deviceInfo.deviceAlias ?? "";
+    systemDeviceName.value = identity.deviceInfo.deviceName;
   } catch {
     systemDeviceName.value = "";
   }
@@ -129,7 +129,7 @@ async function saveSettings(options: {preferences?: AccountPreferences; beforeSa
   session.own(() => controller.abort());
   settingsError.value = "";
   try {
-    // 别名变化先落 device.json，再走 HTTP 立即上报服务器。
+    // 别名变化先保存到 deviceInfo，再走 HTTP 立即上报服务器。
     const deviceAlias = deviceAliasInput.value.trim();
     if (deviceAlias !== savedDeviceAlias.value) {
       await saveDeviceAlias(deviceAlias);

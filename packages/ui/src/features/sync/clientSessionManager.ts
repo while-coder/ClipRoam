@@ -4,6 +4,7 @@ import { DeviceListResponseSchema, ServerMessageSchema, type ClientMessage, type
 import { AccountSession, archiveKeyFor, activeView, accountStateRef, getAccountSession, replaceAccountSession } from "../../accountSession";
 import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
+import { decodeDevice } from "../../platform/deviceInfo";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
 import { showNotification } from "../../platform/runtime";
@@ -106,7 +107,7 @@ export class ClientSessionManager {
   #rememberSessionDevices = (session: AccountSession, devices: Device[]): void => {
     session.state.devicesById.value = {
       ...session.state.devicesById.value,
-      ...Object.fromEntries(devices.map((device) => [device.id, device])),
+      ...Object.fromEntries(devices.map((device) => [device.id, decodeDevice(device)])),
     };
   };
 
@@ -136,7 +137,7 @@ export class ClientSessionManager {
       const client: SessionConnection = new SessionConnection(httpUrl, webSocketUrl, config.sessionToken, device, {
         onConnected: guard((value) => this.#setConnectionState(session, value)),
         onDevices: guard((devices) => {
-          session.state.devicesById.value = Object.fromEntries(devices.map((device) => [device.id, device]));
+          session.state.devicesById.value = Object.fromEntries(devices.map((device) => [device.id, decodeDevice(device)]));
         }),
         onDevicePresence: guard((device) => this.#rememberSessionDevices(session, [device])),
         onEntry: guard(() => session.history.invalidate()),

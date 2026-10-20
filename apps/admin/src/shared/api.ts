@@ -10,7 +10,7 @@ export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
 export type TransferOverrides = Partial<TransferSettings>;
 export type UserTransferSettings = { transfer: TransferSettings; overrides: TransferOverrides; defaults: TransferSettings; customized: boolean };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
-export type AdminDevice = { id: string; name: string; platform: string; osVersion: string; appVersion: string; lastOnlineAt: string | null; online: boolean };
+export type AdminDevice = { id: string; deviceInfo: string; name: string; platform: string; osVersion: string; appVersion: string; lastOnlineAt: string | null; online: boolean };
 export type AdminFile = { fileId: string; size: number; stored: boolean; createdAt: string };
 export type FileStats = { count: number; storedCount: number; storedBytes: number };
 
@@ -55,8 +55,23 @@ export async function resetUserPassword(userId: string, password: string): Promi
 }
 
 export async function fetchUserDevices(userId: string): Promise<AdminDevice[]> {
-  const result = await request<{ devices: AdminDevice[] }>(`users/${userId}/devices`);
-  return result.devices;
+  type StoredDevice = Omit<AdminDevice, "name" | "platform" | "osVersion" | "appVersion">;
+  const result = await request<{ devices: StoredDevice[] }>(`users/${userId}/devices`);
+  return result.devices.map((device) => {
+    let info: Record<string, unknown> = {};
+    try {
+      const value: unknown = JSON.parse(device.deviceInfo);
+      if (value && typeof value === "object" && !Array.isArray(value)) info = value as Record<string, unknown>;
+    } catch { /* Keep device actions available even if its metadata is unreadable. */ }
+    const text = (key: string): string => typeof info[key] === "string" ? info[key] : "";
+    return {
+      ...device,
+      name: text("deviceAlias").trim() || text("name") || text("deviceName") || device.id,
+      platform: text("osType") || text("platform") || "未知",
+      osVersion: text("osVersion") || "未知",
+      appVersion: text("appVersion") || "未知",
+    };
+  });
 }
 
 export async function deleteUserDevice(userId: string, deviceId: string): Promise<void> {

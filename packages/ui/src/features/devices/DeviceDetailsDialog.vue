@@ -13,7 +13,7 @@ const status = computed(() => !props.connected || props.device.online === undefi
   <SModal :show="true" title="设备详细信息" width="560px"
     @update:show="(value: boolean) => { if (!value) emit('close') }">
     <dl class="device-info">
-      <div><dt>设备名字</dt><dd>{{ device.name }} <STag v-if="currentDevice" type="info" size="small">当前设备</STag></dd></div>
+      <div><dt>设备别名</dt><dd>{{ device.deviceAlias || '未设置' }} <STag v-if="currentDevice" type="info" size="small">当前设备</STag></dd></div>
       <div><dt>系统设备名</dt><dd>{{ device.deviceName || '未知' }}</dd></div>
       <div><dt>设备状态</dt><dd><span class="device-status" :class="{ online: connected && device.online === true, offline: connected && device.online === false }"><span class="status-dot" aria-hidden="true" />{{ status }}</span></dd></div>
       <div><dt>设备型号</dt><dd>{{ device.deviceModel || '未知' }}</dd></div>

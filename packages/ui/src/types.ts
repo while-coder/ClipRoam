@@ -1,10 +1,14 @@
 import type {
   ClipboardEntry,
   ClipboardKind,
-  Device,
+  Device as WireDevice,
 } from "@cliproam/protocol";
 
-export type { ClipboardEntry, ClipboardKind, Device };
+import type { DeviceInfo } from "./platform/native";
+
+export type { ClipboardEntry, ClipboardKind };
+/** Device metadata is decoded only in the frontend. */
+export type Device = WireDevice & Partial<DeviceInfo> & { name: string; platform: string };
 
 /** 会话凭证：全局唯一，决定激活哪个账号档案。 */
 export type SyncConfig = {

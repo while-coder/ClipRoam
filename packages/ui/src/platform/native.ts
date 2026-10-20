@@ -4,6 +4,9 @@ import type { FileStat, SaveTarget } from "./files";
 import type { Ref } from "vue";
 
 export type DeviceInfo = {
+  /** 用户设置的别名；为空时显示系统设备名。 */
+  deviceAlias?: string;
+  /** 系统设备名。 */
   deviceName: string;
   /** Hardware model reported by the OS; omitted when unavailable. */
   deviceModel?: string;

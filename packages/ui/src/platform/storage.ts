@@ -1,7 +1,8 @@
 import { base64ToBytes, bytesToBase64 } from "../utils";
 import { applicationDatabase } from "./database";
-import { native } from "./native";
-import type { Device, SyncConfig } from "../types";
+import { native, type DeviceInfo } from "./native";
+import type { Device } from "@cliproam/protocol";
+import type { SyncConfig } from "../types";
 
 /** Application storage for encrypted login configuration and device identity. */
 const CONFIG_KEY = "cliproam.connection.v1";
@@ -119,75 +120,32 @@ export async function writeLoginConfig(config: SyncConfig | null): Promise<void>
   ]);
 }
 
-type StoredDeviceIdentity = { deviceId: string; deviceAlias: string | null };
-
-type DeviceIdentity = {
-  deviceId: string;
-  /** 用户设置的别名；空串表示未设置。 */
-  deviceAlias: string;
-  systemDeviceName: string;
-  cpu: string;
-  architecture?: string;
-  username?: string;
-  language: string;
-  timeZone?: string;
-  systemLocale?: string;
-  deviceModel?: string;
-  memoryTotalBytes?: number;
-  osType: string;
-  osVersion: string;
-  appVersion: string;
-};
+type DeviceIdentity = { deviceId: string; deviceInfo: DeviceInfo };
 
 export async function getDeviceIdentity(): Promise<DeviceIdentity> {
-  // Identity/alias are persisted in IndexedDB; native OS display information stays live.
-  let identity = await applicationDatabase.get<StoredDeviceIdentity | null>("meta", "device");
-  if (!identity) {
-    identity = { deviceId: crypto.randomUUID(), deviceAlias: null };
-    await applicationDatabase.put("meta", "device", identity);
-  }
   const info = await native.getDeviceInfo();
-  return {
-    deviceId: identity.deviceId,
-    deviceAlias: identity.deviceAlias?.trim() ?? "",
-    systemDeviceName: info.deviceName,
-    cpu: info.cpu,
-    architecture: info.architecture,
-    username: info.username,
-    language: info.language,
-    timeZone: info.timeZone,
-    systemLocale: info.systemLocale,
-    deviceModel: info.deviceModel,
-    memoryTotalBytes: info.memoryTotalBytes,
-    osType: info.osType,
-    osVersion: info.osVersion,
-    appVersion: info.appVersion,
-  };
+  let identity: DeviceIdentity;
+  // 旧配置的顶层别名在读取时收进 deviceInfo，之后只保存统一结构。
+  await applicationDatabase.update<DeviceIdentity & { deviceAlias?: string | null }>("meta", "device", (stored) => {
+    identity = {
+      deviceId: stored?.deviceId ?? crypto.randomUUID(),
+      deviceInfo: { ...info, deviceAlias: stored?.deviceInfo?.deviceAlias ?? stored?.deviceAlias?.trim() ?? "" },
+    };
+    return identity;
+  });
+  return identity!;
 }
 
 export async function getDevice(): Promise<Device> {
   const identity = await getDeviceIdentity();
-  return {
-    id: identity.deviceId,
-    name: identity.deviceAlias || identity.systemDeviceName,
-    deviceName: identity.systemDeviceName,
-    cpu: identity.cpu,
-    architecture: identity.architecture,
-    username: identity.username,
-    language: identity.language,
-    timeZone: identity.timeZone,
-    systemLocale: identity.systemLocale,
-    deviceModel: identity.deviceModel,
-    memoryTotalBytes: identity.memoryTotalBytes,
-    platform: identity.osType,
-    osVersion: identity.osVersion,
-    appVersion: identity.appVersion,
-  };
+  return { id: identity.deviceId, deviceInfo: JSON.stringify(identity.deviceInfo) };
 }
 
 export async function saveDeviceAlias(alias: string): Promise<void> {
   const value = alias.trim();
   if ([...value].length > 80) throw new Error("设备别名不能超过 80 个字符");
   await getDeviceIdentity();
-  await applicationDatabase.update<StoredDeviceIdentity | null>("meta", "device", (identity) => identity ? { ...identity, deviceAlias: value || null } : undefined);
+  await applicationDatabase.update<DeviceIdentity>("meta", "device", (identity) => identity
+    ? { ...identity, deviceInfo: { ...identity.deviceInfo, deviceAlias: value } }
+    : undefined);
 }

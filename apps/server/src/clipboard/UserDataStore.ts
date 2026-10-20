@@ -3,7 +3,6 @@ import {
   ClipboardEntrySchema,
   FileInfoSchema,
   ImageInfoSchema,
-  DeviceSchema,
   entryContents,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -158,28 +157,13 @@ export class UserDataStore {
   }
 
   upsertDevice(device: Device): void {
-    const deviceInfo = {
-      name: device.name,
-      deviceModel: device.deviceModel,
-      deviceName: device.deviceName,
-      cpu: device.cpu,
-      architecture: device.architecture,
-      username: device.username,
-      language: device.language,
-      timeZone: device.timeZone,
-      systemLocale: device.systemLocale,
-      memoryTotalBytes: device.memoryTotalBytes,
-      platform: device.platform,
-      osVersion: device.osVersion,
-      appVersion: device.appVersion,
-    };
     this.#database.prepare(`
       INSERT INTO devices (device_id, device_info, last_online_at)
       VALUES (?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         device_info = excluded.device_info,
         last_online_at = COALESCE(devices.last_online_at, excluded.last_online_at)
-    `).run(device.id, JSON.stringify(deviceInfo), new Date().toISOString());
+    `).run(device.id, device.deviceInfo, new Date().toISOString());
   }
 
   recordDeviceOnline(deviceId: string): string {
@@ -200,20 +184,17 @@ export class UserDataStore {
       | { device_info: string; last_online_at: string | null }
       | undefined;
     if (!row) return undefined;
-    const result = DeviceSchema.safeParse({ ...JSON.parse(row.device_info), id: deviceId });
-    return result.success ? { ...result.data, lastOnlineAt: row.last_online_at } : undefined;
+    return { id: deviceId, deviceInfo: row.device_info, lastOnlineAt: row.last_online_at };
   }
 
   #listDeviceRows(): Device[] {
     const rows = this.#database.prepare("SELECT device_id, device_info, last_online_at FROM devices ORDER BY last_online_at DESC, device_id")
       .all() as Array<{ device_id: string; device_info: string; last_online_at: string | null }>;
-    return rows.flatMap(({ device_id, device_info, last_online_at }) => {
-      const result = DeviceSchema.safeParse({
-        ...JSON.parse(device_info),
-        id: device_id,
-      });
-      return result.success ? [{ ...result.data, lastOnlineAt: last_online_at }] : [];
-    });
+    return rows.map(({ device_id, device_info, last_online_at }) => ({
+      id: device_id,
+      deviceInfo: device_info,
+      lastOnlineAt: last_online_at,
+    }));
   }
 
   // Removing a device leaves its account-owned clipboard history intact.

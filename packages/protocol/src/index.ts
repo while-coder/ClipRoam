@@ -101,20 +101,8 @@ export const ClipboardManifestEntrySchema = z.object({
 
 export const DeviceSchema = z.object({
   id: z.string(),
-  name: z.string().min(1).max(80),
-  deviceModel: z.string().trim().min(1).max(256).optional(),
-  deviceName: z.string().max(256).optional(),
-  cpu: z.string().max(512).optional(),
-  architecture: z.string().max(80).optional(),
-  username: z.string().max(256).optional(),
-  language: z.string().max(80).optional(),
-  timeZone: z.string().max(80).optional(),
-  systemLocale: z.string().max(80).optional(),
-  memoryTotalBytes: z.number().int().positive().safe().optional(),
-  platform: z.string().min(1).max(40),
-  osVersion: z.string().min(1).max(80).default("未知"),
-  // 旧版本客户端不上报应用版本，缺省时按未知处理，避免历史设备行解析失败被丢弃。
-  appVersion: z.string().min(1).max(80).default("未知"),
+  // Opaque client-owned data. The server stores and returns it unchanged.
+  deviceInfo: z.string(),
   // Server-owned fields; older clients and local device identity may omit them.
   online: z.boolean().optional(),
   lastOnlineAt: z.string().datetime().nullable().optional(),
