@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { errorMessage, formatAge, formatExactDateTime } from "../../utils";
+import { errorMessage, formatExactDateTime } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Monitor, MonitorSmartphone, RefreshCw, Smartphone, Trash2 } from "lucide-vue-next";
+import DeviceDetailsDialog from "./DeviceDetailsDialog.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import { activeAccountSession } from "../../accountSession";
@@ -15,6 +16,8 @@ const { connected, devicesById } = clientSessionManager;
 defineProps<{ currentTime: number }>();
 
 const currentDeviceId = ref("");
+const selectedDeviceId = ref("");
+const selectedDevice = computed(() => devicesById.value[selectedDeviceId.value]);
 const loading = ref(false);
 const refreshError = ref("");
 const removingDeviceId = ref("");
@@ -86,6 +89,7 @@ async function removeDevice(device: Device): Promise<void> {
 }
 
 watch([activeAccountSession, connected], () => { void refresh(); }, { immediate: true });
+watch(activeAccountSession, () => { selectedDeviceId.value = ""; });
 onMounted(async () => {
   try {
     const identity = await getDeviceIdentity();
@@ -118,12 +122,19 @@ onBeforeUnmount(() => { disposed = true; });
         <div class="device-heading">
           <span class="kind-icon"><component :is="deviceIcon(device)" :size="18" aria-hidden="true" /></span>
           <div class="device-name">
-            <h2>{{ device.name }}</h2>
+            <h2><button type="button" class="device-name-button" :aria-label="`查看设备 ${device.name} 的详细信息`" aria-haspopup="dialog" @click="selectedDeviceId = device.id">{{ device.name }}</button></h2>
             <STag v-if="device.id === currentDeviceId" type="info" size="small">当前设备</STag>
           </div>
-          <span class="device-status" :class="{ online: connected && device.online === true }">
-            <span class="status-dot" aria-hidden="true" />{{ statusText(device) }}
-          </span>
+          <div class="device-presence">
+            <span class="device-status" :class="{ online: connected && device.online === true, offline: connected && device.online === false }">
+              <span class="status-dot" aria-hidden="true" />{{ statusText(device) }}
+            </span>
+            <span v-if="!connected || device.online !== true" class="device-date">
+              最后在线
+              <time v-if="device.lastOnlineAt" :datetime="device.lastOnlineAt">{{ formatExactDateTime(device.lastOnlineAt) }}</time>
+              <span v-else>暂无记录</span>
+            </span>
+          </div>
           <button v-if="currentDeviceId && device.id !== currentDeviceId" type="button" class="device-remove"
             :disabled="!!removingDeviceId || !connected || !activeAccountSession?.client"
             :aria-label="removingDeviceId === device.id ? `正在处理设备 ${device.name}` : `移除设备 ${device.name}`"
@@ -134,23 +145,18 @@ onBeforeUnmount(() => { disposed = true; });
           </button>
         </div>
         <dl class="device-details">
+          <div><dt>设备型号</dt><dd>{{ device.deviceModel || '未知' }}</dd></div>
           <div><dt>系统 / 浏览器</dt><dd>{{ device.platform }} · {{ device.osVersion || '未知' }}</dd></div>
           <div><dt>应用版本</dt><dd>{{ device.appVersion || '未知' }}</dd></div>
-          <div class="device-last-online">
-            <dt>最后在线时间</dt>
-            <dd v-if="connected && device.online === true">当前在线</dd>
-            <dd v-else-if="device.lastOnlineAt">
-              <time :datetime="device.lastOnlineAt">{{ formatExactDateTime(device.lastOnlineAt) }}</time>
-              <span class="device-age">{{ formatAge(device.lastOnlineAt, currentTime) }}</span>
-            </dd>
-            <dd v-else>暂无记录</dd>
-          </div>
           <div class="device-id"><dt>设备 ID</dt><dd>{{ device.id }}</dd></div>
         </dl>
       </article>
       <SEmpty v-if="!devices.length">{{ loading ? '正在获取设备列表…' : refreshError ? '设备列表暂不可用，请点击刷新重试' : '暂无设备，登录同一账号的设备会显示在这里' }}</SEmpty>
     </section>
   </WorkspacePage>
+
+  <DeviceDetailsDialog v-if="selectedDevice" :device="selectedDevice" :connected="connected"
+    :current-device="selectedDevice.id === currentDeviceId" @close="selectedDeviceId = ''" />
 </template>
 
 <style scoped>
@@ -161,14 +167,21 @@ onBeforeUnmount(() => { disposed = true; });
 .device-heading .kind-icon { width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
 .device-name { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .device-name h2 { margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
-.device-status { display: flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--color-secondary-text); font-size: 12px; }
-.device-status.online { color: var(--color-accent); }
+.device-name-button { display: block; max-width: 100%; padding: 4px 0; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; touch-action: manipulation; text-decoration: none; text-underline-offset: 3px; }
+.device-name-button:hover { background: var(--sui-bg-hover); text-decoration: underline; }
+.device-name-button:active { background: var(--sui-bg-active); }
+.device-name-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.device-presence { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; min-width: 0; }
+.device-status { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--sui-bg-hover); color: var(--color-secondary-text); font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.device-status.online { color: var(--color-accent); border-color: currentColor; }
+.device-status.offline .status-dot { background: transparent; box-shadow: inset 0 0 0 1px currentColor; }
+.device-date { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; color: var(--color-secondary-text); font-size: 12px; line-height: 1.5; }
+.device-date time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .status-dot { width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
-.device-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1.5fr); gap: 4px 16px; margin: 8px 0 0; font-size: 13px; line-height: 1.5; }
+.device-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, .7fr); gap: 4px 16px; margin: 8px 0 0; font-size: 13px; line-height: 1.5; }
 .device-details > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .device-details dt { flex-shrink: 0; color: var(--color-secondary-text); font-size: 12px; }
 .device-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.device-age { display: inline-block; margin-left: 8px; color: var(--color-secondary-text); font-size: 12px; }
 .device-id { grid-column: 1 / -1; }
 .device-id dd { color: var(--color-secondary-text); font-family: ui-monospace, monospace; font-size: 12px; }
 .device-error { color: var(--sui-error); font-size: 13px; line-height: 1.6; }
@@ -179,13 +192,14 @@ onBeforeUnmount(() => { disposed = true; });
 .device-remove:disabled { opacity: .4; cursor: default; }
 @media (pointer: coarse) {
   .device-remove { width: 44px; height: 44px; }
+  .device-name-button { min-height: 44px; min-width: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .device-remove { transition: none; }
 }
 @media (max-width: 760px) {
   .device-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
-  .device-last-online { grid-column: 1 / -1; }
+  .device-presence { flex-direction: column; align-items: flex-end; }
 }
 @media (max-width: 480px) {
   .device-list { padding: 12px; }

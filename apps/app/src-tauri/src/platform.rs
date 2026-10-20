@@ -4,6 +4,11 @@ use crate::{app::NotificationPayload, clipboard::RichText, platforms::implementa
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+/// Total physical memory in bytes; unavailable readings are omitted.
+pub(crate) fn read_memory_total_bytes() -> Option<u64> {
+    implementation::read_memory_total_bytes().filter(|bytes| *bytes > 0)
+}
+
 pub(crate) fn autostart_is_enabled() -> Result<bool, String> {
     implementation::autostart_is_enabled()
 }
@@ -143,4 +148,15 @@ pub(crate) fn create_directory(
 }
 pub(crate) fn remove_file(app: &AppHandle, path: &str) -> Result<(), String> {
     implementation::remove_file(app, path)
+}
+
+pub(crate) fn read_device_model() -> Option<String> {
+    implementation::read_device_model().and_then(|model| {
+        let model = model.trim_matches('\0').trim();
+        if model.is_empty() {
+            None
+        } else {
+            Some(model.to_string())
+        }
+    })
 }

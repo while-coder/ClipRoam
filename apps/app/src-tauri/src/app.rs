@@ -196,6 +196,8 @@ fn read_device_name() -> String {
 pub(crate) fn native_get_device_info(app: AppHandle) -> Result<DeviceInfo, String> {
     Ok(DeviceInfo {
         device_name: read_device_name(),
+        device_model: platform::read_device_model(),
+        memory_total_bytes: platform::read_memory_total_bytes(),
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "未知".to_string()),
         os_type: tauri_plugin_os::platform().to_string(),
         os_version: tauri_plugin_os::version().to_string(),
@@ -223,6 +225,10 @@ fn read_username() -> Option<String> {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeviceInfo {
     device_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_total_bytes: Option<u64>,
     cpu: String,
     os_type: String,
     os_version: String,

@@ -126,6 +126,14 @@ type DeviceIdentity = {
   /** 用户设置的别名；空串表示未设置。 */
   deviceAlias: string;
   systemDeviceName: string;
+  cpu: string;
+  architecture?: string;
+  username?: string;
+  language: string;
+  timeZone?: string;
+  systemLocale?: string;
+  deviceModel?: string;
+  memoryTotalBytes?: number;
   osType: string;
   osVersion: string;
   appVersion: string;
@@ -143,6 +151,14 @@ export async function getDeviceIdentity(): Promise<DeviceIdentity> {
     deviceId: identity.deviceId,
     deviceAlias: identity.deviceAlias?.trim() ?? "",
     systemDeviceName: info.deviceName,
+    cpu: info.cpu,
+    architecture: info.architecture,
+    username: info.username,
+    language: info.language,
+    timeZone: info.timeZone,
+    systemLocale: info.systemLocale,
+    deviceModel: info.deviceModel,
+    memoryTotalBytes: info.memoryTotalBytes,
     osType: info.osType,
     osVersion: info.osVersion,
     appVersion: info.appVersion,
@@ -154,6 +170,15 @@ export async function getDevice(): Promise<Device> {
   return {
     id: identity.deviceId,
     name: identity.deviceAlias || identity.systemDeviceName,
+    deviceName: identity.systemDeviceName,
+    cpu: identity.cpu,
+    architecture: identity.architecture,
+    username: identity.username,
+    language: identity.language,
+    timeZone: identity.timeZone,
+    systemLocale: identity.systemLocale,
+    deviceModel: identity.deviceModel,
+    memoryTotalBytes: identity.memoryTotalBytes,
     platform: identity.osType,
     osVersion: identity.osVersion,
     appVersion: identity.appVersion,

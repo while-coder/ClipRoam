@@ -160,6 +160,15 @@ export class UserDataStore {
   upsertDevice(device: Device): void {
     const deviceInfo = {
       name: device.name,
+      deviceModel: device.deviceModel,
+      deviceName: device.deviceName,
+      cpu: device.cpu,
+      architecture: device.architecture,
+      username: device.username,
+      language: device.language,
+      timeZone: device.timeZone,
+      systemLocale: device.systemLocale,
+      memoryTotalBytes: device.memoryTotalBytes,
       platform: device.platform,
       osVersion: device.osVersion,
       appVersion: device.appVersion,

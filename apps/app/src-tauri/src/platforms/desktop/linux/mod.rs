@@ -1,5 +1,8 @@
 //! Linux 平台实现：arboard 剪贴板 + wtype/ydotool/xdotool 合成 Ctrl+V。
 
+mod device_info;
+pub(crate) use device_info::{read_device_model, read_memory_total_bytes};
+
 mod autostart;
 pub(crate) use autostart::{autostart_is_enabled, autostart_set_enabled};
 

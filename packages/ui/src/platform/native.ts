@@ -5,6 +5,10 @@ import type { Ref } from "vue";
 
 export type DeviceInfo = {
   deviceName: string;
+  /** Hardware model reported by the OS; omitted when unavailable. */
+  deviceModel?: string;
+  /** Total physical memory in bytes; omitted when unavailable. */
+  memoryTotalBytes?: number;
   cpu: string;
   /** Native OS type, or browser name for Web/PWA/extensions. */
   osType: string;

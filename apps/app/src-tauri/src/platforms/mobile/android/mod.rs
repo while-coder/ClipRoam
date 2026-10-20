@@ -1,4 +1,7 @@
 //! Android OS document access.
+
+mod device_info;
+pub(crate) use device_info::{read_device_model, read_memory_total_bytes};
 pub(crate) use super::{autostart_is_enabled, autostart_set_enabled};
 pub(crate) use super::{
     open_data_directory, read_clipboard_files, read_clipboard_image, read_clipboard_text,
