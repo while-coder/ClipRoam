@@ -266,6 +266,9 @@ pub(crate) fn native_watch_clipboard(
     scope: String,
     enabled: bool,
 ) -> Result<(), String> {
+    // Mobile clipboard access must follow an explicit user action, even when
+    // an existing account still has clipboard monitoring enabled.
+    let enabled = enabled && !cfg!(any(target_os = "android", target_os = "ios"));
     let mut monitor = state.monitor.lock().map_err(|e| e.to_string())?;
     if !enabled && monitor.as_ref().is_some_and(|(active, _)| active != &scope) {
         return Ok(());
