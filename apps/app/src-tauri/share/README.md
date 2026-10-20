@@ -19,7 +19,7 @@ share/
 
 Android 的 `ShareActivity` 接收 `SEND` / `SEND_MULTIPLE`，将临时 URI 对应的文件复制到应用私有目录 `files/cliproam-shares/<分享ID>/`。文本和附件清单写入临时文件，再原子重命名为 `manifest.json`；提交完成后启动主 `MainActivity`。
 
-iOS 的 Share Extension 将临时附件复制到 App Group 容器的 `ShareInbox/<分享ID>/`，再原子写入 `manifest.json`。扩展沿响应链找到应用 URL 打开器，使用 `cliproam://share` 跳转主 App。主应用在 `native/ios/Info.plist` 注册该 URL Scheme；跳转未成功时，扩展提示内容已保存，用户下次打开主 App 后继续导入。该跳转方式需要在目标 iOS 版本上做真机验证。
+iOS 的 Share Extension 将临时附件复制到 App Group 容器的 `ShareInbox/<分享ID>/`，再原子写入 `manifest.json`。扩展沿响应链找到应用 URL 打开器，使用 `cliproam://share` 跳转主 App。主应用在 `native/ios/Info.plist` 注册该 URL Scheme；跳转未成功时，扩展提示内容已保存，用户需重新从分享菜单唤起主 App 后继续导入。该跳转方式需要在目标 iOS 版本上做真机验证。
 
 App Group 默认使用 `group.com.whilecode.cliproam`。SideStore 重签名会追加 Team ID；共用收件箱代码从各自的 `embedded.mobileprovision` 读取带该前缀的实际授权组名。主应用与分享扩展必须获得同一组的授权，安装时须保留分享扩展。此适配需要重新构建 IPA，仅刷新旧包的签名不会更新代码。
 
@@ -29,7 +29,7 @@ iOS 同时提供上方 App 区域的分享入口 `ClipRoamShare`（`com.apple.sh
 
 ## 主应用导入
 
-主应用首次挂载分享监听、回到前台或切换并初始化账号后检查收件箱。`packages/ui/src/features/shares/useShareReceiver.ts` 等待主界面登录条件满足，`importPendingShares.ts` 等待账号初始化后调用现有 `CaptureService` 导入待上传列表。
+`packages/ui/src/features/shares/useShareReceiver.ts` 等待主界面登录条件满足，`importPendingShares.ts` 等待账号初始化后调用现有 `CaptureService` 导入待上传列表。iOS 仅在收到 `cliproam://share` 唤起后读取 App Group 收件箱；普通启动、回到前台或切换账号不读取收件箱。冷启动时暂存唤起请求，直到登录和初始化完成后处理；请求读取失败后不会随前台切换反复重试，需要再次从分享入口唤起。其他平台继续在挂载监听、回到前台或账号就绪时检查收件箱。
 
 分享使用稳定的 capture ID，部分成功后重试不会重复入队。只有整个分享成功导入后，才调用 `acknowledge` 删除原生收件箱内容；失败时保留，供下次导入。原生附件先复制到账号目录，清理收件箱不影响待上传文件。
 

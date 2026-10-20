@@ -70,6 +70,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building ClipRoam")
         .run(|_app, _event| {
+            #[cfg(target_os = "ios")]
+            if let tauri::RunEvent::Opened { urls } = &_event {
+                if urls
+                    .iter()
+                    .any(|url| url.scheme() == "cliproam" && url.host_str() == Some("share"))
+                {
+                    share::request_import(_app);
+                }
+            }
             // 程序坞点击与托盘点击使用同一恢复流程，包含取消最小化及退出快捷粘贴模式。
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = _event {

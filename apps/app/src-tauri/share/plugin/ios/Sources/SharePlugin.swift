@@ -5,7 +5,6 @@ import UIKit
 import UniformTypeIdentifiers
 #else
 import Tauri
-import WebKit
 #endif
 
 struct SharedItem: Codable {
@@ -181,13 +180,13 @@ class ShareViewController: UIViewController {
         while let current = responder {
             if let application = current as? UIApplication {
                 application.open(url, options: [:]) { opened in
-                    self.finish(opened ? nil : "内容已保存，请打开 ClipRoam 后自动导入。")
+                    self.finish(opened ? nil : "内容已保存，请重新从分享菜单打开 ClipRoam 以导入。")
                 }
                 return
             }
             responder = current.next
         }
-        finish("内容已保存，请打开 ClipRoam 后自动导入。")
+        finish("内容已保存，请重新从分享菜单打开 ClipRoam 以导入。")
     }
 
     private func fail(_ error: Error) {
@@ -214,8 +213,6 @@ private struct AcknowledgeArgs: Decodable {
 }
 
 private final class SharePlugin: Plugin {
-    private var observer: NSObjectProtocol?
-
     @objc func deviceMetadata(_ invoke: Invoke) {
         var result: JSObject = ["deviceBrand": "Apple"]
         if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
@@ -223,18 +220,6 @@ private final class SharePlugin: Plugin {
             result["appBuildNumber"] = build
         }
         invoke.resolve(result)
-    }
-
-    override func load(webview: WKWebView) {
-        observer = NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.trigger("share-received", data: [:] as JSObject)
-        }
-    }
-
-    deinit {
-        if let observer = observer { NotificationCenter.default.removeObserver(observer) }
     }
 
     @objc func pending(_ invoke: Invoke) throws {

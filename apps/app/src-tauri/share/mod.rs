@@ -2,6 +2,20 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
+#[cfg(target_os = "ios")]
+static SHARE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "ios")]
+pub(crate) fn request_import(app: &AppHandle) {
+    use tauri::Emitter;
+    // Keep the request until login/initialization allows the frontend to import.
+    // This also covers a cold launch before its event listener is registered.
+    SHARE_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Err(error) = app.emit("cliproam://share-received", ()) {
+        log::warn!("Failed to notify share receiver: {error}");
+    }
+}
+
 #[cfg(mobile)]
 use crate::files::{ensure_parent_dir, scope_directory};
 #[cfg(mobile)]
@@ -22,6 +36,12 @@ pub(crate) fn native_pending_shares(
     app: AppHandle,
     scope: String,
 ) -> Result<Vec<NativeShare>, String> {
+    // Ordinary launches and account/focus changes must not access App Groups.
+    // Consume before reading so a failed receipt is not retried on every launch.
+    #[cfg(target_os = "ios")]
+    if !SHARE_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(Vec::new());
+    }
     #[cfg(mobile)]
     {
         let root = scope_directory(&app, &scope)?.join("share");

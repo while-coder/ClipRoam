@@ -7,7 +7,7 @@ import { native } from "../../platform/native";
 import { decodeDevice } from "../../platform/deviceInfo";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
 import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences } from "../../config";
-import { showNotification } from "../../platform/runtime";
+import { isMobile, showNotification } from "../../platform/runtime";
 import { getServerUrls } from "./authApi";
 import { applyServerSettings } from "./serverSettings";
 import { createSyncRequester, isTransientNetworkError, type SyncRequester } from "./httpClient";
@@ -93,12 +93,12 @@ export class ClientSessionManager {
     if (session.state.connected.value === value) return;
     session.state.connected.value = value;
     if (value) session.history.invalidate();
-    showNotification({ message: value ? "同步已连接" : "同步连接已断开", tone: value ? "success" : "error" });
+    if (!isMobile.value) showNotification({ message: value ? "同步已连接" : "同步连接已断开", tone: value ? "success" : "error" });
   };
 
   stop = async (): Promise<void> => {
     const session = getAccountSession();
-    if (session?.state.connected.value) showNotification({ message: "同步连接已断开", tone: "error" });
+    if (!isMobile.value && session?.state.connected.value) showNotification({ message: "同步连接已断开", tone: "error" });
     session?.dispose();
     replaceAccountSession();
     await native.quickPasteShortcut?.dispose();
