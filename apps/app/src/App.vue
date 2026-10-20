@@ -4,6 +4,9 @@ import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
 import { isNative, isQuickPaste } from "@cliproam/ui/platform";
 import UpdaterDialog from "./features/updater/UpdaterDialog.vue";
+import { useFileDropUpload } from "./features/uploads/useFileDropUpload";
+
+useFileDropUpload();
 </script>
 
 <template>
