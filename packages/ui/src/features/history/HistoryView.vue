@@ -103,6 +103,8 @@ const deleting = ref(false);
 const deleteTargets = ref<string[]>([]);
 
 function focusSearchInputEl(): void {
+  // 移动端只在用户点击搜索框时唤起键盘。
+  if (isMobile.value || mobileLayout.value) return;
   searchInput.value?.$el?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
 }
 

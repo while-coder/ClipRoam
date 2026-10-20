@@ -3,9 +3,9 @@
 <plist version="1.0">
   <dict>
     <key>CFBundleDisplayName</key>
-    <string>随心贴</string>
+    <string>ClipRoam</string>
     <key>CFBundleName</key>
-    <string>随心贴</string>
+    <string>ClipRoam</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>UIFileSharingEnabled</key>
