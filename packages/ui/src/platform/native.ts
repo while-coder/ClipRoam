@@ -55,6 +55,8 @@ export interface NativePlatform {
   showPasteWindow(): Promise<void>;
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
+  /** Native file drops; web clients use DOM drag events. */
+  onFileDrop?(handler: (files: PickedFiles) => void): Promise<Unlisten>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;

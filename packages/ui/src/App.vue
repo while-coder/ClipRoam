@@ -31,6 +31,7 @@ import {
 } from "./features/history/useEntryActions";
 import EntryDownloadToasts from "./features/downloads/EntryDownloadToasts.vue";
 import { useShareReceiver } from "./features/shares/useShareReceiver";
+import { useFileDropUpload } from "./features/pending-upload/useFileDropUpload";
 import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, provideMobileLayout } from "./platform/runtime";
 import { getDevice, readSavedAccounts, removeSavedAccounts } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
@@ -66,6 +67,8 @@ import type {
   AccountPreferences,
   SyncConfig,
 } from "./types";
+
+useFileDropUpload();
 
 watch(appName, (name) => { document.title = name; }, { immediate: true });
 

@@ -42,6 +42,13 @@ export class NativeRust implements NativePlatform {
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
     return getCurrentWindow().onFocusChanged(({payload}) => handler(payload));
   }
+  async onFileDrop(handler: (files: PickedFiles) => void): Promise<Unlisten> {
+    if (this.windowLabel !== "main" || (await this.getCapabilities()).mobile) return () => {};
+    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+    return getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "drop" && payload.paths.length) handler({ paths: payload.paths });
+    });
+  }
   constructor(private readonly invoke: Invoke = invokeRust, private readonly subscribe: Listen = listenRust) {}
   getCapabilities(): Promise<PlatformCapabilities> { return this.invoke("native_get_platform_capabilities"); }
   async getDeviceInfo(): Promise<DeviceInfo> {
