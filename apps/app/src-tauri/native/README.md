@@ -14,6 +14,8 @@
 | `linux/sync-icons.cjs` | Linux 图标生成 | 输出 32、128、256 像素 PNG。 |
 | `ios/Info.plist` | iOS 主应用的附加配置 | 维护 iOS 的语言、HTTP ATS 和局域网权限；由 `tauri.ios.conf.json` 引用。 |
 | `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
+| `ios/action-locales/` | iOS 分享面板中快捷操作的名称翻译 | 覆盖操作扩展的显示名；分享扩展沿用 `ios/locales/` 中的应用名称。两者均随 iOS 语言选择。 |
+| `ios/action-icon.svg` | iOS 快捷操作的透明单色模板图标 | `ios/sync-icons.cjs` 生成多尺寸 AppIcon 资源并同步到操作扩展。 |
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |
 | `macos/locales/` | macOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
 | `linux/linux.desktop` | Linux 桌面入口模板 | 维护启动命令、图标及本地化显示名；由 `tauri.linux.conf.json` 的 `bundle.linux.deb.desktopTemplate` 引用。 |

@@ -5,8 +5,7 @@
             android:name="com.whilecode.cliproam.share.ShareActivity"
             android:exported="true"
             android:excludeFromRecents="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="ClipRoam">
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <action android:name="android.intent.action.SEND_MULTIPLE" />

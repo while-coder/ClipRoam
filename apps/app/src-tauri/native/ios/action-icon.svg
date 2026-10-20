@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Transparent template version of ClipRoam's clipboard and sync arrows. -->
+  <g fill="none" stroke="#000" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M352 250H298a40 40 0 0 0-40 40v520a40 40 0 0 0 40 40h428a40 40 0 0 0 40-40V290a40 40 0 0 0-40-40h-54"/>
+    <path d="M432 214a80 80 0 0 1 160 0h54v108H378V214Z"/>
+    <path d="M386 440h252M386 548h198M386 656h144"/>
+    <path d="M184 460C82 562 84 700 246 734M184 460v104M184 460H80"/>
+    <path d="M840 640c102-102 100-240-62-274M840 640V536M840 640h104"/>
+  </g>
+</svg>
