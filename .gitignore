@@ -21,3 +21,6 @@ apps/app/src-tauri/share/plugin/permissions/schemas/schema.json
 apps/server/admin/
 apps/server/build/
 apps/server/debug/
+apps/pwa/public/icons/
+apps/chrome/public/icons/
+apps/firefox/public/icons/

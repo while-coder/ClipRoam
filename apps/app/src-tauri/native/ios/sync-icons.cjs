@@ -8,7 +8,7 @@ function syncIcons(apple = path.resolve(__dirname, "../../gen/apple")) {
   const icons = generateNativeIcons("ios", {
     inputs: [__filename, path.join(__dirname, "action-icon.svg")],
     // iOS uses full-bleed artwork; system masking supplies the rounded corners.
-    input: "icon-android.png",
+    input: "icon-fullbleed.png",
     generate({ generated, output, root }) {
       fs.copyFileSync(path.join(generated, "icon.png"), path.join(output, "icon.png"));
       fs.cpSync(path.join(generated, "ios"), output, { recursive: true });

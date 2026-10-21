@@ -25,7 +25,7 @@ function generateNativeIcons(platform, { inputs = [], input = "icons.json", gene
   const cli = require.resolve("@tauri-apps/cli/tauri.js", { paths: [app] });
   const source = path.join(root, "apps/icon");
   const hash = createHash("sha256").update(platform);
-  for (const file of [__filename, path.join(source, "icon.png"), path.join(source, "icon-android.png"),
+  for (const file of [__filename, path.join(source, "icon.png"), path.join(source, "icon-fullbleed.png"),
     path.join(source, "icons.json"), path.join(path.dirname(cli), "package.json"), ...inputs]) {
     hash.update(fs.readFileSync(file));
   }

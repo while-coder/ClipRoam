@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "dev": "node ../../scripts/sync-icons.js --web && vite",
+    "build": "node ../../scripts/sync-icons.js --web && vue-tsc --noEmit && vite build",
     "check": "vue-tsc --noEmit",
     "preview": "vite preview",
     "predev": "pnpm --filter @cliproam/protocol build",
