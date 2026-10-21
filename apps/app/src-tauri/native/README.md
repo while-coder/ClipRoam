@@ -13,7 +13,7 @@
 | `macos/sync-icons.cjs` | macOS 图标生成 | 输出窗口 PNG，并执行内嵌的 Swift 代码生成 Dock 和托盘图标。 |
 | `linux/sync-icons.cjs` | Linux 图标生成 | 输出 32、128、256 像素 PNG。 |
 | `ios/Info.plist` | iOS 主应用的附加配置 | 维护 iOS 的语言、HTTP ATS 和局域网权限；由 `tauri.ios.conf.json` 引用。 |
-| `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`。 |
+| `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`；准备脚本复制到主应用 target，由 Xcode 打包到应用根目录下的 `.lproj/`，不使用 Tauri 的 `bundle.resources`（会放进 `assets/`）。 |
 | `ios/action-locales/` | iOS 分享面板中快捷操作的名称翻译 | 覆盖操作扩展的显示名；分享扩展沿用 `ios/locales/` 中的应用名称。两者均随 iOS 语言选择。 |
 | `ios/action-icon.svg` | iOS 快捷操作的透明单色模板图标 | `ios/sync-icons.cjs` 生成多尺寸 AppIcon 资源并同步到操作扩展。 |
 | `macos/Info.plist` | macOS 应用的附加配置 | 维护 macOS 的语言、HTTP ATS 和局域网权限；由 `tauri.macos.conf.json` 引用。 |

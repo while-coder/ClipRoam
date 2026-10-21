@@ -10,6 +10,10 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
   const project = fs.readFileSync(path.join(apple, "project.yml"), "utf8");
   const target = project.match(/^  ([\w-]+_iOS):\s*$/m)?.[1];
   if (!target) throw new Error("找不到 Tauri iOS 应用 target");
+  // Tauri bundle.resources goes under assets/, where iOS cannot resolve the
+  // system display name. XcodeGen scans this target's sources for .lproj files
+  // and installs them at the app bundle root as localized resources.
+  fs.cpSync(path.join(__dirname, "locales"), path.join(apple, target), { recursive: true });
   const version = require(path.join(root, "package.json")).version;
   const buildVersion = project.match(/^\s+CFBundleVersion:\s*["']?([^\s"']+)/m)?.[1] ?? version;
   const appGroup = { "com.apple.security.application-groups": ["group.com.whilecode.cliproam"] };
