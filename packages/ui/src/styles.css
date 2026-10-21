@@ -853,3 +853,8 @@ button:focus-visible, [role="button"]:focus-visible {
 @media (orientation: landscape) and (max-height: 520px) {
   .mobile-app .workspace-titlebar { min-height: 40px; }
 }
+
+/* iOS 会在小字号输入框聚焦时放大页面；同时覆盖 teleport 弹窗和 kit 的 scoped 尺寸样式。 */
+@media (max-width: 768px), (pointer: coarse) {
+  input, textarea, select { font-size: max(16px, 1em) !important; }
+}
