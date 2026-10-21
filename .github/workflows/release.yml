@@ -124,7 +124,7 @@ jobs:
           notes: ${{ needs.check.outputs.notes }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STORE_TOKEN: ${{ fromJSON(secrets.BUILD_SETTINGS || '{}').STORE_TOKEN }}
+          STORE_TOKEN: ${{ fromJSON(secrets.BUILD_SIGNING_JSON || '{}').STORE_TOKEN }}
 
   publish-manifest:
     needs: [check, desktop, android, ios]
