@@ -137,6 +137,10 @@ iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再�
 
 移动端分享只同步文本和文件。Kotlin 与 Swift 接收并保存分享，随后打开主 App；主界面登录和初始化完成后，将内容导入现有待上传列表。分享入口不执行鉴权或后台上传。目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。
 
+### SideStore 源
+
+在 SideStore / LiveContainer 中添加源地址：`https://raw.githubusercontent.com/while-coder/store/main/sidestore.json`。
+
 ### 常见问题
 
 **连接不上服务器**

@@ -88,6 +88,43 @@ jobs:
       build-command: pnpm tauri ios build --target aarch64 --no-sign --ci
     secrets: inherit
 
+  publish-sidestore:
+    name: Update SideStore source
+    needs: [check, ios]
+    if: ${{ !cancelled() && needs.ios.result == 'success' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-sidestore
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Read SideStore app metadata
+        env:
+          RELEASE_REPOSITORY: while-coder/ClipRoam
+          TAG: ${{ needs.check.outputs.tag }}
+        run: node apps/app/src-tauri/native/ios/sidestore-info.cjs > "$RUNNER_TEMP/cliproam-sidestore.json"
+
+      - name: Update store/sidestore.json
+        uses: while-coder/workflows/.github/actions/update-sidestore@main
+        with:
+          app-info: ${{ runner.temp }}/cliproam-sidestore.json
+          asset-name: ClipRoam_${{ needs.check.outputs.version }}_ios_unsigned.ipa
+          tag: ${{ needs.check.outputs.tag }}
+          version: ${{ needs.check.outputs.version }}
+          release-repository: while-coder/ClipRoam
+          store-repository: while-coder/store
+          notes: ${{ needs.check.outputs.notes }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORE_TOKEN: ${{ fromJSON(secrets.BUILD_SETTINGS || '{}').STORE_TOKEN }}
+
   publish-manifest:
     needs: [check, desktop, android, ios]
     if: ${{ !cancelled() && needs.desktop.result == 'success' }}
