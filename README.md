@@ -139,7 +139,7 @@ iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再�
 
 ### SideStore 源
 
-在 SideStore / LiveContainer 中添加源地址：`https://raw.githubusercontent.com/while-coder/store/main/sidestore.json`。
+在 SideStore / LiveContainer 中添加源地址：`https://while-coder.github.io/store/sidestore.json`。
 
 ### 常见问题
 

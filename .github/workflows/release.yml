@@ -121,6 +121,7 @@ jobs:
           version: ${{ needs.check.outputs.version }}
           release-repository: while-coder/ClipRoam
           store-repository: while-coder/store
+          source-url: https://while-coder.github.io/store/sidestore.json
           notes: ${{ needs.check.outputs.notes }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
