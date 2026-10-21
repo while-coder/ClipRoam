@@ -23,6 +23,8 @@ iOS 的 Share Extension 将临时附件复制到 App Group 容器的 `ShareInbox
 
 App Group 默认使用 `group.com.whilecode.cliproam`。SideStore 重签名会追加 Team ID；共用收件箱代码从各自的 `embedded.mobileprovision` 读取带该前缀的实际授权组名。主应用与分享扩展必须获得同一组的授权，安装时须保留分享扩展。此适配需要重新构建 IPA，仅刷新旧包的签名不会更新代码。
 
+`native/ios/prepare.cjs` 为主应用添加 Xcode 最后的构建脚本阶段：仅在设备构建关闭正式签名时，在两个扩展嵌入后，使用各 target 生成的 entitlements 为三个可执行文件做无需证书的 ad-hoc 签名，并验证签名和 App Group 声明。主程序关闭归档时后续的 strip，避免移除临时签名；扩展在各自构建和嵌入完成后签名。随后由 Tauri 正常打包 IPA，无需解包重打包。SideStore 需要从 IPA 中读取这些声明后申请 App Group 授权；源 JSON 的 `appPermissions` 不能替代可执行文件中的 entitlements。此临时签名仍需安装工具重签名才能安装到设备。
+
 iOS 同时提供上方 App 区域的分享入口 `ClipRoamShare`（`com.apple.share-services`）和下方操作列表的「保存到 ClipRoam」`ClipRoamAction`（`com.apple.ui-services`）。两个扩展复用同一份 Swift 源码、内容类型规则及 App Group 收件箱；后续导入流程相同。安装新 IPA 时需保留两个扩展，可在系统分享面板的「编辑操作」中启用操作入口。
 
 图片与其他文件都按原文件保存，不在分享入口转换、哈希或上传。没有提交清单的目录不会被导入。

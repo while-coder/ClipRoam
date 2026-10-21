@@ -133,7 +133,7 @@ PWA 默认使用相对资源路径；部署到子目录时通过 `PWA_BASE` 指�
 
 `pnpm sync:versions` 同步所有客户端包版本、Chrome/Firefox manifest 和 App 的 Rust 版本。`pnpm sync:icons` 从 `apps/icon/icon.png` 生成 App、共享界面、PWA、Chrome、Firefox 和 VS Code 图标；Android、iOS 和 PWA 自适应图标使用全画布的 `apps/icon/icon-fullbleed.png`，由系统裁切；PWA manifest、插件 manifest 和页面 favicon 均引用生成的图标。PWA、Chrome 和 Firefox 的 `public/icons/` 为生成目录，不纳入 Git，开发和构建前会自动生成（仅运行 Web 图标同步）。原生图标按平台输出到 `apps/app/src-tauri/native/{windows,macos,linux,android,ios}/icons/`，不纳入 Git；开发、打包和 Cargo 构建前会自动生成，详见[原生目录说明](apps/app/src-tauri/native/README.md)。
 
-iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置 Share Extension、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和扩展 `com.whilecode.cliproam.share` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。分享入口不保存登录凭据，登录和上传由主应用处理。未签名 IPA 的构建不验证设备上的共享容器权限。
+iOS 在 macOS 上使用 `pnpm --filter @cliproam/app ios:init` 初始化，再使用 `ios:dev` / `ios:build`。初始化会重新配置分享扩展、操作扩展、App Group 和图标，CI 使用相同入口。主应用 `com.whilecode.cliproam` 和两个扩展 `.share`、`.action` 的签名配置都需启用 `group.com.whilecode.cliproam` App Group；安装时签名工具必须保留此权限。`prepare.cjs` 为关闭正式签名的设备构建添加 Xcode 临时签名及权限检查阶段，在 Tauri 打包 IPA 前将权限声明写入主程序和两个扩展，再交给 SideStore 或 iLoader 重签名安装。分享入口不保存登录凭据，登录和上传由主应用处理。构建检查不替代设备上的共享容器权限验证。
 
 移动端分享只同步文本和文件。Kotlin 与 Swift 接收并保存分享，随后打开主 App；主界面登录和初始化完成后，将内容导入现有待上传列表。分享入口不执行鉴权或后台上传。目录与构建关系见[移动端分享说明](apps/app/src-tauri/share/README.md)。
 

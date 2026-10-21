@@ -17,6 +17,34 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
     { name: "ClipRoamShare", identifier: "share", title: "ClipRoam", point: "com.apple.share-services" },
     { name: "ClipRoamAction", identifier: "action", title: "Save to ClipRoam", point: "com.apple.ui-services" },
   ];
+  // XcodeGen puts this after embedding extensions. Sign executables only: Xcode
+  // may still copy Swift libraries/resources before Tauri packages the archive.
+  const sideloadSigning = {
+    name: "Preserve SideStore App Group entitlements",
+    shell: "/bin/bash",
+    basedOnDependencyAnalysis: false,
+    showEnvVars: false,
+    script: [
+      "set -euo pipefail",
+      'if [ "${PLATFORM_NAME:-}" != "iphoneos" ] || [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ]; then exit 0; fi',
+      'app="${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"',
+      'check="${DERIVED_FILE_DIR}/cliproam-sideload-entitlements.plist"',
+      'sign_executable() {',
+      '  local bundle="$1" entitlements="$2" executable expected actual',
+      '  executable="$bundle/$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle/Info.plist")"',
+      '  /usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$entitlements" "$executable"',
+      '  /usr/bin/codesign --verify --strict "$executable"',
+      '  /usr/bin/codesign --display --entitlements :- "$executable" > "$check"',
+      '  expected=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$entitlements")',
+      '  actual=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$check")',
+      '  if [ "$actual" != "$expected" ]; then echo "error: App Group entitlements mismatch: $bundle" >&2; exit 1; fi',
+      '  echo "Verified App Group entitlements: $bundle"',
+      '}',
+      ...extensions.map(({ name }) =>
+        `sign_executable "$app/PlugIns/${name}.appex" "$SRCROOT/${name}/${name}.entitlements"`),
+      `sign_executable "$app" "$SRCROOT/${target}/${target}.entitlements"`,
+    ].join("\n"),
+  };
   for (const { name: extension } of extensions) {
     const source = path.join(apple, extension);
     fs.mkdirSync(source, { recursive: true });
@@ -37,9 +65,14 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
     targets: {
       [target]: {
         settings: { base: { ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon",
+          // Archive stripping runs after build phases and would remove the
+          // main executable's temporary signature. Extensions are signed only
+          // after their own archive processing and embedding have completed.
+          STRIP_INSTALLED_PRODUCT: "NO", ENABLE_USER_SCRIPT_SANDBOXING: "NO",
           OTHER_LDFLAGS: ["$(inherited)", "-framework", "UniformTypeIdentifiers"] } },
         entitlements: { path: `${target}/${target}.entitlements`, properties: appGroup },
         dependencies: extensions.map(({ name }) => ({ target: name, embed: true })),
+        postBuildScripts: [sideloadSigning],
       },
       ...Object.fromEntries(extensions.map(({ name: extension, identifier, title, point }) => [extension, {
         type: "app-extension", platform: "iOS", deploymentTarget: "14.0",
