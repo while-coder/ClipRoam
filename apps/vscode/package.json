@@ -16,7 +16,8 @@
   "contributes": {
     "commands": [
       { "command": "cliproam.open", "title": "%open.title%", "category": "%displayName%", "icon": "public/cliproam-icon.png" },
-      { "command": "cliproam.captureSelection", "title": "%captureSelection.title%", "category": "%displayName%" }
+      { "command": "cliproam.captureSelection", "title": "%captureSelection.title%", "category": "%displayName%" },
+      { "command": "cliproam.captureFile", "title": "%captureFile.title%", "category": "%displayName%" }
     ],
     "menus": {
       "title": [
@@ -24,6 +25,12 @@
       ],
       "editor/title": [
         { "command": "cliproam.open", "group": "navigation@1" }
+      ],
+      "editor/title/context": [
+        { "command": "cliproam.captureFile", "when": "resourceScheme == file", "group": "9_cliproam" }
+      ],
+      "explorer/context": [
+        { "command": "cliproam.captureFile", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "9_cliproam" }
       ],
       "editor/context": [
         { "command": "cliproam.captureSelection", "when": "editorHasSelection", "group": "9_cliproam" }

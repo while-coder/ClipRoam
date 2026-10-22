@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, stat } from "node:fs/promises";
 import { hostname, platform, release, arch, homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { VscodeShareInbox } from "./shareInbox";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -121,6 +121,14 @@ export function activate(context: vscode.ExtensionContext): void {
       case "shares.acknowledge":
         if (typeof value !== "string") throw new Error("待处理文本标识无效");
         return shares.acknowledge(value);
+      case "shares.readFile": {
+        if (!value || typeof value !== "object") throw new Error("文件参数无效");
+        const { id, path } = value as Record<string, unknown>;
+        if (typeof id !== "string" || typeof path !== "string" || !shares.hasFile(id, path)) throw new Error("待处理文件不存在");
+        const info = await stat(path);
+        if (!info.isFile()) throw new Error("请选择文件");
+        return { name: basename(path), lastModified: info.mtimeMs, data: (await readFile(path)).toString("base64") };
+      }
       case "device.info": return {
         systemLocale: vscode.env.language,
         deviceName: `${hostname()} (VS Code)`, osType: platform(), osVersion: release(), architecture: arch(),
@@ -135,9 +143,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  function command(name: string, action: () => Promise<unknown>): void {
-    context.subscriptions.push(vscode.commands.registerCommand(name, async () => {
-      try { await action(); }
+  function command(name: string, action: (...args: unknown[]) => Promise<unknown>): void {
+    context.subscriptions.push(vscode.commands.registerCommand(name, async (...args: unknown[]) => {
+      try { await action(...args); }
       catch (error) { void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)); }
     }));
   }
@@ -148,6 +156,19 @@ export function activate(context: vscode.ExtensionContext): void {
     const current = await open();
     await current.webview.postMessage({ type: "sharesChanged" });
     void vscode.window.showInformationMessage("选中文本已暂存，进入主界面后自动加入历史");
+  });
+  command("cliproam.captureFile", async (resource, selected) => {
+    const resources = Array.isArray(selected) && selected.length ? selected : [resource ?? vscode.window.activeTextEditor?.document.uri];
+    const paths: string[] = [];
+    for (const uri of resources) {
+      if (!(uri instanceof vscode.Uri) || uri.scheme !== "file") throw new Error("请选择本机文件");
+      if (!(await stat(uri.fsPath)).isFile()) throw new Error("请选择文件，不支持文件夹");
+      paths.push(uri.fsPath);
+    }
+    await shares.enqueueFiles([...new Set(paths)]);
+    const current = await open();
+    await current.webview.postMessage({ type: "sharesChanged" });
+    void vscode.window.showInformationMessage("文件已暂存，进入主界面后自动加入历史");
   });
   context.subscriptions.push({ dispose: () => panel?.dispose() });
 }

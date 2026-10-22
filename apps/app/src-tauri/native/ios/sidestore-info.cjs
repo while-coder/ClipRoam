@@ -16,14 +16,11 @@ function readAppInfo() {
     [...plist.matchAll(/<key>(NS[^<]*UsageDescription[^<]*)<\/key>\s*<string>([\s\S]*?)<\/string>/g)]
       .map(([, key, value]) => [key, decodeXml(value)]),
   );
-  const repository = process.env.RELEASE_REPOSITORY || "while-coder/ClipRoam";
-  const tag = process.env.TAG || "main";
   return {
     name: config.productName,
     bundleIdentifier: ios.identifier ?? config.identifier,
     developerName: "while-coder",
     localizedDescription: "保存剪贴板历史，在自己的多台设备之间同步文字、图片和文件。",
-    iconURL: `https://raw.githubusercontent.com/${repository}/${encodeURIComponent(tag)}/apps/icon/icon.png`,
     version,
     // Tauri defaults CFBundleVersion to the app version; CI uses no --build-number.
     buildVersion: ios.bundle?.iOS?.bundleVersion ?? config.bundle?.iOS?.bundleVersion ?? version,

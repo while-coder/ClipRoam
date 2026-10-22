@@ -1,5 +1,6 @@
 {
   "displayName": "ClipRoam",
-  "open.title": "Open Clipboard History",
-  "captureSelection.title": "Add Selection to History"
+  "open.title": "ClipRoam: Open Clipboard History",
+  "captureSelection.title": "ClipRoam: Add Selected Text",
+  "captureFile.title": "ClipRoam: Add File"
 }

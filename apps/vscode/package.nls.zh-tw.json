@@ -1,5 +1,6 @@
 {
   "displayName": "随心贴",
-  "open.title": "開啟剪貼簿歷史",
-  "captureSelection.title": "新增選取文字至歷史"
+  "open.title": "随心贴：開啟剪貼簿歷史",
+  "captureSelection.title": "随心贴：新增選取文字",
+  "captureFile.title": "随心贴：新增檔案"
 }

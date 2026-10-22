@@ -107,15 +107,13 @@ jobs:
           package-manager-cache: false
 
       - name: Read SideStore app metadata
-        env:
-          RELEASE_REPOSITORY: while-coder/ClipRoam
-          TAG: ${{ needs.check.outputs.tag }}
         run: node apps/app/src-tauri/native/ios/sidestore-info.cjs > "$RUNNER_TEMP/cliproam-sidestore.json"
 
       - name: Update store/sidestore.json
         uses: while-coder/workflows/.github/actions/update-sidestore@main
         with:
           app-info: ${{ runner.temp }}/cliproam-sidestore.json
+          icon-path: apps/icon/icon.png
           asset-name: ClipRoam_${{ needs.check.outputs.version }}_ios_unsigned.ipa
           tag: ${{ needs.check.outputs.tag }}
           version: ${{ needs.check.outputs.version }}
