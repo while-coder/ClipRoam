@@ -70,6 +70,7 @@ async function dismiss() {
 
 <template>
   <SModal
+    nested
     :show="updateVisible"
     :title="title"
     width="640px"
