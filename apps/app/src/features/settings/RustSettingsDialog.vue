@@ -16,7 +16,7 @@ const {
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
     bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,
-    updaterSupported, updateStatus, updateStatusText, checkForUpdate, openAppDataDirectory, saveSettings,
+    updaterSupported, updateStatus, updateStatusText, checkForUpdate, requestInstallPermission, openAppDataDirectory, saveSettings,
 } = useRustSettings();
 
 const debugToolsSupported = ref(false);
@@ -239,6 +239,10 @@ async function openDebugTools(): Promise<void> {
         <p class="about-update-status" :class="{ 'update-error': updateStatus === 'error' }" :role="updateStatus === 'error' ? 'alert' : 'status'" aria-live="polite">
           {{ updateStatusText }}
         </p>
+        <!-- Android：缺少「安装未知应用」权限时引导用户去系统设置开启，返回后可重新检查。 -->
+        <SButton v-if="updateStatus === 'permission'" class="about-update-button" @click="requestInstallPermission">
+          去开启安装权限
+        </SButton>
       </SCard>
       <SCard v-if="debugToolsSupported" title="调试">
         <p class="settings-section-desc">查看页面、控制台和本地存储。</p>

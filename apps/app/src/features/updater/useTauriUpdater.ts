@@ -1,7 +1,11 @@
 import { computed, ref, shallowRef, type ComputedRef, type Ref, type ShallowRef } from 'vue'
-import { isTauri } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+
+/** 与 Rust 侧 platforms/mobile/android/updater.rs 的 UPDATE_PROGRESS_EVENT 保持一致。 */
+const UPDATE_PROGRESS_EVENT = 'cliproam://update-progress'
 
 export type TauriUpdaterStatus =
   | 'idle'
@@ -10,27 +14,39 @@ export type TauriUpdaterStatus =
   | 'available'
   | 'downloading'
   | 'installed'
+  | 'permission'
   | 'error'
 
 export interface CheckForUpdateOptions {
   silent?: boolean
 }
 
-export type CheckForUpdateResult = 'available' | 'latest' | 'unsupported' | 'error'
+export type CheckForUpdateResult = 'available' | 'latest' | 'unsupported' | 'permission' | 'error'
+
+export interface AndroidUpdateInfo {
+  version: string
+  notes: string
+  url: string
+}
 
 export interface CreateTauriUpdaterOptions {
   autoCheckDelayMs?: number
   isMobileRuntime?: () => boolean
+  isAndroidRuntime?: () => boolean
   logger?: Pick<Console, 'warn'>
 }
 
 export interface TauriUpdater {
   runningInTauri: boolean
   updaterSupported: boolean
+  /** Android 走自建更新流程（下载 APK 后唤起系统安装器），桌面端走 tauri-plugin-updater。 */
+  androidUpdater: boolean
   updateStatus: Ref<TauriUpdaterStatus>
   updateStatusText: ComputedRef<string>
   updateMsg: Ref<string>
   pendingUpdate: ShallowRef<Update | null>
+  /** Android 更新包下载地址，非空表示存在待下载/安装的 Android 更新。 */
+  androidUpdateUrl: Ref<string>
   updateVersion: Ref<string>
   updateNotes: Ref<string>
   updateDownloaded: Ref<number>
@@ -41,6 +57,7 @@ export interface TauriUpdater {
   scheduleAutoCheck: (delayMs?: number) => void
   stopAutoCheck: () => void
   downloadAndInstallUpdate: () => Promise<void>
+  requestInstallPermission: () => Promise<void>
   relaunchApp: () => Promise<void>
   closePendingUpdate: () => Promise<void>
   dismissAutoUpdatePrompt: () => void
@@ -50,6 +67,10 @@ export interface TauriUpdater {
 
 function defaultIsMobileRuntime() {
   return /android|iphone|ipad|ipod/i.test(window.navigator.userAgent)
+}
+
+function defaultIsAndroidRuntime() {
+  return /android/i.test(window.navigator.userAgent)
 }
 
 function formatBytes(value: number) {
@@ -66,7 +87,11 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   const logger = options.logger ?? console
   const runningInTauri = isTauri()
   const isMobileRuntime = options.isMobileRuntime ?? defaultIsMobileRuntime
-  const updaterSupported = runningInTauri && !isMobileRuntime()
+  // 桌面端走 tauri-plugin-updater；Android 走自建的「权限检测 -> 下载 APK -> 系统安装器」
+  // 流程（iOS 无法侧载更新，保持不支持）。
+  const isAndroidRuntime = options.isAndroidRuntime ?? defaultIsAndroidRuntime
+  const isAndroid = runningInTauri && isAndroidRuntime()
+  const updaterSupported = runningInTauri && (!isMobileRuntime() || isAndroid)
   const updateStatus = ref<TauriUpdaterStatus>('idle')
   const updateMsg = ref('')
   const pendingUpdate = shallowRef<Update | null>(null)
@@ -76,6 +101,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   const updateTotal = ref<number | null>(null)
   const autoCheckDone = ref(false)
   const autoCheckDismissed = ref(false)
+  const androidUpdateUrl = ref('')
   let checkInFlight: Promise<CheckForUpdateResult> | null = null
   let autoCheckTimer: ReturnType<typeof window.setTimeout> | null = null
 
@@ -94,9 +120,14 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
       if (updateTotal.value) return `正在下载更新：${updateProgressPercent.value}%`
       return `正在下载更新：${formatBytes(updateDownloaded.value)}`
     }
-    if (updateStatus.value === 'installed') return '更新已安装，重启后生效。'
+    if (updateStatus.value === 'installed') {
+      return isAndroid ? '更新包已下载，请在系统安装提示中完成安装。' : '更新已安装，重启后生效。'
+    }
+    if (updateStatus.value === 'permission') {
+      return '需要开启「安装未知应用」权限才能检查更新。'
+    }
     if (updateStatus.value === 'error') return updateMsg.value || '检查更新失败。'
-    return '手动检查桌面端安装包更新。'
+    return isAndroid ? '手动检查 Android 安装包更新。' : '手动检查桌面端安装包更新。'
   })
 
   const showAutoUpdatePrompt = computed(
@@ -130,6 +161,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
       updateMsg.value = ''
       updateVersion.value = ''
       updateNotes.value = ''
+      androidUpdateUrl.value = ''
       resetDownloadState()
       await closePendingUpdate()
 
@@ -139,6 +171,37 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
           updateMsg.value = ''
         }
         return 'unsupported'
+      }
+
+      // Android：先检测「安装未知应用」权限，无权限时引导授权，有权限才自检。
+      if (isAndroid) {
+        updateStatus.value = 'checking'
+        try {
+          if (!(await invoke<boolean>('native_update_permission_status'))) {
+            updateStatus.value = 'permission'
+            return 'permission'
+          }
+          const info = await invoke<AndroidUpdateInfo | null>('native_update_check')
+          if (!info) {
+            updateStatus.value = 'latest'
+            return 'latest'
+          }
+          androidUpdateUrl.value = info.url
+          updateVersion.value = info.version
+          updateNotes.value = info.notes
+          updateStatus.value = 'available'
+          autoCheckDismissed.value = false
+          return 'available'
+        } catch (e) {
+          if (checkOptions.silent) {
+            updateStatus.value = 'idle'
+            logger.warn('[updater] check failed:', e)
+          } else {
+            updateStatus.value = 'error'
+            updateMsg.value = getErrorMessage(e)
+          }
+          return 'error'
+        }
       }
 
       updateStatus.value = 'checking'
@@ -187,6 +250,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   }
 
   async function downloadAndInstallUpdate() {
+    if (isAndroid) return downloadAndInstallAndroidUpdate()
     const update = pendingUpdate.value
     if (!update) return
     updateStatus.value = 'downloading'
@@ -197,6 +261,44 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
       await closePendingUpdate()
       updateStatus.value = 'installed'
       autoCheckDismissed.value = true
+    } catch (e) {
+      updateStatus.value = 'error'
+      updateMsg.value = getErrorMessage(e)
+    }
+  }
+
+  /** Android：由 Rust 下载 APK（事件上报进度），下载完成后唤起系统安装器。 */
+  async function downloadAndInstallAndroidUpdate() {
+    const url = androidUpdateUrl.value
+    if (!url) return
+    updateStatus.value = 'downloading'
+    updateMsg.value = ''
+    resetDownloadState()
+    let unlisten: (() => void) | null = null
+    try {
+      unlisten = await listen<{ downloaded: number; total: number | null }>(UPDATE_PROGRESS_EVENT, (event) => {
+        updateDownloaded.value = event.payload.downloaded
+        updateTotal.value = event.payload.total ?? null
+      })
+      const path = await invoke<string>('native_update_download', {
+        url,
+        version: updateVersion.value,
+      })
+      await invoke('native_update_install', { path })
+      updateStatus.value = 'installed'
+      autoCheckDismissed.value = true
+    } catch (e) {
+      updateStatus.value = 'error'
+      updateMsg.value = getErrorMessage(e)
+    } finally {
+      unlisten?.()
+    }
+  }
+
+  async function requestInstallPermission() {
+    updateMsg.value = ''
+    try {
+      await invoke('native_update_request_permission')
     } catch (e) {
       updateStatus.value = 'error'
       updateMsg.value = getErrorMessage(e)
@@ -233,10 +335,12 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   return {
     runningInTauri,
     updaterSupported,
+    androidUpdater: isAndroid,
     updateStatus,
     updateStatusText,
     updateMsg,
     pendingUpdate,
+    androidUpdateUrl,
     updateVersion,
     updateNotes,
     updateDownloaded,
@@ -247,6 +351,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
     scheduleAutoCheck,
     stopAutoCheck,
     downloadAndInstallUpdate,
+    requestInstallPermission,
     relaunchApp,
     closePendingUpdate,
     dismissAutoUpdatePrompt,

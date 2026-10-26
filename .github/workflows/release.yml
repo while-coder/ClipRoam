@@ -136,6 +136,34 @@ jobs:
       release-notes: ${{ needs.check.outputs.notes }}
     secrets: inherit
 
+  # 把 Android APK 写入 updater manifest 的 android 字段（见
+  # native/android/manifest-update.cjs），必须在 publish-manifest 之后，
+  # 否则会被桌面端清单生成覆盖。
+  publish-android-manifest:
+    name: Update updater manifest (android)
+    needs: [check, publish-manifest, android]
+    if: ${{ !cancelled() && needs.publish-manifest.result == 'success' && needs.android.result == 'success' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-android-manifest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Write android entry into updater manifest
+        working-directory: apps/app/src-tauri/native/android
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+          NOTES: ${{ needs.check.outputs.notes }}
+        run: node manifest-update.cjs
+
   deploy-pwa:
     needs: [check, prepare-release]
     runs-on: ubuntu-latest

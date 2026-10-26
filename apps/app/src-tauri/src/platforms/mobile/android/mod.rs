@@ -1,6 +1,7 @@
 //! Android OS document access.
 
 mod device_info;
+pub(crate) mod updater;
 pub(crate) use device_info::{read_device_market_name, read_device_model, read_memory_total_bytes};
 pub(crate) use super::{autostart_is_enabled, autostart_set_enabled};
 pub(crate) use super::{

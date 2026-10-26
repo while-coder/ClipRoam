@@ -51,7 +51,7 @@ export function useRustSettings() {
     recordingBossKey.value = false;
   });
   watch(bossKeyEnabled, () => { recordingBossKey.value = false; });
-  const { updaterSupported, updateStatus, updateStatusText, checkForUpdate } = useTauriUpdater();
+  const { updaterSupported, updateStatus, updateStatusText, checkForUpdate, requestInstallPermission } = useTauriUpdater();
   const autoUploadLimitOptions = computed(() => {
     const max = serverMaxFileMb.value;
     const standard = [10, 25, 50, 75, 100, 150, 200, 300, 500, 1000]
@@ -174,6 +174,6 @@ export function useRustSettings() {
     savingSettings, autoUploadSelectOptions, recordQuickPasteShortcut, selectQuickPasteShortcut,
     quickPasteShortcut, quickPasteShortcutRefreshing, quickPasteShortcutStatus, displayShortcut,
     bossKeyEnabled, bossKeyShortcut, bossKeyRefreshing, bossKeyStatus, recordingBossKey, recordBossKey,
-    updaterSupported, updateStatus, updateStatusText, checkForUpdate, openAppDataDirectory, saveSettings,
+    updaterSupported, updateStatus, updateStatusText, checkForUpdate, requestInstallPermission, openAppDataDirectory, saveSettings,
   };
 }

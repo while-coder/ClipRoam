@@ -5,6 +5,7 @@ mod clipboard;
 mod files;
 mod platform;
 mod platforms;
+mod updater;
 mod window_mode;
 #[cfg(desktop)]
 mod shortcuts;
@@ -71,6 +72,11 @@ pub fn run() {
             files::native_pick_files,
             share::native_pending_shares,
             share::native_ack_share,
+            updater::native_update_permission_status,
+            updater::native_update_request_permission,
+            updater::native_update_check,
+            updater::native_update_download,
+            updater::native_update_install,
         ])
         .build(tauri::generate_context!())
         .expect("error while building ClipRoam")

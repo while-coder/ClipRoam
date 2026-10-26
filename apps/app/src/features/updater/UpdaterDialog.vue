@@ -38,7 +38,7 @@ const updateErrorText = computed(() => {
   if (!updater.updaterSupported) return '当前平台暂不支持应用内更新。'
   return updateMsg.value || '检查更新失败。'
 })
-const hasPendingUpdate = computed(() => Boolean(updater.pendingUpdate.value))
+const hasPendingUpdate = computed(() => Boolean(updater.pendingUpdate.value || updater.androidUpdateUrl.value))
 const renderedUpdateNotes = computed(() => DOMPurify.sanitize(marked.parse(updateNotes.value, { async: false }) as string))
 const updateDate = computed(() => {
   const value = updater.pendingUpdate.value?.date
@@ -93,7 +93,7 @@ async function dismiss() {
           </template>
           <template v-else-if="updateStatus === 'installed'">
             <strong>安装完成</strong>
-            <p>重启应用即可使用新版本。</p>
+            <p>{{ updater.androidUpdater ? '请在系统安装提示中完成安装。' : '重启应用即可使用新版本。' }}</p>
           </template>
           <template v-else-if="updateStatus === 'error'">
             <strong>更新未能完成</strong>
@@ -137,8 +137,9 @@ async function dismiss() {
       </template>
       <SButton v-else-if="downloading" disabled>正在下载并安装…</SButton>
       <template v-else-if="updateStatus === 'installed'">
-        <SButton @click="dismiss">稍后重启</SButton>
-        <SButton type="primary" @click="updater.relaunchApp">立即重启</SButton>
+        <SButton @click="dismiss">{{ updater.androidUpdater ? '完成' : '稍后重启' }}</SButton>
+        <!-- Android 由系统安装器接管，无需应用内重启。 -->
+        <SButton v-if="!updater.androidUpdater" type="primary" @click="updater.relaunchApp">立即重启</SButton>
       </template>
       <template v-else-if="updateStatus === 'error'">
         <SButton @click="dismiss">关闭</SButton>
