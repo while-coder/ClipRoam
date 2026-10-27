@@ -3,7 +3,7 @@ import { ClipboardKind } from "@cliproam/protocol";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Copy, Download } from "lucide-vue-next";
 import { getAccountSession } from "../../accountSession";
-import { isNative, previewSource, showNotification, usePlatform } from "../../platform/runtime";
+import { previewSource, showNotification, usePlatform } from "../../platform/runtime";
 import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
@@ -28,8 +28,7 @@ const copying = ref(false);
 const { platformCapabilities } = usePlatform();
 const canCopy = computed(() => kind === ClipboardKind.Text || (kind === ClipboardKind.Image
   && platformCapabilities.value.imageClipboard
-  && (isNative || (typeof navigator.clipboard?.write === "function"
-    && typeof ClipboardItem !== "undefined" && typeof createImageBitmap === "function"))));
+  && clipboardPlatform.canWriteImage));
 let disposed = false;
 let audioUrl: string | undefined;
 onBeforeUnmount(() => {

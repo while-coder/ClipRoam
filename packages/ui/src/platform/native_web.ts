@@ -4,7 +4,7 @@ import { getBrowserInfo, getEnvironmentInfo } from "./deviceInfo";
 import type { PlatformCapabilities, NotificationPayload } from "../types";
 import type { ClipboardData, ClipboardWrite } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
-import type { DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "./native";
+import type { DeviceInfo, DirectoryEntry, DroppedFiles, NativePlatform, PickedFiles, Unlisten } from "./native";
 import { FilePickerMode } from "./native";
 
 /** Keep the native WebKit source menu and camera/file selection behavior. */
@@ -22,6 +22,10 @@ export function pickBrowserFiles(mode: FilePickerMode): Promise<File[]> {
 export class NativeWeb implements NativePlatform {
   readonly kind = "web";
   readonly clipboardMonitoring = false;
+  get canWriteImage(): boolean {
+    return typeof navigator.clipboard?.write === "function"
+      && typeof ClipboardItem !== "undefined" && typeof createImageBitmap === "function";
+  }
   readonly windowLabel = "main";
   async getAppVersion(): Promise<string> { return "web"; }
   async openExternalUrl(url: string): Promise<void> {
@@ -38,6 +42,37 @@ export class NativeWeb implements NativePlatform {
     const focus = () => handler(true), blur = () => handler(false);
     window.addEventListener("focus", focus); window.addEventListener("blur", blur);
     return () => { window.removeEventListener("focus", focus); window.removeEventListener("blur", blur); };
+  }
+  async onFileDrop(handler: (files: DroppedFiles) => void): Promise<Unlisten> {
+    const hasFiles = (event: DragEvent): boolean => Boolean(event.dataTransfer?.types.includes("Files"));
+    const dragOver = (event: DragEvent): void => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const drop = (event: DragEvent): void => {
+      if (!hasFiles(event) || !event.dataTransfer) return;
+      event.preventDefault();
+      // Snapshot entries and Files while the drag data store is readable.
+      const items = Array.from(event.dataTransfer.items).filter(item => item.kind === "file")
+        .map(item => ({ entry: item.webkitGetAsEntry?.(), file: item.getAsFile() }));
+      const fallback = Array.from(event.dataTransfer.files);
+      handler(async signal => {
+        if (!items.length) return { files: fallback };
+        const files: File[] = [];
+        for (const item of items) {
+          if (item.entry) await collectEntry(item.entry, item.entry.name, files, signal);
+          else if (item.file) files.push(item.file);
+        }
+        return { files };
+      });
+    };
+    window.addEventListener("dragover", dragOver);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", dragOver);
+      window.removeEventListener("drop", drop);
+    };
   }
   async getCapabilities(): Promise<PlatformCapabilities> { return {...BROWSER_CAPABILITIES}; }
   async getDeviceInfo(): Promise<DeviceInfo> {
@@ -126,5 +161,23 @@ export class NativeWeb implements NativePlatform {
       }
     }
     return count;
+  }
+}
+
+/** Read every directory batch; Chromium returns at most 100 entries per batch. */
+async function collectEntry(entry: FileSystemEntry, path: string, files: File[], signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  if (entry.isFile) {
+    const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
+    Object.defineProperty(file, "webkitRelativePath", { value: path });
+    files.push(file);
+  } else if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    for (;;) {
+      signal.throwIfAborted();
+      const children = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!children.length) break;
+      for (const child of children) await collectEntry(child, `${path}/${child.name}`, files, signal);
+    }
   }
 }

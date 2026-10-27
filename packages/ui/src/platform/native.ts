@@ -34,6 +34,7 @@ export type DeviceInfo = {
   systemLocale?: string;
 };
 export type PickedFiles = { paths?: string[]; files?: File[] };
+export type DroppedFiles = PickedFiles | ((signal: AbortSignal) => Promise<PickedFiles>);
 export const FilePickerMode = { File: "file", Folder: "folder" } as const;
 export type FilePickerMode = typeof FilePickerMode[keyof typeof FilePickerMode];
 export type Unlisten = () => void;
@@ -54,6 +55,7 @@ export type QuickPasteShortcutState = {
 export interface NativePlatform {
   readonly kind: "rust" | "web";
   readonly clipboardMonitoring: boolean;
+  readonly canWriteImage: boolean;
   readonly windowLabel: string;
   readonly quickPasteShortcut?: QuickPasteShortcutState;
   getAppVersion(): Promise<string>;
@@ -62,8 +64,8 @@ export interface NativePlatform {
   showPasteWindow(): Promise<void>;
   hideWindow(): Promise<void>;
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten>;
-  /** Native file drops; web clients use DOM drag events. */
-  onFileDrop?(handler: (files: PickedFiles) => void): Promise<Unlisten>;
+  /** Platform file drops; web directory enumeration is deferred until capture. */
+  onFileDrop(handler: (files: DroppedFiles) => void): Promise<Unlisten>;
   getCapabilities(): Promise<PlatformCapabilities>;
   getDeviceInfo(): Promise<DeviceInfo>;
   openAppDataDir(): Promise<void>;

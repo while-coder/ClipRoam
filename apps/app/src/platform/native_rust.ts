@@ -1,5 +1,5 @@
 import type { PlatformCapabilities, NotificationPayload, ClipboardData, ClipboardWrite, ClipboardWatchOptions,
-  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, Unlisten } from "@cliproam/ui/native";
+  FileStat, SaveTarget, DeviceInfo, DirectoryEntry, NativePlatform, PickedFiles, DroppedFiles, Unlisten } from "@cliproam/ui/native";
 import { base64ToBytes, bytesToBase64 } from "@cliproam/ui/bytes";
 import { getEnvironmentInfo } from "@cliproam/ui/device-info";
 import { pickBrowserFiles } from "@cliproam/ui/native-web";
@@ -20,6 +20,7 @@ export class NativeRust implements NativePlatform {
   private osType = "";
   readonly kind = "rust";
   readonly clipboardMonitoring = true;
+  readonly canWriteImage = true;
   readonly quickPasteShortcut = {
     shortcut: shortcuts.quickPasteShortcut,
     status: shortcuts.quickPasteShortcutStatus,
@@ -42,7 +43,7 @@ export class NativeRust implements NativePlatform {
   onFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
     return getCurrentWindow().onFocusChanged(({payload}) => handler(payload));
   }
-  async onFileDrop(handler: (files: PickedFiles) => void): Promise<Unlisten> {
+  async onFileDrop(handler: (files: DroppedFiles) => void): Promise<Unlisten> {
     if (this.windowLabel !== "main" || (await this.getCapabilities()).mobile) return () => {};
     const { getCurrentWebview } = await import("@tauri-apps/api/webview");
     return getCurrentWebview().onDragDropEvent(({ payload }) => {

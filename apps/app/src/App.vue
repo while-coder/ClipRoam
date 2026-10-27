@@ -9,12 +9,10 @@ import { native } from "@cliproam/ui/native";
 import { initializeBossKey } from "./features/settings/bossKey";
 
 onMounted(async () => {
-  if (isNative) {
-    try {
-      if ((await native.getCapabilities()).globalShortcut) await initializeBossKey();
-    } catch (error) {
-      console.warn("老板键初始化失败", error);
-    }
+  try {
+    if ((await native.getCapabilities()).globalShortcut) await initializeBossKey();
+  } catch (error) {
+    console.warn("老板键初始化失败", error);
   }
 });
 </script>

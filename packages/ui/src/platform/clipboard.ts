@@ -12,6 +12,7 @@ export type ClipboardWrite = { kind: "text"; text: string; html?: string; rtf?: 
 
 /** Clipboard operations are delegated to the selected platform implementation. */
 export const clipboardPlatform = {
+  get canWriteImage(): boolean { return native.canWriteImage; },
   monitoringAvailable: native.clipboardMonitoring,
   subscribe: (changed: (event: ClipboardEvent) => void) => native.listen("cliproam://clipboard-changed", changed),
   watch: (scope: string, enabled: boolean, kinds?: ClipboardWatchOptions): Promise<void> => native.watchClipboard(scope, enabled, kinds),

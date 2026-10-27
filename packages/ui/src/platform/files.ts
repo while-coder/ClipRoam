@@ -232,7 +232,13 @@ export class AccountFiles {
   }
 
   async export(entry: StoredEntry, target: SaveTarget, signal: AbortSignal, ensureFile?: (fileId: string) => Promise<void>): Promise<number> {
-    if (target.kind === "browserDirectory" || (!isNative && target.kind === "path")) {
+    return target.kind === "browserDirectory" || !isNative
+      ? this.exportWeb(entry, target, signal, ensureFile)
+      : this.exportNative(entry, target, signal);
+  }
+
+  private async exportWeb(entry: StoredEntry, target: SaveTarget, signal: AbortSignal, ensureFile?: (fileId: string) => Promise<void>): Promise<number> {
+    if (target.kind === "browserDirectory" || target.kind === "path") {
       const database = this.database;
       const stream = async (fileId: string): Promise<ReadableStream<Uint8Array>> => {
         signal.throwIfAborted();
@@ -259,26 +265,27 @@ export class AccountFiles {
       }
       return native.exportDirectory(target, contents(), signal);
     }
-    if (!isNative) {
-      let fileId: string, name: string;
-      if (entry.kind === "image") {
-        fileId = entry.imageInfo!.fileId;
-        name = `${safeName(entry.content)}.webp`;
-      } else {
-        const files = Object.entries(entry.fileInfo ?? {});
-        if (files.length !== 1 || !isFileNode(files[0]![1])) throw new Error("当前浏览器不支持目录保存，无法导出文件夹或多文件");
-        name = files[0]![0];
-        if (safeName(name) !== name) throw new Error("文件名称不合法");
-        fileId = files[0]![1].f;
-      }
-      const blob = await this.database.get<Blob>("blobs", fileId);
-      if (!blob) throw new Error("本机文件内容不可用");
-      signal.throwIfAborted();
-      const url = URL.createObjectURL(blob), link = document.createElement("a");
-      link.href = url; link.download = name;
-      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),60000);
-      return 1;
+    let fileId: string, name: string;
+    if (entry.kind === "image") {
+      fileId = entry.imageInfo!.fileId;
+      name = `${safeName(entry.content)}.webp`;
+    } else {
+      const files = Object.entries(entry.fileInfo ?? {});
+      if (files.length !== 1 || !isFileNode(files[0]![1])) throw new Error("当前浏览器不支持目录保存，无法导出文件夹或多文件");
+      name = files[0]![0];
+      if (safeName(name) !== name) throw new Error("文件名称不合法");
+      fileId = files[0]![1].f;
     }
+    const blob = await this.database.get<Blob>("blobs", fileId);
+    if (!blob) throw new Error("本机文件内容不可用");
+    signal.throwIfAborted();
+    const url = URL.createObjectURL(blob), link = document.createElement("a");
+    link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),60000);
+    return 1;
+  }
+
+  private async exportNative(entry: StoredEntry, target: SaveTarget, signal: AbortSignal): Promise<number> {
     const contents = entryContents(entry);
     const singles = Object.values(entry.fileInfo ?? {});
     const single = entry.kind === "image" || (singles.length === 1 && isFileNode(singles[0]!));
