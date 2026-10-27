@@ -23,7 +23,6 @@ const text = ref("");
 const source = ref("");
 const textLimit = 2 * 1024 * 1024;
 const truncated = ref(false);
-const saving = ref(false);
 const copying = ref(false);
 const { platformCapabilities } = usePlatform();
 const canCopy = computed(() => kind === ClipboardKind.Text || (kind === ClipboardKind.Image
@@ -57,13 +56,13 @@ async function copyToClipboard(): Promise<void> {
 
 async function downloadFile(): Promise<void> {
   const session = getAccountSession();
-  if (!session || saving.value) return;
-  saving.value = true;
+  if (!session) return;
   try {
     const name = props.image ? `${safeName(props.file.name)}.webp` : props.file.name;
     const target = await session.files.selectSaveTarget(true, name);
     if (!target) return;
     session.signal.throwIfAborted();
+    showNotification({ message: "已添加到下载列表", tone: "success" });
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
     const entry = await session.history.get(props.entryId);
     // Export this file alone, including when it was opened from a directory.
@@ -80,8 +79,6 @@ async function downloadFile(): Promise<void> {
     if (!session.signal.aborted && !(cause instanceof DownloadCancelledError)) {
       showNotification({ message: `下载失败：${errorMessage(cause)}`, tone: "error" });
     }
-  } finally {
-    saving.value = false;
   }
 }
 
@@ -137,7 +134,7 @@ onMounted(async () => {
       <SButton v-if="canCopy" :loading="copying" :disabled="loading || copying || !!error" @click="copyToClipboard">
         <Copy :size="15" aria-hidden="true" />复制到剪贴板
       </SButton>
-      <SButton type="primary" :loading="saving" :disabled="loading || saving" @click="downloadFile">
+      <SButton type="primary" @click="downloadFile">
         <Download :size="15" aria-hidden="true" />下载
       </SButton>
       <SButton @click="emit('close')">关闭</SButton>
