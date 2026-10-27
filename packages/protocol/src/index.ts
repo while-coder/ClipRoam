@@ -199,6 +199,12 @@ export const FileQueryRequestSchema = z.object({
 
 export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchema) });
 
+export const FileAccessRequestSchema = z.object({
+  name: z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f/\\]+$/),
+  download: z.boolean(),
+});
+export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("/files/") });
+
 // Offset pagination over entry identities: keyword filter on entry content, an
 // inclusive UTC time range, a kind filter, and a 1-based page. The client may
 // pick a page size within a bounded range (smaller responses on weak links,
@@ -289,6 +295,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     entryId: z.string(),
     size: z.number().int().nonnegative(),
     offset: z.number().int().nonnegative().optional(),
+    endOffset: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal("pong") }),
   z.object({

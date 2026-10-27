@@ -5,6 +5,7 @@ import {
   FILE_CHUNK_SIZE,
   FileIdSchema,
   FileQueryRequestSchema,
+  FileAccessRequestSchema,
   UploadBeginRequestSchema,
 } from "@cliproam/protocol";
 import type { FileQueryResponse, ServerMessage } from "@cliproam/protocol";
@@ -14,6 +15,7 @@ import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
 import { requireSessionUser } from "./SessionUser.js";
 import { parseOr400 } from "./parseRequest.js";
+import { FileAccessTokens, fileContentType, parseFileRange } from "../../files/FileAccess.js";
 
 export type FileRouteDeps = {
   uploads: Pick<UploadService, "begin" | "uploadPart">;
@@ -28,6 +30,20 @@ export type FileRouteDeps = {
 // online from a device that has it — never landing on the server's disk.
 export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): void {
   const { uploads, relays, broadcast, store } = deps;
+  const accessTokens = new FileAccessTokens();
+
+  app.post("/files/:entryId/:fileId/access", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const { entryId, fileId } = request.params as { entryId: string; fileId: string };
+    const body = parseOr400(reply, FileAccessRequestSchema, request.body, "文件访问参数无效");
+    if (!body) return reply;
+    if (!FileIdSchema.safeParse(fileId).success || !store.canReadFile(user.id, entryId, fileId)) {
+      return reply.code(404).send({ message: "文件不存在或无权访问" });
+    }
+    const access = accessTokens.issue(user.id, entryId, fileId, body.name, body.download);
+    return { path: `/files/${encodeURIComponent(entryId)}/${fileId}?access=${access}` };
+  });
 
   app.post("/upload/begin", async (request, reply) => {
     const user = requireSessionUser(request, reply);
@@ -70,9 +86,12 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   // scopes the permission check: a content id alone says nothing about who
   // may read it.
   app.get("/files/:entryId/:fileId", async (request, reply) => {
-    const user = requireSessionUser(request, reply);
-    if (!user) return reply;
     const { entryId, fileId } = request.params as { entryId: string; fileId: string };
+    const query = request.query as { access?: string };
+    const access = typeof query.access === "string" ? accessTokens.verify(query.access, entryId, fileId) : undefined;
+    if (query.access !== undefined && !access) return reply.code(401).send({ message: "文件访问链接已失效" });
+    const user = access ? { id: access.userId } : requireSessionUser(request, reply);
+    if (!user) return reply;
     if (!FileIdSchema.safeParse(fileId).success || !entryId) {
       return reply.code(400).send({ message: "下载参数无效" });
     }
@@ -81,23 +100,39 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     }
     const stored = store.files().get(fileId);
     const size = stored?.size ?? store.files().describe([fileId])[0]?.size ?? 0;
-    const rawOffset = (request.query as { offset?: string }).offset;
-    const offset = rawOffset === undefined ? 0 : Number(rawOffset);
-    if ((rawOffset !== undefined && !/^\d+$/.test(rawOffset)) || !Number.isSafeInteger(offset) || offset < 0 || offset > size) {
-      return reply.code(400).send({ message: "文件起始位置无效" });
-    }
+    const etag = `"${fileId}"`;
+    const rangeHeader = request.headers.range;
+    const useRange = rangeHeader !== undefined && (!request.headers["if-range"] || request.headers["if-range"] === etag);
+    const range = useRange ? parseFileRange(rangeHeader, size) : undefined;
+    if (range === null) return reply.code(416).header("Content-Range", `bytes */${size}`).send();
+    const offset = range?.start ?? 0;
+    const end = range?.end ?? size;
+    const partial = Boolean(range);
     const headers: Record<string, string> = {
-      "Content-Type": "application/octet-stream",
-      "Content-Length": String(size - offset),
+      "Content-Type": access && !access.download ? fileContentType(access.name) : "application/octet-stream",
+      "Content-Length": String(end - offset),
+      "Accept-Ranges": "bytes",
+      ETag: etag,
+      "Cache-Control": "private, no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox; default-src 'none'",
       // Also applies to the hijacked relay response, which bypasses Fastify hooks.
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Expose-Headers": "Content-Range",
+      "Access-Control-Expose-Headers": "Content-Range, Content-Disposition, ETag, Accept-Ranges",
     };
-    if (offset > 0 && offset < size) headers["Content-Range"] = `bytes ${offset}-${size - 1}/${size}`;
-    const status = offset > 0 && offset < size ? 206 : 200;
-    if (offset === size) return reply.headers(headers).send(Buffer.alloc(0));
+    if (access) headers["Content-Disposition"] = `${access.download ? "attachment" : "inline"}; filename="file"; filename*=UTF-8''${encodeURIComponent(access.name).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+    if (partial) headers["Content-Range"] = `bytes ${offset}-${end - 1}/${size}`;
+    const status = partial ? 206 : 200;
+    if (request.method === "HEAD") {
+      reply.hijack();
+      reply.raw.writeHead(status, headers);
+      reply.raw.end();
+      return;
+    }
+    if (offset === size) return reply.code(status).headers(headers).send(Buffer.alloc(0));
     if (stored) {
-      return reply.code(status).headers(headers).send(createReadStream(stored.path, { start: offset }));
+      return reply.code(status).headers(headers).send(createReadStream(stored.path, { start: offset, end: end - 1 }));
     }
     // Park the requester: the response body is a live pipe fed by whichever
     // device streams the bytes into the session. The response is hijacked so
@@ -125,6 +160,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
       entryId,
       size,
       offset,
+      endOffset: end,
     });
   });
 

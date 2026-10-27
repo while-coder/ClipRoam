@@ -21,6 +21,7 @@ export function isTransientNetworkError(error: unknown): boolean {
 }
 
 export type SyncRequester = {
+  url: (path: string) => string;
   // Raw fetch with the Bearer header attached and network failures mapped to
   // the transient error message above.
   fetch: (method: string, path: string, init: RequestInit) => Promise<Response>;
@@ -85,6 +86,7 @@ export function createSyncRequester(httpUrl: string, token: string, session: Acc
   };
 
   return {
+    url: (path) => `${httpUrl}${path}`,
     fetch: (method, path, init) => session.start(() => httpFetch(method, path, init)),
     request: (method, path, init, schema, incompatible, tolerate404) =>
       session.start(() => request(method, path, init, schema, incompatible, tolerate404)),

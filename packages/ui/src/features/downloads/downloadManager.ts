@@ -4,6 +4,8 @@ import type { LocalClipboardEntry, StoredEntry } from "../../types";
 import { entryContents, isFileNode } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SaveTarget } from "../../platform/files";
+import { downloadWithBrowser } from "./fileAccess";
+import { showNotification } from "../../platform/runtime";
 
 /** 取消专用哨兵：被取消的批次（含去重合并方连带取消）抛出，调用方据此静默收尾。 */
 export class DownloadCancelledError extends Error {}
@@ -316,7 +318,10 @@ export class DownloadManager {
         try {
           const offset = writer.size;
           task.snapshot.receivedBytes = offset; this.#publish();
-          const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}?offset=${offset}`, { signal });
+          const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}`, {
+            signal,
+            headers: offset > 0 ? { Range: `bytes=${offset}-`, "If-Range": `"${task.snapshot.fileId}"` } : {},
+          });
           try {
             if (!response.ok) throw new Error(response.status === 401 ? "登录已失效，请重新登录" : `下载请求失败（${response.status}）`);
             // Never append a full response (or bytes for a different range) to a partial file.
@@ -397,6 +402,13 @@ export class DownloadManager {
     const target = await this.session.files.selectSaveTarget(single,fileName);
     if (!target) return null;
     this.session.signal.throwIfAborted();
+    if (target.kind === "browser") {
+      const file = entryContents(entry)[0];
+      if (!file) throw new Error("文件内容不可用");
+      await downloadWithBrowser(this.session, entryId, file.fileId, fileName);
+      showNotification({ message: "已交给浏览器下载", tone: "success" });
+      return null;
+    }
     const saveId = crypto.randomUUID(); this.#saves.set(saveId, { entryId, target, controller: new AbortController() });
     return { saveId };
   }

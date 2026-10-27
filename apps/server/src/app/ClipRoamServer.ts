@@ -74,7 +74,7 @@ export class ClipRoamServer {
     this.#app.addHook("onRequest", async (request, reply) => {
       reply
         .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        .header("Access-Control-Allow-Headers", "Content-Type, Authorization, Range, If-Range")
         .header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       if (request.method === "OPTIONS") return reply.code(204).send();
       // One place resolves the Bearer token for every route; handlers opt in

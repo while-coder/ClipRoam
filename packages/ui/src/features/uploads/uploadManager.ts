@@ -36,7 +36,7 @@ export class UploadManager {
       entryId: request.entryId,
       fileId: request.fileId,
       label: request.fileId.slice(0, 8),
-      size: request.size - (request.offset ?? 0),
+      size: (request.endOffset ?? request.size) - (request.offset ?? 0),
       status: "pending",
       sentBytes: 0,
       startedAt: Date.now(),

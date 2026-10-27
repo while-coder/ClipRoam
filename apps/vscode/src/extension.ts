@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       const html = await readFile(vscode.Uri.joinPath(resourceRoot, "index.html").fsPath, "utf8");
       const source = current.webview.cspSource;
-      const csp = `default-src 'none'; script-src ${source}; style-src ${source} 'unsafe-inline'; img-src ${source} data: blob: http: https:; font-src ${source} data:; connect-src http: https: ws: wss:;`;
+      const csp = `default-src 'none'; script-src ${source}; style-src ${source} 'unsafe-inline'; img-src ${source} data: blob: http: https:; media-src ${source} blob: http: https:; font-src ${source} data:; connect-src http: https: ws: wss:;`;
       current.webview.html = html.replace("<head>", `<head><meta http-equiv="Content-Security-Policy" content="${csp}">`)
         .replace(/(src|href)="\.\/([^"<>]+)"/g, (_match, attr: string, file: string) =>
           `${attr}="${current.webview.asWebviewUri(vscode.Uri.joinPath(resourceRoot, file))}"`);

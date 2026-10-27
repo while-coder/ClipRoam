@@ -24,22 +24,24 @@ export class RelayUploader {
     let task: ServeTaskSnapshot | undefined;
     try {
       const startOffset = request.offset ?? 0;
-      if (!Number.isSafeInteger(startOffset) || startOffset < 0 || startOffset > request.size) {
+      const endOffset = request.endOffset ?? request.size;
+      if (!Number.isSafeInteger(startOffset) || !Number.isSafeInteger(endOffset)
+        || startOffset < 0 || startOffset > endOffset || endOffset > request.size) {
         throw new Error("文件起始位置无效");
       }
       // Probe before claiming: a device without the bytes stays quiet so another
       // holder can serve the request. Empty files still need a local existence check.
-      const remaining = request.size - startOffset;
+      const remaining = endOffset - startOffset;
       const probe = await this.deps.session.files.read(request.fileId, startOffset, remaining > 0 ? 1 : 0);
       if (remaining > 0 && !probe.length) return;
       task = this.deps.session.uploads.record(request);
       this.deps.session.uploads.update(task, { status: "serving" });
       let offset = startOffset;
       for (;;) {
-        const length = Math.min(FILE_CHUNK_SIZE, request.size - offset);
+        const length = Math.min(FILE_CHUNK_SIZE, endOffset - offset);
         const bytes = await this.deps.session.files.read(request.fileId, offset, length);
         if (length > 0 && !bytes.length) throw new Error("本机文件内容不可用");
-        const last = offset + bytes.byteLength >= request.size;
+        const last = offset + bytes.byteLength >= endOffset;
         const put = await this.http.fetch(
           "PUT",
           `/files/relay/${request.sessionId}${last ? "?end=1" : ""}`,
