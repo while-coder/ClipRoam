@@ -307,38 +307,59 @@ export class DownloadManager {
     const http = this.session.http;
     const budget = AbortSignal.timeout(5 * 60000);
     const signal = anyAbortSignal([budget, task.controller.signal, this.session.signal]);
-    while (!signal.aborted) {
-      const writer = await this.session.files.writer(task.snapshot.fileId, task.snapshot.size);
-      try {
-        task.snapshot.receivedBytes = 0; this.#publish();
-        const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}`, { signal });
-        if (!response.ok) throw new Error(response.status === 401 ? "登录已失效，请重新登录" : `下载请求失败（${response.status}）`);
-        if (!response.body) throw new Error("服务器没有返回文件内容");
-        const reader = response.body.getReader();
+    // Keep both the partial content and its incremental hash across network retries.
+    const writer = await this.session.files.writer(task.snapshot.fileId, task.snapshot.size);
+    let committed = false;
+    try {
+      while (!signal.aborted && writer.size < task.snapshot.size) {
+        let retryable = true;
         try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            signal.throwIfAborted();
-            await writer.append(value);
-            task.snapshot.receivedBytes += value.byteLength;
-            this.session.schedule("download-progress", () => this.#publish(), 200);
-          }
-        } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
-        signal.throwIfAborted();
-        await writer.commit();
-        return;
-      } catch (error) {
-        await writer.abort().catch(() => undefined);
-        if (signal.aborted) throw error;
-        await new Promise<void>((resolve,reject) => {
-          const timer = setTimeout(() => { signal.removeEventListener("abort", cancel); resolve(); }, 3000);
-          const cancel = () => { clearTimeout(timer); reject(signal.reason); };
-          signal.addEventListener("abort", cancel, { once: true });
-        });
+          const offset = writer.size;
+          task.snapshot.receivedBytes = offset; this.#publish();
+          const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}?offset=${offset}`, { signal });
+          try {
+            if (!response.ok) throw new Error(response.status === 401 ? "登录已失效，请重新登录" : `下载请求失败（${response.status}）`);
+            // Never append a full response (or bytes for a different range) to a partial file.
+            retryable = false;
+            const expectedStatus = offset > 0 ? 206 : 200;
+            const expectedRange = `bytes ${offset}-${task.snapshot.size - 1}/${task.snapshot.size}`;
+            const length = response.headers.get("Content-Length");
+            if (response.status !== expectedStatus ||
+              (offset > 0 && response.headers.get("Content-Range") !== expectedRange) ||
+              (length !== null && length !== String(task.snapshot.size - offset))) {
+              throw new Error("下载响应的文件范围或大小不匹配");
+            }
+            if (!response.body) throw new Error("服务器没有返回文件内容");
+            const reader = response.body.getReader();
+            try {
+              for (;;) {
+                retryable = true;
+                const { done, value } = await reader.read();
+                if (done) break;
+                signal.throwIfAborted();
+                // Local write failures may leave a partial chunk on disk: do not resume those.
+                retryable = false;
+                await writer.append(value);
+                task.snapshot.receivedBytes = writer.size;
+                this.session.schedule("download-progress", () => this.#publish(), 200);
+              }
+            } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+          } finally { await response.body?.cancel().catch(() => undefined); }
+          if (writer.size < task.snapshot.size) throw new Error("文件传输中断");
+        } catch (error) {
+          if (signal.aborted || !retryable) throw error;
+          await new Promise<void>((resolve,reject) => {
+            const timer = setTimeout(() => { signal.removeEventListener("abort", cancel); resolve(); }, 3000);
+            const cancel = () => { clearTimeout(timer); reject(signal.reason); };
+            signal.addEventListener("abort", cancel, { once: true });
+            if (signal.aborted) cancel();
+          });
+        }
       }
-    }
-    signal.throwIfAborted();
+      signal.throwIfAborted();
+      await writer.commit();
+      committed = true;
+    } finally { if (!committed) await writer.abort().catch(() => undefined); }
   }
 
   cancelTask(taskId: string): void {

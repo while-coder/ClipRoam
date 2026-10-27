@@ -89,6 +89,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const headers: Record<string, string> = {
       "Content-Type": "application/octet-stream",
       "Content-Length": String(size - offset),
+      // Also applies to the hijacked relay response, which bypasses Fastify hooks.
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Expose-Headers": "Content-Range",
     };
     if (offset > 0 && offset < size) headers["Content-Range"] = `bytes ${offset}-${size - 1}/${size}`;
     const status = offset > 0 && offset < size ? 206 : 200;

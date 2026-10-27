@@ -10,6 +10,8 @@ export type FileStat = { path: string; name: string; directory: boolean; symlink
 export type SaveTarget = { kind: "path" | "documentTree" | "browser"; value: string }
   | { kind: "browserDirectory"; value: string; directory: FileSystemDirectoryHandle };
 export interface ContentWriter {
+  /** Bytes successfully persisted in this temporary file/blob sequence. */
+  readonly size: number;
   append(bytes: Uint8Array): Promise<void>;
   commit(): Promise<void>;
   abort(): Promise<void>;
@@ -22,6 +24,7 @@ const contentId = (id: string) => { if (!/^[a-f0-9]{64}$/.test(id)) throw new Er
 /** Platform byte access only. Scheduling, hashing and records stay in TS. */
 export class AccountFiles {
   #urls = new Map<string, string>();
+  #writes = new Map<string, Promise<void>>();
   readonly database: AccountDatabase;
   #root: Promise<string> | undefined;
   constructor(readonly account: string) { this.database = new AccountDatabase(account); }
@@ -80,6 +83,7 @@ export class AccountFiles {
     const candidates: { id: string; path: string; source?: LocalSource }[] = [];
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i]!;
+      // Keep reading existing caches; new content always uses download/<fileId>.
       candidates.push({id,path:`${root}/upload/images/${id}`},{id,path:`${root}/download/${id}`});
       for (const source of sources[i] ?? []) candidates.push({id,path:source.source,source});
     }
@@ -109,45 +113,82 @@ export class AccountFiles {
     await this.database.put("sources", source.fileId, [...existing.filter((value) => value.source !== source.source), source]);
   }
 
-  async writer(fileId: string, expectedSize: number, captured = false): Promise<ContentWriter> {
+  async writer(fileId: string, expectedSize: number): Promise<ContentWriter> {
     contentId(fileId);
+    // Capture and download share the same temporary content. Serialize writers by fileId.
+    const previous = this.#writes.get(fileId);
+    let unlock!: () => void;
+    const pending = new Promise<void>((resolve) => { unlock = resolve; });
+    this.#writes.set(fileId, pending);
+    await previous;
+    let closed = false;
+    const release = () => {
+      closed = true;
+      if (this.#writes.get(fileId) === pending) this.#writes.delete(fileId);
+      unlock();
+    };
     let size = 0;
     const hash = new Sha256();
-    const chunks: string[] = [];
-    const partial = `partial:${crypto.randomUUID()}`;
-    const final = isNative ? `${await this.root()}/${captured ? "upload/images" : "download"}/${fileId}` : "";
-    const temp = `${final}.${crypto.randomUUID()}.part`;
-    if (isNative) await native.writeFile(temp, new Uint8Array(), false);
+    let storage: Omit<ContentWriter, "size">;
+    try { storage = isNative ? await this.writeNative(fileId) : this.writeWeb(fileId); }
+    catch (error) { release(); throw error; }
     return {
+      get size() { return size; },
       append: async (bytes) => {
-        size += bytes.length;
-        if (size > expectedSize) throw new Error("下载内容超过声明大小");
+        if (closed) throw new Error("文件写入已结束");
+        if (size + bytes.length > expectedSize) throw new Error("下载内容超过声明大小");
+        await storage.append(bytes);
         hash.update(bytes);
-        if (isNative) await native.writeFile(temp, bytes, true);
-        else { const id = `${partial}:${chunks.length}`; await this.database.put("blobs",id,new Blob([bytes])); chunks.push(id); }
+        size += bytes.length;
       },
       commit: async () => {
+        if (closed) throw new Error("文件写入已结束");
         if (size !== expectedSize || hash.digest() !== fileId) throw new Error("文件大小或内容校验失败");
-        if (isNative) await native.moveFile(temp, final);
-        else {
-          const blobs = await this.database.getMany<Blob>("blobs",chunks);
-          if (blobs.some((blob) => !blob)) throw new Error("下载缓存不完整");
-          await this.database.batch([
-            { name:"blobs",id:fileId,value:new Blob(blobs as Blob[]) },
-            ...chunks.map((id) => ({name:"blobs" as const,id})),
-          ]);
-        }
+        await storage.commit();
+        release();
       },
       abort: async () => {
-        if (isNative) await native.removeFile(temp);
-        else await this.database.batch(chunks.map((id) => ({name:"blobs",id})));
+        if (closed) return;
+        try { await storage.abort(); } finally { release(); }
       },
+    };
+  }
+
+  private async writeNative(fileId: string): Promise<Omit<ContentWriter, "size">> {
+    const final = `${await this.root()}/download/${fileId}`;
+    const temp = `${final}.part`;
+    await native.writeFile(temp, new Uint8Array(), false);
+    return {
+      append: (bytes) => native.writeFile(temp, bytes, true),
+      commit: () => native.moveFile(temp, final),
+      abort: () => native.removeFile(temp),
+    };
+  }
+
+  private writeWeb(fileId: string): Omit<ContentWriter, "size"> {
+    const chunks: string[] = [];
+    const partial = `partial:download:${fileId}`;
+    return {
+      append: async (bytes) => {
+        const id = `${partial}:${chunks.length}`;
+        await this.database.put("blobs", id, new Blob([bytes]));
+        chunks.push(id);
+      },
+      commit: async () => {
+        const blobs = await this.database.getMany<Blob>("blobs", chunks);
+        if (blobs.some((blob) => !blob)) throw new Error("下载缓存不完整");
+        await this.database.batch([
+          { name: "blobs", id: fileId, value: new Blob(blobs as Blob[]) },
+          ...chunks.map((id) => ({ name: "blobs" as const, id })),
+        ]);
+      },
+      abort: () => this.database.batch(chunks.map((id) => ({ name: "blobs", id }))),
     };
   }
 
   async putBlob(bytes: Uint8Array): Promise<string> {
     const id = new Sha256().update(bytes).digest();
-    const writer = await this.writer(id, bytes.length, true);
+    const writer = await this.writer(id, bytes.length);
     try { await writer.append(bytes); await writer.commit(); } catch (error) { await writer.abort(); throw error; }
     return id;
   }
