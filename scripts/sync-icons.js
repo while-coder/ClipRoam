@@ -85,7 +85,7 @@ for (const platform of ["pwa", "chrome", "firefox", "vscode"]) {
 execFileSync(
   process.execPath,
   [tauriCli, "icon", fullbleedIcon, "--output", maskableIconsDirectory,
-    ...[192, 512].flatMap((size) => ["--png", String(size)])],
+    ...[180, 192, 512].flatMap((size) => ["--png", String(size)])],
   { cwd: rootDirectory, stdio: "inherit" },
 );
 for (const size of [192, 512]) {
@@ -95,6 +95,13 @@ for (const size of [192, 512]) {
   );
 }
 console.log("已更新 PWA 自适应图标");
+
+// iOS Home Screen needs an opaque, full-bleed touch icon of its own.
+fs.copyFileSync(
+  path.join(maskableIconsDirectory, "180x180.png"),
+  path.join(rootDirectory, "apps", "pwa", "public", "apple-touch-icon.png"),
+);
+console.log("已更新 PWA iOS 主屏幕图标");
 
 if (!webOnly && fs.existsSync(androidResourcesDirectory)) {
   // The full-bleed source fills the adaptive layer and keeps its artwork inside

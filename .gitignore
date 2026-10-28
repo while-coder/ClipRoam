@@ -22,5 +22,7 @@ apps/server/admin/
 apps/server/build/
 apps/server/debug/
 apps/pwa/public/icons/
+apps/pwa/public/cliproam-icon.png
+apps/pwa/public/apple-touch-icon.png
 apps/chrome/public/icons/
 apps/firefox/public/icons/
