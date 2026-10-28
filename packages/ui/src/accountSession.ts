@@ -1,5 +1,6 @@
 import { computed, effectScope, ref, shallowRef, type Ref, type WritableComputedRef } from "vue";
 import { AccountDatabase } from "./platform/database";
+import { normalizeServerAddress } from "./features/sync/authApi";
 import { HistoryManager } from "./features/history/historyManager";
 import { PendingUploadManager } from "./features/pending-upload/pendingUploadManager";
 import { UploadManager } from "./features/uploads/uploadManager";
@@ -72,9 +73,8 @@ export function accountStateRef<K extends keyof AccountState>(key: K): WritableC
 export const activeView = accountStateRef("activeView");
 
 export function archiveKeyFor(config: SyncConfig | undefined): string {
-  const serverAddress = config?.serverAddress.trim().toLowerCase() ?? "";
   const username = config?.username.trim().toLowerCase() ?? "";
-  return username ? `account:${serverAddress}/${encodeURIComponent(username)}` : "";
+  return username && config ? `account:${JSON.stringify([normalizeServerAddress(config.serverAddress), username])}` : "";
 }
 
 /** Account-owned state, resources and cooperative task lifetime. */

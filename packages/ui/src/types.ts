@@ -13,7 +13,6 @@ export type Device = WireDevice & Partial<DeviceInfo> & { name: string; platform
 /** 会话凭证：全局唯一，决定激活哪个账号档案。 */
 export type SyncConfig = {
   serverAddress: string;
-  serverProtocol: "http" | "https";
   username: string;
   sessionToken: string;
 };

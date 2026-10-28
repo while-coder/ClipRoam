@@ -37,7 +37,7 @@ const submitSettings = () => props.save ? props.save() : saveSettings();
 const busy = computed(() => savingSettings.value || changingPassword.value);
 const currentServer = computed(() => {
   const config = clientSessionManager.getActiveConfig();
-  return config?.serverAddress ? `${config.serverProtocol}://${config.serverAddress}` : "";
+  return config?.serverAddress ?? "";
 });
 </script>
 

@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import type { ServerMessage } from "@cliproam/protocol";
 import type { AdminService } from "../../admin/AdminService.js";
 import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
-import type { TlsCertificateService, TlsOptions } from "../../tls/TlsCertificateService.js";
 import { updateTransferSettings, validateUserTransferOverrides, ADMIN_SESSION_LIFETIME_MS, type ServerConfig } from "../ServerConfig.js";
 
 const ADMIN_SESSION_COOKIE = "cliproam_admin";
@@ -11,20 +10,16 @@ const ADMIN_SESSION_MAX_AGE_SECONDS = ADMIN_SESSION_LIFETIME_MS / 1000;
 
 export type AdminRouteDeps = {
   admin: AdminService;
-  tls: TlsCertificateService;
   config: ServerConfig;
   onSettingsChanged: (userId?: string) => void;
   store: ClipRoamStore;
   broadcast: (userId: string, message: ServerMessage) => void;
   disconnectUser: (userId: string, reason: string, deviceId?: string) => void;
   isDeviceOnline: (userId: string, deviceId: string) => boolean;
-  // The running HTTP(S) server, so a new TLS certificate can be applied
-  // without a restart when the runtime supports it.
-  liveServer: { setSecureContext?: (context: TlsOptions) => void };
 };
 
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
-  const { admin, tls, config, store, liveServer, broadcast, disconnectUser } = deps;
+  const { admin, config, store, broadcast, disconnectUser } = deps;
 
   const requireAdmin = (
     request: { headers: { cookie?: string } },
@@ -43,7 +38,6 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       "SameSite=Strict",
       `Max-Age=${maxAge}`,
     ];
-    if (tls.status.enabled) parts.push("Secure");
     return parts.join("; ");
   };
 
@@ -72,7 +66,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
 
   app.get("/admin-api/status", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
-    return { tls: tls.status, transfer: config };
+    return { transfer: config };
   });
 
   app.put("/admin-api/transfer-settings", async (request, reply) => {
@@ -85,37 +79,6 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       return reply.code(400).send({
         code: "INVALID_TRANSFER_SETTINGS",
         message: error instanceof Error ? error.message : "传输配置无效。",
-      });
-    }
-  });
-
-  app.put("/admin-api/tls", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    const body = request.body as { cert?: unknown; key?: unknown } | undefined;
-    try {
-      const options = tls.replace(body?.cert, body?.key);
-      if (liveServer.setSecureContext) {
-        liveServer.setSecureContext(options);
-        return { tls: tls.status, restartRequired: false };
-      }
-      return { tls: tls.status, restartRequired: true };
-    } catch (error) {
-      return reply.code(400).send({
-        code: "INVALID_TLS_CONFIGURATION",
-        message: error instanceof Error ? error.message : "证书配置无效。",
-      });
-    }
-  });
-
-  app.delete("/admin-api/tls", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    try {
-      tls.remove();
-      return { tls: tls.status, restartRequired: true };
-    } catch (error) {
-      return reply.code(400).send({
-        code: "INVALID_TLS_CONFIGURATION",
-        message: error instanceof Error ? error.message : "证书删除失败。",
       });
     }
   });

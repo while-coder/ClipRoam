@@ -170,7 +170,7 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .auth-mode-switch button.active { color: #dbeafe; background: var(--color-primary); }
 .server-connection-fields {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 8px;
 }
@@ -667,9 +667,6 @@ button:focus-visible, [role="button"]:focus-visible {
   .setup-content { padding-block: 12px; }
   .setup-brand { margin-bottom: 2px; }
   .setup-form { margin-top: 8px; }
-}
-@media (max-width: 360px) {
-  .server-connection-fields { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
   .password-change-fields { grid-template-columns: 1fr; gap: 5px; }

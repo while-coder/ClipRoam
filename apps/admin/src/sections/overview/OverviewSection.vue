@@ -1,20 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { fetchStatus, fetchUsers, type TlsStatus } from "../../shared/api.js";
+import { fetchUsers } from "../../shared/api.js";
 import { errorMessage } from "../../shared/errorMessage.js";
 
-const tls = ref<TlsStatus>();
 const userCount = ref(0);
 const error = ref("");
 
-const tlsSummary = ref("加载中…");
-
 onMounted(async () => {
   try {
-    const [status, users] = await Promise.all([fetchStatus(), fetchUsers()]);
-    tls.value = status.tls;
+    const users = await fetchUsers();
     userCount.value = users.length;
-    tlsSummary.value = status.tls.enabled ? "HTTPS 已启用（后台管理）" : "尚未启用 HTTPS";
   } catch (reason) {
     error.value = errorMessage(reason, "加载状态失败。");
   }
@@ -28,16 +23,6 @@ onMounted(async () => {
     </header>
 
     <SAlert v-if="error" type="error">{{ error }}</SAlert>
-
-    <SCard aria-labelledby="tls-status-title">
-      <div class="status-row">
-        <div class="status-copy">
-          <p id="tls-status-title" class="label">TLS 状态</p>
-          <strong><span v-if="tlsSummary === '加载中…'" class="s-spinner" aria-hidden="true" />{{ tlsSummary }}</strong>
-        </div>
-        <STag :type="tls?.enabled ? 'success' : 'default'">{{ tls?.enabled ? "已启用" : "未启用" }}</STag>
-      </div>
-    </SCard>
 
     <SCard aria-labelledby="user-count-title">
       <div class="status-row">

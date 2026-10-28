@@ -3,16 +3,17 @@ import { applicationDatabase } from "./database";
 import { native, type DeviceInfo } from "./native";
 import type { Device } from "@cliproam/protocol";
 import type { SyncConfig } from "../types";
+import { normalizeServerAddress } from "../features/sync/authApi";
 
 /** Application storage for encrypted login configuration and device identity. */
-const CONFIG_KEY = "cliproam.connection.v1";
-const SAVED_ACCOUNTS_KEY = "cliproam.saved-accounts.v1";
+const CONFIG_KEY = "cliproam.connection.v2";
+const SAVED_ACCOUNTS_KEY = "cliproam.saved-accounts.v2";
 const ENCRYPTION_KEY = "cliproam.storage-key.v1";
 type EncryptedConfig = { version: 1; iv: string; ciphertext: string };
 type SavedAccounts = Record<string, { username: string; token: string }[]>;
 
 function serverKey(config: SyncConfig): string {
-  return `${config.serverAddress}:${config.serverProtocol === "http"}`;
+  return normalizeServerAddress(config.serverAddress);
 }
 
 async function readEncrypted<T>(id: string): Promise<T | undefined> {
@@ -33,11 +34,9 @@ async function encrypt(value: unknown): Promise<EncryptedConfig> {
 
 export async function readSavedAccounts(): Promise<SyncConfig[]> {
   const accounts = await readEncrypted<SavedAccounts>(SAVED_ACCOUNTS_KEY) ?? {};
-  return Object.entries(accounts).flatMap(([key, users]) => {
-    const separator = key.lastIndexOf(":");
+  return Object.entries(accounts).flatMap(([address, users]) => {
     return users.map(({ username, token }) => ({
-      serverAddress: key.slice(0, separator),
-      serverProtocol: key.slice(separator + 1) === "true" ? "http" as const : "https" as const,
+      serverAddress: normalizeServerAddress(address),
       username,
       sessionToken: token,
     }));
@@ -94,9 +93,8 @@ export async function readLoginConfig(): Promise<SyncConfig | null> {
     const key = await localKey(false);
     const plaintext = await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(stored.iv)},key,base64ToBytes(stored.ciphertext));
     const config = JSON.parse(new TextDecoder().decode(plaintext)) as SyncConfig;
-    if (typeof config.serverAddress !== "string" || typeof config.username !== "string" || typeof config.sessionToken !== "string"
-      || (config.serverProtocol !== "http" && config.serverProtocol !== "https")) throw new Error("invalid config");
-    return config;
+    if (typeof config.serverAddress !== "string" || typeof config.username !== "string" || typeof config.sessionToken !== "string") throw new Error("invalid config");
+    return { ...config, serverAddress: normalizeServerAddress(config.serverAddress) };
   } catch {
     throw new Error("本地登录配置无法解密，请输入账号信息重新登录");
   }
@@ -107,6 +105,7 @@ export async function writeLoginConfig(config: SyncConfig | null): Promise<void>
     await applicationDatabase.delete("meta", CONFIG_KEY);
     return;
   }
+  config = { ...config, serverAddress: normalizeServerAddress(config.serverAddress) };
   const accounts = await readEncrypted<SavedAccounts>(SAVED_ACCOUNTS_KEY) ?? {};
   const key = serverKey(config);
   const users = accounts[key] ?? [];

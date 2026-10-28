@@ -1,10 +1,9 @@
 <script lang="ts">
-import type { AuthMode, ServerProtocol } from "./authApi";
+import type { AuthMode } from "./authApi";
 
-/** 提交给 App.vue 的表单草稿；serverAddress 已经过规范化。 */
+/** 提交给 App.vue 的表单草稿；serverAddress 为规范化后的完整 URL。 */
 export type SetupDraft = {
   serverAddress: string;
-  serverProtocol: ServerProtocol;
   username: string;
   password: string;
   authMode: AuthMode;
@@ -17,7 +16,7 @@ import { errorMessage } from "../../utils";
 import { computed, ref } from "vue";
 import { ArrowLeft, Server, ShieldCheck, Trash2 } from "lucide-vue-next";
 import { normalizeServerAddress } from "./authApi";
-import { DEFAULT_SERVER_PROTOCOL, DEFAULT_SERVER_ADDRESS } from "../../config";
+import { DEFAULT_SERVER_ADDRESS } from "../../config";
 import type { SyncConfig } from "../../types";
 
 const props = defineProps<{
@@ -41,19 +40,18 @@ const emit = defineEmits<{
 }>();
 
 const setupServerAddress = ref(DEFAULT_SERVER_ADDRESS);
-const setupServerProtocol = ref<ServerProtocol>(DEFAULT_SERVER_PROTOCOL);
 const setupUsername = ref("");
 const setupPassword = ref("");
 const authMode = ref<AuthMode>("login");
 const serverFieldError = ref("");
 const usernameFieldError = ref("");
 const passwordFieldError = ref("");
-const serverOptions = computed(() => [...new Set(props.savedAccounts.map((account) => `${account.serverProtocol}://${account.serverAddress}`))]
+const serverOptions = computed(() => [...new Set(props.savedAccounts.map((account) => account.serverAddress))]
   .map((value) => ({ label: value, value })));
 const currentServerAccounts = computed(() => {
   try {
     const address = normalizeServerAddress(setupServerAddress.value);
-    return props.savedAccounts.filter((account) => account.serverAddress === address && account.serverProtocol === setupServerProtocol.value);
+    return props.savedAccounts.filter((account) => account.serverAddress === address);
   } catch {
     return [];
   }
@@ -79,15 +77,8 @@ const passwordHint = computed(() => matchesSavedSession.value
 const serverInput = ref<{ $el?: Element }>();
 const accountPasswordInput = ref<{ $el?: Element }>();
 
-const protocolHint = computed(() =>
-  setupServerProtocol.value === "https"
-    ? "HTTPS + WSS：服务端需要配置可信 TLS 证书。"
-    : "HTTP + WS 未加密，仅应在受信任的网络中使用。",
-);
-
 function setFields(config?: SyncConfig): void {
   setupServerAddress.value = config?.serverAddress || DEFAULT_SERVER_ADDRESS;
-  setupServerProtocol.value = config?.serverProtocol || DEFAULT_SERVER_PROTOCOL;
   setupUsername.value = config?.username || "";
   setupPassword.value = "";
   authMode.value = "login";
@@ -109,10 +100,9 @@ function fillServerAccount(): void {
 }
 
 function selectServer(value: string): void {
-  const account = props.savedAccounts.find((account) => `${account.serverProtocol}://${account.serverAddress}` === value);
+  const account = props.savedAccounts.find((account) => account.serverAddress === value);
   if (!account) return;
-  setupServerAddress.value = account.serverAddress;
-  setupServerProtocol.value = account.serverProtocol;
+  setupServerAddress.value = value;
   serverFieldError.value = "";
   fillServerAccount();
 }
@@ -120,18 +110,6 @@ function selectServer(value: string): void {
 function updateServerAddress(value: string): void {
   setupServerAddress.value = value;
   serverFieldError.value = "";
-  // 手动输入已知地址时也回填协议；同一地址有两种协议时优先保留当前选择。
-  try {
-    const address = normalizeServerAddress(value);
-    const account = props.savedAccounts.find((account) => account.serverAddress === address && account.serverProtocol === setupServerProtocol.value)
-      ?? props.savedAccounts.find((account) => account.serverAddress === address);
-    if (account) setupServerProtocol.value = account.serverProtocol;
-  } catch { /* 地址仍在输入中。 */ }
-  fillServerAccount();
-}
-
-function updateServerProtocol(value: ServerProtocol): void {
-  setupServerProtocol.value = value;
   fillServerAccount();
 }
 
@@ -178,8 +156,7 @@ function switchAuthMode(mode: AuthMode): void {
 
 function submit(): void {
   if (props.busy) return;
-  // 先校验再 emit：validateServerField 会回写规范化后的地址，
-  // 保证父组件拿到的是规范化 serverAddress。
+  // 校验并规范化完整 URL 后再提交。
   const serverAddress = validateServerField();
   const usernameValid = validateUsernameField();
   const passwordValid = validatePasswordField();
@@ -190,7 +167,6 @@ function submit(): void {
   }
   emit("submit", {
     serverAddress,
-    serverProtocol: setupServerProtocol.value,
     username: setupUsername.value.trim(),
     password: setupPassword.value,
     authMode: authMode.value,
@@ -242,15 +218,6 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
       </div>
 
       <div class="server-connection-fields">
-        <SFormItem label="协议">
-          <SSelect
-            id="server-protocol"
-            :value="setupServerProtocol"
-            :options="[{ label: 'HTTP', value: 'http' }, { label: 'HTTPS', value: 'https' }]"
-            :disabled="busy"
-            @update:value="updateServerProtocol"
-          />
-        </SFormItem>
         <SFormItem label="服务器地址" :error="serverFieldError">
           <div class="login-choice-field">
             <SInput
@@ -258,17 +225,17 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
               ref="serverInput"
               :value="setupServerAddress"
               type="text"
-              inputmode="text"
+              inputmode="url"
               autocomplete="off"
               spellcheck="false"
-              placeholder="选择或输入 IP:端口"
+              placeholder="https://example.com/cliproam"
               :disabled="busy"
               :invalid="Boolean(serverFieldError)"
               @update:value="updateServerAddress"
               @blur="validateServerField"
             >
               <template v-if="serverOptions.length" #suffix>
-                <SSelect class="login-choice-menu" :value="`${setupServerProtocol}://${setupServerAddress}`" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择已保存的服务器" title="选择已保存的服务器" @select="selectServer" />
+                <SSelect class="login-choice-menu" :value="setupServerAddress" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择已保存的服务器" title="选择已保存的服务器" @select="selectServer" />
               </template>
             </SInput>
             <SIconButton v-if="currentServerAccounts.length" :size="36" :disabled="busy" title="删除此服务器的全部登录记录" aria-label="删除此服务器的全部登录记录" @click="emit('remove-server', currentServerAccounts[0]!)">
@@ -277,7 +244,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
           </div>
         </SFormItem>
       </div>
-      <p class="connection-hint">{{ protocolHint }}</p>
+      <p class="connection-hint">填写完整的 http:// 或 https:// 地址，支持子路径，例如 https://example.com/cliproam。</p>
 
       <SFormItem label="账号" :error="usernameFieldError">
         <div class="login-choice-field">

@@ -16,13 +16,11 @@ import { FileRelayService } from "../files/FileRelayService.js";
 import { UploadService } from "../files/UploadService.js";
 import { loadServerConfig, SERVER_PORT, SMALL_JSON_BODY_LIMIT, type ServerConfig } from "./ServerConfig.js";
 import { ClipRoamStore } from "../account/ClipRoamStore.js";
-import { TlsCertificateService, type TlsOptions } from "../tls/TlsCertificateService.js";
 
 const logger = getLogger("ClipRoamServer");
 
 export class ClipRoamServer {
-  readonly #tls = new TlsCertificateService();
-  readonly #app = createApp(this.#tls.options);
+  readonly #app = createApp();
   readonly #store = new ClipRoamStore();
   readonly #auth = new AuthService(this.#store);
   readonly #admin = new AdminService();
@@ -50,8 +48,7 @@ export class ClipRoamServer {
   get adminConfigured(): boolean { return this.#admin.isConfigured; }
 
   get adminUrl(): string {
-    const protocol = this.#tls.status.enabled ? "https" : "http";
-    return `${protocol}://localhost:${SERVER_PORT}/admin`;
+    return `http://localhost:${SERVER_PORT}/admin`;
   }
 
   async start(): Promise<void> {
@@ -115,7 +112,6 @@ export class ClipRoamServer {
     this.#app.get("/ws", { websocket: true }, (socket) => this.#sockets.handleSocket(socket));
     registerAdminRoutes(this.#app, {
       admin: this.#admin,
-      tls: this.#tls,
       config: this.config,
       onSettingsChanged: (userId) => {
         const users = userId ? [{ id: userId }] : this.#store.listUsers();
@@ -125,7 +121,6 @@ export class ClipRoamServer {
       },
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
-      liveServer: this.#app.server as unknown as { setSecureContext?: (context: TlsOptions) => void },
       disconnectUser: this.#sockets.disconnectUser.bind(this.#sockets),
       isDeviceOnline: this.#sockets.isDeviceOnline.bind(this.#sockets),
     });
@@ -145,13 +140,11 @@ export class ClipRoamServer {
 
 }
 
-function createApp(tls: TlsOptions | undefined): FastifyInstance {
+function createApp(): FastifyInstance {
   // forceCloseConnections: hijacked relay GETs park on a live pipe and are
   // never "idle" — without this, `stop()` would wait on them for the full
   // GracefulShutdownTimeout (or forever) and SIGINT would not shut down.
-  return (tls
-    ? Fastify({ logger: false, forceCloseConnections: true, https: tls })
-    : Fastify({ logger: false, forceCloseConnections: true })) as FastifyInstance;
+  return Fastify({ logger: false, forceCloseConnections: true });
 }
 
 // The client-facing caps, derived from the live config on every call so admin

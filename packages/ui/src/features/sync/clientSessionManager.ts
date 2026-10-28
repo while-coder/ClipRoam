@@ -6,7 +6,7 @@ import { AccountDatabase } from "../../platform/database";
 import { native } from "../../platform/native";
 import { decodeDevice } from "../../platform/deviceInfo";
 import { getDevice, readLoginConfig, writeLoginConfig } from "../../platform/storage";
-import { DEFAULT_AUTO_UPLOAD_LIMIT, DEFAULT_SERVER_ADDRESS, DEFAULT_SERVER_PROTOCOL, defaultAccountPreferences, normalizeAccountPreferences } from "../../config";
+import { DEFAULT_AUTO_UPLOAD_LIMIT, defaultAccountPreferences, normalizeAccountPreferences } from "../../config";
 import { isMobile, showNotification } from "../../platform/runtime";
 import { getServerUrls } from "./authApi";
 import { applyServerSettings } from "./serverSettings";
@@ -56,10 +56,7 @@ export class ClientSessionManager {
   };
 
   loadSyncConfig = async (): Promise<SyncConfig | null> => {
-    const stored = await readLoginConfig();
-    if (!stored) return null;
-    return { ...stored, serverAddress:stored.serverAddress || DEFAULT_SERVER_ADDRESS,
-      serverProtocol:stored.serverProtocol === "https" ? "https" : DEFAULT_SERVER_PROTOCOL };
+    return readLoginConfig();
   };
 
   persistSyncConfig = (config: SyncConfig | null): Promise<void> => {
@@ -132,7 +129,7 @@ export class ClientSessionManager {
     try {
       await session.start(() => session.ready);
       const device = await session.start(() => getDevice());
-      const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress, config.serverProtocol);
+      const { httpUrl, webSocketUrl } = getServerUrls(config.serverAddress);
       const guard = session.guard.bind(session);
       const client: SessionConnection = new SessionConnection(httpUrl, webSocketUrl, config.sessionToken, device, {
         onConnected: guard((value) => this.#setConnectionState(session, value)),

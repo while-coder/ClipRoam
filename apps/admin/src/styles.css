@@ -39,7 +39,6 @@ h2 { font-size: 18px; }
 .muted, .footnote { color: #94a3b8; line-height: 1.55; }
 .login-card form { display: grid; gap: 9px; margin-top: 24px; }
 label { color: #cbd5e1; font-size: 13px; font-weight: 600; }
-.file-input { color: #94a3b8; font-size: 12px; }
 .layout { display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 100vh; width: 100%; }
 .sidebar {
   position: sticky;

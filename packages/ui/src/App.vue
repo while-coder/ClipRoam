@@ -195,7 +195,6 @@ async function clearSavedAccounts(config?: SyncConfig, wholeServer = false): Pro
   try {
     await removeSavedAccounts(config, wholeServer);
     if (!config || (savedSessionConfig.value?.serverAddress === config.serverAddress
-      && savedSessionConfig.value?.serverProtocol === config.serverProtocol
       && (wholeServer || savedSessionConfig.value?.username === config.username))) savedSessionConfig.value = undefined;
     setupError.value = "";
     await refreshSavedAccounts();
@@ -217,7 +216,7 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
   if (testingConnection.value) return;
   if (accountRuntimeError.value) { setupError.value = accountRuntimeError.value; return; }
   setupError.value = "";
-  const { serverAddress, username, password, serverProtocol } = draft;
+  const { serverAddress, username, password } = draft;
 
   testingConnection.value = true;
   const controller = new AbortController();
@@ -230,7 +229,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
       username,
       password,
       draft.authMode,
-      serverProtocol,
       device,
       controller.signal,
     );
@@ -241,7 +239,6 @@ async function connectAndSave(draft: SetupDraft): Promise<void> {
     // 重连并以 toast 报告状态。
     const config: SyncConfig = {
       serverAddress,
-      serverProtocol,
       username: session.user.username,
       sessionToken: session.sessionToken,
     };

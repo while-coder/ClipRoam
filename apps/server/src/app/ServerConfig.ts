@@ -28,8 +28,6 @@ export const USER_STORE_IDLE_MS = 10 * 60 * 1_000;
 export const USER_STORE_SWEEP_INTERVAL_MS = 60 * 1_000;
 // 账号密码的 scrypt 派生密钥长度（字节）。
 export const PASSWORD_KEY_LENGTH = 64;
-// 管理后台上传 TLS 证书/私钥的单文件大小上限。
-export const TLS_MAX_PEM_BYTES = 1_024 * 1_024;
 // 小型 JSON 请求体（id 列表查询）与入站 WebSocket 消息的上限；与条目负载的
 // MAX_PUBLISH_BYTES 区分开。
 export const SMALL_JSON_BODY_LIMIT = 64 * 1024;

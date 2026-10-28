@@ -1,4 +1,3 @@
-export type TlsStatus = { enabled: boolean };
 export type TransferSettings = {
   maxStoredFileMb: number;
   maxStoredImageMb: number;
@@ -6,7 +5,7 @@ export type TransferSettings = {
   maxHistoryEntries: number;
   maxCaptureFileCount: number;
 };
-export type StatusResponse = { tls: TlsStatus; transfer: TransferSettings };
+export type StatusResponse = { transfer: TransferSettings };
 export type TransferOverrides = Partial<TransferSettings>;
 export type UserTransferSettings = { transfer: TransferSettings; overrides: TransferOverrides; defaults: TransferSettings; customized: boolean };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
@@ -113,15 +112,4 @@ export async function updateUserTransferSettings(userId: string, settings: Trans
 
 export async function resetUserTransferSettings(userId: string): Promise<UserTransferSettings> {
   return request<UserTransferSettings>(`users/${encodeURIComponent(userId)}/transfer-settings`, { method: "DELETE" });
-}
-
-export async function replaceTls(cert: string, key: string): Promise<{ tls: TlsStatus; restartRequired: boolean }> {
-  return request<{ tls: TlsStatus; restartRequired: boolean }>("tls", {
-    method: "PUT",
-    body: JSON.stringify({ cert, key }),
-  });
-}
-
-export async function removeTls(): Promise<{ tls: TlsStatus; restartRequired: boolean }> {
-  return request<{ tls: TlsStatus; restartRequired: boolean }>("tls", { method: "DELETE" });
 }

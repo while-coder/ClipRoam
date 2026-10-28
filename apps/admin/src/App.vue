@@ -21,7 +21,6 @@ const menuItems: MenuItem[] = [
   },
   { to: "/files", label: "文件管理", paths: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z", "M14 2v6h6"] },
   { to: "/transfer", label: "文件传输", paths: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"] },
-  { to: "/security", label: "HTTPS 证书", paths: ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"] },
 ];
 
 const signOutPaths = ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5", "M21 12H9"];

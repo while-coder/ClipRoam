@@ -135,7 +135,7 @@ async function saveSettings(options: {preferences?: AccountPreferences; beforeSa
       await saveDeviceAlias(deviceAlias);
       savedDeviceAlias.value = deviceAlias;
       try {
-        await pushDeviceInfo(activeConfig.serverAddress, activeConfig.serverProtocol, activeConfig.sessionToken, await session.start(() => getDevice()), controller.signal);
+        await pushDeviceInfo(activeConfig.serverAddress, activeConfig.sessionToken, await session.start(() => getDevice()), controller.signal);
       } catch {
         // 上报失败不阻塞保存：下次启动同步时的会话验证会重新读取并上报设备信息。
       }
@@ -184,7 +184,6 @@ async function changePassword(): Promise<void> {
   try {
     await changeAccountPassword(
       activeConfig.serverAddress,
-      activeConfig.serverProtocol,
       activeConfig.sessionToken,
       currentPassword.value,
       newPassword.value,

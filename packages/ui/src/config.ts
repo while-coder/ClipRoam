@@ -1,7 +1,6 @@
 import type { AccountPreferences, PlatformCapabilities } from "./types";
 
-export const DEFAULT_SERVER_PROTOCOL = "http";
-export const DEFAULT_SERVER_ADDRESS = "127.0.0.1:4810";
+export const DEFAULT_SERVER_ADDRESS = "http://127.0.0.1:4810";
 export const PAGE_SIZE = 50;
 
 export const DESKTOP_CAPABILITIES: PlatformCapabilities = {
