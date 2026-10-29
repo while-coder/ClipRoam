@@ -101,7 +101,7 @@ export class AccountSession {
   constructor(readonly config: SyncConfig, preferences: AccountPreferences) {
     this.#preferences = shallowRef(preferences);
     this.database = new AccountDatabase(this.accountKey);
-    this.files = new AccountFiles(this.accountKey);
+    this.files = new AccountFiles(this.accountKey, () => this.history.invalidate());
     this.history = new HistoryManager(this);
     this.pendingUploads = new PendingUploadManager(this);
     this.uploads = new UploadManager(this);

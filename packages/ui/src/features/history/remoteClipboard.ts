@@ -1,7 +1,7 @@
 import { errorMessage } from "../../utils";
 import { clientSessionManager } from "../sync/clientSessionManager";
 import { getAccountSession } from "../../accountSession";
-import type { ClipboardManifestEntry } from "@cliproam/protocol";
+import { entryContents, type ClipboardManifestEntry } from "@cliproam/protocol";
 import { isMobile, usePlatform, showNotification } from "../../platform/runtime";
 import { ensureLocalFiles } from "../downloads/useDownloads";
 
@@ -35,6 +35,7 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
 
   const activationRevision = ++session.state.remoteActivationRevision;
   const startingLocalRevision = session.state.localClipboardRevision;
+  let release: (() => void) | undefined;
   try {
     // Push supplies the same identity/revision pair as a manifest page.
     const [entry] = await session.history.fetchHistoryInfo([manifestEntry]);
@@ -42,6 +43,8 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
     kind = entry.kind;
     let localEntry = entry;
     if (clientSessionManager.getActiveConfig() !== config || !receiveEnabled()) return;
+    const full = await session.history.get(entry.id);
+    release = session.files.retain(entryContents(full).map((file) => file.fileId));
     if (entry.kind === "image") localEntry = await ensureLocalFiles(localEntry, session);
 
     // A newer remote activation or a real local copy wins while an image is
@@ -62,6 +65,6 @@ export async function activateRemoteClipboard(manifestEntry: ClipboardManifestEn
     ) {
       showNotification({ message: `自动接收剪贴板失败：${errorMessage(error)}`, tone: "error" });
     }
-  }
+  } finally { release?.(); }
 }
 

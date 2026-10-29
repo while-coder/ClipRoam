@@ -25,9 +25,11 @@ const contentId = (id: string) => { if (!/^[a-f0-9]{64}$/.test(id)) throw new Er
 export class AccountFiles {
   #urls = new Map<string, string>();
   #writes = new Map<string, Promise<void>>();
+  #temporary = new Map<string, Blob>();
+  #users = new Map<string, number>();
   readonly database: AccountDatabase;
   #root: Promise<string> | undefined;
-  constructor(readonly account: string) { this.database = new AccountDatabase(account); }
+  constructor(readonly account: string, private readonly changed: () => void = () => {}) { this.database = new AccountDatabase(account); }
   root(): Promise<string> { return this.#root ??= appPaths().then((paths) => `${paths.appDir}/histories/${profileName(this.account)}/files`); }
 
   async stats(paths: string[]): Promise<(FileStat | null)[]> {
@@ -54,9 +56,35 @@ export class AccountFiles {
     return (await this.resolveMany([fileId])).get(fileId);
   }
 
+  /** Keep remote Web content only while an operation or preview uses it. */
+  retain(fileIds: string[]): () => void {
+    if (isNative) return () => {};
+    const ids = [...new Set(fileIds)];
+    for (const id of ids) this.#users.set(id, (this.#users.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const id of ids) {
+        const count = (this.#users.get(id) ?? 0) - 1;
+        if (count > 0) { this.#users.set(id, count); continue; }
+        this.#users.delete(id);
+        if (!this.#temporary.delete(id)) continue;
+        const url = this.#urls.get(id);
+        if (url) URL.revokeObjectURL(url);
+        this.#urls.delete(id);
+        this.changed();
+      }
+    };
+  }
+
+  private async webBlob(fileId: string): Promise<Blob | undefined> {
+    return this.#temporary.get(fileId) ?? this.database.get<Blob>("blobs", fileId);
+  }
+
   /** 普通下载的保存位置；浏览器 Blob 缓存没有可展示的磁盘路径。 */
   async downloadDestination(fileIds: string[]): Promise<string> {
-    if (!isNative) return "浏览器本地缓存";
+    if (!isNative) return "浏览器临时内存（使用后释放）";
     const root = `${await this.root()}/download`;
     const ids = [...new Set(fileIds)].map(contentId);
     if (!ids.length) return root;
@@ -70,7 +98,7 @@ export class AccountFiles {
     if (!isNative) {
       const blobs = await this.database.getMany<Blob>("blobs",ids);
       for (let i = 0; i < ids.length; i++) {
-        const blob = blobs[i], id = ids[i]!;
+        const id = ids[i]!, blob = this.#temporary.get(id) ?? blobs[i];
         if (!blob) continue;
         let url = this.#urls.get(id);
         if (!url) { url = URL.createObjectURL(blob); this.#urls.set(id,url); }
@@ -98,7 +126,7 @@ export class AccountFiles {
 
   async read(fileId: string, offset: number, length: number): Promise<Uint8Array> {
     if (!isNative) {
-      const blob = await this.database.get<Blob>("blobs", contentId(fileId));
+      const blob = await this.webBlob(contentId(fileId));
       if (!blob) throw new Error("本机文件内容不可用");
       return new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
     }
@@ -113,7 +141,7 @@ export class AccountFiles {
     await this.database.put("sources", source.fileId, [...existing.filter((value) => value.source !== source.source), source]);
   }
 
-  async writer(fileId: string, expectedSize: number): Promise<ContentWriter> {
+  async writer(fileId: string, expectedSize: number, temporary = false): Promise<ContentWriter> {
     contentId(fileId);
     // Capture and download share the same temporary content. Serialize writers by fileId.
     const previous = this.#writes.get(fileId);
@@ -130,7 +158,7 @@ export class AccountFiles {
     let size = 0;
     const hash = new Sha256();
     let storage: Omit<ContentWriter, "size">;
-    try { storage = isNative ? await this.writeNative(fileId) : this.writeWeb(fileId); }
+    try { storage = isNative ? await this.writeNative(fileId) : temporary ? this.writeMemory(fileId) : this.writeWeb(fileId); }
     catch (error) { release(); throw error; }
     return {
       get size() { return size; },
@@ -183,6 +211,18 @@ export class AccountFiles {
         ]);
       },
       abort: () => this.database.batch(chunks.map((id) => ({ name: "blobs", id }))),
+    };
+  }
+
+  private writeMemory(fileId: string): Omit<ContentWriter, "size"> {
+    const chunks: Blob[] = [];
+    return {
+      append: async (bytes) => { chunks.push(new Blob([bytes])); },
+      commit: async () => {
+        if (this.#users.has(fileId)) this.#temporary.set(fileId, new Blob(chunks));
+        chunks.length = 0;
+      },
+      abort: async () => { chunks.length = 0; },
     };
   }
 
@@ -239,12 +279,11 @@ export class AccountFiles {
 
   private async exportWeb(entry: StoredEntry, target: SaveTarget, signal: AbortSignal, ensureFile?: (fileId: string) => Promise<void>): Promise<number> {
     if (target.kind === "browserDirectory" || target.kind === "path") {
-      const database = this.database;
       const stream = async (fileId: string): Promise<ReadableStream<Uint8Array>> => {
         signal.throwIfAborted();
         await ensureFile?.(fileId);
         signal.throwIfAborted();
-        const blob = await database.get<Blob>("blobs", fileId);
+        const blob = await this.webBlob(fileId);
         if (!blob) throw new Error("本机文件内容不可用");
         return blob.stream();
       };
@@ -276,7 +315,7 @@ export class AccountFiles {
       if (safeName(name) !== name) throw new Error("文件名称不合法");
       fileId = files[0]![1].f;
     }
-    const blob = await this.database.get<Blob>("blobs", fileId);
+    const blob = await this.webBlob(fileId);
     if (!blob) throw new Error("本机文件内容不可用");
     signal.throwIfAborted();
     const url = URL.createObjectURL(blob), link = document.createElement("a");
@@ -314,7 +353,10 @@ export class AccountFiles {
     }
   }
 
-  dispose(): void { for (const url of this.#urls.values()) URL.revokeObjectURL(url); this.#urls.clear(); }
+  dispose(): void {
+    for (const url of this.#urls.values()) URL.revokeObjectURL(url);
+    this.#urls.clear(); this.#temporary.clear(); this.#users.clear();
+  }
 }
 
 function countLeaves(info: FileInfo): number {

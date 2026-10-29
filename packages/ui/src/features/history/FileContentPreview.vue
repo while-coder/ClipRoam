@@ -7,8 +7,8 @@ import { previewSource, showNotification, usePlatform } from "../../platform/run
 import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
+import { downloadWithBrowser } from "../downloads/fileAccess";
 import { audioMimeType, decodePreviewText, filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
-import { downloadWithBrowser, getFileUrl } from "../downloads/fileAccess";
 import ImagePreview from "../../components/preview/ImagePreview.vue";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import MarkdownPreview from "../../components/preview/MarkdownPreview.vue";
@@ -31,8 +31,10 @@ const canCopy = computed(() => kind === ClipboardKind.Text || (kind === Clipboar
   && clipboardPlatform.canWriteImage));
 let disposed = false;
 let audioUrl: string | undefined;
+let releasePreview: (() => void) | undefined;
 onBeforeUnmount(() => {
   disposed = true;
+  releasePreview?.();
   if (audioUrl) URL.revokeObjectURL(audioUrl);
 });
 
@@ -40,6 +42,7 @@ async function copyToClipboard(): Promise<void> {
   const session = getAccountSession();
   if (!session || copying.value || loading.value || error.value || !canCopy.value) return;
   copying.value = true;
+  const release = session.files.retain([props.file.fileId]);
   try {
     // Copy the complete file, even when the text preview only shows its beginning.
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
@@ -52,6 +55,7 @@ async function copyToClipboard(): Promise<void> {
   } catch (cause) {
     if (!session.signal.aborted) showNotification({ message: `复制失败：${errorMessage(cause)}`, tone: "error" });
   } finally {
+    release();
     copying.value = false;
   }
 }
@@ -59,6 +63,7 @@ async function copyToClipboard(): Promise<void> {
 async function downloadFile(): Promise<void> {
   const session = getAccountSession();
   if (!session) return;
+  const release = session.files.retain([props.file.fileId]);
   try {
     const name = props.image ? `${safeName(props.file.name)}.webp` : props.file.name;
     const target = await session.files.selectSaveTarget(true, name);
@@ -86,7 +91,7 @@ async function downloadFile(): Promise<void> {
     if (!session.signal.aborted && !(cause instanceof DownloadCancelledError)) {
       showNotification({ message: `下载失败：${errorMessage(cause)}`, tone: "error" });
     }
-  }
+  } finally { release(); }
 }
 
 onMounted(async () => {
@@ -95,28 +100,23 @@ onMounted(async () => {
   try {
     const session = getAccountSession();
     if (!session) throw new Error("同步账号未登录");
+    releasePreview = session.files.retain([props.file.fileId]);
+    await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
+    if (disposed) return;
+    session.signal.throwIfAborted();
     if (kind === ClipboardKind.Image || kind === FilePreviewKind.Audio) {
       const path = await session.files.resolve(props.file.fileId);
-      const name = props.image ? `${safeName(props.file.name)}.webp` : props.file.name;
+      if (!path) throw new Error("文件内容不可用");
       let url: string;
-      if (path && kind === FilePreviewKind.Audio) {
+      if (kind === FilePreviewKind.Audio) {
         const bytes = await session.files.read(props.file.fileId, 0, props.file.size);
         if (disposed) return;
         audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMimeType(props.file.name) }));
         url = audioUrl;
-      } else url = path ? await previewSource(path) : await getFileUrl(session, props.entryId, props.file.fileId, name);
+      } else url = await previewSource(path);
       if (!disposed) source.value = url;
     } else {
-      let bytes: Uint8Array;
-      const path = await session.files.resolve(props.file.fileId);
-      if (path) bytes = await session.files.read(props.file.fileId, 0, Math.min(props.file.size, textLimit));
-      else if (props.file.size === 0) bytes = new Uint8Array();
-      else {
-        const url = await getFileUrl(session, props.entryId, props.file.fileId, props.file.name);
-        const response = await fetch(url, { signal: session.signal, headers: { Range: `bytes=0-${Math.min(props.file.size, textLimit) - 1}` } });
-        if (!response.ok) throw new Error(`读取文件失败（${response.status}）`);
-        bytes = new Uint8Array(await response.arrayBuffer());
-      }
+      const bytes = await session.files.read(props.file.fileId, 0, Math.min(props.file.size, textLimit));
       if (disposed) return;
       truncated.value = props.file.size > textLimit;
       text.value = decodePreviewText(bytes, truncated.value);

@@ -6,6 +6,7 @@ import { downloadEntry } from "../downloads/useDownloads";
 import { DownloadCancelledError } from "../downloads/downloadManager";
 import { refreshHistory } from "./useHistorySync";
 import type { LocalClipboardEntry } from "../../types";
+import { entryContents } from "@cliproam/protocol";
 
 /**
  * 条目动作（从 App.vue 下沉）：复制/粘贴/另存/删除。文件准备经下载模块，历史失效走 refreshHistory。
@@ -26,7 +27,10 @@ async function activateEntry(
   }
   if (activatingEntryIds.value.has(entry.id)) return;
   activatingEntryIds.value.add(entry.id);
+  let release: (() => void) | undefined;
   try {
+    const full = await session.history.get(entry.id);
+    release = session.files.retain(entryContents(full).map((file) => file.fileId));
     // Wait for all missing content before copying or pasting the entry.
     await downloadEntry(entry.id, session);
     // 串行化：等待轮到自己再写剪贴板，避免并发 paste_entry 交错。
@@ -45,6 +49,7 @@ async function activateEntry(
     }
     showNotification({ message: String(error), tone: "error" });
   } finally {
+    release?.();
     activatingEntryIds.value.delete(entry.id);
   }
 }

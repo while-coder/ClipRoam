@@ -58,7 +58,7 @@ export type EntryDownloadToast = {
 };
 
 type Task = { snapshot: DownloadTaskSnapshot; controller: AbortController; done: Promise<void>; finish: (error?: unknown) => void };
-type Save = { entryId: string; target: SaveTarget; recordId?: string; controller: AbortController; savedCount?: number };
+type Save = { entryId: string; target: SaveTarget; recordId?: string; controller: AbortController; savedCount?: number; release: () => void };
 const terminal = (status: string) => ["succeeded", "failed", "cancelled", "interrupted"].includes(status);
 
 /** One account-owned TS queue; no backend worker or second window state. */
@@ -227,6 +227,7 @@ export class DownloadManager {
     await this.#persist(record);
     await this.#trim();
     const requested: Task[] = [];
+    const release = this.session.files.retain(files.map((file) => file.fileId));
     try {
       // Register every requester before draining so batch cancellation is complete.
       for (const file of files) {
@@ -280,7 +281,7 @@ export class DownloadManager {
         await this.#persist(record);
       }
       throw error;
-    }
+    } finally { release(); }
   }
 
   async #drain(): Promise<void> {
@@ -310,7 +311,7 @@ export class DownloadManager {
     const budget = AbortSignal.timeout(5 * 60000);
     const signal = anyAbortSignal([budget, task.controller.signal, this.session.signal]);
     // Keep both the partial content and its incremental hash across network retries.
-    const writer = await this.session.files.writer(task.snapshot.fileId, task.snapshot.size);
+    const writer = await this.session.files.writer(task.snapshot.fileId, task.snapshot.size, true);
     let committed = false;
     try {
       while (!signal.aborted && writer.size < task.snapshot.size) {
@@ -377,7 +378,11 @@ export class DownloadManager {
     this.#publish();
   }
   cancelRequest(requestId: string): void { for (const task of this.#tasks.values()) if (task.snapshot.requestIds.includes(requestId)) this.cancelTask(task.snapshot.id); }
-  stop(): void { for (const id of this.#tasks.keys()) this.cancelTask(id); for (const save of this.#saves.values()) save.controller.abort(); }
+  stop(): void {
+    for (const id of this.#tasks.keys()) this.cancelTask(id);
+    for (const save of this.#saves.values()) { save.controller.abort(); save.release(); }
+    this.#saves.clear();
+  }
 
   async cancelRecord(id: string): Promise<void> {
     this.cancelRequest(id);
@@ -409,13 +414,14 @@ export class DownloadManager {
       showNotification({ message: "已交给浏览器下载", tone: "success" });
       return null;
     }
-    const saveId = crypto.randomUUID(); this.#saves.set(saveId, { entryId, target, controller: new AbortController() });
+    const release = this.session.files.retain(entryContents(entry).map((file) => file.fileId));
+    const saveId = crypto.randomUUID(); this.#saves.set(saveId, { entryId, target, controller: new AbortController(), release });
     return { saveId };
   }
   async cancelSave(id: string): Promise<void> {
     const save = this.#saves.get(id);
     if (!save) return;
-    save.controller.abort(new Error("已取消保存")); this.#saves.delete(id);
+    save.controller.abort(new Error("已取消保存")); save.release(); this.#saves.delete(id);
     const record = save.recordId ? this.#records.get(save.recordId) : undefined;
     if (record && record.finishedMs === null) {
       record.status = "cancelled"; record.finishedMs = Date.now(); record.error = "已取消保存"; await this.#persist(record);
@@ -437,6 +443,6 @@ export class DownloadManager {
         record.finishedMs = Date.now(); record.error = String(error); await this.#persist(record);
       }
       throw error;
-    } finally { this.#saves.delete(id); }
+    } finally { save.release(); this.#saves.delete(id); }
   }
 }
