@@ -73,7 +73,8 @@ for (const platform of ["pwa", "chrome", "firefox", "vscode"]) {
   const iconsDirectory = path.join(publicDirectory, "icons");
   fs.mkdirSync(iconsDirectory, { recursive: true });
   fs.copyFileSync(path.join(browserIconsDirectory, "128x128.png"), path.join(publicDirectory, "cliproam-icon.png"));
-  const sizes = platform === "vscode" ? [] : platform === "pwa" ? [192, 512] : [16, 32, 48, 128];
+  // PWA installation icons are generated below from opaque full-bleed artwork.
+  const sizes = ["vscode", "pwa"].includes(platform) ? [] : [16, 32, 48, 128];
   for (const size of sizes) {
     fs.copyFileSync(path.join(browserIconsDirectory, `${size}x${size}.png`), path.join(iconsDirectory, `icon-${size}.png`));
   }
@@ -91,16 +92,19 @@ execFileSync(
 for (const size of [192, 512]) {
   fs.copyFileSync(
     path.join(maskableIconsDirectory, `${size}x${size}.png`),
-    path.join(rootDirectory, "apps", "pwa", "public", "icons", `icon-maskable-${size}.png`),
+    path.join(rootDirectory, "apps", "pwa", "public", "icons", `icon-fullbleed-${size}.png`),
   );
 }
 console.log("已更新 PWA 自适应图标");
 
-// iOS Home Screen needs an opaque, full-bleed touch icon of its own.
-fs.copyFileSync(
-  path.join(maskableIconsDirectory, "180x180.png"),
-  path.join(rootDirectory, "apps", "pwa", "public", "apple-touch-icon.png"),
-);
+// Use a new URL to avoid cached transparent icons. Keep the conventional name
+// too, for browsers that discover the touch icon without reading the link tag.
+for (const name of ["apple-touch-icon-fullbleed.png", "apple-touch-icon.png"]) {
+  fs.copyFileSync(
+    path.join(maskableIconsDirectory, "180x180.png"),
+    path.join(rootDirectory, "apps", "pwa", "public", name),
+  );
+}
 console.log("已更新 PWA iOS 主屏幕图标");
 
 if (!webOnly && fs.existsSync(androidResourcesDirectory)) {

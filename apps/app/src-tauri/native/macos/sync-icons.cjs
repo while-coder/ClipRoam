@@ -15,6 +15,10 @@ function syncIcons() {
       execFileSync("swift", ["-module-cache-path", path.join(root, ".tmp/swift-module-cache"),
         "-", path.join(root, "apps/icon/icon.png"), output],
         { cwd: root, input: swiftSource, stdio: ["pipe", "inherit", "inherit"] });
+      const iconset = path.join(output, "AppIcon.iconset");
+      execFileSync("iconutil", ["-c", "icns", iconset, "-o", path.join(output, "icon.icns")],
+        { cwd: root, stdio: "inherit" });
+      fs.rmSync(iconset, { recursive: true });
     },
   });
 }
@@ -54,10 +58,29 @@ for y in 0..<image.height {
 guard right > left && top > bottom else { fatalError("Source icon has no visible artwork") }
 let visible = CGRect(x: left, y: bottom, width: right - left, height: top - bottom)
 
-func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat) {
+func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat, dock: Bool = false) {
     let scale = artwork / max(visible.width, visible.height)
     context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
     context.interpolationQuality = .high
+    if dock {
+        // The source contains faint alpha noise beyond its visible tile. Clip it
+        // to the macOS tile instead of letting IconServices count it as artwork.
+        // Normalize both axes: the source's visible bounds are not quite square.
+        let tile = CGRect(x: (canvas - artwork) / 2, y: (canvas - artwork) / 2,
+                          width: artwork, height: artwork)
+        let radius = artwork * 184 / 824
+        context.saveGState()
+        context.addPath(CGPath(roundedRect: tile, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.clip()
+        context.draw(image, in: CGRect(
+            x: tile.minX - visible.minX * artwork / visible.width,
+            y: tile.minY - visible.minY * artwork / visible.height,
+            width: CGFloat(image.width) * artwork / visible.width,
+            height: CGFloat(image.height) * artwork / visible.height
+        ))
+        context.restoreGState()
+        return
+    }
     context.draw(image, in: CGRect(
         x: canvas / 2 - visible.midX * scale,
         y: canvas / 2 - visible.midY * scale,
@@ -66,26 +89,17 @@ func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat) {
     ))
 }
 
-// Keep the rounded-square artwork inside an 856 px square on a 1024 px canvas.
-// The transparent inset prevents it from looking oversized in the Dock.
+// Match the macOS icon grid: an 824 px tile with 100 px transparent margins.
+// Oversized or noisy alpha bounds can trigger Tahoe's inset white backing plate.
 let representations = [
-    (16, 1, "icp4"), (16, 2, "ic11"),
-    (32, 1, "icp5"), (32, 2, "ic12"),
-    (128, 1, "ic07"), (128, 2, "ic13"),
-    (256, 1, "ic08"), (256, 2, "ic14"),
-    (512, 1, "ic09"), (512, 2, "ic10"),
+    (16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
+    (256, 1), (256, 2), (512, 1), (512, 2),
 ]
-
-func chunkHeader(_ type: String, _ length: Int) -> Data {
-    var size = UInt32(length).bigEndian
-    var header = Data(type.utf8)
-    withUnsafeBytes(of: &size) { header.append(contentsOf: $0) }
-    return header
-}
-
-var chunks = Data()
-var tableOfContents = Data()
-for (points, scale, type) in representations {
+let iconset = icons.appendingPathComponent("AppIcon.iconset")
+try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+// Let Apple's iconutil encode ICNS. In particular, the small 1x entries cannot
+// contain PNG data in icp4/icp5 chunks: IconServices decodes those as legacy RGB.
+for (points, scale) in representations {
     let pixels = points * scale
     guard let context = CGContext(
         data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: pixels * 4,
@@ -93,8 +107,8 @@ for (points, scale, type) in representations {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     ) else { fatalError("Cannot create \(pixels) px canvas") }
     let canvas = CGFloat(pixels)
-    let artwork = (canvas * 856 / 1024).rounded()
-    drawArtwork(in: context, canvas: canvas, artwork: artwork)
+    let artwork = (canvas * 824 / 1024).rounded()
+    drawArtwork(in: context, canvas: canvas, artwork: artwork, dock: true)
 
     let png = NSMutableData()
     guard let result = context.makeImage(),
@@ -103,19 +117,10 @@ for (points, scale, type) in representations {
     }
     CGImageDestinationAddImage(destination, result, nil)
     guard CGImageDestinationFinalize(destination) else { fatalError("Cannot write \(pixels) px icon") }
-    let header = chunkHeader(type, png.length + 8)
-    tableOfContents.append(header)
-    chunks.append(header)
-    chunks.append(png as Data)
+    let suffix = scale == 2 ? "@2x" : ""
+    try (png as Data).write(to: iconset.appendingPathComponent("icon_\(points)x\(points)\(suffix).png"))
 }
-
-// ICNS stores PNG representations in typed chunks with big-endian lengths.
-var output = chunkHeader("icns", 8 + 8 + tableOfContents.count + chunks.count)
-output.append(chunkHeader("TOC ", tableOfContents.count + 8))
-output.append(tableOfContents)
-output.append(chunks)
-try output.write(to: icons.appendingPathComponent("icon.icns"), options: .atomic)
-print("Generated native/macos/icons/icon.icns (856/1024 artwork, transparent padding)")
+print("Generated macOS iconset (824/1024 tile, clean transparent padding)")
 
 // Render the same ClipRoam artwork for the 18 pt menu bar slot at 2x resolution.
 // A 1 pt transparent inset keeps it clear of the menu bar edges.
