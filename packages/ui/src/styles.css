@@ -590,6 +590,9 @@ button.image-thumbnail { cursor: zoom-in; }
 
 /* fill-height 只定 box 高，kit 没写 body 拉伸：补 flex:1 让 body 撑满，内部 form 才能拿到确定高度。 */
 .s-modal-box.fill-height .s-modal-body { flex: 1; }
+/* 文件名允许连续字符换行，标题变高时保留关闭按钮和完整标题。 */
+.file-content-preview-modal .s-modal-header { flex-shrink: 0; align-items: flex-start; }
+.file-content-preview-modal .s-modal-header h2 { white-space: normal; overflow-wrap: anywhere; }
 /* 设置页固定高度（参考 sterm）：body 不滚，form 纵向 flex —— STabs 吃满剩余并内部滚动（左 tabs 固定）。 */
 /* Contain scrolling even on short tabs, and over the header, navigation or mask. */
 .settings-modal { overflow: auto; overscroll-behavior: contain; }
