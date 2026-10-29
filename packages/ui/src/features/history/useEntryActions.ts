@@ -114,7 +114,7 @@ export function activateFromView(entry: LocalClipboardEntry, viaClick: boolean):
   }
 }
 
-export async function setEntriesFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<boolean> {
+export async function setEntriesFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<boolean> {
   if (!entryIds.length) return true;
   const session = getAccountSession();
   if (!session?.client) {
@@ -122,7 +122,7 @@ export async function setEntriesFavorite(entryIds: readonly string[], isFavorite
     return false;
   }
   try {
-    await session.history.setFavorite(entryIds, isFavorite);
+    await session.history.setFavorite(entryIds, isFavorite, favoriteFolderId);
     return !session.signal.aborted;
   } catch (error) {
     if (!session.signal.aborted) showNotification({ message: `修改收藏失败：${errorMessage(error)}`, tone: "error" });

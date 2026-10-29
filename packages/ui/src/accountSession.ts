@@ -12,7 +12,7 @@ import { profileName } from "./utils";
 import { showNotification } from "./platform/runtime";
 import type { ClientConnection } from "./features/sync/clientSessionManager";
 import type { SyncRequester } from "./features/sync/httpClient";
-import type { SyncConfig, AccountPreferences, Device, SettingsPage } from "./types";
+import type { SyncConfig, AccountPreferences, Device, SettingsPage, WorkspaceView } from "./types";
 
 function createSettingsState() {
   const settingsVisible = ref(false);
@@ -38,7 +38,7 @@ function createAccountState() {
     settingsRequestController: undefined as AbortController | undefined,
     connected: ref(false),
     devicesById: ref<Record<string, Device>>({}),
-    activeView: ref<"history" | "pending-upload" | "uploads" | "downloads" | "devices">("history"),
+    activeView: ref<WorkspaceView>("history"),
     activatingEntryIds: ref(new Set<string>()),
     savingEntryId: ref(""),
     clipboardWriteChain: Promise.resolve() as Promise<unknown>,

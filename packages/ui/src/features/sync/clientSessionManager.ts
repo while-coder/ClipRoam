@@ -349,6 +349,7 @@ class SessionConnection implements ClientConnection {
         return;
       case "clipboard.created":
       case "clipboard.updated":
+      case "favorites.folders.updated":
         this.handlers.onEntry();
         return;
       case "clipboard.activated":

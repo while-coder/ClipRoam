@@ -556,7 +556,9 @@ onBeforeUnmount(() => {
   >
     <KeepAlive>
       <HistoryView
-        v-if="activeView === 'history'"
+        v-if="activeView === 'history' || activeView === 'favorites'"
+        :key="activeView"
+        :favorites="activeView === 'favorites'"
         v-show="!isQuickPaste"
         ref="historyView"
         :fetch-history-page="fetchHistoryPage"

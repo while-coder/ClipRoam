@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ClipboardEntrySchema,
   FileInfoSchema,
   ImageInfoSchema,
+  MAX_FAVORITE_FOLDER_DEPTH,
   entryContents,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -11,6 +12,8 @@ import {
   type EntryPublishInput,
   type FileInfo,
   type ImageInfo,
+  type FavoriteFolder,
+  type FavoriteFolderInput,
 } from "@cliproam/protocol";
 import type Database from "better-sqlite3";
 import { FileStore } from "../files/FileStore.js";
@@ -21,6 +24,7 @@ type EntryRow = {
   id: number;
   version: number;
   is_favorite: number;
+  favorite_folder_id: string | null;
   kind: string;
   content: string;
   extra: string;
@@ -46,6 +50,7 @@ export class UserDataStore {
         id INTEGER PRIMARY KEY,
         version INTEGER NOT NULL DEFAULT 1,
         is_favorite INTEGER NOT NULL DEFAULT 0,
+        favorite_folder_id TEXT,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -61,11 +66,23 @@ export class UserDataStore {
         device_info TEXT NOT NULL,
         last_online_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS favorite_folders (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT,
+        name TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS favorite_folders_name
+        ON favorite_folders (COALESCE(parent_id, ''), name);
     `);
     const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
     if (!columns.some(({ name }) => name === "is_favorite")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0");
     }
+    if (!columns.some(({ name }) => name === "favorite_folder_id")) {
+      this.#database.exec("ALTER TABLE entries ADD COLUMN favorite_folder_id TEXT");
+    }
+    this.#database.exec("CREATE INDEX IF NOT EXISTS entries_favorite_folder ON entries (favorite_folder_id) WHERE is_favorite = 1");
     if (!columns.some(({ name }) => name === "version")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
     }
@@ -100,6 +117,12 @@ export class UserDataStore {
     const deviceClause = selectedDeviceIds.length
       ? `source_device_id IN (${Object.keys(deviceParams).map((name) => `@${name}`).join(", ")})`
       : "";
+    const folderIds = query.favoriteFolderId && query.favoriteFolderId !== "unfiled"
+      ? this.#folderSubtree(query.favoriteFolderId) : [];
+    const folderParams = Object.fromEntries(folderIds.map((id, index) => [`folder${index}`, id]));
+    const folderClause = query.favoriteFolderId === "unfiled"
+      ? "is_favorite = 1 AND favorite_folder_id IS NULL"
+      : folderIds.length ? `is_favorite = 1 AND favorite_folder_id IN (${Object.keys(folderParams).map((name) => `@${name}`).join(", ")})` : "";
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
@@ -107,6 +130,7 @@ export class UserDataStore {
         AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
         AND (@kind IS NULL OR kind = @kind)
         AND (@favoriteOnly = 0 OR is_favorite = 1)
+        ${folderClause ? `AND (${folderClause})` : ""}
         ${deviceClause ? `AND (${deviceClause})` : ""}
     `;
     const filters = {
@@ -116,6 +140,7 @@ export class UserDataStore {
       kind: query.kind ?? null,
       favoriteOnly: query.favoriteOnly ? 1 : 0,
       ...deviceParams,
+      ...folderParams,
     };
     const rows = this.#database
       .prepare(`
@@ -142,7 +167,7 @@ export class UserDataStore {
       if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
-          SELECT id, version, is_favorite, kind, content, extra, source_device_id, created_at
+          SELECT id, version, is_favorite, favorite_folder_id, kind, content, extra, source_device_id, created_at
           FROM entries
           WHERE id IN (${placeholders(ids.length)})
           ORDER BY created_at DESC
@@ -237,7 +262,7 @@ export class UserDataStore {
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
-        RETURNING id, version, is_favorite, kind, content, extra, source_device_id, created_at
+        RETURNING id, version, is_favorite, favorite_folder_id, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -252,17 +277,75 @@ export class UserDataStore {
     });
   }
 
-  setFavorite(entryIds: readonly string[], isFavorite: boolean): ClipboardEntry[] {
+  setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
     const ids = [...new Set(entryIds)];
     return this.#transaction(() => {
+      if (isFavorite && favoriteFolderId) this.#requireFolder(favoriteFolderId);
       for (const batch of chunk(ids, QUERY_BATCH)) {
         this.#database.prepare(`
-          UPDATE entries SET is_favorite = ?, version = version + 1
-          WHERE id IN (${placeholders(batch.length)}) AND is_favorite != ?
-        `).run(isFavorite ? 1 : 0, ...batch, isFavorite ? 1 : 0);
+          UPDATE entries SET is_favorite = ?, favorite_folder_id = ${!isFavorite || favoriteFolderId !== undefined ? "?" : "favorite_folder_id"}, version = version + 1
+          WHERE id IN (${placeholders(batch.length)})
+        `).run(isFavorite ? 1 : 0, ...(!isFavorite || favoriteFolderId !== undefined ? [isFavorite ? favoriteFolderId ?? null : null] : []), ...batch);
       }
       return this.listByIds(ids);
     });
+  }
+
+  listFavoriteFolders(): FavoriteFolder[] {
+    return this.#database.prepare(`
+      SELECT f.id, f.parent_id AS parentId, f.name, COUNT(e.id) AS entryCount
+      FROM favorite_folders f LEFT JOIN entries e ON e.favorite_folder_id = f.id AND e.is_favorite = 1
+      GROUP BY f.id ORDER BY f.name COLLATE NOCASE, f.id
+    `).all() as FavoriteFolder[];
+  }
+
+  saveFavoriteFolder(input: FavoriteFolderInput, id: string = randomUUID()): void {
+    this.#transaction(() => {
+      const folders = this.listFavoriteFolders();
+      if (input.parentId) this.#requireFolder(input.parentId);
+      const subtree = folders.some((folder) => folder.id === id) ? this.#folderSubtree(id) : [id];
+      if (input.parentId && subtree.includes(input.parentId)) throw new FavoriteFolderError("不能移动到自身或下级目录");
+      if (folders.some((folder) => folder.id !== id && folder.parentId === input.parentId && folder.name === input.name)) {
+        throw new FavoriteFolderError("同级目录名称已存在", 409);
+      }
+      const parents = new Map(folders.map((folder) => [folder.id, folder.parentId]));
+      parents.set(id, input.parentId);
+      for (const folderId of subtree) {
+        let depth = 1;
+        let parentId = parents.get(folderId);
+        while (parentId) { depth++; parentId = parents.get(parentId); }
+        if (depth > MAX_FAVORITE_FOLDER_DEPTH) throw new FavoriteFolderError(`目录最多支持 ${MAX_FAVORITE_FOLDER_DEPTH} 级`);
+      }
+      this.#database.prepare(`INSERT INTO favorite_folders (id, parent_id, name) VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name`).run(id, input.parentId, input.name);
+    });
+  }
+
+  requireFavoriteFolder(id: string): void { this.#requireFolder(id); }
+
+  deleteFavoriteFolder(id: string): void {
+    this.#transaction(() => {
+      const ids = this.#folderSubtree(id);
+      for (const batch of chunk(ids, QUERY_BATCH)) {
+        this.#database.prepare(`UPDATE entries SET favorite_folder_id = NULL, version = version + 1
+          WHERE favorite_folder_id IN (${placeholders(batch.length)})`).run(...batch);
+        this.#database.prepare(`DELETE FROM favorite_folders WHERE id IN (${placeholders(batch.length)})`).run(...batch);
+      }
+    });
+  }
+
+  #requireFolder(id: string): void {
+    if (!this.#database.prepare("SELECT id FROM favorite_folders WHERE id = ?").get(id)) {
+      throw new FavoriteFolderError("目录不存在或已被删除，请重新选择", 404);
+    }
+  }
+
+  #folderSubtree(id: string): string[] {
+    this.#requireFolder(id);
+    return (this.#database.prepare(`WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM favorite_folders WHERE id = ?
+      UNION ALL SELECT f.id FROM favorite_folders f JOIN subtree s ON f.parent_id = s.id
+    ) SELECT id FROM subtree`).all(id) as Array<{ id: string }>).map((folder) => folder.id);
   }
 
   // Enforces the non-favorite history cap: entries beyond the newest
@@ -305,6 +388,7 @@ export class UserDataStore {
       id: String(row.id),
       version: row.version,
       isFavorite: row.is_favorite === 1,
+      favoriteFolderId: row.favorite_folder_id ?? null,
       kind: row.kind,
       content: row.content,
       sourceDeviceId: row.source_device_id,
@@ -316,6 +400,10 @@ export class UserDataStore {
   #transaction<T>(work: () => T): T {
     return withTransaction(this.#database, work);
   }
+}
+
+export class FavoriteFolderError extends Error {
+  constructor(message: string, readonly statusCode = 400) { super(message); }
 }
 
 // Range bounds compare against `created_at` (stored via `toISOString()`, i.e.

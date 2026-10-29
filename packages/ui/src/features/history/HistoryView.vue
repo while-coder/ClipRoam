@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ClipboardKind } from "@cliproam/protocol";
-import { parseLocalDate, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf } from "../../utils";
+import { ClipboardKind, type FavoriteFolder } from "@cliproam/protocol";
+import { parseLocalDate, validateDateRange, deviceName as deviceDisplayName, fileEntrySummary, uploadStatus as uploadStatusOf, errorMessage } from "../../utils";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { openModalCount } from "@qingfeng346/ui-kit/components/SModal.vue";
 import { native } from "../../platform/native";
@@ -26,6 +26,10 @@ import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import FilePreview from "./FilePreview.vue";
+import FavoriteFoldersPanel from "../favorites/FavoriteFoldersPanel.vue";
+import FavoriteDestinationDialog from "../favorites/FavoriteDestinationDialog.vue";
+import { flattenFavoriteFolders } from "../favorites/folderTree";
+import { getAccountSession } from "../../accountSession";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { setEntriesFavorite } from "./useEntryActions";
@@ -49,6 +53,7 @@ const props = defineProps<{
   /** Bumped whenever the history may have changed in the background. */
   revision: number;
   quickPaste?: boolean;
+  favorites?: boolean;
   devicesById: Record<string, Device>;
   currentTime: number;
   importingShare: boolean;
@@ -70,17 +75,67 @@ const isQuickPaste = computed(() => props.quickPaste === true);
 const query = ref("");
 const filter = ref<EntryFilter>("all");
 const favoriteOnly = ref(false);
+const favoriteFolderId = ref("");
+const folders = ref<FavoriteFolder[]>([]);
+const folderRows = computed(() => flattenFavoriteFolders(folders.value));
+const folderTitle = computed(() => favoriteFolderId.value === "unfiled" ? "未分类" : folderRows.value.find((folder) => folder.id === favoriteFolderId.value)?.path ?? "全部收藏");
+const foldersLoading = ref(false);
+const foldersError = ref("");
+const destinationIds = ref<string[]>([]);
+const destinationFolderId = ref<string | null>(null);
+const destinationError = ref("");
+const recentFavoriteIds = ref<string[]>([]);
+let folderLoadToken = 0;
+async function loadFolders(): Promise<void> {
+  const session = getAccountSession();
+  if (!session) return;
+  const token = ++folderLoadToken;
+  foldersLoading.value = true;
+  foldersError.value = "";
+  try {
+    const latest = await session.history.listFavoriteFolders();
+    if (token !== folderLoadToken || session.signal.aborted) return;
+    folders.value = latest;
+    if (favoriteFolderId.value && favoriteFolderId.value !== "unfiled" && !latest.some((folder) => folder.id === favoriteFolderId.value)) {
+      favoriteFolderId.value = "unfiled";
+    }
+  } catch (error) {
+    if (token === folderLoadToken && !session.signal.aborted) foldersError.value = errorMessage(error);
+  } finally { if (token === folderLoadToken) foldersLoading.value = false; }
+}
+watch([() => props.revision, () => props.favorites, () => destinationIds.value.length > 0], () => {
+  if (props.favorites || destinationIds.value.length) void loadFolders();
+}, { immediate: true });
+onBeforeUnmount(() => { folderLoadToken++; });
+function chooseDestination(ids: readonly string[], folderId: string | null = null): void {
+  if (!ids.length || favoriting.value || deleting.value) return;
+  destinationFolderId.value = folderId;
+  destinationError.value = "";
+  destinationIds.value = [...ids];
+}
+function destinationFromMenu(entry: LocalClipboardEntry): void {
+  const ids = selectedIds.value.has(entry.id) && selectedCount.value > 1 ? [...selectedIds.value] : [entry.id];
+  chooseDestination(ids, ids.length === 1 ? entry.favoriteFolderId ?? null : null);
+}
+async function confirmDestination(folderId: string | null): Promise<void> {
+  if (await favoriteEntries(destinationIds.value, true, folderId)) {
+    destinationIds.value = [];
+    recentFavoriteIds.value = [];
+    showNotification({ message: "已保存到所选收藏目录", tone: "success" });
+  } else destinationError.value = "保存失败，请检查连接或重新选择目录后重试";
+}
 const favoritingIds = ref(new Set<string>());
 const favoriting = computed(() => favoritingIds.value.size > 0);
 
 async function toggleFavorite(entry: LocalClipboardEntry): Promise<void> {
-  await favoriteEntries([entry.id], !entry.isFavorite);
+  const adding = !entry.isFavorite;
+  if (await favoriteEntries([entry.id], adding)) recentFavoriteIds.value = adding ? [entry.id] : [];
 }
 
-async function favoriteEntries(ids: readonly string[], isFavorite: boolean): Promise<void> {
-  if (!ids.length || deleting.value || favoriting.value) return;
+async function favoriteEntries(ids: readonly string[], isFavorite: boolean, folderId?: string | null): Promise<boolean> {
+  if (!ids.length || deleting.value || favoriting.value) return false;
   for (const id of ids) favoritingIds.value.add(id);
-  try { await setEntriesFavorite(ids, isFavorite); }
+  try { return await setEntriesFavorite(ids, isFavorite, folderId); }
   finally { for (const id of ids) favoritingIds.value.delete(id); }
 }
 
@@ -162,7 +217,8 @@ const {
   fetchHistoryPage: props.fetchHistoryPage,
   buildFilter: (page) => ({
     query: committedQuery.value,
-    favoriteOnly: favoriteOnly.value,
+    favoriteOnly: props.favorites || favoriteOnly.value,
+    favoriteFolderId: props.favorites ? favoriteFolderId.value || undefined : undefined,
     kind: filter.value,
     start: activeTimeRange.value.start,
     end: activeTimeRange.value.end,
@@ -170,7 +226,7 @@ const {
     page,
   }),
   revision: computed(() => props.revision),
-  filterSources: [committedQuery, filter, favoriteOnly, timeFilter, startDate, endDate, selectedDeviceIds],
+  filterSources: [committedQuery, filter, favoriteOnly, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds],
   // An invalid custom range matches nothing — the backend never sees it, and
   // background revision bumps must not refill the cleared list either.
   canFetch: () => !timeRangeError.value,
@@ -196,7 +252,7 @@ const selectedCount = computed(() => selectedIds.value.size);
 watch(pageEntries, (entries) => {
   if (menuEntry.value && !entries.some((entry) => entry.id === menuEntry.value?.id)) closeEntryMenu();
 });
-watch([committedQuery, filter, favoriteOnly, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
+watch([committedQuery, filter, favoriteOnly, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
   clearSelection();
   closeEntryMenu();
 });
@@ -300,6 +356,8 @@ function leaveHistory(): void {
   cancelLongPress();
   closeEntryMenu();
   previewEntry.value = undefined;
+  if (!favoriting.value) destinationIds.value = [];
+  recentFavoriteIds.value = [];
   if (!deleting.value) deleteTargets.value = [];
   clearSelection();
 }
@@ -314,6 +372,7 @@ onActivated(() => {
   // The initial mount already fetches; menu returns retain the page while refreshing.
   if (!wasDeactivated) return;
   attachSelectionListeners();
+  if (props.favorites) void loadFolders();
   void fetchPage(currentPage.value);
 });
 
@@ -488,7 +547,10 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>
-  <WorkspacePage title="剪贴板历史" layout="history" :data-history-selecting="selecting || undefined">
+  <div class="history-workspace app-content" :class="{ 'with-favorite-folders': favorites }">
+  <FavoriteFoldersPanel v-if="favorites" v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
+  <WorkspacePage :title="favorites ? folderTitle : '剪贴板历史'" layout="history" :data-history-selecting="selecting || undefined">
+    <template v-if="favorites" #status>收藏夹</template>
     <template #menu><WorkspaceMenu /></template>
     <template v-if="isQuickPaste" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
@@ -499,7 +561,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         {{ selecting ? "取消选择" : "选择" }}
       </SButton>
       <SButton
-        v-if="!selecting"
+        v-if="!selecting && !favorites"
         aria-label="读取当前剪贴板"
         title="读取当前剪贴板"
         :aria-busy="capturingClipboard"
@@ -525,8 +587,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
             ref="searchInput"
             v-model:value="query"
             type="text"
-            placeholder="搜索剪贴板历史"
-            aria-label="搜索剪贴板历史"
+            :placeholder="favorites ? `搜索${folderTitle}` : '搜索剪贴板历史'"
+            :aria-label="favorites ? `搜索${folderTitle}` : '搜索剪贴板历史'"
             enterkeyhint="search"
             clearable
             @keydown.enter="!$event.isComposing && commitSearch()"
@@ -562,6 +624,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
             :devices="devices"
           />
           <button
+            v-if="!favorites"
             class="favorite-filter"
             type="button"
             :aria-pressed="favoriteOnly"
@@ -571,6 +634,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           ><Star :size="13" :fill="favoriteOnly ? 'currentColor' : 'none'" aria-hidden="true" /><span>已收藏</span></button>
         </div>
       </div>
+      <div v-if="recentFavoriteIds.length" class="favorite-feedback" role="status">已收藏到「未分类」<SButton size="small" @click="chooseDestination(recentFavoriteIds)">选择目录</SButton><SButton size="small" @click="recentFavoriteIds = []">关闭</SButton></div>
+      <SButton v-if="favorites && favoriteFolderId && committedQuery" size="small" @click="favoriteFolderId = ''">搜索全部收藏</SButton>
       <p v-if="mobileLayout" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击条目预览，长按打开菜单" }}</p>
     </section>
     </template>
@@ -639,6 +704,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           :loading="activatingEntryIds.has(entry.id)"
         />
         <ClipboardEntryContent :entry="entry" :device-name="deviceDisplayName(devicesById, entry)" :current-time="currentTime">
+            <template v-if="favorites && entry.isFavorite">
+              <span>·</span><span class="entry-folder-path" :title="folderRows.find((folder) => folder.id === entry.favoriteFolderId)?.path ?? '未分类'">{{ folderRows.find((folder) => folder.id === entry.favoriteFolderId)?.path ?? '未分类' }}</span>
+            </template>
             <template v-if="fileEntrySummary(entry)">
               <span>·</span>
               <span>{{ fileEntrySummary(entry) }}</span>
@@ -672,8 +740,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
         <Search :size="28" aria-hidden="true" />
-        <strong>{{ timeRangeError ? "日期区间无效" : favoriteOnly ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (favoriteOnly ? "点击条目的星标收藏，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <strong>{{ timeRangeError ? "日期区间无效" : favorites || favoriteOnly ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
+        <span>{{ timeRangeError || (favorites || favoriteOnly ? "在历史中收藏内容并选择目录，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
       </SEmpty>
     </section>
@@ -685,6 +753,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], true)">
           <Star :size="15" aria-hidden="true" />收藏
         </SButton>
+        <SButton :disabled="deleting || favoriting || !selectedCount" @click="chooseDestination([...selectedIds], favorites && favoriteFolderId !== 'unfiled' ? favoriteFolderId || null : null)">{{ favorites ? '移动到…' : '收藏到…' }}</SButton>
         <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], false)">取消收藏</SButton>
         <SButton class="history-selection-delete" type="error" :disabled="deleting || !selectedCount" @click="requestSelectedDelete">
           <Trash2 :size="15" aria-hidden="true" />
@@ -727,6 +796,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       :entry="menuEntry"
       :favoriting="favoriting"
       @favorite="favoriteFromMenu"
+      @destination="destinationFromMenu"
       :x="menuX"
       :y="menuY"
       :activating="activatingEntryIds.has(menuEntry.id)"
@@ -739,6 +809,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       @select="beginSelection"
       @close="closeEntryMenu"
     />
+
+    <FavoriteDestinationDialog v-if="destinationIds.length" :folders="folders" :initial-folder-id="destinationFolderId" :count="destinationIds.length" :busy="favoriting" :loading="foldersLoading" :error="destinationError || foldersError" @close="destinationIds = []" @confirm="confirmDestination" @refresh="loadFolders" />
 
     <SModal v-if="deleteTargets.length" :show="true" :title="`删除 ${deleteTargets.length} 条历史？`" width="420px"
       :closable="!deleting" :mask-closable="!deleting" :close-on-esc="!deleting"
@@ -780,9 +852,17 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       @close="closeEntryPreview"
     />
   </WorkspacePage>
+  </div>
 </template>
 
 <style scoped>
+.history-workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+.history-workspace.with-favorite-folders { grid-template-columns: 190px minmax(0, 1fr); }
+.favorite-feedback { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--color-secondary-text); font-size: 12px; }
+.entry-folder-path { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 768px) {
+  .history-workspace.with-favorite-folders { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+}
 .toolbar { container: history-toolbar / inline-size; }
 .history-refresh.s-button { flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
 .favorite-filter { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; height: 27px; margin-left: 5px; padding: 0 9px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; background: rgba(255, 255, 255, 0.04); color: #cbd5e1; font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }

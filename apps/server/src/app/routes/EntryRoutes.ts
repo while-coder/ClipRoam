@@ -7,6 +7,7 @@ import {
   EntryQueryRequestSchema,
   EntryDeleteRequestSchema,
   EntryFavoriteRequestSchema,
+  FavoriteFolderInputSchema,
   type EntryManifestResponse,
   type EntryPublishResponse,
   type EntryQueryResponse,
@@ -22,7 +23,8 @@ import { parseOr400 } from "./parseRequest.js";
 const logger = getLogger("EntryRoutes");
 
 export type EntryRouteDeps = {
-  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite">;
+  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite" |
+    "listFavoriteFolders" | "saveFavoriteFolder" | "deleteFavoriteFolder">;
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
   maxHistoryEntries: (userId: string) => number;
@@ -112,13 +114,47 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!user) return reply;
     const body = parseOr400(reply, EntryFavoriteRequestSchema, request.body, "收藏参数无效");
     if (!body) return reply;
-    const entries = store.setFavorite(user.id, body.ids, body.isFavorite);
+    const entries = store.setFavorite(user.id, body.ids, body.isFavorite, body.favoriteFolderId);
     if (entries.length) broadcast(user.id, {
       type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
     });
     for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
       broadcast(user.id, { type: "clipboard.deleted", entryId });
     }
+    return reply.code(204).send();
+  });
+
+  app.get("/favorites/folders", async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    return { folders: store.listFavoriteFolders(user.id) };
+  });
+
+  app.post("/favorites/folders", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const body = parseOr400(reply, FavoriteFolderInputSchema, request.body, "目录参数无效");
+    if (!body) return reply;
+    store.saveFavoriteFolder(user.id, body);
+    broadcast(user.id, { type: "favorites.folders.updated" });
+    return reply.code(204).send();
+  });
+
+  app.patch<{ Params: { id: string } }>("/favorites/folders/:id", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const body = parseOr400(reply, FavoriteFolderInputSchema, request.body, "目录参数无效");
+    if (!body) return reply;
+    store.saveFavoriteFolder(user.id, body, request.params.id);
+    broadcast(user.id, { type: "favorites.folders.updated" });
+    return reply.code(204).send();
+  });
+
+  app.delete<{ Params: { id: string } }>("/favorites/folders/:id", async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    store.deleteFavoriteFolder(user.id, request.params.id);
+    broadcast(user.id, { type: "favorites.folders.updated" });
     return reply.code(204).send();
   });
 

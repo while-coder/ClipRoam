@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Trash2, ListChecks, Star } from "lucide-vue-next";
+import { Copy, Download, Trash2, ListChecks, Star, Folder } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 import { useMobileLayout } from "../../platform/runtime";
 
@@ -27,6 +27,7 @@ const emit = defineEmits<{
   remove: [entry: LocalClipboardEntry];
   select: [entry: LocalClipboardEntry];
   favorite: [entry: LocalClipboardEntry, isFavorite: boolean];
+  destination: [entry: LocalClipboardEntry];
   close: [];
 }>();
 
@@ -88,6 +89,7 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
 const onSelect = run((entry) => emit("select", entry));
+const onDestination = run((entry) => emit("destination", entry));
 function onFavorite(isFavorite: boolean): void {
   emit("close");
   emit("favorite", props.entry, isFavorite);
@@ -181,6 +183,9 @@ onBeforeUnmount(() => {
       <SButton v-if="multiple" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
         <Star :size="15" aria-hidden="true" />
         <span>取消收藏选中的 {{ selectedCount }} 条</span>
+      </SButton>
+      <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onDestination(entry)">
+        <Folder :size="15" aria-hidden="true" /><span>{{ entry.isFavorite && !multiple ? '移动到目录…' : '收藏到目录…' }}</span>
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />

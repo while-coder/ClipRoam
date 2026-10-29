@@ -56,6 +56,7 @@ export const ClipboardEntrySchema = z.object({
   id: z.string(),
   version: z.number().int().positive().safe(),
   isFavorite: z.boolean().optional(),
+  favoriteFolderId: z.string().uuid().nullable().optional(),
   kind: ClipboardKindSchema,
   content: z.string(),
   html: z.string().optional(),
@@ -160,7 +161,7 @@ export const AuthResponseSchema = z.object({
 // Identity and revision belong to the server: it assigns the id (arrival order),
 // timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true }).extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true, favoriteFolderId: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });
@@ -213,6 +214,7 @@ export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("
 // matching rows.
 export const EntryManifestQuerySchema = z.object({
   favoriteOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  favoriteFolderId: z.union([z.literal("unfiled"), z.string().uuid()]).optional(),
   search: z.string().trim().min(1).max(100).optional(),
   // Either a UTC date (`YYYY-MM-DD`, expanded to the whole day) or a concrete
   // UTC timestamp down to milliseconds, matching how entries are stored.
@@ -242,7 +244,24 @@ export const EntryManifestResponseSchema = z.object({
 export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema) });
 
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
-export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({ isFavorite: z.boolean() });
+export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
+  isFavorite: z.boolean(),
+  // Omitted preserves an existing favorite's folder; null explicitly unfiles it.
+  favoriteFolderId: z.string().uuid().nullable().optional(),
+});
+
+export const MAX_FAVORITE_FOLDER_DEPTH = 2;
+export const FavoriteFolderInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  parentId: z.string().uuid().nullable(),
+});
+export const FavoriteFolderSchema = FavoriteFolderInputSchema.extend({
+  id: z.string().uuid(),
+  entryCount: z.number().int().nonnegative(),
+});
+export const FavoriteFolderListSchema = z.object({ folders: z.array(FavoriteFolderSchema) });
+export type FavoriteFolder = z.infer<typeof FavoriteFolderSchema>;
+export type FavoriteFolderInput = z.infer<typeof FavoriteFolderInputSchema>;
 
 // The socket only authenticates the connection and carries server-push
 // notifications. Every request/response exchange — listing, querying,
@@ -258,6 +277,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("favorites.folders.updated") }),
   z.object({ type: z.literal("clipboard.updated"), entries: z.array(ClipboardManifestEntrySchema) }),
   // Reconnection refreshes settings missed while offline.
   z.object({ type: z.literal("auth.ack"), settings: z.unknown().optional() }),

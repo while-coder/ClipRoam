@@ -2,6 +2,7 @@ import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchem
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import { PAGE_SIZE } from "../../config";
+import { FavoriteFolderListSchema, type FavoriteFolder, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
@@ -36,6 +37,7 @@ export class HistoryClient {
     if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
     for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
     if (filter.favoriteOnly) params.set("favoriteOnly", "true");
+    if (filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
     const result = await this.http.request(
       "GET", `/entries/manifest?${params}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
@@ -46,12 +48,24 @@ export class HistoryClient {
     return { total: result!.total, entries };
   }
 
-  async setFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<void> {
-    await this.http.request(
-      "PATCH", "/entries/favorite",
-      this.#jsonInit({ ids: [...new Set(entryIds)], isFavorite }, ENTRY_HTTP_TIMEOUT_MS),
-      null, "",
-    );
+  async setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<void> {
+    for (let offset = 0; offset < entryIds.length; offset += ENTRY_QUERY_BATCH) {
+      await this.http.request("PATCH", "/entries/favorite",
+        this.#jsonInit({ ids: [...new Set(entryIds.slice(offset, offset + ENTRY_QUERY_BATCH))], isFavorite, favoriteFolderId }, ENTRY_HTTP_TIMEOUT_MS), null, "");
+    }
+  }
+
+  async listFavoriteFolders(): Promise<FavoriteFolder[]> {
+    const result = await this.http.request("GET", "/favorites/folders", { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, FavoriteFolderListSchema, "服务器返回了不兼容的目录列表");
+    return result!.folders;
+  }
+
+  async saveFavoriteFolder(input: FavoriteFolderInput, id?: string): Promise<void> {
+    await this.http.request(id ? "PATCH" : "POST", `/favorites/folders${id ? `/${encodeURIComponent(id)}` : ""}`, this.#jsonInit(input, ENTRY_HTTP_TIMEOUT_MS), null, "");
+  }
+
+  async deleteFavoriteFolder(id: string): Promise<void> {
+    await this.http.request("DELETE", `/favorites/folders/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, null, "");
   }
 
   /** Only detail backfill writes server entry/file information into the cache. */

@@ -5,6 +5,8 @@ import type {
   EntryManifestQuery,
   EntryManifestResponse,
   EntryPublishInput,
+  FavoriteFolder,
+  FavoriteFolderInput,
 } from "@cliproam/protocol";
 import { getLogger } from "../app/Logger.js";
 import { USER_STORE_IDLE_MS, USER_STORE_SWEEP_INTERVAL_MS, type ServerConfig, type UserTransferOverrides } from "../app/ServerConfig.js";
@@ -70,9 +72,16 @@ export class ClipRoamStore {
   }
   delete(userId: string, entryIds: readonly string[]): void { this.#userStore(userId).delete(entryIds); }
   pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
-  setFavorite(userId: string, entryIds: readonly string[], isFavorite: boolean): ClipboardEntry[] {
-    return this.#userStore(userId).setFavorite(entryIds, isFavorite);
+  setFavorite(userId: string, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
+    return this.#userStore(userId).setFavorite(entryIds, isFavorite, favoriteFolderId);
   }
+  listFavoriteFolders(userId: string): FavoriteFolder[] { return this.#userStore(userId).listFavoriteFolders(); }
+  saveFavoriteFolder(userId: string, input: FavoriteFolderInput, id?: string): void {
+    const store = this.#userStore(userId);
+    if (id) store.requireFavoriteFolder(id);
+    store.saveFavoriteFolder(input, id);
+  }
+  deleteFavoriteFolder(userId: string, id: string): void { this.#userStore(userId).deleteFavoriteFolder(id); }
   files(): FileStore { return this.#files; }
   listUsers(search?: string): AdminUserSummary[] { return this.#accounts.listUsers(search); }
   hasUser(userId: string): boolean { return this.#accounts.hasUser(userId); }

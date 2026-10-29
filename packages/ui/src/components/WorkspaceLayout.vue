@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { appName } from "../branding";
 import { computed } from "vue";
-import { Clipboard, Cloud, CloudOff, CloudUpload, Download, MonitorSmartphone, Upload } from "lucide-vue-next";
+import { Clipboard, Cloud, CloudOff, CloudUpload, Download, MonitorSmartphone, Upload, Star } from "lucide-vue-next";
 import type { WorkspaceView } from "../types";
 
 const props = withDefaults(defineProps<{
@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ "update:activeView": [view: WorkspaceView] }>();
 const mobilePages = computed(() => [
   {view:"history" as const,label:"历史",icon:Clipboard,count:0},
+  {view:"favorites" as const,label:"收藏夹",icon:Star,count:0},
   {view:"pending-upload" as const,label:"待上传",icon:CloudUpload,count:props.pendingCount},
   {view:"uploads" as const,label:"上传",icon:Upload,count:props.activeUploadCount},
   {view:"downloads" as const,label:"下载",icon:Download,count:props.activeDownloadCount},
@@ -49,6 +50,10 @@ const mobilePages = computed(() => [
         >
           <Clipboard :size="17" aria-hidden="true" />
           <span>剪贴板历史</span>
+        </button>
+        <button class="nav-item" :class="{ active: activeView === 'favorites' }" type="button"
+          :aria-current="activeView === 'favorites' ? 'page' : undefined" @click="emit('update:activeView', 'favorites')">
+          <Star :size="17" aria-hidden="true" /><span>收藏夹</span>
         </button>
         <button
           class="nav-item"
@@ -106,7 +111,7 @@ const mobilePages = computed(() => [
 
     <slot />
 
-    <nav v-if="mobile && !quickPaste" class="mobile-navigation" aria-label="主导航">
+    <nav v-if="mobile && !quickPaste" class="mobile-navigation" :style="{ gridTemplateColumns: `repeat(${mobilePages.length}, minmax(0, 1fr))`, gap: '2px' }" aria-label="主导航">
       <button
         v-for="page in mobilePages"
         :key="page.view"

@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus } from "@cliproam/protocol";
+import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry, PendingRow, StoredEntry } from "../../types";
@@ -57,10 +57,27 @@ export class HistoryManager {
     this.invalidate();
   }
 
-  async setFavorite(entryIds: readonly string[], isFavorite: boolean): Promise<void> {
+  async setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<void> {
     if (!entryIds.length) return;
     if (!this.#client) throw new Error("同步账号未登录");
-    await this.#client.setFavorite(entryIds, isFavorite);
+    await this.#client.setFavorite(entryIds, isFavorite, favoriteFolderId);
+    this.invalidate();
+  }
+
+  listFavoriteFolders() {
+    if (!this.#client) throw new Error("同步账号未登录");
+    return this.#client.listFavoriteFolders();
+  }
+
+  async saveFavoriteFolder(input: FavoriteFolderInput, id?: string): Promise<void> {
+    if (!this.#client) throw new Error("同步账号未登录");
+    await this.#client.saveFavoriteFolder(input, id);
+    this.invalidate();
+  }
+
+  async deleteFavoriteFolder(id: string): Promise<void> {
+    if (!this.#client) throw new Error("同步账号未登录");
+    await this.#client.deleteFavoriteFolder(id);
     this.invalidate();
   }
 
