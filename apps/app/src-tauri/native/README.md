@@ -11,6 +11,7 @@
 | `android/sync-icons.cjs` | Android 图标生成和工程资源同步 | 生成 `android/icons/` 并将其中的 `res/` 复制到生成工程。 |
 | `windows/sync-icons.cjs` | Windows 图标生成 | 输出 `windows/icons/icon.ico`。 |
 | `macos/sync-icons.cjs` | macOS 图标生成 | 输出窗口 PNG，并执行内嵌的 Swift 代码生成 Dock 和托盘图标。 |
+| `macos/sign.sh` | macOS 固定证书签名 | 创建或恢复 `cliproam-dev` 证书，构建签名开发包、导入 CI 证书及校验签名；根目录 `scripts/mac-import-signing-cert.sh` 是共用发布工作流的入口。 |
 | `linux/sync-icons.cjs` | Linux 图标生成 | 输出 32、128、256 像素 PNG。 |
 | `ios/Info.plist` | iOS 主应用的附加配置 | 维护 iOS 的语言、HTTP ATS 和局域网权限；由 `tauri.ios.conf.json` 引用。 |
 | `ios/locales/` | iOS 系统显示名及权限说明翻译 | 独立维护各语言的 `InfoPlist.strings`；准备脚本复制到主应用 target，由 Xcode 打包到应用根目录下的 `.lproj/`，不使用 Tauri 的 `bundle.resources`（会放进 `assets/`）。 |

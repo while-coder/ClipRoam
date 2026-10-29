@@ -6,6 +6,7 @@
       "native/macos/locales/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings"
     },
     "macOS": {
+      "signingIdentity": "cliproam-dev",
       "infoPlist": "native/macos/Info.plist"
     },
     "icon": [

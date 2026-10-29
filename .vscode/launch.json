@@ -47,7 +47,14 @@
       "preLaunchTask": "ui:kill"
     },
     {
-      "name": "Launch App · macOS",
+      "name": "Launch App · macOS · Signed",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:app:mac",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Launch App · macOS · LLDB (Separate Permission)",
       "type": "lldb",
       "request": "launch",
       "program": "${workspaceFolder}/apps/app/src-tauri/target/debug/cliproam",

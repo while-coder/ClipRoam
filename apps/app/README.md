@@ -37,6 +37,40 @@ iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使�
 
 浏览器支持目录选择 API 时，多文件和文件夹可保存到用户选择的目录，保留嵌套目录和空目录；每个文件下载并校验后流式写入。不支持该 API 时只提供单文件下载，导出文件夹或多文件会明确提示不支持。取消或失败时停止当前文件写入，已保存的文件保留在所选目录。
 
+## macOS 签名与辅助功能授权
+
+macOS 默认使用固定自签名证书 `cliproam-dev` 签名整个 `.app`。Bundle ID 保持 `com.whilecode.cliproam`；持续使用同一张证书，使签名要求不再绑定每次构建变化的 `cdhash`。缺少证书时构建失败，不自动降级为 ad-hoc 签名。自签名证书不提供 Apple 公证或 Gatekeeper 信任。
+
+首次在 macOS 终端执行（会要求设置 P12 导出密码，并可能弹出钥匙串授权）：
+
+```sh
+pnpm --filter @cliproam/app macos:setup-signing
+pnpm --filter @cliproam/app macos:check-signing
+pnpm dev:app:mac       # 构建、校验并启动签名的 debug .app
+pnpm build:app:mac     # 使用同一证书构建 release 安装包
+```
+
+证书备份保存在 `~/.config/cliproam/signing/cliproam-dev.p12`，不要提交到仓库；请备份此文件及导出密码。`--setup` 会优先恢复已有 P12，或修复已有证书的本机信任，不替换旧证书。同名新证书仍是不同身份，会使原有授权失效。在其他开发机上，将原始 P12 放到同一路径，再执行 `--setup` 导入。签名与校验命令也可直接通过 `bash apps/app/src-tauri/native/macos/sign.sh` 执行，不依赖 pnpm。
+
+CI 沿用 `.github/workflows/release.yml` 中的共用桌面工作流。它调用 `scripts/mac-import-signing-cert.sh`，转入 `native/macos/sign.sh --import-ci`，从以下仓库 Secrets 导入同一张证书、配置临时钥匙串并执行实际签名校验，再设置 `APPLE_SIGNING_IDENTITY` 供 Tauri 打包：
+
+- `APPLE_CERTIFICATE`：上述原始 P12 的 Base64 内容，可用 `base64 -i ~/.config/cliproam/signing/cliproam-dev.p12 | pbcopy` 复制。
+- `APPLE_CERTIFICATE_PASSWORD`：创建或导出该 P12 时设置的密码。
+
+这两个 Secret 与更新器的 `TAURI_SIGNING_PRIVATE_KEY` 独立，后者继续负责更新包的验签。正式分发若使用 Developer ID，可通过 `APPLE_SIGNING_IDENTITY` 指定已导入的证书身份，并按 Tauri 文档另外配置公证。
+
+VS Code 的 `Launch App · macOS · Signed` 使用签名 `.app`；LLDB 配置仍直接运行未经过整包签名的 `target/debug/cliproam`，用于原生调试，不应拿它验证安装版的授权。运行开发包前先退出安装版，避免单实例机制将操作转交给已经运行的应用。
+
+从旧的未签名或 ad-hoc 安装包迁移时，需要退出应用、安装新签名版本，并在系统设置 → 隐私与安全性 → 辅助功能中删除旧条目，添加当前 `.app` 并开启权限。后续授权是否保留还受系统权限重置、证书变化等影响；签名不会自动授予权限。
+
+排查当前安装包：
+
+```sh
+bash apps/app/src-tauri/native/macos/sign.sh --verify /Applications/ClipRoam.app
+```
+
+此检查要求完整签名校验通过，且签名要求不包含 `cdhash`。`CSSMERR_TP_NOT_TRUSTED` 表示当前机器不信任证书；本地自签名开发证书可运行 `--setup` 修复信任。当前已签名包需要手动重签时，先退出应用，再将 `.app` 路径直接传给脚本；不要在 Tauri 生成更新包及 `.sig` 后修改包内签名，否则应重新生成更新产物。
+
 ## macOS 图标
 
 Dock 与托盘沿用 `apps/icon/icon.png` 的同一图案。Dock 主体约占画布宽度的 84%，托盘按 18 pt 的菜单栏尺寸生成 2x 资源，并保留透明留白。

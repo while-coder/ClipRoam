@@ -5,6 +5,8 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "debug:app": "pnpm --filter @cliproam/protocol build && cargo build --manifest-path apps/app/src-tauri/Cargo.toml",
+    "dev:app:mac": "pnpm --filter @cliproam/app macos:dev",
+    "build:app:mac": "pnpm --filter @cliproam/app macos:build",
     "debug:server": "pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/server debug",
     "debug:vscode": "pnpm build:vscode && code --new-window --extensionDevelopmentPath=apps/vscode",
     "build:server": "pnpm --filter @cliproam/server build",
