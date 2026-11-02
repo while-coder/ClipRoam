@@ -10,8 +10,17 @@ const BUNDLED_ADMIN_DIRECTORY = fileURLToPath(new URL("../../admin-ui", import.m
 const WORKSPACE_ADMIN_DIRECTORY = fileURLToPath(new URL("../../../admin", import.meta.url));
 
 export function registerAdminUiRoutes(app: FastifyInstance): void {
+  // Only the browser knows the original path after a proxy strips its prefix.
+  // Resolve here so both /cliproam and /cliproam/ reach /cliproam/admin/.
+  app.get("/", async (_request, reply) => reply
+    .header("Cache-Control", "no-cache")
+    .type("text/html; charset=utf-8")
+    .send(`<!doctype html><html><head><meta charset="utf-8"><title>ClipRoam</title></head><body><script>
+      const target = new URL(window.location.href);
+      target.pathname = target.pathname.replace(/\\/?$/, "/") + "admin/";
+      window.location.replace(target.href);
+    </script></body></html>`));
   // Relative redirects preserve a reverse proxy's external path prefix.
-  app.get("/", async (_request, reply) => reply.redirect("admin/"));
   app.get("/admin", async (_request, reply) => reply.redirect("admin/"));
 
   app.register(async (adminApp) => {

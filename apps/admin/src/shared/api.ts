@@ -13,6 +13,12 @@ export type AdminDevice = { id: string; deviceInfo: string; name: string; platfo
 export type AdminFile = { fileId: string; name: string | null; size: number; stored: boolean; createdAt: string };
 export type FileStats = { count: number; storedCount: number; storedBytes: number };
 
+let unauthorizedHandler: (() => void) | undefined;
+
+export function setUnauthorizedHandler(handler: () => void): void {
+  unauthorizedHandler = handler;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(new URL(`../admin-api/${path}`, document.baseURI), {
     credentials: "same-origin",
@@ -22,6 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   const body = await response.json().catch(() => ({})) as { message?: string } & T;
+  if (response.status === 401 && path !== "login") unauthorizedHandler?.();
   if (!response.ok) throw new Error(body.message ?? `请求失败（${response.status}）`);
   return body;
 }
@@ -35,7 +42,7 @@ export async function login(password: string): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  await request("logout", { method: "POST" }).catch(() => undefined);
+  await request("logout", { method: "POST" });
 }
 
 export async function fetchUsers(search = ""): Promise<AdminUser[]> {

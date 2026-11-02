@@ -4,6 +4,8 @@ import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { logout } from "./shared/api.js";
 import { markSignedOut } from "./shared/auth.js";
+import { toast } from "@qingfeng346/ui-kit";
+import { errorMessage } from "./shared/errorMessage.js";
 
 type MenuItem = { to: string; label: string; paths: string[] };
 
@@ -28,12 +30,21 @@ const signOutPaths = ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5
 const route = useRoute();
 const router = useRouter();
 const collapsed = ref(false);
+const signingOut = ref(false);
 
 async function signOut(): Promise<void> {
-  await logout();
-  markSignedOut();
-  collapsed.value = false;
-  await router.push({ name: "login" });
+  if (signingOut.value) return;
+  signingOut.value = true;
+  try {
+    await logout();
+    markSignedOut();
+    collapsed.value = false;
+    await router.push({ name: "login" });
+  } catch (reason) {
+    toast.show("error", errorMessage(reason, "退出登录失败，请重试。"));
+  } finally {
+    signingOut.value = false;
+  }
 }
 </script>
 
@@ -51,7 +62,7 @@ async function signOut(): Promise<void> {
           <span class="menu-label">{{ item.label }}</span>
         </RouterLink>
       </nav>
-      <SButton class="menu-item signout" type="text" @click="signOut">
+      <SButton class="menu-item signout" type="text" :loading="signingOut" @click="signOut">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="d in signOutPaths" :key="d" :d="d" /></svg>
         <span class="menu-label">退出登录</span>
       </SButton>

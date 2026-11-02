@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { authenticated, ensureAuthenticated } from "../shared/auth.js";
+import { authenticated, ensureAuthenticated, markSignedOut } from "../shared/auth.js";
+import { setUnauthorizedHandler } from "../shared/api.js";
 import LoginSection from "../sections/login/LoginSection.vue";
 import OverviewSection from "../sections/overview/OverviewSection.vue";
 import UsersSection from "../sections/users/UsersSection.vue";
@@ -17,6 +18,15 @@ export const router = createRouter({
     { path: "/transfer", name: "transfer", component: TransferSection },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
+});
+
+setUnauthorizedHandler(() => {
+  markSignedOut();
+  const current = router.currentRoute.value;
+  // Initial navigation is handled by the guard below.
+  if (current.matched.length && !current.meta.public) {
+    void router.replace({ name: "login", query: { redirect: current.fullPath } });
+  }
 });
 
 router.beforeEach(async (to) => {
