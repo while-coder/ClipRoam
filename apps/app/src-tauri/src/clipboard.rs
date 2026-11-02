@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Cursor,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::Mutex,
     thread,
     time::Duration,
 };
@@ -167,16 +164,10 @@ pub(crate) struct Capture {
     signature: String,
     data: ClipboardData,
 }
-#[derive(Clone, Serialize)]
-struct ClipboardEvent<'a> {
-    scope: &'a str,
-    capture: &'a Capture,
-}
 #[derive(Default)]
 pub(crate) struct ClipboardState {
-    monitor: Mutex<Option<(String, Arc<AtomicBool>)>>,
-    scope: Mutex<String>,
     signature: Mutex<String>,
+    capture_id: Mutex<String>,
     io: Mutex<()>,
 }
 
@@ -249,111 +240,84 @@ pub(crate) fn native_read_clipboard(
 ) -> Result<Option<ClipboardData>, String> {
     Ok(read(&app, text_only)?.map(|(data, _)| data))
 }
-#[derive(Deserialize)]
-pub(crate) struct ClipboardWatchOptions {
-    text: bool,
-    image: bool,
-    files: bool,
+fn emit_capture(app: &AppHandle, data: ClipboardData, signature: String) -> Result<(), String> {
+    let state = app.state::<ClipboardState>();
+    let mut previous = state.signature.lock().map_err(|e| e.to_string())?;
+    let mut capture_id = state.capture_id.lock().map_err(|e| e.to_string())?;
+    // A login read and a monitor event for the same change share an ID, so
+    // the account's pending transaction deduplicates them.
+    let id = if *previous == signature && !capture_id.is_empty() {
+        capture_id.clone()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+    app.emit_to(
+        "main",
+        "cliproam://clipboard-changed",
+        Capture {
+            id: id.clone(),
+            signature: signature.clone(),
+            data,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    *previous = signature;
+    *capture_id = id;
+    Ok(())
 }
 
-impl ClipboardWatchOptions {
-    fn allows(&self, data: &ClipboardData) -> bool {
-        match data {
-            ClipboardData::Text { .. } => self.text,
-            ClipboardData::Image { .. } => self.image,
-            ClipboardData::Files { .. } => self.files,
-        }
-    }
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub(crate) fn native_watch_clipboard(
+/// Read once after login, using the same event path as clipboard changes.
+#[tauri::command(async)]
+pub(crate) fn native_capture_clipboard(
     app: AppHandle,
     state: State<'_, ClipboardState>,
-    scope: String,
-    enabled: bool,
-    kinds: Option<ClipboardWatchOptions>,
 ) -> Result<(), String> {
-    // Mobile clipboard access must follow an explicit user action, even when
-    // an existing account still has clipboard monitoring enabled.
-    let enabled = enabled && !cfg!(any(target_os = "android", target_os = "ios"));
-    let kinds = kinds.unwrap_or(ClipboardWatchOptions { text: true, image: true, files: true });
-    let mut monitor = state.monitor.lock().map_err(|e| e.to_string())?;
-    if !enabled && monitor.as_ref().is_some_and(|(active, _)| active != &scope) {
+    // Mobile clipboard reads must follow an explicit user action.
+    if cfg!(any(target_os = "android", target_os = "ios")) {
         return Ok(());
     }
     let _io = state.io.lock().map_err(|e| e.to_string())?;
-    if let Some((_, stop)) = monitor.take() {
-        stop.store(true, Ordering::Relaxed);
+    if let Some((data, signature)) = read(&app, false)? {
+        emit_capture(&app, data, signature)?;
     }
-    if !enabled {
-        return Ok(());
+    Ok(())
+}
+
+/// Application-wide desktop monitor; account and type filtering belongs to the frontend.
+pub(crate) fn start_monitor(app: &AppHandle) {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        return;
     }
-    let mut previous_scope = state.scope.lock().map_err(|e| e.to_string())?;
-    if *previous_scope != scope {
-        state.signature.lock().map_err(|e| e.to_string())?.clear();
-        *previous_scope = scope.clone();
-    }
-    let stop = Arc::new(AtomicBool::new(false));
-    *monitor = Some((scope.clone(), stop.clone()));
+    let app = app.clone();
     thread::spawn(move || {
         let mut sequence = 0;
-        while !stop.load(Ordering::Relaxed) {
+        loop {
             let skip = crate::platform::should_skip_clipboard_poll(&mut sequence);
             let state = app.state::<ClipboardState>();
             let _io = match state.io.lock() {
                 Ok(io) => io,
                 Err(_) => break,
             };
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
             match if skip { Ok(None) } else { read(&app, false) } {
                 Ok(Some((data, signature))) => {
-                    if let Ok(mut previous) = state.signature.lock() {
-                        // Disabled kinds must never be delivered to the account.
-                        if !kinds.allows(&data) {
-                            *previous = signature;
-                        } else if *previous != signature {
-                            let capture = Capture {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                signature: signature.clone(),
-                                data,
-                            };
-                            let result = app.emit_to(
-                                "main",
-                                "cliproam://clipboard-changed",
-                                ClipboardEvent {
-                                    scope: &scope,
-                                    capture: &capture,
-                                },
-                            );
-                            if result.is_ok() {
-                                *previous = signature;
-                            } else if let Err(error) = result {
-                                tauri_plugin_log::log::error!(
-                                    "Clipboard delivery failed: {error}"
-                                );
-                            }
+                    let changed = state.signature.lock()
+                        .map(|previous| *previous != signature)
+                        .unwrap_or(false);
+                    if changed {
+                        if let Err(error) = emit_capture(&app, data, signature) {
+                            log::warn!("Clipboard delivery failed: {error}");
                         }
                     }
                 }
-                Err(error) => tauri_plugin_log::log::warn!("Clipboard read failed: {error}"),
+                Err(error) => log::warn!("Clipboard read failed: {error}"),
                 _ => {}
             }
             drop(_io);
             if !skip {
-                thread::sleep(Duration::from_millis(
-                    if cfg!(any(target_os = "android", target_os = "ios")) {
-                        2000
-                    } else {
-                        350
-                    },
-                ));
+                thread::sleep(Duration::from_millis(350));
             }
         }
     });
-    Ok(())
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -395,6 +359,7 @@ pub(crate) fn native_write_clipboard(
     }
     if let Some((_, signature)) = read(&app, false)? {
         *state.signature.lock().map_err(|e| e.to_string())? = signature;
+        *state.capture_id.lock().map_err(|e| e.to_string())? = uuid::Uuid::new_v4().to_string();
     }
     drop(_io);
     crate::platform::deliver_paste(&window, synthesize)

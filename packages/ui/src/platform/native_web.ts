@@ -109,7 +109,7 @@ export class NativeWeb implements NativePlatform {
       await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);
     } else throw new Error("浏览器不支持系统文件剪贴板，请下载文件");
   }
-  async watchClipboard(_scope: string, _enabled: boolean): Promise<void> {}
+  async captureClipboard(): Promise<void> {}
   async pickFiles(mode: FilePickerMode, _scope: string): Promise<PickedFiles> {
     return {files: await pickBrowserFiles(mode)};
   }

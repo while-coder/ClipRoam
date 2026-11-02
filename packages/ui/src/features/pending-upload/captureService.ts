@@ -1,7 +1,7 @@
 import { base64ToBytes, nameMatches, safeName, profileName, Sha256 } from "../../utils";
 import { isFileNode, type FileInfo } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
-import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
+import { clipboardPlatform, type ClipboardCapture, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
 import { applicationDatabase } from "../../platform/database";
@@ -14,25 +14,22 @@ export class CaptureService {
 
   async start(): Promise<void> {
     if (clipboardPlatform.monitoringAvailable) {
-      await this.session.ownAsync(clipboardPlatform.subscribe(({scope, capture}) => {
-        if (scope !== profileName(this.session.accountKey) || this.session.signal.aborted) return;
-        const preferences = this.session.preferences;
-        const enabled = capture.data.kind === "text" ? preferences.watchClipboardText
-          : capture.data.kind === "image" ? preferences.watchClipboardImage : preferences.watchClipboardFiles;
-        if (!enabled) return;
-        void this.capture(capture.data, capture.id).catch((error) => {
-          if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`);
-        });
-      }));
-      await this.updateWatch();
+      await clipboardPlatform.captureCurrent().catch((error) => {
+        if (!this.session.signal.aborted) this.error(`剪贴板读取失败：${String(error)}`);
+      });
     }
     void this.resume().catch((error) => { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); });
   }
 
-  async updateWatch(): Promise<void> {
+  receive(capture: ClipboardCapture): void {
+    if (this.session.signal.aborted) return;
     const preferences = this.session.preferences;
-    const kinds = { text: preferences.watchClipboardText, image: preferences.watchClipboardImage, files: preferences.watchClipboardFiles };
-    await clipboardPlatform.watch(profileName(this.session.accountKey), kinds.text || kinds.image || kinds.files, kinds);
+    const enabled = capture.data.kind === "text" ? preferences.watchClipboardText
+      : capture.data.kind === "image" ? preferences.watchClipboardImage : preferences.watchClipboardFiles;
+    if (!enabled) return;
+    void this.capture(capture.data, capture.id).catch((error) => {
+      if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`);
+    });
   }
 
   capture(data: ClipboardData, captureId?: string): Promise<void> {

@@ -34,6 +34,7 @@ pub fn run() {
             app.manage(clipboard::ClipboardState::default());
             platform::manage_platform_state(app.handle())?;
             platform::create_windows(app.handle())?;
+            clipboard::start_monitor(app.handle());
             #[cfg(desktop)]
             platform::setup_desktop_shell(app.handle())?;
             Ok(())
@@ -57,7 +58,7 @@ pub fn run() {
             app::native_show_notification,
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,
-            clipboard::native_watch_clipboard,
+            clipboard::native_capture_clipboard,
             files::native_paths,
             files::native_fs_stat,
             files::native_fs_list,

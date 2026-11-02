@@ -78,7 +78,7 @@ export class ClientSessionManager {
     if (!config?.username) throw new Error("同步账号未登录");
     const session = getAccountSession();
     await new AccountDatabase(archiveKeyFor(config)).put("settings", "preferences", preferences);
-    if (session) { session.preferences = preferences; await session.capture.updateWatch(); }
+    if (session) session.preferences = preferences;
     this.#activePreferences = preferences;
   };
 

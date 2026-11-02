@@ -1,5 +1,5 @@
 import type { PlatformCapabilities, NotificationPayload } from "../types";
-import type { ClipboardData, ClipboardWrite, ClipboardWatchOptions } from "./clipboard";
+import type { ClipboardData, ClipboardWrite } from "./clipboard";
 import type { FileStat, SaveTarget } from "./files";
 import type { Ref } from "vue";
 
@@ -75,7 +75,7 @@ export interface NativePlatform {
   previewSource(path: string): Promise<string>;
   readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
   writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void>;
-  watchClipboard(scope: string, enabled: boolean, kinds?: ClipboardWatchOptions): Promise<void>;
+  captureClipboard(): Promise<void>;
   pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles>;
   getPaths(): Promise<{ appDir: string }>;
   statFiles(paths: string[]): Promise<(FileStat | null)[]>;
@@ -98,5 +98,5 @@ export function configureNative(platform: NativePlatform): void {
 }
 
 export type { PlatformCapabilities, NotificationPayload, NotificationOptions } from "../types";
-export type { ClipboardData, ClipboardWrite, ClipboardWatchOptions } from "./clipboard";
+export type { ClipboardData, ClipboardWrite } from "./clipboard";
 export type { FileStat, SaveTarget } from "./files";

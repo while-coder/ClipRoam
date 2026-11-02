@@ -35,6 +35,7 @@ import { useFileDropUpload } from "./features/pending-upload/useFileDropUpload";
 import { showNotification, isNative, isQuickPaste, usePlatform, useAppVersion, provideMobileLayout } from "./platform/runtime";
 import { getDevice, readSavedAccounts, removeSavedAccounts } from "./platform/storage";
 import { activeView, activeAccountSession, getAccountSession } from "./accountSession";
+import { clipboardPlatform } from "./platform/clipboard";
 import {
   fetchHistoryPage,
   focusSearchInput,
@@ -411,6 +412,10 @@ function readableStartupError(error: unknown): string {
 async function initializeNativeServices(): Promise<void> {
   if (!isNative) return;
   const listenerResults = await Promise.allSettled([
+    clipboardPlatform.subscribe((capture) => {
+      const session = getAccountSession();
+      if (session?.client && !session.signal.aborted) session.capture.receive(capture);
+    }),
     native.listen("cliproam://show-paste", () => {
       if (setupVisible.value || openModalCount.value > 0) return;
       void native.showPasteWindow().catch((error) => showNotification({ message: errorMessage(error), tone: "error" }));
@@ -491,7 +496,7 @@ onMounted(async () => {
   // only the pending badge needs an initial query here.
   void refreshPendingCount();
   if (!accountRuntimeError.value) {
-    void initializeNativeServices();
+    await initializeNativeServices();
   }
 
   await nextTick();

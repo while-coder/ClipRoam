@@ -7,8 +7,6 @@ import { UploadManager } from "./features/uploads/uploadManager";
 import { DownloadManager } from "./features/downloads/downloadManager";
 import { CaptureService } from "./features/pending-upload/captureService";
 import { AccountFiles } from "./platform/files";
-import { clipboardPlatform } from "./platform/clipboard";
-import { profileName } from "./utils";
 import { showNotification } from "./platform/runtime";
 import type { ClientConnection } from "./features/sync/clientSessionManager";
 import type { SyncRequester } from "./features/sync/httpClient";
@@ -115,9 +113,6 @@ export class AccountSession {
     }, (message) => { if (!this.signal.aborted) showNotification({ message: message, tone: "error" }); });
     this.ready = this.downloads.restore();
     this.own(() => { this.downloads.stop(); this.files.dispose(); });
-    this.own(() => {
-      void clipboardPlatform.watch(profileName(this.accountKey),false).catch(() => undefined);
-    });
   }
 
   get http(): SyncRequester {
