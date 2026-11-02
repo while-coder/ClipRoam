@@ -47,7 +47,7 @@ import type {
   TimeFilter,
 } from "../../types";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** Fetch a server page, backfilling missing details into the local cache. */
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
@@ -63,7 +63,7 @@ const props = defineProps<{
   savingEntryId: string;
   ensureLocalFiles: (entry: LocalClipboardEntry) => Promise<LocalClipboardEntry>;
   removeEntries: (ids: readonly string[]) => Promise<boolean>;
-}>();
+}>(), { active: true });
 
 const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry, viaClick: boolean];
