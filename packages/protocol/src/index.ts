@@ -276,7 +276,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("favorites.folders.updated") }),
+  z.object({ type: z.literal("favorites.updated") }),
   z.object({ type: z.literal("clipboard.updated"), entries: z.array(ClipboardManifestEntrySchema) }),
   // Reconnection refreshes settings missed while offline.
   z.object({ type: z.literal("auth.ack"), settings: z.unknown().optional() }),

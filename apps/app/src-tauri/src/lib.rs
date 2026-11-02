@@ -58,7 +58,6 @@ pub fn run() {
             app::native_show_notification,
             clipboard::native_read_clipboard,
             clipboard::native_write_clipboard,
-            clipboard::native_capture_clipboard,
             files::native_paths,
             files::native_fs_stat,
             files::native_fs_list,

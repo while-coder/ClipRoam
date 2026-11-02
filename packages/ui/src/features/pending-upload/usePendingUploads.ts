@@ -59,8 +59,8 @@ export async function captureCurrentClipboard(): Promise<void> {
   if (capturingClipboard.value) return;
   capturingClipboard.value = true;
   try {
-    const captured = await getAccountSession()?.capture.readCurrentText();
-    showNotification({ message: captured ? "已读取当前文本剪贴板" : "当前剪贴板没有可读取的文本", tone: captured ? "success" : "info" });
+    const captured = await getAccountSession()?.capture.readCurrent();
+    showNotification({ message: captured ? "已读取当前剪贴板" : "当前剪贴板没有可读取的内容", tone: captured ? "success" : "info" });
   } catch (error) {
     showNotification({ message: `读取剪贴板失败：${errorMessage(error)}`, tone: "error" });
   } finally {

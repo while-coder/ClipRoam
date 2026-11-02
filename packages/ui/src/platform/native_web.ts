@@ -91,8 +91,10 @@ export class NativeWeb implements NativePlatform {
   }
   async listen<T>(_event: string, _handler: (payload: T) => void): Promise<Unlisten> { return () => {}; }
   async previewSource(path: string): Promise<string> { return path; }
-  async readClipboard(_textOnly: boolean): Promise<ClipboardData | null> {
-    const text = await navigator.clipboard.readText(); return text.trim() ? {kind:"text",text} : null;
+  protected readClipboardText(): Promise<string> { return navigator.clipboard.readText(); }
+  async readClipboard(): Promise<ClipboardData | null> {
+    const text = await this.readClipboardText();
+    return text.trim() ? {kind:"text",text} : null;
   }
   async writeClipboard(payload: ClipboardWrite, _synthesize: boolean): Promise<void> {
     if (payload.kind === "text") {
@@ -109,7 +111,6 @@ export class NativeWeb implements NativePlatform {
       await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);
     } else throw new Error("浏览器不支持系统文件剪贴板，请下载文件");
   }
-  async captureClipboard(): Promise<void> {}
   async pickFiles(mode: FilePickerMode, _scope: string): Promise<PickedFiles> {
     return {files: await pickBrowserFiles(mode)};
   }

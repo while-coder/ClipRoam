@@ -73,9 +73,8 @@ export interface NativePlatform {
   showNotification(payload: NotificationPayload): Promise<void>;
   listen<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
   previewSource(path: string): Promise<string>;
-  readClipboard(textOnly: boolean): Promise<ClipboardData | null>;
+  readClipboard(): Promise<ClipboardData | null>;
   writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void>;
-  captureClipboard(): Promise<void>;
   pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles>;
   getPaths(): Promise<{ appDir: string }>;
   statFiles(paths: string[]): Promise<(FileStat | null)[]>;

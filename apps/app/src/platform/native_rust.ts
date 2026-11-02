@@ -65,12 +65,11 @@ export class NativeRust implements NativePlatform {
     if (/^(blob:|data:|https?:)/.test(path)) return path;
     return (await import("@tauri-apps/api/core")).convertFileSrc(path);
   }
-  readClipboard(textOnly: boolean): Promise<ClipboardData | null> { return this.invoke("native_read_clipboard", {textOnly}); }
+  readClipboard(): Promise<ClipboardData | null> { return this.invoke("native_read_clipboard"); }
   writeClipboard(payload: ClipboardWrite, synthesize: boolean): Promise<void> {
     const encoded = payload.kind === "image" ? {kind:"image",data:bytesToBase64(payload.bytes)} : payload;
     return this.invoke("native_write_clipboard", {payload:encoded,synthesize});
   }
-  captureClipboard(): Promise<void> { return this.invoke("native_capture_clipboard"); }
   async pickFiles(mode: FilePickerMode, scope: string): Promise<PickedFiles> {
     // getDeviceInfo runs before mounting the app. Open synchronously from the
     // tap so WebKit retains the user gesture required by its file input.

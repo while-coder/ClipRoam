@@ -136,7 +136,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const body = parseOr400(reply, FavoriteFolderInputSchema, request.body, "目录参数无效");
     if (!body) return reply;
     store.saveFavoriteFolder(user.id, body);
-    broadcast(user.id, { type: "favorites.folders.updated" });
+    broadcast(user.id, { type: "favorites.updated" });
     return reply.code(204).send();
   });
 
@@ -146,7 +146,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const body = parseOr400(reply, FavoriteFolderInputSchema, request.body, "目录参数无效");
     if (!body) return reply;
     store.saveFavoriteFolder(user.id, body, request.params.id);
-    broadcast(user.id, { type: "favorites.folders.updated" });
+    broadcast(user.id, { type: "favorites.updated" });
     return reply.code(204).send();
   });
 
@@ -154,7 +154,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     store.deleteFavoriteFolder(user.id, request.params.id);
-    broadcast(user.id, { type: "favorites.folders.updated" });
+    broadcast(user.id, { type: "favorites.updated" });
     return reply.code(204).send();
   });
 

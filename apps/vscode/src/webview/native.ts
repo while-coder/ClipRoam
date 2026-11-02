@@ -1,5 +1,5 @@
 import { NativeWeb } from "@cliproam/ui/native-web";
-import type { ClipboardData, ClipboardWrite, DeviceInfo, DirectoryEntry, PlatformCapabilities, SaveTarget } from "@cliproam/ui/native";
+import type { ClipboardWrite, DeviceInfo, DirectoryEntry, PlatformCapabilities, SaveTarget } from "@cliproam/ui/native";
 import { bytesToBase64 } from "@cliproam/ui/bytes";
 import { request } from "./bridge";
 import packageInfo from "../../package.json";
@@ -48,10 +48,7 @@ export class NativeVscode extends NativeWeb {
     }
   }
   async openExternalUrl(url: string): Promise<void> { await request("external.open", url); }
-  async readClipboard(_textOnly: boolean): Promise<ClipboardData | null> {
-    const text = await request<string>("clipboard.read");
-    return text.trim() ? { kind: "text", text } : null;
-  }
+  protected readClipboardText(): Promise<string> { return request<string>("clipboard.read"); }
   async writeClipboard(payload: ClipboardWrite, _synthesize: boolean): Promise<void> {
     if (payload.kind !== "text") throw new Error("VS Code 扩展仅支持文本剪贴板；图片和文件可在历史中预览或下载到缓存");
     await request("clipboard.write", payload.text);

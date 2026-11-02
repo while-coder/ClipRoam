@@ -1,35 +1,54 @@
-import { base64ToBytes, nameMatches, safeName, profileName, Sha256 } from "../../utils";
+import { base64ToBytes, fnv1a, nameMatches, safeName, profileName, Sha256 } from "../../utils";
 import { isFileNode, type FileInfo } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
-import { clipboardPlatform, type ClipboardCapture, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
+import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
 import { applicationDatabase } from "../../platform/database";
+import { isMobile } from "../../platform/runtime";
 import type { FilePickerMode } from "../../platform/native";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
   #work: Promise<void> = Promise.resolve();
+  #clipboardSignature?: string;
   constructor(private readonly session: AccountSession, private readonly changed: () => void, private readonly error: (message: string) => void) {}
 
   async start(): Promise<void> {
-    if (clipboardPlatform.monitoringAvailable) {
-      await clipboardPlatform.captureCurrent().catch((error) => {
+    if (clipboardPlatform.monitoringAvailable && !isMobile.value) {
+      await clipboardPlatform.read().then((data) => {
+        if (data) this.receive(data);
+      }).catch((error) => {
         if (!this.session.signal.aborted) this.error(`剪贴板读取失败：${String(error)}`);
       });
     }
     void this.resume().catch((error) => { if (!this.session.signal.aborted) this.error(`文件处理失败：${String(error)}`); });
   }
 
-  receive(capture: ClipboardCapture): void {
+  receive(data: ClipboardData): void {
     if (this.session.signal.aborted) return;
     const preferences = this.session.preferences;
-    const enabled = capture.data.kind === "text" ? preferences.watchClipboardText
-      : capture.data.kind === "image" ? preferences.watchClipboardImage : preferences.watchClipboardFiles;
+    const enabled = data.kind === "text" ? preferences.watchClipboardText
+      : data.kind === "image" ? preferences.watchClipboardImage : preferences.watchClipboardFiles;
     if (!enabled) return;
-    void this.capture(capture.data, capture.id).catch((error) => {
+    void this.#captureClipboard(data).catch((error) => {
       if (!this.session.signal.aborted) this.error(`剪贴板捕获失败：${String(error)}`);
     });
+  }
+
+  #captureClipboard(data: ClipboardData): Promise<void> {
+    const work = this.#work.then(async () => {
+      this.session.signal.throwIfAborted();
+      const files = data.kind === "files" ? await this.session.files.stats(data.paths) : [];
+      const content = data.kind === "text" ? [data.kind, data.text, data.html ?? null, data.rtf ?? null]
+        : data.kind === "image" ? [data.kind, data.data]
+        : [data.kind, data.paths, files.map((file) => [file?.size ?? 0, file?.modifiedAt ?? 0])];
+      const signature = fnv1a(JSON.stringify(content));
+      if (this.#clipboardSignature === signature) return;
+      await this.#capture(data, undefined, () => { this.#clipboardSignature = signature; });
+    });
+    this.#work = work.catch(() => undefined);
+    return work;
   }
 
   capture(data: ClipboardData, captureId?: string): Promise<void> {
@@ -38,7 +57,7 @@ export class CaptureService {
     return work;
   }
 
-  async #capture(data: ClipboardData, captureId?: string): Promise<void> {
+  async #capture(data: ClipboardData, captureId?: string, onEnqueued?: () => void): Promise<void> {
     this.session.signal.throwIfAborted();
     if (captureId && await this.session.database.get("captures", captureId)) return;
     this.session.state.localClipboardRevision++;
@@ -58,6 +77,7 @@ export class CaptureService {
       entry.content = Object.keys(collected.info).join("、");
     }
     const id = await this.session.pendingUploads.enqueue(entry, captureId, data.kind === "files");
+    onEnqueued?.();
     this.changed();
     if (data.kind === "files") await this.#resolve(id);
   }
@@ -139,9 +159,11 @@ export class CaptureService {
     }
   }
 
-  async readCurrentText(): Promise<boolean> {
-    const data = await clipboardPlatform.readText();
-    if (!data) return false; await this.capture(data); return true;
+  async readCurrent(): Promise<boolean> {
+    const data = await clipboardPlatform.read();
+    if (!data) return false;
+    await this.#captureClipboard(data);
+    return true;
   }
 
   async pickFiles(mode: FilePickerMode): Promise<boolean> {
