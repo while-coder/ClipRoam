@@ -25,7 +25,7 @@ const updateVisible = computed(() => ['available', 'downloading', 'installed', '
 const downloading = computed(() => updateStatus.value === 'downloading')
 const releaseNotesReady = ref(false)
 const releaseNotesDismissed = ref(false)
-const releaseNotesKey = computed(() => `cliproam.release-notes.seen.${appVersion.value}`)
+const releaseNotesKey = 'cliproam.version'
 const currentReleaseNotes = computed(() => releaseNotesForVersion(changelog, appVersion.value))
 const currentReleaseVisible = computed(() => releaseNotesReady.value
   && !releaseNotesDismissed.value && Boolean(currentReleaseNotes.value)
@@ -36,7 +36,7 @@ const renderedCurrentNotes = computed(() => DOMPurify.sanitize(marked.parse(curr
 watch(appVersion, (version) => {
   if (!version) return
   try {
-    releaseNotesDismissed.value = localStorage.getItem(releaseNotesKey.value) === 'true'
+    releaseNotesDismissed.value = localStorage.getItem(releaseNotesKey) === version
   } catch (error) {
     console.warn('[updater] 无法读取版本内容展示记录', error)
   }
@@ -46,7 +46,7 @@ watch(appVersion, (version) => {
 function dismissCurrentRelease() {
   releaseNotesDismissed.value = true
   try {
-    localStorage.setItem(releaseNotesKey.value, 'true')
+    localStorage.setItem(releaseNotesKey, appVersion.value)
   } catch (error) {
     console.warn('[updater] 无法保存版本内容展示记录', error)
   }
