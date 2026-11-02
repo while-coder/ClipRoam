@@ -3,7 +3,7 @@ import { ClipboardKind } from "@cliproam/protocol";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Copy, Download } from "lucide-vue-next";
 import { getAccountSession } from "../../accountSession";
-import { previewSource, showNotification, usePlatform } from "../../platform/runtime";
+import { showNotification, usePlatform } from "../../platform/runtime";
 import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
@@ -30,12 +30,12 @@ const canCopy = computed(() => kind === ClipboardKind.Text || (kind === Clipboar
   && platformCapabilities.value.imageClipboard
   && clipboardPlatform.canWriteImage));
 let disposed = false;
-let audioUrl: string | undefined;
+let mediaUrl: string | undefined;
 let releasePreview: (() => void) | undefined;
 onBeforeUnmount(() => {
   disposed = true;
   releasePreview?.();
-  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  if (mediaUrl) URL.revokeObjectURL(mediaUrl);
 });
 
 async function copyToClipboard(): Promise<void> {
@@ -46,7 +46,7 @@ async function copyToClipboard(): Promise<void> {
   try {
     // Copy the complete file, even when the text preview only shows its beginning.
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
-    const bytes = await session.files.read(props.file.fileId, 0, props.file.size);
+    const bytes = await session.files.readCached(props.file.fileId, 0, props.file.size);
     session.signal.throwIfAborted();
     await clipboardPlatform.write(kind === ClipboardKind.Image
       ? { kind: ClipboardKind.Image, bytes }
@@ -105,18 +105,15 @@ onMounted(async () => {
     if (disposed) return;
     session.signal.throwIfAborted();
     if (kind === ClipboardKind.Image || kind === FilePreviewKind.Audio) {
-      const path = await session.files.resolve(props.file.fileId);
-      if (!path) throw new Error("文件内容不可用");
-      let url: string;
-      if (kind === FilePreviewKind.Audio) {
-        const bytes = await session.files.read(props.file.fileId, 0, props.file.size);
-        if (disposed) return;
-        audioUrl = URL.createObjectURL(new Blob([bytes], { type: audioMimeType(props.file.name) }));
-        url = audioUrl;
-      } else url = await previewSource(path);
-      if (!disposed) source.value = url;
+      // Preview only cached content; keep the Blob URL local to this preview.
+      const bytes = await session.files.readCached(props.file.fileId, 0, props.file.size);
+      if (disposed) return;
+      session.signal.throwIfAborted();
+      const type = kind === FilePreviewKind.Audio ? audioMimeType(props.file.name) : undefined;
+      mediaUrl = URL.createObjectURL(new Blob([bytes], { type }));
+      source.value = mediaUrl;
     } else {
-      const bytes = await session.files.read(props.file.fileId, 0, Math.min(props.file.size, textLimit));
+      const bytes = await session.files.readCached(props.file.fileId, 0, Math.min(props.file.size, textLimit));
       if (disposed) return;
       truncated.value = props.file.size > textLimit;
       text.value = decodePreviewText(bytes, truncated.value);

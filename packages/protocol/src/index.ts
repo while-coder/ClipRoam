@@ -202,7 +202,6 @@ export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchem
 
 export const FileAccessRequestSchema = z.object({
   name: z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f/\\]+$/),
-  download: z.boolean(),
 });
 export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("/files/") });
 

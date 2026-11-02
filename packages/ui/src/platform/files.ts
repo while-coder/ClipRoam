@@ -56,6 +56,10 @@ export class AccountFiles {
     return (await this.resolveMany([fileId])).get(fileId);
   }
 
+  async resolveCached(fileId: string): Promise<string | undefined> {
+    return (await this.resolveCachedMany([fileId])).get(fileId);
+  }
+
   /** Keep remote Web content only while an operation or preview uses it. */
   retain(fileIds: string[]): () => void {
     if (isNative) return () => {};
@@ -92,7 +96,32 @@ export class AccountFiles {
     return ids.map((id) => available.get(id) ?? `${root}/${id}`).join("\n");
   }
 
+  async cachedDownloadDestination(fileIds: string[]): Promise<string> {
+    if (!isNative) return "浏览器临时内存（使用后释放）";
+    const root = `${await this.root()}/download`;
+    const ids = [...new Set(fileIds)].map(contentId);
+    if (!ids.length) return root;
+    const available = await this.resolveCachedMany(ids);
+    return ids.map((id) => available.get(id) ?? `${root}/${id}`).join("\n");
+  }
+
   async resolveMany(fileIds: string[]): Promise<Map<string,string>> {
+    const result = await this.resolveCachedMany(fileIds);
+    if (!isNative) return result;
+    const ids = [...new Set(fileIds)].filter((id) => !result.has(id));
+    if (!ids.length) return result;
+    const sources = await this.database.getMany<LocalSource[]>("sources", ids);
+    const candidates = sources.flatMap((items, i) => (items ?? []).map((source) => ({ id: ids[i]!, source })));
+    const stats = await this.stats(candidates.map(({ source }) => source.source));
+    for (let i = 0; i < candidates.length; i++) {
+      const { id, source } = candidates[i]!, stat = stats[i];
+      if (!result.has(id) && stat && !stat.directory && !stat.symlink && stat.size === source.size
+        && (source.modifiedAt == null || source.modifiedAt === stat.modifiedAt)) result.set(id, source.source);
+    }
+    return result;
+  }
+
+  async resolveCachedMany(fileIds: string[]): Promise<Map<string,string>> {
     const ids = [...new Set(fileIds)].map(contentId), result = new Map<string,string>();
     if (!ids.length) return result;
     if (!isNative) {
@@ -107,21 +136,25 @@ export class AccountFiles {
       return result;
     }
     const root = await this.root();
-    const sources = await this.database.getMany<LocalSource[]>("sources",ids);
-    const candidates: { id: string; path: string; source?: LocalSource }[] = [];
+    const candidates: { id: string; path: string }[] = [];
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i]!;
       // Keep reading existing caches; new content always uses download/<fileId>.
       candidates.push({id,path:`${root}/upload/images/${id}`},{id,path:`${root}/download/${id}`});
-      for (const source of sources[i] ?? []) candidates.push({id,path:source.source,source});
     }
     const stats = await this.stats(candidates.map((value) => value.path));
     for (let i = 0; i < candidates.length; i++) {
-      const {id,path,source} = candidates[i]!, stat = stats[i];
-      if (!result.has(id) && stat && !stat.directory && !stat.symlink && (!source ||
-        (stat.size === source.size && (source.modifiedAt == null || source.modifiedAt === stat.modifiedAt)))) result.set(id,path);
+      const {id,path} = candidates[i]!, stat = stats[i];
+      if (!result.has(id) && stat && !stat.directory && !stat.symlink) result.set(id,path);
     }
     return result;
+  }
+
+  async readCached(fileId: string, offset: number, length: number): Promise<Uint8Array> {
+    if (!isNative) return this.read(fileId, offset, length);
+    const path = await this.resolveCached(fileId);
+    if (!path) throw new Error("本机文件内容不可用");
+    return this.readPath(path, offset, length);
   }
 
   async read(fileId: string, offset: number, length: number): Promise<Uint8Array> {

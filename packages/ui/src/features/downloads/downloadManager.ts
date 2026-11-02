@@ -145,10 +145,10 @@ export class DownloadManager {
     return this.session.history.getEntry(entry.id);
   }
 
-  /** Preview one file without downloading the rest of its directory tree. */
+  /** Ensure preview content is cached, without checking original source paths. */
   async ensureLocalFile(entryId: string, fileId: string): Promise<void> {
     this.session.signal.throwIfAborted();
-    if (await this.session.files.resolve(fileId)) return;
+    if (await this.session.files.resolveCached(fileId)) return;
     const outcome = await this.batch(entryId, crypto.randomUUID(), undefined, fileId);
     this.session.history.invalidate();
     if (outcome.cancelled) throw new DownloadCancelledError("已取消下载");
@@ -222,7 +222,9 @@ export class DownloadManager {
     const save = saveId ? this.#saves.get(saveId) : undefined;
     if (saveId && (!save || save.entryId !== entryId)) throw new Error("另存为任务不存在或不匹配");
     if (save) { save.recordId = record.id; record.destination = save.target.value; }
-    else record.destination = await this.session.files.downloadDestination(files.map((file) => file.fileId));
+    else record.destination = previewFileId
+      ? await this.session.files.cachedDownloadDestination(files.map((file) => file.fileId))
+      : await this.session.files.downloadDestination(files.map((file) => file.fileId));
     this.#records.set(record.id, record);
     await this.#persist(record);
     await this.#trim();
@@ -232,7 +234,9 @@ export class DownloadManager {
       // Register every requester before draining so batch cancellation is complete.
       for (const file of files) {
         this.session.signal.throwIfAborted();
-        const local = await this.session.files.resolve(file.fileId);
+        const local = previewFileId
+          ? await this.session.files.resolveCached(file.fileId)
+          : await this.session.files.resolve(file.fileId);
         if (record.finishedMs !== null || save?.controller.signal.aborted) {
           this.cancelRequest(requestId); return { cancelled: true, failedCount: 0, total: files.length };
         }

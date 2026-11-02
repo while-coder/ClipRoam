@@ -7,7 +7,7 @@ export async function downloadWithBrowser(session: AccountSession, entryId: stri
   const http = session.http;
   const result = await http.request("POST", `/files/${encodeURIComponent(entryId)}/${fileId}/access`, {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, download: true }),
+    body: JSON.stringify({ name }),
   }, FileAccessResponseSchema, "服务器返回的文件访问链接无效");
   session.signal.throwIfAborted();
   if (!result) throw new Error("文件访问链接不可用");
