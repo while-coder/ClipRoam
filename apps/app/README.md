@@ -75,6 +75,6 @@ bash apps/app/src-tauri/native/macos/sign.sh --verify /Applications/ClipRoam.app
 
 ## macOS 图标
 
-Dock 与托盘沿用 `apps/icon/icon.png` 的同一图案。Dock 主体约占画布宽度的 84%，托盘按 18 pt 的菜单栏尺寸生成 2x 资源，并保留透明留白。
+Dock 使用 `apps/icon/icon-fullbleed.png` 的不透明满版图案，不预先添加圆角或透明留白，由新版 macOS 处理图标外形。托盘使用 `apps/icon/icon.png`，按 18 pt 的菜单栏尺寸生成 2x 资源，并保留透明留白。
 
 在仓库根目录执行 `pnpm sync:icons` 刷新全部图标；在 macOS 上会一并生成 Dock 与托盘资源。原生图标分别位于 `src-tauri/native/<平台>/icons/`，由各平台 Tauri 配置引用，生成文件不纳入 Git。Tauri 开发、打包以及直接 Cargo 构建会自动准备对应平台图标；更新 `.icns` 后，Cargo 会重新构建开发版以刷新嵌入的图标。

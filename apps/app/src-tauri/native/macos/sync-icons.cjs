@@ -13,7 +13,7 @@ function syncIcons() {
     generate({ generated, output, root }) {
       fs.copyFileSync(path.join(generated, "32x32.png"), path.join(output, "32x32.png"));
       execFileSync("swift", ["-module-cache-path", path.join(root, ".tmp/swift-module-cache"),
-        "-", path.join(root, "apps/icon/icon.png"), output],
+        "-", path.join(root, "apps/icon/icon.png"), output, path.join(root, "apps/icon/icon-fullbleed.png")],
         { cwd: root, input: swiftSource, stdio: ["pipe", "inherit", "inherit"] });
       const iconset = path.join(output, "AppIcon.iconset");
       execFileSync("iconutil", ["-c", "icns", iconset, "-o", path.join(output, "icon.icns")],
@@ -58,29 +58,10 @@ for y in 0..<image.height {
 guard right > left && top > bottom else { fatalError("Source icon has no visible artwork") }
 let visible = CGRect(x: left, y: bottom, width: right - left, height: top - bottom)
 
-func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat, dock: Bool = false) {
+func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat) {
     let scale = artwork / max(visible.width, visible.height)
     context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
     context.interpolationQuality = .high
-    if dock {
-        // The source contains faint alpha noise beyond its visible tile. Clip it
-        // to the macOS tile instead of letting IconServices count it as artwork.
-        // Normalize both axes: the source's visible bounds are not quite square.
-        let tile = CGRect(x: (canvas - artwork) / 2, y: (canvas - artwork) / 2,
-                          width: artwork, height: artwork)
-        let radius = artwork * 184 / 824
-        context.saveGState()
-        context.addPath(CGPath(roundedRect: tile, cornerWidth: radius, cornerHeight: radius, transform: nil))
-        context.clip()
-        context.draw(image, in: CGRect(
-            x: tile.minX - visible.minX * artwork / visible.width,
-            y: tile.minY - visible.minY * artwork / visible.height,
-            width: CGFloat(image.width) * artwork / visible.width,
-            height: CGFloat(image.height) * artwork / visible.height
-        ))
-        context.restoreGState()
-        return
-    }
     context.draw(image, in: CGRect(
         x: canvas / 2 - visible.midX * scale,
         y: canvas / 2 - visible.midY * scale,
@@ -89,8 +70,13 @@ func drawArtwork(in context: CGContext, canvas: CGFloat, artwork: CGFloat, dock:
     ))
 }
 
-// Match the macOS icon grid: an 824 px tile with 100 px transparent margins.
-// Oversized or noisy alpha bounds can trigger Tahoe's inset white backing plate.
+// Dock uses an opaque, full-bleed source. Do not bake a rounded tile or
+// transparent inset into the image: newer macOS applies its own icon mask.
+let dockURL = URL(fileURLWithPath: CommandLine.arguments[3])
+guard let dockSource = CGImageSourceCreateWithURL(dockURL as CFURL, nil),
+      let dockImage = CGImageSourceCreateImageAtIndex(dockSource, 0, nil) else {
+    fatalError("Cannot read apps/icon/icon-fullbleed.png")
+}
 let representations = [
     (16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
     (256, 1), (256, 2), (512, 1), (512, 2),
@@ -107,8 +93,10 @@ for (points, scale) in representations {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     ) else { fatalError("Cannot create \(pixels) px canvas") }
     let canvas = CGFloat(pixels)
-    let artwork = (canvas * 824 / 1024).rounded()
-    drawArtwork(in: context, canvas: canvas, artwork: artwork, dock: true)
+    context.interpolationQuality = .high
+    context.setFillColor(CGColor(red: 15 / 255, green: 23 / 255, blue: 42 / 255, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: canvas, height: canvas))
+    context.draw(dockImage, in: CGRect(x: 0, y: 0, width: canvas, height: canvas))
 
     let png = NSMutableData()
     guard let result = context.makeImage(),
@@ -120,7 +108,7 @@ for (points, scale) in representations {
     let suffix = scale == 2 ? "@2x" : ""
     try (png as Data).write(to: iconset.appendingPathComponent("icon_\(points)x\(points)\(suffix).png"))
 }
-print("Generated macOS iconset (824/1024 tile, clean transparent padding)")
+print("Generated macOS iconset (opaque full-bleed artwork, system-managed mask)")
 
 // Render the same ClipRoam artwork for the 18 pt menu bar slot at 2x resolution.
 // A 1 pt transparent inset keeps it clear of the menu bar edges.
