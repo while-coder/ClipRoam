@@ -87,6 +87,12 @@ function formatDateTime(iso: string): string {
 // 替代原先手写的 sortState/toggleSort/sortArrow/ariaSort。
 const columns = [
   {
+    title: "文件名",
+    key: "name",
+    sorter: (left: AdminFile, right: AdminFile) => (left.name ?? "").localeCompare(right.name ?? ""),
+    render: (file: AdminFile) => h("span", { title: file.name ?? undefined }, file.name ?? "—"),
+  },
+  {
     title: "内容 ID",
     key: "fileId",
     render: (file: AdminFile) => h("span", { class: "mono file-id-cell", title: file.fileId }, file.fileId),

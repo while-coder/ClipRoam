@@ -29,7 +29,7 @@ export class UploadService {
     private readonly fileStored: (fileId: string) => void,
   ) {}
 
-  begin(userId: string, fileId: string, size: number, kind: UploadKind = ClipboardKind.Files): UploadBeginResponse {
+  begin(userId: string, fileId: string, size: number, kind: UploadKind = ClipboardKind.Files, name?: string): UploadBeginResponse {
     // Content the server already holds needs no transfer at all — even when it
     // exceeds a limit that was lowered after it was stored. Availability was
     // broadcast exactly once when the content was promoted, so repeat answers
@@ -40,6 +40,7 @@ export class UploadService {
     const config = this.configForUser(userId);
     const limitMb = kind === ClipboardKind.Image ? config.maxStoredImageMb : config.maxStoredFileMb;
     if (size >= limitMb * MEGABYTE) throw new UploadHttpError(413, kind === ClipboardKind.Image ? "图片超过服务器存储上限" : "文件超过服务器存储上限");
+    if (name !== undefined) this.files.recordUploadName(fileId, size, name);
     const chunkCount = Math.ceil(size / FILE_CHUNK_SIZE);
     // An empty content has no chunks: the buffer is complete on arrival, so it
     // is promoted inside this very request.

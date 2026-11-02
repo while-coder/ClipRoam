@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-export default defineConfig({
-  base: "/admin/",
+export default defineConfig(({ command }) => ({
+  base: command === "serve" ? "/admin/" : "./",
   plugins: [vue()],
   server: {
     // Dev server proxies the admin API (and serves the UI under the same
@@ -15,4 +15,4 @@ export default defineConfig({
     outDir: "../server/admin",
     emptyOutDir: true,
   },
-});
+}));

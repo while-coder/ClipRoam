@@ -34,7 +34,8 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     const parts = [
       `${ADMIN_SESSION_COOKIE}=${value}`,
       "HttpOnly",
-      "Path=/admin-api",
+      // Let the browser scope the cookie to the login URL's directory,
+      // including any external reverse-proxy prefix.
       "SameSite=Strict",
       `Max-Age=${maxAge}`,
     ];

@@ -6,10 +6,9 @@ import UsersSection from "../sections/users/UsersSection.vue";
 import FilesSection from "../sections/files/FilesSection.vue";
 import TransferSection from "../sections/transfer/TransferSection.vue";
 
-// The admin UI is mounted under /admin/ and the server falls back to
-// index.html for extension-less /admin/* paths, so history mode deep links work.
+// index.html sets the external admin root, including a reverse-proxy prefix.
 export const router = createRouter({
-  history: createWebHistory("/admin/"),
+  history: createWebHistory(new URL(document.baseURI).pathname),
   routes: [
     { path: "/login", name: "login", component: LoginSection, meta: { public: true } },
     { path: "/", name: "overview", component: OverviewSection },

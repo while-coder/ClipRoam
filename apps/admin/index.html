@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Resolve assets and history routes from the externally visible admin root,
+      // including when a nested route is opened directly behind a reverse proxy.
+      const pathname = window.location.pathname;
+      const adminIndex = pathname.lastIndexOf("/admin/");
+      const base = document.createElement("base");
+      base.href = adminIndex >= 0 ? pathname.slice(0, adminIndex + 7) : pathname;
+      document.head.appendChild(base);
+    </script>
     <title>ClipRoam 管理后台</title>
   </head>
   <body>

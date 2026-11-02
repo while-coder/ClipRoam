@@ -1,12 +1,12 @@
 import { base64ToBytes } from "../../utils";
-import { ClipboardKind, FILE_CHUNK_SIZE, entryContents, UploadBeginResponseSchema, UploadChunkResponseSchema, type UploadKind, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
+import { ClipboardKind, FILE_CHUNK_SIZE, entryContents, isFileNode, UploadBeginResponseSchema, UploadChunkResponseSchema, type TreeNode, type UploadKind, type ClipboardEntry, type UploadBeginRequest, type UploadBeginResponse, type UploadChunkResponse } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 
 const UPLOAD_BEGIN_TIMEOUT_MS = 30_000;
 const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 const TRANSFER_CONCURRENCY = 4;
-type FileReference = { fileId: string; size: number; kind: UploadKind };
+type FileReference = { fileId: string; name?: string; size: number; kind: UploadKind };
 export type FileUploaderDeps = {
   session: AccountSession;
   onUploadProgress(entryId: string, uploadedBytes: number, totalBytes: number): void;
@@ -36,6 +36,18 @@ export class FileUploader {
     const candidates = entryContents(entry).filter((file) => file.size < sizeLimit);
     if (!candidates.length) return;
 
+    const names = new Map<string, string>();
+    const collectNames = (tree: Record<string, TreeNode>): void => {
+      for (const [name, node] of Object.entries(tree)) {
+        if (isFileNode(node)) {
+          if (!names.has(node.f)) names.set(node.f, name);
+        } else {
+          collectNames(node);
+        }
+      }
+    };
+    if (entry.fileInfo) collectNames(entry.fileInfo);
+
     const totalBytes = candidates.reduce((total, file) => total + file.size, 0);
     const uploadedByFileId = new Map(candidates.map((file) => [file.fileId, 0]));
     this.deps.onUploadProgress(entry.id, 0, totalBytes);
@@ -44,7 +56,7 @@ export class FileUploader {
         candidates,
         TRANSFER_CONCURRENCY,
         async (file) => {
-          await this.#uploadContent({ ...file, kind }, (fileUploadedBytes) => {
+          await this.#uploadContent({ ...file, kind, name: names.get(file.fileId) }, (fileUploadedBytes) => {
             uploadedByFileId.set(file.fileId, fileUploadedBytes);
             const uploadedBytes = [...uploadedByFileId.values()].reduce(
               (total, bytes) => total + bytes,
@@ -140,6 +152,7 @@ export class FileUploader {
   async #uploadBegin(file: FileReference): Promise<UploadBeginResponse> {
     const request: UploadBeginRequest = {
       fileId: file.fileId,
+      name: file.name,
       size: file.size,
       kind: file.kind,
     };

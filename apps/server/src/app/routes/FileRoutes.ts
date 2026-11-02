@@ -51,7 +51,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const body = parseOr400(reply, UploadBeginRequestSchema, request.body, "上传参数无效");
     if (!body) return reply;
     try {
-      return uploads.begin(user.id, body.fileId, body.size, body.kind);
+      return uploads.begin(user.id, body.fileId, body.size, body.kind, body.name);
     } catch (error) {
       return uploadError(reply, error);
     }

@@ -10,11 +10,11 @@ export type TransferOverrides = Partial<TransferSettings>;
 export type UserTransferSettings = { transfer: TransferSettings; overrides: TransferOverrides; defaults: TransferSettings; customized: boolean };
 export type AdminUser = { id: string; username: string; createdAt: string; activeSessions: number };
 export type AdminDevice = { id: string; deviceInfo: string; name: string; platform: string; osVersion: string; appVersion: string; lastOnlineAt: string | null; online: boolean };
-export type AdminFile = { fileId: string; size: number; stored: boolean; createdAt: string };
+export type AdminFile = { fileId: string; name: string | null; size: number; stored: boolean; createdAt: string };
 export type FileStats = { count: number; storedCount: number; storedBytes: number };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/admin-api/${path}`, {
+  const response = await fetch(new URL(`../admin-api/${path}`, document.baseURI), {
     credentials: "same-origin",
     // Only body-carrying requests declare JSON: Fastify rejects a body-less
     // DELETE that claims an application/json payload.

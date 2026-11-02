@@ -342,6 +342,7 @@ export const UPLOAD_STATUS = {
 // that chunk still has to be sent.
 export const UploadBeginRequestSchema = z.object({
   fileId: FileIdSchema,
+  name: NodeNameSchema.optional(),
   size: z.number().int().nonnegative(),
   kind: UploadKindSchema.default(ClipboardKind.Files),
 });

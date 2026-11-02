@@ -10,8 +10,9 @@ const BUNDLED_ADMIN_DIRECTORY = fileURLToPath(new URL("../../admin-ui", import.m
 const WORKSPACE_ADMIN_DIRECTORY = fileURLToPath(new URL("../../../admin", import.meta.url));
 
 export function registerAdminUiRoutes(app: FastifyInstance): void {
-  app.get("/", async (_request, reply) => reply.redirect("/admin/"));
-  app.get("/admin", async (_request, reply) => reply.redirect("/admin/"));
+  // Relative redirects preserve a reverse proxy's external path prefix.
+  app.get("/", async (_request, reply) => reply.redirect("admin/"));
+  app.get("/admin", async (_request, reply) => reply.redirect("admin/"));
 
   app.register(async (adminApp) => {
     const directory = existsSync(join(BUNDLED_ADMIN_DIRECTORY, "index.html"))

@@ -12,7 +12,7 @@ type FileRow = { file_id: string; size: number; stored: number };
 type FileStatus = { fileId: string; size: number; stored: boolean };
 
 // The admin listing shape: a pool row with its registration timestamp.
-export type FileRecord = { fileId: string; size: number; stored: boolean; createdAt: string };
+export type FileRecord = { fileId: string; name: string | null; size: number; stored: boolean; createdAt: string };
 
 // The content pool: bytes addressed by `sha256(content)`, with no knowledge of
 // clipboard entries. Nothing here records who references a content, so the same
@@ -32,6 +32,7 @@ export class FileStore {
       -- the content so peers can render totals before upload.
       CREATE TABLE IF NOT EXISTS files (
         file_id TEXT PRIMARY KEY,
+        name TEXT,
         size INTEGER NOT NULL,
         stored INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
@@ -46,6 +47,10 @@ export class FileStore {
         bitmap BLOB NOT NULL
       );
     `);
+    const fileColumns = this.database.pragma("table_info(files)") as Array<{ name: string }>;
+    if (!fileColumns.some(({ name }) => name === "name")) {
+      this.database.exec("ALTER TABLE files ADD COLUMN name TEXT");
+    }
     // Old ledgers keep their bitmap; only the unused GC timestamp is removed.
     const columns = this.database.pragma("table_info(upload_parts)") as Array<{ name: string }>;
     if (columns.some(({ name }) => name === "updated_at")) {
@@ -73,6 +78,15 @@ export class FileStore {
       VALUES (?, ?, 1, ?)
       ON CONFLICT(file_id) DO UPDATE SET stored = 1, size = excluded.size
     `).run(fileId, size, new Date().toISOString());
+  }
+
+  // Keep the first supplied upload name, including across retries and restarts.
+  recordUploadName(fileId: string, size: number, name: string): void {
+    this.database.prepare(`
+      INSERT INTO files (file_id, name, size, stored, created_at)
+      VALUES (?, ?, ?, 0, ?)
+      ON CONFLICT(file_id) DO UPDATE SET name = COALESCE(files.name, excluded.name)
+    `).run(fileId, name, size, new Date().toISOString());
   }
 
   has(fileId: string): boolean {
@@ -177,11 +191,12 @@ export class FileStore {
       .prepare(`SELECT COUNT(*) AS total FROM files ${where}`)
       .get(...(pattern ? [pattern] : [])) as { total: number };
     const rows = this.database
-      .prepare(`SELECT file_id, size, stored, created_at FROM files ${where} ORDER BY created_at DESC LIMIT ?`)
-      .all(...(pattern ? [pattern] : []), limit) as Array<FileRow & { created_at: string }>;
+      .prepare(`SELECT file_id, name, size, stored, created_at FROM files ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...(pattern ? [pattern] : []), limit) as Array<FileRow & { name: string | null; created_at: string }>;
     return {
-      files: rows.map(({ file_id, size, stored, created_at }) => ({
+      files: rows.map(({ file_id, name, size, stored, created_at }) => ({
         fileId: file_id,
+        name,
         size,
         stored: Boolean(stored),
         createdAt: created_at,
