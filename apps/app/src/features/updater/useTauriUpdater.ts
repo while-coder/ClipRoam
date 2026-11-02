@@ -53,6 +53,7 @@ export interface TauriUpdater {
   updateTotal: Ref<number | null>
   updateProgressPercent: ComputedRef<number>
   showAutoUpdatePrompt: ComputedRef<boolean>
+  autoCheckFinished: Ref<boolean>
   checkForUpdate: (options?: CheckForUpdateOptions) => Promise<CheckForUpdateResult>
   scheduleAutoCheck: (delayMs?: number) => void
   stopAutoCheck: () => void
@@ -100,6 +101,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   const updateDownloaded = ref(0)
   const updateTotal = ref<number | null>(null)
   const autoCheckDone = ref(false)
+  const autoCheckFinished = ref(false)
   const autoCheckDismissed = ref(false)
   const androidUpdateUrl = ref('')
   let checkInFlight: Promise<CheckForUpdateResult> | null = null
@@ -241,11 +243,15 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
   }
 
   function scheduleAutoCheck(delayMs = options.autoCheckDelayMs ?? 5000) {
-    if (autoCheckDone.value || !updaterSupported || autoCheckTimer !== null) return
+    if (!updaterSupported) {
+      autoCheckFinished.value = true
+      return
+    }
+    if (autoCheckDone.value || autoCheckTimer !== null) return
     autoCheckTimer = window.setTimeout(() => {
       autoCheckTimer = null
       autoCheckDone.value = true
-      void checkForUpdate({ silent: true })
+      void checkForUpdate({ silent: true }).finally(() => { autoCheckFinished.value = true })
     }, delayMs)
   }
 
@@ -347,6 +353,7 @@ export function createTauriUpdater(options: CreateTauriUpdaterOptions = {}): Tau
     updateTotal,
     updateProgressPercent,
     showAutoUpdatePrompt,
+    autoCheckFinished,
     checkForUpdate,
     scheduleAutoCheck,
     stopAutoCheck,

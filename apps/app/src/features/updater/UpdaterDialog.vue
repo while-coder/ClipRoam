@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SModal from '@qingfeng346/ui-kit/components/SModal.vue'
 import SButton from '@qingfeng346/ui-kit/components/button/SButton.vue'
 import { useAppVersion } from '@cliproam/ui/platform'
@@ -7,6 +7,8 @@ import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-vue-n
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useTauriUpdater } from './useTauriUpdater'
+import changelog from '../../../../../CHANGELOG.md?raw'
+import { releaseNotesForVersion } from './releaseNotes'
 
 const props = withDefaults(defineProps<{
   autoCheck?: boolean
@@ -21,6 +23,34 @@ const { appVersion, initAppVersion } = useAppVersion()
 const { updateStatus, updateVersion, updateNotes, updateDownloaded, updateTotal, updateProgressPercent, updateMsg } = updater
 const updateVisible = computed(() => ['available', 'downloading', 'installed', 'error'].includes(updateStatus.value))
 const downloading = computed(() => updateStatus.value === 'downloading')
+const releaseNotesReady = ref(false)
+const releaseNotesDismissed = ref(false)
+const releaseNotesKey = computed(() => `cliproam.release-notes.seen.${appVersion.value}`)
+const currentReleaseNotes = computed(() => releaseNotesForVersion(changelog, appVersion.value))
+const currentReleaseVisible = computed(() => releaseNotesReady.value
+  && !releaseNotesDismissed.value && Boolean(currentReleaseNotes.value)
+  && (!props.autoCheck || updater.autoCheckFinished.value)
+  && !updateVisible.value && updateStatus.value !== 'checking')
+const renderedCurrentNotes = computed(() => DOMPurify.sanitize(marked.parse(currentReleaseNotes.value, { async: false }) as string))
+
+watch(appVersion, (version) => {
+  if (!version) return
+  try {
+    releaseNotesDismissed.value = localStorage.getItem(releaseNotesKey.value) === 'true'
+  } catch (error) {
+    console.warn('[updater] 无法读取版本内容展示记录', error)
+  }
+  releaseNotesReady.value = true
+}, { immediate: true })
+
+function dismissCurrentRelease() {
+  releaseNotesDismissed.value = true
+  try {
+    localStorage.setItem(releaseNotesKey.value, 'true')
+  } catch (error) {
+    console.warn('[updater] 无法保存版本内容展示记录', error)
+  }
+}
 const title = computed(() => ({
   available: '发现新版本',
   downloading: '正在下载更新',
@@ -145,6 +175,20 @@ async function dismiss() {
         <SButton @click="dismiss">关闭</SButton>
         <SButton v-if="hasPendingUpdate" type="primary" @click="updater.downloadAndInstallUpdate">重试</SButton>
       </template>
+    </template>
+  </SModal>
+  <SModal
+    nested
+    :show="currentReleaseVisible"
+    :title="`版本 ${appVersion} 更新内容`"
+    width="640px"
+    @update:show="(show: boolean) => { if (!show) dismissCurrentRelease() }"
+  >
+    <div class="updater-content">
+      <div class="updater-notes" v-html="renderedCurrentNotes" />
+    </div>
+    <template #footer>
+      <SButton type="primary" @click="dismissCurrentRelease">知道了</SButton>
     </template>
   </SModal>
 </template>
