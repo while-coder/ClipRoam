@@ -8,6 +8,7 @@ import { entryContents } from "@cliproam/protocol";
 export class PendingUploadManager {
   readonly entries = ref<LocalClipboardEntry[]>([]);
   readonly count = ref(0);
+  readonly failedCount = ref(0);
   readonly progress = ref<Record<string, UploadProgress>>({});
   readonly retryingAll = ref(false);
   #progress = new Map<string, UploadProgress>();
@@ -49,7 +50,10 @@ export class PendingUploadManager {
     await this.session.ready;
     const rows = await this.rows();
     if (!list) {
-      if (!this.session.signal.aborted && countRevision === this.#countRevision) this.count.value = rows.length;
+      if (!this.session.signal.aborted && countRevision === this.#countRevision) {
+        this.count.value = rows.length;
+        this.failedCount.value = rows.filter((row) => row.status === "failed").length;
+      }
       return;
     }
     const ids = [...new Set(rows.flatMap((row) => entryContents(row.entry).map((file) => file.fileId)).filter(Boolean))];
@@ -60,7 +64,10 @@ export class PendingUploadManager {
     });
     if (!this.session.signal.aborted) {
       if (listRevision === this.#listRevision) this.entries.value = entries;
-      if (countRevision === this.#countRevision) this.count.value = rows.length;
+      if (countRevision === this.#countRevision) {
+        this.count.value = rows.length;
+        this.failedCount.value = rows.filter((row) => row.status === "failed").length;
+      }
     }
   }
 

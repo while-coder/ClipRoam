@@ -453,7 +453,7 @@ button.image-thumbnail { cursor: zoom-in; }
 .app-shell {
   position: relative;
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 208px) minmax(0, 1fr);
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -740,6 +740,13 @@ button:focus-visible, [role="button"]:focus-visible {
 .mobile-app .history-content[data-history-selecting] { grid-template-rows: 40px auto minmax(0, 1fr) auto; }
 .mobile-app .pending-content { grid-template-rows: 40px minmax(0, 1fr); }
 .mobile-app .pending-content.has-footer { grid-template-rows: 40px minmax(0, 1fr) 36px; }
+.pending-content.transfer-content { grid-template-rows: 52px auto minmax(0, 1fr); }
+.pending-content.transfer-content.has-footer { grid-template-rows: 52px auto minmax(0, 1fr) 36px; }
+.mobile-app .pending-content.transfer-content { grid-template-rows: 40px auto minmax(0, 1fr); }
+.mobile-app .pending-content.transfer-content.has-footer { grid-template-rows: 40px auto minmax(0, 1fr) 36px; }
+.transfer-failure { color: var(--sui-error); font-weight: 700; }
+.mobile-nav-item:has(.mobile-transfer-failure) { position: relative; }
+.mobile-transfer-failure { position: absolute; top: 2px; right: 8px; font-size: 12px; }
 .mobile-app .workspace-titlebar { padding-inline: 12px; }
 .mobile-app .page-title > span { display: none; }
 .mobile-app .page-title h1 { font-size: 17px; }

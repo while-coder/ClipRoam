@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import TransferTabs from "./TransferTabs.vue";
+
 withDefaults(defineProps<{
   title: string;
   layout?: "history" | "list";
+  transfer?: boolean;
 }>(), { layout: "list" });
 </script>
 
 <template>
-  <section class="app-content history-content" :class="{ 'pending-content': layout === 'list', 'has-footer': !!$slots.footer }">
+  <section class="app-content history-content" :class="{ 'pending-content': layout === 'list', 'has-footer': !!$slots.footer, 'transfer-content': transfer }">
     <slot name="header">
       <header class="titlebar workspace-titlebar">
         <div class="page-title">
@@ -16,7 +19,8 @@ withDefaults(defineProps<{
         <div class="titlebar-actions"><slot name="actions" /><slot name="menu" /></div>
       </header>
     </slot>
-    <slot name="toolbar" />
+    <TransferTabs v-if="transfer" />
+    <slot v-else name="toolbar" />
     <slot />
     <footer v-if="$slots.footer" class="footer-hint"><slot name="footer" /></footer>
   </section>

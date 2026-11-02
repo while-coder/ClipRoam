@@ -27,11 +27,13 @@ import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import FilePreview from "./FilePreview.vue";
 import FavoriteFoldersPanel from "../favorites/FavoriteFoldersPanel.vue";
+import SidebarResizer from "../../components/SidebarResizer.vue";
 import FavoriteDestinationDialog from "../favorites/FavoriteDestinationDialog.vue";
 import { flattenFavoriteFolders } from "../favorites/folderTree";
 import { getAccountSession } from "../../accountSession";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
+import { useHistoryEvents } from "./useHistorySync";
 import { setEntriesFavorite } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
 import { usePlatform, useMobileLayout, showNotification } from "../../platform/runtime";
@@ -50,8 +52,8 @@ const props = defineProps<{
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
   ) => Promise<EntriesManifestPage>;
-  /** Bumped whenever the history may have changed in the background. */
-  revision: number;
+  /** Explicit visibility for pages hidden with v-show rather than KeepAlive. */
+  active?: boolean;
   quickPaste?: boolean;
   favorites?: boolean;
   devicesById: Record<string, Device>;
@@ -70,7 +72,9 @@ const emit = defineEmits<{
 
 const { isMobile } = usePlatform();
 const mobileLayout = useMobileLayout();
+const folderPanelWidth = ref(190);
 const isQuickPaste = computed(() => props.quickPaste === true);
+const pageActive = useHistoryEvents(refreshVisiblePage, () => props.active !== false);
 
 const query = ref("");
 const filter = ref<EntryFilter>("all");
@@ -87,6 +91,7 @@ const destinationError = ref("");
 const recentFavoriteIds = ref<string[]>([]);
 let folderLoadToken = 0;
 async function loadFolders(): Promise<void> {
+  if (!pageActive.value) return;
   const session = getAccountSession();
   if (!session) return;
   const token = ++folderLoadToken;
@@ -103,9 +108,9 @@ async function loadFolders(): Promise<void> {
     if (token === folderLoadToken && !session.signal.aborted) foldersError.value = errorMessage(error);
   } finally { if (token === folderLoadToken) foldersLoading.value = false; }
 }
-watch([() => props.revision, () => props.favorites, () => destinationIds.value.length > 0], () => {
+watch([() => props.favorites, () => destinationIds.value.length > 0], () => {
   if (props.favorites || destinationIds.value.length) void loadFolders();
-}, { immediate: true });
+});
 onBeforeUnmount(() => { folderLoadToken++; });
 function chooseDestination(ids: readonly string[], folderId: string | null = null): void {
   if (!ids.length || favoriting.value || deleting.value) return;
@@ -213,6 +218,8 @@ const {
   fetch: fetchPage,
   clear: clearManifest,
   changePage,
+  cancel: cancelPageFetch,
+  refresh: refreshPage,
 } = useHistoryManifest({
   fetchHistoryPage: props.fetchHistoryPage,
   buildFilter: (page) => ({
@@ -225,16 +232,26 @@ const {
     deviceIds: selectedDeviceIds.value,
     page,
   }),
-  revision: computed(() => props.revision),
   filterSources: [committedQuery, filter, favoriteOnly, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds],
-  // An invalid custom range matches nothing — the backend never sees it, and
-  // background revision bumps must not refill the cleared list either.
-  canFetch: () => !timeRangeError.value,
+  // Hidden views and invalid date ranges must not start background queries.
+  canFetch: () => pageActive.value && !timeRangeError.value,
   onError: (message) => showNotification({ message: `读取历史失败：${message}`, tone: "error" }),
   listElement: historyListElement,
   getSelectedEntryId: () => selectedEntryId.value,
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },
 });
+
+function refreshVisiblePage(): void {
+  if (!pageActive.value) return;
+  if (props.favorites || destinationIds.value.length) void loadFolders();
+  void refreshPage();
+}
+watch(pageActive, (active) => {
+  if (active) return;
+  cancelPageFetch();
+  folderLoadToken++;
+  foldersLoading.value = false;
+}, { flush: "sync" });
 
 const refreshing = ref(false);
 async function refreshCurrentPage(): Promise<void> {
@@ -369,11 +386,9 @@ onDeactivated(() => {
   leaveHistory();
 });
 onActivated(() => {
-  // The initial mount already fetches; menu returns retain the page while refreshing.
+  // Fetches and event subscriptions are handled by useHistoryEvents.
   if (!wasDeactivated) return;
   attachSelectionListeners();
-  if (props.favorites) void loadFolders();
-  void fetchPage(currentPage.value);
 });
 
 // An invalid custom range matches nothing — the backend never sees it.
@@ -547,8 +562,10 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 </script>
 
 <template>
-  <div class="history-workspace app-content" :class="{ 'with-favorite-folders': favorites }">
+  <div class="history-workspace app-content" :class="{ 'with-favorite-folders': favorites }" :style="{ '--folder-panel-width': `${folderPanelWidth}px` }">
   <FavoriteFoldersPanel v-if="favorites" v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
+  <SidebarResizer v-if="favorites && !mobileLayout" storage-key="cliproam.folderPanelWidth" label="收藏目录宽度"
+    :default-width="190" :min-width="160" :max-width="400" :content-min-width="320" @resize="folderPanelWidth = $event" />
   <WorkspacePage :title="favorites ? folderTitle : '剪贴板历史'" layout="history" :data-history-selecting="selecting || undefined">
     <template v-if="favorites" #status>收藏夹</template>
     <template #menu><WorkspaceMenu /></template>
@@ -856,8 +873,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 </template>
 
 <style scoped>
-.history-workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
-.history-workspace.with-favorite-folders { grid-template-columns: 190px minmax(0, 1fr); }
+.history-workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+.history-workspace.with-favorite-folders { grid-template-columns: var(--folder-panel-width, 190px) minmax(0, 1fr); }
 .favorite-feedback { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--color-secondary-text); font-size: 12px; }
 .entry-folder-path { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 768px) {

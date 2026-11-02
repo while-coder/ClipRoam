@@ -33,13 +33,13 @@ function percent(task: ServeTaskSnapshot): number {
 </script>
 
 <template>
-  <WorkspacePage title="上传">
+  <WorkspacePage title="传输" transfer>
     <template #menu><WorkspaceMenu /></template>
     <template #status>
       <span role="status">{{ activeServeCount ? `${activeServeCount} 个进行中` : `共 ${serveTasks.length} 个任务` }}</span>
     </template>
 
-    <section class="history-list downloads-list" aria-label="上传列表">
+    <section id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-uploads" tabindex="0">
       <div v-for="task in serveTasks" :key="task.id" class="history-item download-row">
         <span class="kind-icon">
           <span v-if="task.status === 'serving'" class="s-spinner" aria-hidden="true" />

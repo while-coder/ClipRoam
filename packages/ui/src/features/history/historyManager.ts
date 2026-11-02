@@ -1,4 +1,3 @@
-import { ref } from "vue";
 import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
@@ -12,17 +11,26 @@ import type { AccountFiles } from "../../platform/files";
 export class HistoryManager {
   readonly database: AccountDatabase;
   readonly files: AccountFiles;
-  readonly revision = ref(0);
+  #listeners = new Set<() => void>();
   #client?: HistoryClient;
 
   constructor(private readonly session: AccountSession) {
     this.files = session.files;
     this.database = this.files.database;
+    session.signal.addEventListener("abort", () => this.#listeners.clear(), { once: true });
   }
 
   connect(http: SyncRequester): void { this.#client = new HistoryClient(http, this.session); }
 
-  invalidate(): void { if (!this.session.signal.aborted) this.revision.value++; }
+  addEvent(listener: () => void): void {
+    if (!this.session.signal.aborted) this.#listeners.add(listener);
+  }
+
+  delEvent(listener: () => void): void { this.#listeners.delete(listener); }
+
+  invalidate(): void {
+    if (!this.session.signal.aborted) for (const listener of [...this.#listeners]) listener();
+  }
 
   fetchHistoryPage(filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
     return this.#client?.fetchHistoryPage(filter) ?? Promise.resolve({ total: 0, entries: [] });

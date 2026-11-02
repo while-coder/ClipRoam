@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { appName } from "../branding";
-import { computed } from "vue";
-import { Clipboard, Cloud, CloudOff, CloudUpload, Download, MonitorSmartphone, Upload, Star } from "lucide-vue-next";
+import { computed, ref, watch } from "vue";
+import { Clipboard, Cloud, CloudOff, ArrowDownUp, MonitorSmartphone, Star } from "lucide-vue-next";
 import type { WorkspaceView } from "../types";
+import { hasTransferFailure, transferTabs } from "./transferNavigation";
+import SidebarResizer from "./SidebarResizer.vue";
 
 const props = withDefaults(defineProps<{
   activeView: WorkspaceView;
@@ -18,18 +20,23 @@ const props = withDefaults(defineProps<{
   connectionStatus: () => ({tone:"",label:"未连接",title:"未连接服务器"}),
 });
 const emit = defineEmits<{ "update:activeView": [view: WorkspaceView] }>();
+const lastTransferView = ref<WorkspaceView>("pending-upload");
+const sidebarWidth = ref(208);
+const transferActive = computed(() => transferTabs.value.some((tab) => tab.view === props.activeView));
+const transferCount = computed(() => props.pendingCount + props.activeUploadCount + props.activeDownloadCount);
+watch(() => props.activeView, (view) => {
+  if (transferTabs.value.some((tab) => tab.view === view)) lastTransferView.value = view;
+}, { immediate: true, flush: "sync" });
 const mobilePages = computed(() => [
-  {view:"history" as const,label:"历史",icon:Clipboard,count:0},
-  {view:"favorites" as const,label:"收藏夹",icon:Star,count:0},
-  {view:"pending-upload" as const,label:"待上传",icon:CloudUpload,count:props.pendingCount},
-  {view:"uploads" as const,label:"上传",icon:Upload,count:props.activeUploadCount},
-  {view:"downloads" as const,label:"下载",icon:Download,count:props.activeDownloadCount},
-  {view:"devices" as const,label:"设备",icon:MonitorSmartphone,count:0},
+  {view:"history" as const,label:"历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
+  {view:"favorites" as const,label:"收藏夹",icon:Star,count:0,active:props.activeView === "favorites",failed:false},
+  {view:lastTransferView.value,label:"传输",icon:ArrowDownUp,count:transferCount.value,active:transferActive.value,failed:hasTransferFailure.value},
+  {view:"devices" as const,label:"设备",icon:MonitorSmartphone,count:0,active:props.activeView === "devices",failed:false},
 ]);
 </script>
 
 <template>
-  <main class="app-shell" :class="{ 'paste-app': quickPaste, 'mobile-app': mobile }">
+  <main class="app-shell" :class="{ 'paste-app': quickPaste, 'mobile-app': mobile }" :style="{ '--sidebar-width': `${sidebarWidth}px` }">
     <aside v-if="!mobile" v-show="!quickPaste" class="sidebar" aria-label="主导航">
       <header class="sidebar-brand">
         <span class="brand-mark"><Clipboard :size="17" /></span>
@@ -57,36 +64,15 @@ const mobilePages = computed(() => [
         </button>
         <button
           class="nav-item"
-          :class="{ active: activeView === 'pending-upload' }"
+          :class="{ active: transferActive }"
           type="button"
-          :aria-current="activeView === 'pending-upload' ? 'page' : undefined"
-          @click="emit('update:activeView', 'pending-upload')"
+          :aria-current="transferActive ? 'page' : undefined"
+          @click="emit('update:activeView', lastTransferView)"
         >
-          <CloudUpload :size="17" aria-hidden="true" />
-          <span>待上传</span>
-          <span v-if="pendingCount" class="nav-count">{{ pendingCount }}</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'uploads' }"
-          type="button"
-          :aria-current="activeView === 'uploads' ? 'page' : undefined"
-          @click="emit('update:activeView', 'uploads')"
-        >
-          <Upload :size="17" aria-hidden="true" />
-          <span>上传</span>
-          <span v-if="activeUploadCount" class="nav-count">{{ activeUploadCount }}</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'downloads' }"
-          type="button"
-          :aria-current="activeView === 'downloads' ? 'page' : undefined"
-          @click="emit('update:activeView', 'downloads')"
-        >
-          <Download :size="17" aria-hidden="true" />
-          <span>下载</span>
-          <span v-if="activeDownloadCount" class="nav-count">{{ activeDownloadCount }}</span>
+          <ArrowDownUp :size="17" aria-hidden="true" />
+          <span>传输</span>
+          <span v-if="hasTransferFailure" class="transfer-failure" aria-label="有失败任务" title="有失败任务">!</span>
+          <span v-if="transferCount" class="nav-count">{{ transferCount > 99 ? '99+' : transferCount }}</span>
         </button>
         <button
           class="nav-item"
@@ -109,6 +95,8 @@ const mobilePages = computed(() => [
       </div>
     </aside>
 
+    <SidebarResizer v-if="!mobile && !quickPaste" storage-key="cliproam.sidebarWidth" label="主菜单宽度"
+      :default-width="208" :min-width="176" :max-width="360" :content-min-width="480" @resize="sidebarWidth = $event" />
     <slot />
 
     <nav v-if="mobile && !quickPaste" class="mobile-navigation" :style="{ gridTemplateColumns: `repeat(${mobilePages.length}, minmax(0, 1fr))`, gap: '2px' }" aria-label="主导航">
@@ -117,8 +105,8 @@ const mobilePages = computed(() => [
         :key="page.view"
         type="button"
         class="mobile-nav-item"
-        :class="{ active: activeView === page.view }"
-        :aria-current="activeView === page.view ? 'page' : undefined"
+        :class="{ active: page.active }"
+        :aria-current="page.active ? 'page' : undefined"
         @click="emit('update:activeView', page.view)"
       >
         <span class="mobile-nav-icon">
@@ -126,6 +114,7 @@ const mobilePages = computed(() => [
           <span v-if="page.count" class="mobile-nav-count" :aria-label="`${page.count} 个任务`">{{ page.count > 99 ? '99+' : page.count }}</span>
         </span>
         <span>{{ page.label }}</span>
+        <span v-if="page.failed" class="transfer-failure mobile-transfer-failure" aria-label="有失败任务" title="有失败任务">!</span>
       </button>
     </nav>
 

@@ -1,4 +1,4 @@
-import { computed, nextTick } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import type { ClipboardEntry } from "@cliproam/protocol";
 import { getAccountSession } from "../../accountSession";
 import type {
@@ -22,8 +22,25 @@ export function initHistorySync(next: HistorySyncDeps): void {
   deps = next;
 }
 
-/** Bumped whenever the history may have changed; the history view refetches its page on it. */
-export const historyRevision = computed(() => getAccountSession()?.history.revision.value ?? 0);
+/** Subscribe only while mounted, activated by KeepAlive, and visible (including v-show). */
+export function useHistoryEvents(onRefresh: () => void, enabled: () => boolean = () => true) {
+  const activated = ref(false);
+  const active = computed(() => activated.value && enabled());
+  watch(active, (visible, _previous, onCleanup) => {
+    if (!visible) return;
+    const history = getAccountSession()?.history;
+    if (!history) return;
+    history.addEvent(onRefresh);
+    onCleanup(() => history.delEvent(onRefresh));
+    // Changes while away need no replay: query the current server state on return.
+    onRefresh();
+  }, { flush: "sync" });
+  onMounted(() => { activated.value = true; });
+  onActivated(() => { activated.value = true; });
+  onDeactivated(() => { activated.value = false; });
+  onBeforeUnmount(() => { activated.value = false; });
+  return active;
+}
 
 export async function fetchHistoryPage(
   filter: EntriesManifestFilter,
@@ -31,7 +48,7 @@ export async function fetchHistoryPage(
   return getAccountSession()?.history.fetchHistoryPage(filter) ?? { total: 0, entries: [] };
 }
 
-/** Mark history changed immediately; only a mounted history view fetches it. */
+/** Notify the currently subscribed history view. */
 export function refreshHistory(): void {
   getAccountSession()?.history.invalidate();
 }

@@ -38,7 +38,6 @@ import { activeView, activeAccountSession, getAccountSession } from "./accountSe
 import {
   fetchHistoryPage,
   focusSearchInput,
-  historyRevision,
   initHistorySync,
 } from "./features/history/useHistorySync";
 import {
@@ -488,8 +487,8 @@ onMounted(async () => {
 
   if (startupWarning) showNotification({ message: startupWarning, tone: "error" });
   void initAppVersion();
-  // The history view fetches its first page itself (revision watch with
-  // `immediate`); only the pending badge needs an initial query.
+  // The history view subscribes and fetches when activated;
+  // only the pending badge needs an initial query here.
   void refreshPendingCount();
   if (!accountRuntimeError.value) {
     void initializeNativeServices();
@@ -562,7 +561,7 @@ onBeforeUnmount(() => {
         v-show="!isQuickPaste"
         ref="historyView"
         :fetch-history-page="fetchHistoryPage"
-        :revision="historyRevision"
+        :active="!isQuickPaste"
         :devices-by-id="devicesById"
         :current-time="currentTime"
         :importing-share="importingShare"
@@ -613,7 +612,7 @@ onBeforeUnmount(() => {
     <slot v-if="isQuickPaste" name="quick-paste"
       :register="registerQuickHistoryView"
       :bindings="{
-        fetchHistoryPage, revision: historyRevision, devicesById, currentTime, importingShare: false,
+        fetchHistoryPage, devicesById, currentTime, importingShare: false,
         activatingEntryIds, savingEntryId, ensureLocalFiles, removeEntries,
         onActivate: activateFromView, onSave: saveEntry,
       }"

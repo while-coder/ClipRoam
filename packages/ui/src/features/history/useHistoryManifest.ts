@@ -8,8 +8,6 @@ type ManifestOptions = {
     filter: EntriesManifestFilter,
   ) => Promise<EntriesManifestPage>;
   buildFilter: (page: number) => EntriesManifestFilter;
-  /** Bumped whenever the underlying history may have changed in the background. */
-  revision: Ref<number>;
   /** Filter inputs: watching them re-runs the query from page 1. */
   filterSources: WatchSource[];
   /** When false (e.g. an invalid filter), fetches are skipped so the cleared list stays cleared. */
@@ -23,15 +21,15 @@ type ManifestOptions = {
 
 /**
  * Server-style manifest paging: the backend filters, counts and slices, so
- * only the rendered page ever crosses the IPC boundary. `revision` bumps keep
- * the current page in place; filter edits restart from page 1.
+ * only the rendered page ever crosses the IPC boundary. Refreshes keep the
+ * current page in place; filter edits restart from page 1.
  */
 export function useHistoryManifest(options: ManifestOptions) {
   const page = ref(1);
   const total = ref(0);
   const entries = ref<LocalClipboardEntry[]>([]);
   let fetchToken = 0;
-  // 请求的目标页：revision 自增落在一次拉取中途时（例如重开快捷粘贴窗口的
+  // 请求的目标页：刷新事件落在一次拉取中途时（例如重开快捷粘贴窗口的
   // 第 1 页重置还没返回），按目标页重拉，而不是被过期的旧 page.value 抢占。
   let targetPage = 1;
 
@@ -77,17 +75,16 @@ export function useHistoryManifest(options: ManifestOptions) {
     entries.value = [];
   }
 
-  onScopeDispose(() => { fetchToken += 1; });
+  function cancel(): void { fetchToken += 1; }
+
+  onScopeDispose(cancel);
 
   watch(options.filterSources, () => { void fetch(1, true); });
-  // `immediate` covers the first mount and re-mounts of the view; later bumps
-  // refresh the current page in the background.
-  watch(options.revision, () => { void fetch(targetPage); }, { immediate: true });
 
   async function changePage(next: number): Promise<void> {
     if (next === page.value) return;
     await fetch(next, true);
   }
 
-  return { page, total, pageCount, entries, fetch, clear, changePage };
+  return { page, total, pageCount, entries, fetch, clear, changePage, cancel, refresh: () => fetch(targetPage) };
 }

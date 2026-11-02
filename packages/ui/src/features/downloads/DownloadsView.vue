@@ -33,7 +33,7 @@ function percent(record: DownloadRecord): number {
 </script>
 
 <template>
-  <WorkspacePage title="下载">
+  <WorkspacePage title="传输" transfer>
     <template #menu><WorkspaceMenu /></template>
     <template #status>
       <span role="status">{{ activeCount ? `${activeCount} 个进行中` : `共 ${records.length} 条记录` }}</span>
@@ -45,7 +45,7 @@ function percent(record: DownloadRecord): number {
         清空已结束
       </SButton>
     </template>
-    <section class="history-list downloads-list" aria-label="下载记录">
+    <section id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-downloads" tabindex="0">
       <article v-for="record in records" :key="record.id" class="download-record">
         <div class="download-record-main">
           <button class="download-record-summary" type="button"
