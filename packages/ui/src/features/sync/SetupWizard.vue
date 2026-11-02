@@ -46,7 +46,14 @@ const authMode = ref<AuthMode>("login");
 const serverFieldError = ref("");
 const usernameFieldError = ref("");
 const passwordFieldError = ref("");
-const serverOptions = computed(() => [...new Set(props.savedAccounts.map((account) => account.serverAddress))]
+const presetServerAddresses = [
+  "https://nas2.while.net.cn:16443/cliproam",
+  "https://nas.while.net.cn:18443/cliproam",
+];
+const serverOptions = computed(() => [...new Set([
+  ...presetServerAddresses,
+  ...props.savedAccounts.map((account) => account.serverAddress),
+])]
   .map((value) => ({ label: value, value })));
 const currentServerAccounts = computed(() => {
   try {
@@ -100,8 +107,6 @@ function fillServerAccount(): void {
 }
 
 function selectServer(value: string): void {
-  const account = props.savedAccounts.find((account) => account.serverAddress === value);
-  if (!account) return;
   setupServerAddress.value = value;
   serverFieldError.value = "";
   fillServerAccount();
@@ -235,7 +240,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
               @blur="validateServerField"
             >
               <template v-if="serverOptions.length" #suffix>
-                <SSelect class="login-choice-menu" :value="setupServerAddress" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择已保存的服务器" title="选择已保存的服务器" @select="selectServer" />
+                <SSelect class="login-choice-menu" :value="setupServerAddress" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择服务器" title="选择服务器" @select="selectServer" />
               </template>
             </SInput>
             <SIconButton v-if="currentServerAccounts.length" :size="36" :disabled="busy" title="删除此服务器的全部登录记录" aria-label="删除此服务器的全部登录记录" @click="emit('remove-server', currentServerAccounts[0]!)">
