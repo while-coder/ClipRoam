@@ -196,14 +196,3 @@ pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    ensure_parent_dir(path)?;
-    let mut name = path.as_os_str().to_owned();
-    name.push(".tmp");
-    let temp = PathBuf::from(name);
-    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    fs::rename(&temp, path).map_err(|e| {
-        let _ = fs::remove_file(&temp);
-        e.to_string()
-    })
-}

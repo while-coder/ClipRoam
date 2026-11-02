@@ -1,11 +1,10 @@
-//! OS clipboard snapshots, change buffering and clipboard writes. No account database or transfer logic.
+//! OS clipboard change events and clipboard writes. No account database or transfer logic.
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Cursor,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -181,15 +180,6 @@ pub(crate) struct ClipboardState {
     io: Mutex<()>,
 }
 
-fn scope_dir(app: &AppHandle, scope: &str) -> Result<PathBuf, String> {
-    crate::files::validate_component(scope)?;
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("clipboard-inbox")
-        .join(scope))
-}
 pub(crate) fn image_data(bytes: &[u8]) -> Result<ClipboardData, String> {
     let (bytes, width, height, thumbnail) = encode_image_as_webp(bytes)?;
     Ok(ClipboardData::Image {
@@ -304,8 +294,6 @@ pub(crate) fn native_watch_clipboard(
         state.signature.lock().map_err(|e| e.to_string())?.clear();
         *previous_scope = scope.clone();
     }
-    let dir = scope_dir(&app, &scope)?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
     *monitor = Some((scope.clone(), stop.clone()));
     thread::spawn(move || {
@@ -323,29 +311,28 @@ pub(crate) fn native_watch_clipboard(
             match if skip { Ok(None) } else { read(&app, false) } {
                 Ok(Some((data, signature))) => {
                     if let Ok(mut previous) = state.signature.lock() {
-                        // Disabled kinds must never be persisted in the capture inbox.
+                        // Disabled kinds must never be delivered to the account.
                         if !kinds.allows(&data) {
                             *previous = signature;
                         } else if *previous != signature {
-                            let id = uuid::Uuid::new_v4().to_string();
                             let capture = Capture {
-                                id: id.clone(),
+                                id: uuid::Uuid::new_v4().to_string(),
                                 signature: signature.clone(),
                                 data,
                             };
-                            let result = serde_json::to_vec(&capture)
-                                .map_err(|e| e.to_string())
-                                .and_then(|data| {
-                                    crate::files::write_file_atomic(
-                                        &dir.join(format!("{id}.json")),
-                                        &data,
-                                    )
-                                });
+                            let result = app.emit_to(
+                                "main",
+                                "cliproam://clipboard-changed",
+                                ClipboardEvent {
+                                    scope: &scope,
+                                    capture: &capture,
+                                },
+                            );
                             if result.is_ok() {
                                 *previous = signature;
                             } else if let Err(error) = result {
                                 tauri_plugin_log::log::error!(
-                                    "Clipboard snapshot persistence failed: {error}"
+                                    "Clipboard delivery failed: {error}"
                                 );
                             }
                         }
@@ -353,9 +340,6 @@ pub(crate) fn native_watch_clipboard(
                 }
                 Err(error) => tauri_plugin_log::log::warn!("Clipboard read failed: {error}"),
                 _ => {}
-            }
-            if let Err(error) = deliver_inbox(&app, &scope) {
-                tauri_plugin_log::log::warn!("Clipboard delivery failed: {error}");
             }
             drop(_io);
             if !skip {
@@ -369,48 +353,6 @@ pub(crate) fn native_watch_clipboard(
             }
         }
     });
-    Ok(())
-}
-fn clipboard_inbox(app: &AppHandle, scope: &str) -> Result<Vec<Capture>, String> {
-    let dir = scope_dir(app, scope)?;
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut paths = fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
-        .collect::<Vec<_>>();
-    paths.sort_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok());
-    paths
-        .into_iter()
-        .map(|entry| {
-            serde_json::from_slice(&fs::read(entry.path()).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())
-        })
-        .collect()
-}
-fn clipboard_ack(app: &AppHandle, scope: &str, id: &str) -> Result<(), String> {
-    uuid::Uuid::parse_str(id).map_err(|_| "Invalid capture id")?;
-    let path = scope_dir(app, scope)?.join(format!("{id}.json"));
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-fn deliver_inbox(app: &AppHandle, scope: &str) -> Result<(), String> {
-    for capture in clipboard_inbox(app, scope)? {
-        app.emit_to(
-            "main",
-            "cliproam://clipboard-changed",
-            ClipboardEvent {
-                scope,
-                capture: &capture,
-            },
-        )
-        .map_err(|error| error.to_string())?;
-        clipboard_ack(app, scope, &capture.id)?;
-    }
     Ok(())
 }
 #[derive(Deserialize)]
