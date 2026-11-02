@@ -113,7 +113,9 @@ extendedKeyUsage = codeSigning
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 OPENSSL_CONFIG
-    openssl pkcs12 -export \
+    # 显式指定钥匙串兼容的算法，避免 OpenSSL 版本改变默认导出格式。
+    /usr/bin/openssl pkcs12 -export \
+      -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
       -name "$IDENTITY" \
       -inkey "$key_path" \
       -in "$cert_path" \
@@ -196,7 +198,22 @@ import_ci() {
   local ci_p12_path="$WORK_DIR/identity.p12"
   local ci_cert_path="$WORK_DIR/identity.crt"
 
-  printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$ci_p12_path"
+  if ! printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$ci_p12_path"; then
+    echo "APPLE_CERTIFICATE 不是有效的 Base64；请重新复制 cliproam.p12 的 Base64 内容" >&2
+    return 1
+  fi
+  if [ ! -s "$ci_p12_path" ]; then
+    echo "APPLE_CERTIFICATE 解码后为空；请重新设置证书 Secret" >&2
+    return 1
+  fi
+  # 使用 macOS 自带 OpenSSL，支持旧 P12 中的 RC2；不输出证书或私钥。
+  if ! /usr/bin/openssl pkcs12 -in "$ci_p12_path" -noout \
+    -passin env:APPLE_CERTIFICATE_PASSWORD > "$WORK_DIR/p12-check.log" 2>&1; then
+    echo "P12 校验失败：证书内容损坏、格式不受支持，或 APPLE_CERTIFICATE_PASSWORD 不匹配" >&2
+    echo "APPLE_CERTIFICATE 必须是原始 cliproam.p12 的一次 Base64 编码，不能填写路径、PEM 或重复编码的内容" >&2
+    echo "本机检查：/usr/bin/openssl pkcs12 -in ~/.config/cliproam/signing/cliproam.p12 -noout" >&2
+    return 1
+  fi
 
   echo "正在创建临时签名钥匙串..."
   security create-keychain -p "$ci_keychain_password" "$ci_keychain_path"
@@ -204,8 +221,11 @@ import_ci() {
   security unlock-keychain -p "$ci_keychain_password" "$ci_keychain_path"
 
   echo "正在导入签名身份..."
-  security import "$ci_p12_path" -k "$ci_keychain_path" \
-    -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+  if ! security import "$ci_p12_path" -f pkcs12 -k "$ci_keychain_path" \
+    -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign; then
+    echo "P12 校验已通过，但钥匙串导入失败；请检查 P12 是否包含用于代码签名的证书及私钥" >&2
+    return 1
+  fi
   # 从已导入的钥匙串读取证书，避免 OpenSSL 3 拒绝旧 P12 中的 RC2 加密。
   security find-certificate -c "$IDENTITY" -p "$ci_keychain_path" > "$ci_cert_path"
 

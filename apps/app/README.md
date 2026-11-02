@@ -57,6 +57,8 @@ CI 沿用 `.github/workflows/release.yml` 中的共用桌面工作流。它调�
 - `APPLE_CERTIFICATE`：上述原始 P12 的 Base64 内容，可用 `base64 -i ~/.config/cliproam/signing/cliproam.p12 | pbcopy` 复制。
 - `APPLE_CERTIFICATE_PASSWORD`：创建或导出该 P12 时设置的密码。
 
+若 CI 提示 `Unknown format in import` 或 P12 校验失败，先在本机执行 `/usr/bin/openssl pkcs12 -in ~/.config/cliproam/signing/cliproam.p12 -noout`，输入导出密码验证原始文件，再重新复制上述 Base64 内容到 `APPLE_CERTIFICATE`。Secret 不能填写文件路径、PEM 文本或重复 Base64 编码的内容。新生成的 P12 使用显式指定的钥匙串兼容算法；已有文件不会自动覆盖。
+
 这两个 Secret 与更新器的 `TAURI_SIGNING_PRIVATE_KEY` 独立，后者继续负责更新包的验签。正式分发若使用 Developer ID，可通过 `APPLE_SIGNING_IDENTITY` 指定已导入的证书身份，并按 Tauri 文档另外配置公证。
 
 VS Code 的 `Launch App · macOS · Signed` 使用签名 `.app`；LLDB 配置仍直接运行未经过整包签名的 `target/debug/cliproam`，用于原生调试，不应拿它验证安装版的授权。运行开发包前先退出安装版，避免单实例机制将操作转交给已经运行的应用。
