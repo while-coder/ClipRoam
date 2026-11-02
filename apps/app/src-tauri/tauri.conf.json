@@ -47,8 +47,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/histories/*/files/upload/images/*",
-          "$APPDATA/histories/*/files/download/*"
+          "$APPLOCALDATA/histories/*/files/upload/images/*",
+          "$APPLOCALDATA/histories/*/files/download/*"
         ]
       }
     }

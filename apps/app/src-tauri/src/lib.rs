@@ -26,7 +26,7 @@ pub fn run() {
     let builder = platform::register_plugins(builder);
     builder
         .setup(|app| {
-            std::fs::create_dir_all(app.path().app_data_dir()?)?;
+            std::fs::create_dir_all(app.path().app_local_data_dir()?)?;
             app.manage(app::QuickPasteMode::default());
             #[cfg(desktop)]
             app.manage(shortcuts::ShortcutState::default());

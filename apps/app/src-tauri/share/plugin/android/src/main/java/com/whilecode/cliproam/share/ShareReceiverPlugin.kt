@@ -148,7 +148,7 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
             var directory: File? = null
             try {
                 val targetDirectory = File(args.directory).canonicalFile
-                // Tauri app_data_dir resolves to dataDir; profile caches live
+                // Tauri app_local_data_dir resolves to dataDir; profile caches live
                 // under dataDir/histories, alongside the files subdirectory.
                 require(targetDirectory.path.startsWith(activity.dataDir.canonicalPath + File.separator)) {
                     "文件导入目录必须位于应用数据目录中"

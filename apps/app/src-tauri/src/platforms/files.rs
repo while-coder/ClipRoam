@@ -48,7 +48,7 @@ pub(crate) fn remove_file(app: &AppHandle, path: &str) -> Result<(), String> {
     }
     let root = app
         .path()
-        .app_data_dir()
+        .app_local_data_dir()
         .map_err(|error| error.to_string())?
         .canonicalize()
         .map_err(|error| error.to_string())?;

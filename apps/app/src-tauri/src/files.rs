@@ -26,7 +26,7 @@ pub(crate) fn scope_directory(app: &AppHandle, scope: &str) -> Result<PathBuf, S
     validate_component(scope)?;
     Ok(app
         .path()
-        .app_data_dir()
+        .app_local_data_dir()
         .map_err(|e| e.to_string())?
         .join("histories")
         .join(scope)
@@ -43,7 +43,7 @@ pub(crate) fn native_paths(app: AppHandle) -> Result<NativePaths, String> {
     Ok(NativePaths {
         app_dir: app
             .path()
-            .app_data_dir()
+            .app_local_data_dir()
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned(),

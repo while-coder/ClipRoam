@@ -381,7 +381,7 @@ pub(crate) fn open_data_directory_with(app: &AppHandle, command: &str) -> Result
 
     let app_data_dir = app
         .path()
-        .app_data_dir()
+        .app_local_data_dir()
         .map_err(|error| error.to_string())?;
     fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
     Command::new(command)
