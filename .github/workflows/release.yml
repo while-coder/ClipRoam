@@ -161,7 +161,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.check.outputs.tag }}
           VERSION: ${{ needs.check.outputs.version }}
-          NOTES: ${{ needs.check.outputs.notes }}
         run: node manifest-update.cjs
 
   deploy-pwa:

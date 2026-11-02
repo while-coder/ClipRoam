@@ -19,13 +19,13 @@ const PROGRESS_EMIT_INTERVAL: u64 = 256 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct UpdaterManifest {
+    version: String,
+    notes: Option<String>,
     android: Option<ManifestAndroidEntry>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ManifestAndroidEntry {
-    version: String,
-    notes: Option<String>,
     url: String,
 }
 
@@ -143,13 +143,13 @@ pub(crate) async fn check_update(app: &AppHandle) -> Result<Option<UpdateInfo>, 
     let Some(entry) = manifest.android else {
         return Ok(None);
     };
-    let latest = entry.version.trim().trim_start_matches('v').trim();
+    let latest = manifest.version.trim().trim_start_matches('v').trim();
     if latest.is_empty() || !is_newer_version(latest, &current) {
         return Ok(None);
     }
     Ok(Some(UpdateInfo {
         version: latest.to_string(),
-        notes: entry.notes.unwrap_or_default().trim().to_string(),
+        notes: manifest.notes.unwrap_or_default().trim().to_string(),
         url: entry.url,
     }))
 }

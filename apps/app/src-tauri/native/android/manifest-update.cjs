@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // 发版时把 Android APK 写入 updater manifest（latest.json）的 android 字段。
 // 客户端自检只读这份静态清单，不请求 GitHub API。需在 tauri-updater-manifest
-// 工作流（重新生成 latest.json）之后运行。环境变量：TAG、VERSION、NOTES、GH_TOKEN。
+// 工作流（重新生成 latest.json）之后运行。环境变量：TAG、VERSION、GH_TOKEN。
+// Android 只保存 APK URL，版本与更新说明复用清单顶层字段。
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -10,7 +11,6 @@ const path = require("node:path");
 const repo = process.env.GITHUB_REPOSITORY || "while-coder/ClipRoam";
 const tag = requiredEnv("TAG");
 const version = requiredEnv("VERSION");
-const notes = process.env.NOTES || "";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -50,7 +50,10 @@ try {
   gh(["release", "download", "updater", "--repo", repo, "--pattern", "latest.json", "--dir", workDir]);
   const manifestPath = path.join(workDir, "latest.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  manifest.android = { version, notes, url };
+  if (typeof manifest.version !== "string" || manifest.version.replace(/^v/, "") !== version.replace(/^v/, "")) {
+    throw new Error("清单顶层 version 与当前 Android 发布版本不一致，拒绝写入 APK URL");
+  }
+  manifest.android = { url };
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   gh(["release", "upload", "updater", manifestPath, "--repo", repo, "--clobber"]);
   console.log(`已写入 android 更新项：${version} -> ${url}`);
