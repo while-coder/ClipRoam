@@ -4,7 +4,7 @@ import type { AccountSession } from "../../accountSession";
 import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../../platform/clipboard";
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
-import { applicationDatabase, type FileHashRecord } from "../../platform/database";
+import { applicationDatabase } from "../../platform/database";
 import type { FilePickerMode } from "../../platform/native";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
@@ -104,7 +104,7 @@ export class CaptureService {
         this.session.signal.throwIfAborted();
         const [before] = await this.session.files.stats([source.source]);
         if (!before || before.directory || before.symlink || before.size !== source.size || (source.modifiedAt != null && before.modifiedAt !== source.modifiedAt)) throw new Error(`源文件已修改或不可用：${source.path}`);
-        const cached = await applicationDatabase.get<FileHashRecord>("file_hash", source.source);
+        const cached = await applicationDatabase.getFileHash(source.source);
         let fileId = cached && source.modifiedAt != null && cached.size === source.size && cached.modifiedAt === source.modifiedAt ? cached.hash : undefined;
         if (!fileId) {
           const hash = new Sha256();
@@ -117,9 +117,9 @@ export class CaptureService {
           fileId = hash.digest();
           const [after] = await this.session.files.stats([source.source]);
           if (!after || after.size !== before.size || after.modifiedAt !== before.modifiedAt) throw new Error(`读取期间源文件发生变化：${source.path}`);
-          await applicationDatabase.put("file_hash", source.source, { hash: fileId, size: source.size, modifiedAt: source.modifiedAt } satisfies FileHashRecord);
+          await applicationDatabase.putFileHash({ path: source.source, hash: fileId, size: source.size, modifiedAt: source.modifiedAt });
         }
-        source.fileId = fileId; await this.session.files.rememberSource(source);
+        source.fileId = fileId;
         const segments = source.path.split("/"); let parent = row.entry.fileInfo!;
         for (const part of segments.slice(0,-1)) { const node = parent[part]!; if (isFileNode(node)) throw new Error("文件树结构不合法"); parent = node; }
         const node = parent[segments[segments.length - 1]!]!;

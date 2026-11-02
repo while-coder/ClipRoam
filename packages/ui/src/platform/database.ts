@@ -2,20 +2,31 @@ import { appName } from "../branding";
 import type { PendingRow, StoredEntry } from "../types";
 
 /** Browser-owned persistence. Each account has its own database. */
-export type StoreName = "entries" | "files" | "pending" | "downloads" | "sources" | "blobs" | "settings" | "captures";
-type GlobalStoreName = "meta" | "file_hash";
+export type StoreName = "entries" | "files" | "pending" | "downloads" | "blobs" | "settings" | "captures";
 type Row<T> = { id: string | number; value: T };
-const accountStores: StoreName[] = ["entries", "files", "pending", "downloads", "sources", "blobs", "settings", "captures"];
+const accountStores: StoreName[] = ["entries", "files", "pending", "downloads", "blobs", "settings", "captures"];
 const openings = new Map<string, Promise<IDBDatabase>>();
 
 function database(name: string, stores: readonly string[]): Promise<IDBDatabase> {
   const existing = openings.get(name);
   if (existing) return existing;
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(name, 1);
+    const request = indexedDB.open(name, name === "cliproam-global" ? 3 : 2);
     let blocked = false;
-    request.onupgradeneeded = () => {
-      for (const store of stores) request.result.createObjectStore(store, { keyPath: "id", autoIncrement: store === "pending" });
+    request.onupgradeneeded = (event) => {
+      const db = request.result;
+      for (const store of stores) {
+        if (!db.objectStoreNames.contains(store)) db.createObjectStore(store, { keyPath: "id", autoIncrement: store === "pending" });
+      }
+      if (name === "cliproam-global") {
+        if (event.oldVersion < 2 && db.objectStoreNames.contains("file_hash")) db.deleteObjectStore("file_hash");
+        const hashes = db.objectStoreNames.contains("file_hash")
+          ? request.transaction!.objectStore("file_hash")
+          : db.createObjectStore("file_hash", { keyPath: "path" });
+        hashes.createIndex("hash", "hash", { unique: false });
+      } else if (db.objectStoreNames.contains("sources")) {
+        db.deleteObjectStore("sources");
+      }
     };
     request.onerror = () => { openings.delete(name); reject(request.error); };
     request.onblocked = () => {
@@ -157,5 +168,42 @@ export class AccountDatabase extends LocalDatabase<StoreName> {
   }
 }
 
-export type FileHashRecord = { hash: string; size: number; modifiedAt?: number };
-export const applicationDatabase = new LocalDatabase<GlobalStoreName>("cliproam-global", ["meta", "file_hash"]);
+export type FileHashRecord = { path: string; hash: string; size: number; modifiedAt?: number };
+
+class ApplicationDatabase extends LocalDatabase<"meta"> {
+  constructor() { super("cliproam-global", ["meta"]); }
+
+  async getFileHash(path: string): Promise<FileHashRecord | undefined> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction("file_hash", "readonly");
+      const request = transaction.objectStore("file_hash").get(path);
+      transaction.oncomplete = () => resolve(request.result as FileHashRecord | undefined);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+
+  async findFileHashes(hashes: string[]): Promise<FileHashRecord[]> {
+    if (!hashes.length) return [];
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction("file_hash", "readonly");
+      const index = transaction.objectStore("file_hash").index("hash");
+      const requests = [...new Set(hashes)].map((hash) => index.getAll(hash));
+      transaction.oncomplete = () => resolve(requests.flatMap((request) => request.result as FileHashRecord[]));
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+
+  async putFileHash(record: FileHashRecord): Promise<void> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction("file_hash", "readwrite");
+      transaction.objectStore("file_hash").put(record);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+}
+
+export const applicationDatabase = new ApplicationDatabase();

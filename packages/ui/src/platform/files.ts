@@ -1,7 +1,7 @@
 import { entryContents, isFileNode, type FileInfo } from "@cliproam/protocol";
-import { AccountDatabase } from "./database";
+import { AccountDatabase, applicationDatabase } from "./database";
 import { profileName, Sha256, safeName } from "../utils";
-import type { LocalSource, StoredEntry } from "../types";
+import type { StoredEntry } from "../types";
 import { isNative } from "./runtime";
 import { native, type DirectoryEntry } from "./native";
 import type { ClipboardData } from "./clipboard";
@@ -110,13 +110,12 @@ export class AccountFiles {
     if (!isNative) return result;
     const ids = [...new Set(fileIds)].filter((id) => !result.has(id));
     if (!ids.length) return result;
-    const sources = await this.database.getMany<LocalSource[]>("sources", ids);
-    const candidates = sources.flatMap((items, i) => (items ?? []).map((source) => ({ id: ids[i]!, source })));
-    const stats = await this.stats(candidates.map(({ source }) => source.source));
+    const candidates = await applicationDatabase.findFileHashes(ids);
+    const stats = await this.stats(candidates.map((record) => record.path));
     for (let i = 0; i < candidates.length; i++) {
-      const { id, source } = candidates[i]!, stat = stats[i];
-      if (!result.has(id) && stat && !stat.directory && !stat.symlink && stat.size === source.size
-        && (source.modifiedAt == null || source.modifiedAt === stat.modifiedAt)) result.set(id, source.source);
+      const record = candidates[i]!, stat = stats[i];
+      if (!result.has(record.hash) && stat && !stat.directory && !stat.symlink && stat.size === record.size
+        && stat.modifiedAt === record.modifiedAt) result.set(record.hash, record.path);
     }
     return result;
   }
@@ -166,12 +165,6 @@ export class AccountFiles {
     const path = await this.resolve(fileId);
     if (!path) throw new Error("本机文件内容不可用");
     return this.readPath(path, offset, length);
-  }
-
-  async rememberSource(source: LocalSource): Promise<void> {
-    if (!source.fileId) return;
-    const existing = await this.database.get<LocalSource[]>("sources", source.fileId) ?? [];
-    await this.database.put("sources", source.fileId, [...existing.filter((value) => value.source !== source.source), source]);
   }
 
   async writer(fileId: string, expectedSize: number, temporary = false): Promise<ContentWriter> {
