@@ -50,11 +50,11 @@ pnpm dev:app:mac       # 构建、校验并启动签名的 debug .app
 pnpm build:app:mac     # 使用同一证书构建 release 安装包
 ```
 
-证书备份保存在 `~/.config/cliproam/signing/cliproam-dev.p12`，不要提交到仓库；请备份此文件及导出密码。`--setup` 会优先恢复已有 P12，或修复已有证书的本机信任，不替换旧证书。同名新证书仍是不同身份，会使原有授权失效。在其他开发机上，将原始 P12 放到同一路径，再执行 `--setup` 导入。签名与校验命令也可直接通过 `bash apps/app/src-tauri/native/macos/sign.sh` 执行，不依赖 pnpm。
+证书备份保存在 `~/.config/cliproam/signing/cliproam.p12`，不要提交到仓库；请备份此文件及导出密码。`--setup` 会优先恢复已有 P12，或修复已有证书的本机信任，不替换旧证书。同名新证书仍是不同身份，会使原有授权失效。在其他开发机上，将原始 P12 放到同一路径，再执行 `--setup` 导入。签名与校验命令也可直接通过 `bash apps/app/src-tauri/native/macos/sign.sh` 执行，不依赖 pnpm。
 
 CI 沿用 `.github/workflows/release.yml` 中的共用桌面工作流。它调用 `scripts/mac-import-signing-cert.sh`，转入 `native/macos/sign.sh --import-ci`，从以下仓库 Secrets 导入同一张证书、配置临时钥匙串并执行实际签名校验，再设置 `APPLE_SIGNING_IDENTITY` 供 Tauri 打包：
 
-- `APPLE_CERTIFICATE`：上述原始 P12 的 Base64 内容，可用 `base64 -i ~/.config/cliproam/signing/cliproam-dev.p12 | pbcopy` 复制。
+- `APPLE_CERTIFICATE`：上述原始 P12 的 Base64 内容，可用 `base64 -i ~/.config/cliproam/signing/cliproam.p12 | pbcopy` 复制。
 - `APPLE_CERTIFICATE_PASSWORD`：创建或导出该 P12 时设置的密码。
 
 这两个 Secret 与更新器的 `TAURI_SIGNING_PRIVATE_KEY` 独立，后者继续负责更新包的验签。正式分发若使用 Developer ID，可通过 `APPLE_SIGNING_IDENTITY` 指定已导入的证书身份，并按 Tauri 文档另外配置公证。

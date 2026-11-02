@@ -35,7 +35,7 @@ workspace() {
 [ "$(uname -s)" = Darwin ] || { echo "仅支持 macOS 签名" >&2; exit 1; }
 [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo "需要固定证书身份，不能使用 ad-hoc 签名" >&2; exit 1; }
 SIGNING_DIR="${CLIPROAM_SIGNING_DIR:-$HOME/.config/cliproam/signing}"
-P12_PATH="$SIGNING_DIR/$IDENTITY.p12"
+P12_PATH="$SIGNING_DIR/cliproam.p12"
 
 has_identity() {
   security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$IDENTITY\""
@@ -82,7 +82,7 @@ setup_identity() {
   fi
 
   if [ -z "${CLIPROAM_CERTIFICATE_PASSWORD:-}" ]; then
-    read -r -s -p "设置 $IDENTITY.p12 的导出密码（用于 GitHub Secret）: " CLIPROAM_CERTIFICATE_PASSWORD
+    read -r -s -p "设置 ${P12_PATH##*/} 的导出密码（用于 GitHub Secret）: " CLIPROAM_CERTIFICATE_PASSWORD
     echo
   fi
   if [ -z "$CLIPROAM_CERTIFICATE_PASSWORD" ]; then
