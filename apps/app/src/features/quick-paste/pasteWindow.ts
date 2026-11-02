@@ -65,9 +65,12 @@ export function showPasteWindow(): Promise<void> {
     // the original external paste target on macOS.
     await invoke<void>("native_capture_paste_target");
     try {
-      await setWindowMode({ mode: "quickPaste", title: quickPasteTitle.value, visible: false });
+      // Render the paste view before native geometry changes: restoring a
+      // maximized/minimized window on Windows can briefly make it visible.
       setQuickPasteView(true);
       await nextTick();
+      session.signal.throwIfAborted();
+      await setWindowMode({ mode: "quickPaste", title: quickPasteTitle.value, visible: false });
       session.signal.throwIfAborted();
       await setWindowMode({ mode: "quickPaste", title: quickPasteTitle.value, position: { kind: "cursor" } });
       session.signal.throwIfAborted();
