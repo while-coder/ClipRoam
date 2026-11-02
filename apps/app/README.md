@@ -44,7 +44,7 @@ macOS 默认使用固定自签名证书 `cliproam-dev` 签名整个 `.app`。Bun
 首次在 macOS 终端执行（会要求设置 P12 导出密码，并可能弹出钥匙串授权）：
 
 ```sh
-pnpm --filter @cliproam/app macos:setup-signing
+pnpm generate:p12     # 在仓库根目录生成或恢复 cliproam.p12
 pnpm --filter @cliproam/app macos:check-signing
 pnpm dev:app:mac       # 构建、校验并启动签名的 debug .app
 pnpm build:app:mac     # 使用同一证书构建 release 安装包
