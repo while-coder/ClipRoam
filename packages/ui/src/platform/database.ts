@@ -1,4 +1,5 @@
 import { appName } from "../branding";
+import { profileName } from "../utils";
 import type { PendingRow, StoredEntry } from "../types";
 
 /** Browser-owned persistence. Each account has its own database. */
@@ -136,7 +137,7 @@ class LocalDatabase<S extends string> {
 export class AccountDatabase extends LocalDatabase<StoreName> {
   constructor(readonly account: string) {
     if (!account) throw new Error("账号数据库需要有效的账号标识");
-    super(`cliproam-${account}`, accountStores);
+    super(`cliproam-${profileName(account)}`, accountStores);
   }
 
   /** Deduplication and insertion share one transaction, including across windows. */

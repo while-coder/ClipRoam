@@ -303,6 +303,18 @@ export function fnv1a(value: string): string {
 }
 
 export function profileName(account: string): string {
-  const name = [...account.replace(/^account:/, "")].map((c) => /^[a-z0-9._-]$/i.test(c) ? c : "_").join("") || "local";
-  return `${name}-${fnv1a(account)}`;
+  if (!account.startsWith("account:")) throw new Error("账号标识无效");
+  let identity: unknown;
+  try {
+    identity = JSON.parse(account.slice("account:".length));
+  } catch {
+    throw new Error("账号标识无效");
+  }
+  if (!Array.isArray(identity) || identity.length !== 2
+    || typeof identity[0] !== "string" || !identity[0].trim()
+    || typeof identity[1] !== "string" || !identity[1].trim()) {
+    throw new Error("账号标识必须包含服务器地址和用户名");
+  }
+  const name = [...identity[1]].map((c) => /^[a-z0-9._-]$/i.test(c) ? c : "_").join("");
+  return `${name}_${fnv1a(account)}`;
 }
