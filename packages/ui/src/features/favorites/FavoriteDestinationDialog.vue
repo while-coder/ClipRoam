@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, useId } from "vue";
 import { MAX_FAVORITE_FOLDER_DEPTH, type FavoriteFolder } from "@cliproam/protocol";
 import { getAccountSession } from "../../accountSession";
 import { errorMessage } from "../../utils";
@@ -8,6 +8,8 @@ import { flattenFavoriteFolders } from "./folderTree";
 const props = defineProps<{ folders: FavoriteFolder[]; initialFolderId: string | null; count: number; busy: boolean; error: string; loading: boolean }>();
 const emit = defineEmits<{ close: []; confirm: [folderId: string | null]; refresh: [] }>();
 const folderId = ref(props.initialFolderId);
+const targetFolderLabelId = useId();
+const parentFolderLabelId = useId();
 const creating = ref(false);
 const name = ref("");
 const parentId = ref<string | null>(null);
@@ -37,12 +39,12 @@ async function createFolder(): Promise<void> {
 <template>
   <SModal :show="true" :title="`收藏到目录 · ${count} 条`" width="460px" :closable="!busy && !savingFolder" :mask-closable="!busy && !savingFolder" :close-on-esc="!busy && !savingFolder" @update:show="!busy && !savingFolder && emit('close')">
     <div class="destination-form">
-      <label>目标目录<FavoriteFolderSelect v-model="folderId" :folders="folders" :disabled="busy || savingFolder || loading" /></label>
+      <div class="folder-select-field"><span :id="targetFolderLabelId">目标目录</span><FavoriteFolderSelect v-model="folderId" :aria-labelledby="targetFolderLabelId" :folders="folders" :disabled="busy || savingFolder || loading" /></div>
       <p>已收藏的内容会移动到所选目录。</p>
       <SButton v-if="!creating" :disabled="busy || loading" @click="creating = true">新建目录</SButton>
       <form v-else class="inline-folder-form" @submit.prevent="createFolder">
         <label>目录名称<SInput v-model:value="name" maxlength="80" :disabled="savingFolder" /></label>
-        <label>父目录<FavoriteFolderSelect v-model="parentId" :folders="folders" :allowed-ids="allowedParents" null-label="无（一级目录）" :disabled="savingFolder" /></label>
+        <div class="folder-select-field"><span :id="parentFolderLabelId">父目录</span><FavoriteFolderSelect v-model="parentId" :aria-labelledby="parentFolderLabelId" :folders="folders" :allowed-ids="allowedParents" null-label="无（一级目录）" :disabled="savingFolder" /></div>
         <div><SButton :disabled="savingFolder" @click="creating = false">取消新建</SButton><SButton :loading="savingFolder" :disabled="!name.trim()" @click="createFolder">创建并选中</SButton></div>
       </form>
       <p v-if="loading" role="status">正在读取目录…</p>
@@ -53,7 +55,7 @@ async function createFolder(): Promise<void> {
 </template>
 
 <style scoped>
-.destination-form, label, .inline-folder-form { display: grid; gap: 8px; }
+.destination-form, label, .inline-folder-form, .folder-select-field { display: grid; gap: 8px; }
 .destination-form { gap: 16px; }
 .inline-folder-form { padding: 12px; border: 1px solid var(--color-border); border-radius: 6px; gap: 12px; }
 .inline-folder-form > div { display: flex; gap: 8px; }

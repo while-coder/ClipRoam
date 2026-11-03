@@ -3,7 +3,6 @@ import {
   ClipboardEntrySchema,
   FileInfoSchema,
   ImageInfoSchema,
-  MAX_FAVORITE_FOLDER_DEPTH,
   entryContents,
   type ClipboardEntry,
   type ClipboardManifestEntry,
@@ -307,14 +306,6 @@ export class UserDataStore {
       if (input.parentId && subtree.includes(input.parentId)) throw new FavoriteFolderError("不能移动到自身或下级目录");
       if (folders.some((folder) => folder.id !== id && folder.parentId === input.parentId && folder.name === input.name)) {
         throw new FavoriteFolderError("同级目录名称已存在", 409);
-      }
-      const parents = new Map(folders.map((folder) => [folder.id, folder.parentId]));
-      parents.set(id, input.parentId);
-      for (const folderId of subtree) {
-        let depth = 1;
-        let parentId = parents.get(folderId);
-        while (parentId) { depth++; parentId = parents.get(parentId); }
-        if (depth > MAX_FAVORITE_FOLDER_DEPTH) throw new FavoriteFolderError(`目录最多支持 ${MAX_FAVORITE_FOLDER_DEPTH} 级`);
       }
       this.#database.prepare(`INSERT INTO favorite_folders (id, parent_id, name) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name`).run(id, input.parentId, input.name);

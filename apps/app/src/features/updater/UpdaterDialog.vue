@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SModal from '@qingfeng346/ui-kit/components/SModal.vue'
 import SButton from '@qingfeng346/ui-kit/components/button/SButton.vue'
-import { useAppVersion } from '@cliproam/ui/platform'
+import { useAppVersion, useMobileLayout } from '@cliproam/ui/platform'
 import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-vue-next'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -19,6 +19,7 @@ const props = withDefaults(defineProps<{
 })
 
 const updater = useTauriUpdater()
+const mobileLayout = useMobileLayout()
 const { appVersion, initAppVersion } = useAppVersion()
 const { updateStatus, updateVersion, updateNotes, updateDownloaded, updateTotal, updateProgressPercent, updateMsg } = updater
 const updateVisible = computed(() => ['available', 'downloading', 'installed', 'error'].includes(updateStatus.value))
@@ -180,6 +181,7 @@ async function dismiss() {
   <SModal
     nested
     :show="currentReleaseVisible"
+    :class="{ 'release-notes-mobile': mobileLayout }"
     :title="`版本 ${appVersion} 更新内容`"
     width="640px"
     @update:show="(show: boolean) => { if (!show) dismissCurrentRelease() }"
@@ -195,6 +197,15 @@ async function dismiss() {
 
 <style scoped>
 .updater-content { display: flex; flex-direction: column; gap: 20px; font-size: 13px; line-height: 1.6; }
+:global(.release-notes-mobile.s-modal-overlay) { padding: 0; align-items: stretch; }
+:global(.release-notes-mobile .s-modal-box) { width: 100% !important; height: 100%; max-height: 100%; border: 0; border-radius: 0; box-sizing: border-box; padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+:global(.release-notes-mobile .s-modal-header) { flex: none; padding-top: max(14px, env(safe-area-inset-top, 0px)); }
+:global(.release-notes-mobile .s-modal-header h2) { white-space: normal; overflow-wrap: anywhere; }
+:global(.release-notes-mobile .s-icon-close) { width: 44px; height: 44px; }
+:global(.release-notes-mobile .s-modal-body) { flex: 1; }
+:global(.release-notes-mobile.s-modal-overlay .updater-notes) { max-height: none; overflow: visible; }
+:global(.release-notes-mobile .s-modal-footer) { flex: none; padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)); }
+:global(.release-notes-mobile .s-modal-footer .s-button) { min-height: 44px; }
 .updater-summary { display: flex; align-items: center; gap: 14px; }
 .updater-icon { display: flex; flex: 0 0 48px; height: 48px; align-items: center; justify-content: center; border: 1px solid var(--sui-border); border-radius: 12px; color: var(--sui-primary); background: var(--sui-bg-soft); }
 .updater-summary.is-installed .updater-icon { color: var(--sui-success); }

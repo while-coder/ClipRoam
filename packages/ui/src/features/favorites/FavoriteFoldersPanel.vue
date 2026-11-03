@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onDeactivated, ref, useId, watch } from "vue";
-import { ChevronRight, Folder, FolderOpen, Menu, MoreHorizontal, Plus, Star } from "lucide-vue-next";
+import { computed, nextTick, onBeforeUnmount, onDeactivated, ref, useId, watch } from "vue";
+import SCascadeMenu from "@qingfeng346/ui-kit/components/SCascadeMenu.vue";
+import { ChevronRight, Folder, FolderOpen, Info, Menu, MoreHorizontal, Plus, Star } from "lucide-vue-next";
 import { MAX_FAVORITE_FOLDER_DEPTH, type FavoriteFolder } from "@cliproam/protocol";
 import { getAccountSession } from "../../accountSession";
 import { useMobileLayout } from "../../platform/runtime";
@@ -16,6 +17,7 @@ const current = computed(() => rows.value.find((folder) => folder.id === props.m
 const currentPath = computed(() => props.modelValue === "unfiled" ? "未分类" : current.value?.path ?? "全部收藏");
 const drawerOpen = ref(false);
 const drawerId = useId();
+const parentFolderLabelId = useId();
 const collapsed = ref(new Set<string>());
 const visibleRows = computed(() => rows.value.filter((folder) => !rows.value.some((parent) => parent.id !== folder.id && collapsed.value.has(parent.id) && parent.descendantIds.includes(folder.id))));
 const editorOpen = ref(false);
@@ -38,6 +40,15 @@ const dropTarget = ref<string>();
 let pointerDrag: { id: number; x: number; y: number; folder: FolderRow; element: HTMLElement } | undefined;
 let suppressClick = false;
 const menu = ref<{ x: number; y: number; folder?: FolderRow }>();
+const desktopMenu = ref<InstanceType<typeof SCascadeMenu>>();
+function closeMenuOutside(event: PointerEvent): void {
+  if (!desktopMenu.value?.contains(event.target as Node)) menu.value = undefined;
+}
+watch(() => Boolean(menu.value) && !mobile.value, (shown) => {
+  document.removeEventListener("pointerdown", closeMenuOutside, true);
+  if (shown) document.addEventListener("pointerdown", closeMenuOutside, true);
+});
+onBeforeUnmount(() => document.removeEventListener("pointerdown", closeMenuOutside, true));
 const menuOptions = computed<Array<{ key: string; label: string; disabled?: boolean; error?: boolean }>>(() => [
   { key: "add", label: "新建一级目录" },
   ...(menu.value?.folder ? [
@@ -77,6 +88,11 @@ function openMenu(event: MouseEvent, folder?: FolderRow): void {
   if (busy.value || props.loading || props.error) return;
   (event.currentTarget as HTMLElement).focus();
   menu.value = { x: event.clientX, y: event.clientY, folder };
+}
+function openPanelMenu(event: MouseEvent): void {
+  if (mobile.value) return;
+  event.preventDefault();
+  openMenu(event);
 }
 function openDrawer(): void {
   for (const folder of rows.value) {
@@ -213,13 +229,13 @@ async function remove(): Promise<void> {
 </script>
 
 <template>
-  <aside class="favorite-folders" aria-label="收藏目录">
+  <aside class="favorite-folders" aria-label="收藏目录" @contextmenu="openPanelMenu">
     <button v-if="mobile" class="folder-mobile-trigger" :aria-label="`打开收藏目录，当前：${currentPath}`" aria-haspopup="dialog" :aria-expanded="drawerOpen" :aria-controls="drawerOpen ? drawerId : undefined" @click="openDrawer">
       <Menu :size="20" aria-hidden="true" /><span class="folder-trigger-label">目录</span><span class="folder-trigger-path" :title="currentPath">{{ currentPath }}</span><ChevronRight :size="16" aria-hidden="true" />
     </button>
     <template v-else>
-      <div class="folder-heading"><strong>收藏目录</strong><button class="folder-icon-button" aria-label="新建一级目录" title="新建一级目录" :disabled="busy || loading || !!error" @click="openEditor(false)"><Plus :size="16" /></button></div>
-      <nav ref="tree" class="folder-navigation" role="tree" aria-label="收藏目录导航" :aria-busy="busy || loading" @contextmenu.self.prevent="openMenu($event)">
+      <div class="folder-heading"><strong>收藏目录</strong></div>
+      <nav ref="tree" class="folder-navigation" role="tree" data-drop-folder="" aria-label="收藏目录导航" :aria-busy="busy || loading">
         <button class="folder-link" :class="{ active: !modelValue }" role="treeitem" data-folder-id="" :tabindex="focusedId === '' ? 0 : -1" :aria-selected="!modelValue" :aria-level="1" @focus="focusedId = ''" @keydown="treeKey($event, '')" @contextmenu.prevent.stop="openMenu($event)" @click="emit('update:modelValue', '')"><Star :size="16" aria-hidden="true" />全部收藏</button>
         <button class="folder-link" :class="{ active: modelValue === 'unfiled' }" role="treeitem" data-folder-id="unfiled" :tabindex="focusedId === 'unfiled' ? 0 : -1" :aria-selected="modelValue === 'unfiled'" :aria-level="1" @focus="focusedId = 'unfiled'" @keydown="treeKey($event, 'unfiled')" @contextmenu.prevent.stop="openMenu($event)" @click="emit('update:modelValue', 'unfiled')"><Folder :size="16" aria-hidden="true" />未分类</button>
         <div v-for="folder in visibleRows" :key="folder.id" class="folder-row" :class="{ active: modelValue === folder.id, dragging: draggingId === folder.id, 'drop-target': dropTarget === folder.id }" :style="{ paddingLeft: `${(folder.depth - 1) * 16}px` }"
@@ -232,14 +248,12 @@ async function remove(): Promise<void> {
           <span class="folder-link"><component :is="folder.descendantIds.length > 1 && !collapsed.has(folder.id) ? FolderOpen : Folder" :size="15" aria-hidden="true" /><span>{{ folder.name }}</span><small>{{ folder.count }}</small></span>
           <button class="folder-icon-button folder-more" tabindex="-1" :disabled="busy || loading || !!error" :aria-label="`${folder.name}的操作`" title="目录操作" @click.stop="openMenu($event, folder)"><MoreHorizontal :size="15" /></button>
         </div>
-        <div class="folder-root-drop" :class="{ 'drop-target': dropTarget === '' }" data-drop-folder="" @contextmenu.prevent.stop="openMenu($event)">{{ draggingId ? '拖到此处移为一级目录' : '右键管理目录 · 拖动移动' }}</div>
+        <div class="folder-root-drop" data-drop-folder="" @contextmenu.prevent.stop="openMenu($event)"><Info :size="13" aria-hidden="true" /><span>右键管理目录 · 拖动移动</span></div>
       </nav>
-      <SDropdown v-if="menu" :show="true" :x="menu.x" :y="menu.y" :options="menuOptions" :on-clickoutside="() => { menu = undefined }" @select="menuAction" />
-      <p v-if="busy" class="folder-status" role="status">正在保存目录…</p>
+      <SCascadeMenu v-if="menu" ref="desktopMenu" :show="true" :root-style="{ left: `${menu.x}px`, top: `${menu.y}px` }" :options="menuOptions" label="收藏目录操作" @close="menu = undefined" @select="option => menuAction(String(option.key))" />
       <p v-if="moveError" class="folder-status" role="alert">{{ moveError }}</p>
     </template>
     <template v-if="!mobile">
-      <p v-if="loading" class="folder-status" role="status">正在读取目录…</p>
       <div v-if="error" class="folder-status" role="alert">{{ error }} <SButton size="small" @click="emit('refresh')">重试</SButton></div>
     </template>
   </aside>
@@ -267,7 +281,7 @@ async function remove(): Promise<void> {
   <SModal v-if="editorOpen" :show="true" :nested="mobile && drawerOpen" :title="editingId ? '编辑目录' : '新建目录'" width="440px" :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy" @update:show="!busy && (editorOpen = false)">
     <form class="folder-form" @submit.prevent="save">
       <label>目录名称<SInput v-model:value="name" autofocus maxlength="80" :disabled="busy" /></label>
-      <label>父目录<FavoriteFolderSelect v-model="parentId" :folders="folders" :allowed-ids="allowedParents" null-label="无（一级目录）" :disabled="busy" /></label>
+      <div class="folder-select-field"><span :id="parentFolderLabelId">父目录</span><FavoriteFolderSelect v-model="parentId" :aria-labelledby="parentFolderLabelId" :folders="folders" :allowed-ids="allowedParents" null-label="无（一级目录）" :disabled="busy" /></div>
       <p>最多支持 {{ MAX_FAVORITE_FOLDER_DEPTH }} 级目录。修改父目录即可移动目录。</p>
       <p v-if="formError" role="alert">{{ formError }}</p>
       <button type="submit" hidden />
@@ -282,9 +296,10 @@ async function remove(): Promise<void> {
 </template>
 
 <style scoped>
-.favorite-folders { min-height: 0; overflow: auto; padding: 12px; border-right: 1px solid var(--color-border); color: var(--color-foreground); }
+.favorite-folders { display: flex; flex-direction: column; min-height: 0; overflow: auto; padding: 12px; border-right: 1px solid var(--color-border); color: var(--color-foreground); }
 .folder-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; color: var(--color-secondary-text); }
-.folder-navigation { display: grid; gap: 4px; }
+.folder-navigation { display: flex; flex-direction: column; flex: 1 0 auto; gap: 4px; }
+.folder-navigation > * { flex: none; }
 .folder-icon-button { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
 .folder-icon-button:hover { background: var(--sui-bg-hover); }
 .folder-icon-button:disabled { opacity: .5; cursor: default; }
@@ -295,10 +310,12 @@ async function remove(): Promise<void> {
 .folder-row:hover { background: var(--sui-bg-hover); }
 .folder-row { border-radius: 6px; cursor: pointer; user-select: none; touch-action: pan-y; }
 .folder-row.dragging { opacity: .45; }
-.folder-root-drop { padding: 12px 6px; margin-top: 8px; border: 1px dashed var(--color-border); border-radius: 6px; font-size: 11px; color: var(--color-secondary-text); text-align: center; }
+.folder-root-drop { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 4px; margin-top: auto; font-size: 11px; line-height: 1.5; color: var(--color-secondary-text); }
+.folder-root-drop > svg { flex: none; }
 .folder-navigation .drop-target { outline: 2px solid var(--sui-primary); outline-offset: -2px; background: var(--sui-bg-active); }
 .folder-row:focus-visible, .folder-icon-button:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 1px; }
-.folder-link { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.folder-link { display: flex; align-items: center; gap: 7px; flex: none; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.folder-row > .folder-link, .mobile-folder-row > .folder-link { flex: 1; }
 .folder-link span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-link svg { flex: none; }
 .folder-link small { margin-left: auto; }
@@ -310,7 +327,7 @@ async function remove(): Promise<void> {
 .folder-toggle .expanded { transform: rotate(90deg); }
 .folder-link:focus-visible, .folder-toggle:focus-visible, select:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 1px; }
 .folder-status { font-size: 12px; color: var(--color-secondary-text); overflow-wrap: anywhere; }
-.folder-form, .folder-form label { display: grid; gap: 8px; }
+.folder-form, .folder-form label, .folder-select-field { display: grid; gap: 8px; }
 .folder-form { gap: 16px; }
 .folder-form p { margin: 0; color: var(--color-secondary-text); font-size: 12px; }
 .folder-mobile-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--color-foreground); font: inherit; cursor: pointer; text-align: left; }

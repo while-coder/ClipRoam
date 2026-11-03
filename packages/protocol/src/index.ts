@@ -249,7 +249,7 @@ export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
   favoriteFolderId: z.string().uuid().nullable().optional(),
 });
 
-export const MAX_FAVORITE_FOLDER_DEPTH = 2;
+export const MAX_FAVORITE_FOLDER_DEPTH = 5;
 export const FavoriteFolderInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
   parentId: z.string().uuid().nullable(),

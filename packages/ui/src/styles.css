@@ -177,15 +177,21 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
 .setup-form .server-connection-fields .s-input { font-size: 14px; }
 .setup-form .server-connection-fields .s-select { font-size: 13px; gap: 4px; }
 .login-choice-field { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.login-choice-field > .s-input-wrap { flex: 1; min-width: 0; }
-.login-choice-field .s-input-suffix { right: 2px; pointer-events: auto; }
-.login-choice-menu.s-single-select { width: 32px; }
-.setup-form .login-choice-menu .s-select { justify-content: center; min-height: 30px; padding: 0; border: 0; background: transparent; }
+.login-choice-control { display: grid; flex: 1; min-width: 0; }
+.login-choice-control > .s-input-wrap,
+.login-choice-control > .login-choice-menu { grid-area: 1 / 1; min-width: 0; }
+/* SSelect spans the field so its teleported menu follows the full input width. */
+.login-choice-control.has-menu > .s-input-wrap { z-index: 1; width: calc(100% - 36px); }
+.login-choice-control.has-menu .s-input { background: transparent; border-color: transparent; }
+.setup-form .login-choice-menu .s-select { justify-content: flex-end; padding-right: 10px; }
 .login-choice-menu .s-multi-select-value { display: none; }
+.login-choice-control.has-menu:focus-within .s-select:not(.invalid) { border-color: var(--sui-primary); }
+.login-choice-control.has-menu:focus-within { border-radius: var(--sui-radius-sm); outline: 2px solid var(--sui-primary); outline-offset: -2px; }
+.login-choice-control.has-menu .s-input:focus-visible,
+.login-choice-control.has-menu .s-select:focus-visible { outline: none; }
 .mobile-shell .login-choice-field > .s-icon-button { min-width: 44px; min-height: 44px; }
-.mobile-shell .login-choice-field .s-input-wrap.has-suffix .s-input { padding-right: 40px; }
-.mobile-shell .login-choice-menu.s-single-select { width: 36px; }
-.mobile-shell .setup-form .login-choice-menu .s-select { min-height: 44px; }
+.mobile-shell .login-choice-control.has-menu > .s-input-wrap { width: calc(100% - 44px); }
+.mobile-shell .setup-form .login-choice-menu .s-select { padding-right: 14px; }
 .setup-form label {
   margin-top: 3px;
   color: #cbd5e1;

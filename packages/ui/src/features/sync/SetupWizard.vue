@@ -225,24 +225,23 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
       <div class="server-connection-fields">
         <SFormItem label="服务器地址" :error="serverFieldError">
           <div class="login-choice-field">
-            <SInput
-              id="server-address"
-              ref="serverInput"
-              :value="setupServerAddress"
-              type="text"
-              inputmode="url"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="https://example.com/cliproam"
-              :disabled="busy"
-              :invalid="Boolean(serverFieldError)"
-              @update:value="updateServerAddress"
-              @blur="validateServerField"
-            >
-              <template v-if="serverOptions.length" #suffix>
-                <SSelect class="login-choice-menu" :value="setupServerAddress" :options="serverOptions" :menu-width="320" :disabled="busy" aria-label="选择服务器" title="选择服务器" @select="selectServer" />
-              </template>
-            </SInput>
+            <div class="login-choice-control has-menu">
+              <SInput
+                id="server-address"
+                ref="serverInput"
+                :value="setupServerAddress"
+                type="text"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="https://example.com/cliproam"
+                :disabled="busy"
+                :invalid="Boolean(serverFieldError)"
+                @update:value="updateServerAddress"
+                @blur="validateServerField"
+              />
+              <SSelect class="login-choice-menu" :value="setupServerAddress" :options="serverOptions" :disabled="busy" :invalid="Boolean(serverFieldError)" aria-label="选择服务器" title="选择服务器" @select="selectServer" />
+            </div>
             <SIconButton v-if="currentServerAccounts.length" :size="36" :disabled="busy" title="删除此服务器的全部登录记录" aria-label="删除此服务器的全部登录记录" @click="emit('remove-server', currentServerAccounts[0]!)">
               <Trash2 :size="16" aria-hidden="true" />
             </SIconButton>
@@ -253,22 +252,21 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
 
       <SFormItem label="账号" :error="usernameFieldError">
         <div class="login-choice-field">
-          <SInput
-            id="account-username"
-            :value="setupUsername"
-            type="text"
-            autocomplete="username"
-            spellcheck="false"
-            placeholder="选择或输入账号"
-            :disabled="busy"
-            :invalid="Boolean(usernameFieldError)"
-            @update:value="selectAccount"
-            @blur="validateUsernameField"
-          >
-            <template v-if="authMode === 'login'" #suffix>
-              <SSelect class="login-choice-menu" :value="setupUsername" :options="accountOptions.length ? accountOptions : [{ label: '此服务器暂无记录，请手动输入账号', value: '', disabled: true }]" :menu-width="280" :disabled="busy" aria-label="选择此服务器的已存账号" title="选择已保存的账号" @select="selectAccount" />
-            </template>
-          </SInput>
+          <div class="login-choice-control" :class="{ 'has-menu': authMode === 'login' }">
+            <SInput
+              id="account-username"
+              :value="setupUsername"
+              type="text"
+              autocomplete="username"
+              spellcheck="false"
+              placeholder="选择或输入账号"
+              :disabled="busy"
+              :invalid="Boolean(usernameFieldError)"
+              @update:value="selectAccount"
+              @blur="validateUsernameField"
+            />
+            <SSelect v-if="authMode === 'login'" class="login-choice-menu" :value="setupUsername" :options="accountOptions.length ? accountOptions : [{ label: '此服务器暂无记录，请手动输入账号', value: '', disabled: true }]" :disabled="busy" :invalid="Boolean(usernameFieldError)" aria-label="选择此服务器的已存账号" title="选择已保存的账号" @select="selectAccount" />
+          </div>
           <SIconButton v-if="authMode === 'login' && selectedAccount" :size="36" :disabled="busy" title="删除此账号的登录记录" aria-label="删除此账号的登录记录" @click="emit('remove-account', selectedAccount)">
             <Trash2 :size="16" aria-hidden="true" />
           </SIconButton>
