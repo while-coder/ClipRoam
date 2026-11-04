@@ -15,7 +15,7 @@ import type { ClipRoamStore } from "../../account/ClipRoamStore.js";
 import { SMALL_JSON_BODY_LIMIT } from "../ServerConfig.js";
 import { requireSessionUser } from "./SessionUser.js";
 import { parseOr400 } from "./parseRequest.js";
-import { FileAccessTokens, parseFileRange } from "../../files/FileAccess.js";
+import { FileAccessTokens, parseFileRange, videoContentType } from "../../files/FileAccess.js";
 
 export type FileRouteDeps = {
   uploads: Pick<UploadService, "begin" | "uploadPart">;
@@ -41,7 +41,10 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     if (!FileIdSchema.safeParse(fileId).success || !store.canReadFile(user.id, entryId, fileId)) {
       return reply.code(404).send({ message: "文件不存在或无权访问" });
     }
-    const access = accessTokens.issue(user.id, entryId, fileId, body.name);
+    if (body.preview && !videoContentType(body.name)) {
+      return reply.code(400).send({ message: "暂不支持此文件类型的在线播放" });
+    }
+    const access = accessTokens.issue(user.id, entryId, fileId, body.name, body.preview);
     return { path: `/files/${encodeURIComponent(entryId)}/${fileId}?access=${access}` };
   });
 
@@ -108,8 +111,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const offset = range?.start ?? 0;
     const end = range?.end ?? size;
     const partial = Boolean(range);
+    const previewType = access?.preview ? videoContentType(access.name) : undefined;
     const headers: Record<string, string> = {
-      "Content-Type": "application/octet-stream",
+      "Content-Type": previewType ?? "application/octet-stream",
       "Content-Length": String(end - offset),
       "Accept-Ranges": "bytes",
       ETag: etag,
@@ -121,7 +125,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Expose-Headers": "Content-Range, Content-Disposition, ETag, Accept-Ranges",
     };
-    if (access) headers["Content-Disposition"] = `attachment; filename="file"; filename*=UTF-8''${encodeURIComponent(access.name).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+    if (access) headers["Content-Disposition"] = `${previewType ? "inline" : "attachment"}; filename="file"; filename*=UTF-8''${encodeURIComponent(access.name).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
     if (partial) headers["Content-Range"] = `bytes ${offset}-${end - 1}/${size}`;
     const status = partial ? 206 : 200;
     if (request.method === "HEAD") {

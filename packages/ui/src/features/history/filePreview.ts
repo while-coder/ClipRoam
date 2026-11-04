@@ -4,6 +4,7 @@ import { languageForFile } from "../../components/preview/textLanguages";
 export type PreviewFile = { name: string; path: string; fileId: string; size: number };
 
 const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "bmp"]);
+const videoExtensions = new Set(["mp4", "m4v", "webm", "ogv", "mov", "mkv", "avi", "wmv", "flv", "mpg", "mpeg", "3gp", "3g2"]);
 const audioTypes: Record<string, string> = {
   mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", oga: "audio/ogg",
   opus: "audio/ogg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac", weba: "audio/webm",
@@ -13,6 +14,7 @@ export const FilePreviewKind = {
   Text: ClipboardKind.Text,
   Image: ClipboardKind.Image,
   Audio: "audio",
+  Video: "video",
 } as const;
 export type FilePreviewKind = typeof FilePreviewKind[keyof typeof FilePreviewKind];
 
@@ -27,6 +29,7 @@ export function filePreviewKind(name: string): FilePreviewKind | undefined {
   if (languageForFile(name)) return ClipboardKind.Text;
   if (imageExtensions.has(extension)) return ClipboardKind.Image;
   if (audioMimeType(name)) return FilePreviewKind.Audio;
+  if (videoExtensions.has(extension)) return FilePreviewKind.Video;
   return undefined;
 }
 

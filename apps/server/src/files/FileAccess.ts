@@ -1,14 +1,31 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-type FileAccess = { userId: string; name: string; expires: number };
+type FileAccess = { userId: string; name: string; expires: number; preview?: boolean };
 const ACCESS_LIFETIME_MS = 60 * 60 * 1000;
+
+export function videoContentType(name: string): string | undefined {
+  switch (name.split(".").pop()?.toLowerCase()) {
+    case "mp4": case "m4v": return "video/mp4";
+    case "webm": return "video/webm";
+    case "ogv": return "video/ogg";
+    case "mov": return "video/quicktime";
+    case "mkv": return "video/x-matroska";
+    case "avi": return "video/x-msvideo";
+    case "wmv": return "video/x-ms-wmv";
+    case "flv": return "video/x-flv";
+    case "mpg": case "mpeg": return "video/mpeg";
+    case "3gp": return "video/3gpp";
+    case "3g2": return "video/3gpp2";
+    default: return undefined;
+  }
+}
 
 /** Short-lived, file-scoped URLs; the account session token never enters the URL. */
 export class FileAccessTokens {
   readonly #key = randomBytes(32);
 
-  issue(userId: string, entryId: string, fileId: string, name: string): string {
-    const payload = Buffer.from(JSON.stringify({ userId, name, expires: Date.now() + ACCESS_LIFETIME_MS })).toString("base64url");
+  issue(userId: string, entryId: string, fileId: string, name: string, preview = false): string {
+    const payload = Buffer.from(JSON.stringify({ userId, name, preview, expires: Date.now() + ACCESS_LIFETIME_MS })).toString("base64url");
     return `${payload}.${this.#sign(entryId, fileId, payload).toString("base64url")}`;
   }
 

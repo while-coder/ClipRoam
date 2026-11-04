@@ -7,12 +7,13 @@ import { showNotification, usePlatform } from "../../platform/runtime";
 import { clipboardPlatform } from "../../platform/clipboard";
 import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
-import { downloadWithBrowser } from "../downloads/fileAccess";
+import { downloadWithBrowser, videoPreviewUrl } from "../downloads/fileAccess";
 import { audioMimeType, decodePreviewText, filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
 import ImagePreview from "../../components/preview/ImagePreview.vue";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import MarkdownPreview from "../../components/preview/MarkdownPreview.vue";
 import AudioPreview from "../../components/preview/AudioPreview.vue";
+import VideoPreview from "../../components/preview/VideoPreview.vue";
 import { languageForFile } from "../../components/preview/textLanguages";
 
 const props = defineProps<{ entryId: string; file: PreviewFile; image?: boolean; back?: boolean }>();
@@ -32,6 +33,11 @@ const canCopy = computed(() => kind === ClipboardKind.Text || (kind === Clipboar
 let disposed = false;
 let mediaUrl: string | undefined;
 let releasePreview: (() => void) | undefined;
+async function getVideoSource(): Promise<string> {
+  const session = getAccountSession();
+  if (!session) throw new Error("同步账号未登录");
+  return videoPreviewUrl(session, props.entryId, props.file.fileId, props.file.name);
+}
 onBeforeUnmount(() => {
   disposed = true;
   releasePreview?.();
@@ -100,6 +106,11 @@ onMounted(async () => {
   try {
     const session = getAccountSession();
     if (!session) throw new Error("同步账号未登录");
+    if (kind === FilePreviewKind.Video) {
+      const url = await getVideoSource();
+      if (!disposed) source.value = url;
+      return;
+    }
     releasePreview = session.files.retain([props.file.fileId]);
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
     if (disposed) return;
@@ -127,12 +138,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal class="file-content-preview-modal" :show="true" :title="file.name" :width="kind === ClipboardKind.Image ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal class="file-content-preview-modal" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image" @update:show="(value: boolean) => { if (!value) emit('close') }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
     <ImagePreview v-else-if="kind === ClipboardKind.Image && source" :src="source" :title="file.name" />
     <AudioPreview v-else-if="kind === FilePreviewKind.Audio && source" :src="source" :title="file.name" />
+    <VideoPreview v-else-if="kind === FilePreviewKind.Video && source" :src="source" :title="file.name" :refresh-source="getVideoSource" />
     <MarkdownPreview v-else-if="kind === ClipboardKind.Text && languageForFile(file.name) === 'markdown'" :text="text" :file-name="file.name">
       <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
     </MarkdownPreview>

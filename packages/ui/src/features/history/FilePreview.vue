@@ -3,7 +3,7 @@ import { errorMessage, formatFileSize, fileEntrySummary } from "../../utils";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { fullEntry } from "./useHistorySync";
 import { ClipboardKind, isFileNode, type FileInfo, type TreeNode } from "@cliproam/protocol";
-import { ChevronDown, ChevronRight, File, FileText, Image, Music, Folder, FolderOpen } from "lucide-vue-next";
+import { ChevronDown, ChevronRight, File, FileText, Image, Music, Video, Folder, FolderOpen } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 import FileContentPreview from "./FileContentPreview.vue";
 import { filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
@@ -103,7 +103,7 @@ function openFile(row: PreviewRow): void {
 
 function fileIcon(name: string) {
   const kind = filePreviewKind(name);
-  return kind === FilePreviewKind.Image ? Image : kind === FilePreviewKind.Text ? FileText : kind === FilePreviewKind.Audio ? Music : File;
+  return kind === FilePreviewKind.Image ? Image : kind === FilePreviewKind.Text ? FileText : kind === FilePreviewKind.Audio ? Music : kind === FilePreviewKind.Video ? Video : File;
 }
 </script>
 
