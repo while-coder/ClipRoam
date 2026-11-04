@@ -34,6 +34,8 @@
 
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+/* 保留触摸滚动，禁止浏览器将双指手势用于整页缩放。 */
+html { touch-action: pan-x pan-y; }
 /* 隐藏的快捷粘贴窗口聚焦控件时，不允许浏览器滚动外壳，只让历史列表滚动。 */
 
 button, input, select { font: inherit; }

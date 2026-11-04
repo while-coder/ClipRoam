@@ -42,6 +42,7 @@
       "name": "Launch App · Android",
       "type": "node-terminal",
       "request": "launch",
+      "autoAttachChildProcesses": false,
       "command": "pnpm --filter @cliproam/app android:dev",
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "ui:kill"

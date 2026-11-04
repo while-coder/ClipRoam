@@ -448,10 +448,17 @@ async function enableAccountShortcuts(): Promise<void> {
   }
 }
 
+function preventPagePinch(event: Event): void {
+  // 触控板捏合在 Chromium 中表现为带 ctrlKey 的 wheel，WebKit 使用 gesturestart。
+  if (event.type === "gesturestart" || (event as WheelEvent).ctrlKey) event.preventDefault();
+}
+
 onMounted(async () => {
   ageRefreshTimer = window.setInterval(() => { currentTime.value = Date.now(); }, 10_000);
   document.addEventListener("keydown", handleKeys);
   document.addEventListener("contextmenu", handleContextMenu);
+  document.addEventListener("wheel", preventPagePinch, { passive: false });
+  document.addEventListener("gesturestart", preventPagePinch, { passive: false });
 
   let config: SyncConfig | null = null;
   let startupWarning = "";
@@ -513,6 +520,8 @@ onBeforeUnmount(() => {
   cancelUploadProgressFlush();
   document.removeEventListener("keydown", handleKeys);
   document.removeEventListener("contextmenu", handleContextMenu);
+  document.removeEventListener("wheel", preventPagePinch);
+  document.removeEventListener("gesturestart", preventPagePinch);
   unlisteners.forEach((unlisten) => unlisten());
   void stop();
   void native.quickPasteShortcut?.dispose();
