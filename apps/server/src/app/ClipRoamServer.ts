@@ -96,6 +96,7 @@ export class ClipRoamServer {
       store: this.#store,
       broadcast: this.#sockets.broadcast.bind(this.#sockets),
       maxHistoryEntries: (userId) => this.#configForUser(userId).maxHistoryEntries,
+      maxStickyEntries: (userId) => this.#configForUser(userId).maxStickyEntries,
       maxCaptureFileCount: (userId) => this.#configForUser(userId).maxCaptureFileCount,
     });
     registerDeviceRoutes(this.#app, {
@@ -154,6 +155,7 @@ function serverSettings(config: ServerConfig): ServerSettings {
     maxStoredFileMb: config.maxStoredFileMb,
     maxStoredImageMb: config.maxStoredImageMb,
     maxHistoryEntries: config.maxHistoryEntries,
+    maxStickyEntries: config.maxStickyEntries,
     maxCaptureFileCount: config.maxCaptureFileCount,
   };
 }

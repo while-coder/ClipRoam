@@ -13,6 +13,7 @@ const SETTING_CONSTRAINTS = {
   maxStoredImageMb: { default: 10, min: 0, max: 2048 },
   resumableUploadTtlHours: { default: 24, min: 0, max: 8760 },
   maxHistoryEntries: { default: 3000, min: 100, max: 100_000 },
+  maxStickyEntries: { default: 20, min: 0, max: 100 },
   maxCaptureFileCount: { default: 1000, min: 1, max: 100_000 },
 } as const;
 
@@ -39,6 +40,7 @@ export type ServerConfig = {
   maxStoredImageMb: number;
   resumableUploadTtlHours: number;
   maxHistoryEntries: number;
+  maxStickyEntries: number;
   maxCaptureFileCount: number;
 };
 
@@ -62,6 +64,7 @@ export function loadServerConfig(): ServerConfig {
     maxStoredImageMb: SETTING_CONSTRAINTS.maxStoredImageMb.default,
     resumableUploadTtlHours: SETTING_CONSTRAINTS.resumableUploadTtlHours.default,
     maxHistoryEntries: SETTING_CONSTRAINTS.maxHistoryEntries.default,
+    maxStickyEntries: SETTING_CONSTRAINTS.maxStickyEntries.default,
     maxCaptureFileCount: SETTING_CONSTRAINTS.maxCaptureFileCount.default,
     ...readTransferSettings(),
   };
@@ -81,6 +84,7 @@ export function validateTransferSettings(values: unknown): ServerConfig {
     maxStoredFileMb: validateSetting(input.maxStoredFileMb, "服务器文件上限（MB）", SETTING_CONSTRAINTS.maxStoredFileMb),
     maxStoredImageMb: validateSetting(input.maxStoredImageMb, "剪贴板图片上限（MB）", SETTING_CONSTRAINTS.maxStoredImageMb),
     resumableUploadTtlHours: validateSetting(input.resumableUploadTtlHours, "断点续传有效期（小时）", SETTING_CONSTRAINTS.resumableUploadTtlHours),
+    maxStickyEntries: validateSetting(input.maxStickyEntries, "单用户最大便签数", SETTING_CONSTRAINTS.maxStickyEntries),
     maxHistoryEntries: validateSetting(input.maxHistoryEntries, "单用户最大历史条数", SETTING_CONSTRAINTS.maxHistoryEntries),
     maxCaptureFileCount: validateSetting(input.maxCaptureFileCount, "单次复制文件数上限", SETTING_CONSTRAINTS.maxCaptureFileCount),
   };
@@ -99,6 +103,7 @@ function readTransferSettings(): Partial<ServerConfig> {
     maxStoredImageMb: pickSetting(input.maxStoredImageMb, SETTING_CONSTRAINTS.maxStoredImageMb),
     resumableUploadTtlHours: pickSetting(input.resumableUploadTtlHours, SETTING_CONSTRAINTS.resumableUploadTtlHours),
     maxHistoryEntries: pickSetting(input.maxHistoryEntries, SETTING_CONSTRAINTS.maxHistoryEntries),
+    maxStickyEntries: pickSetting(input.maxStickyEntries, SETTING_CONSTRAINTS.maxStickyEntries),
     maxCaptureFileCount: pickSetting(input.maxCaptureFileCount, SETTING_CONSTRAINTS.maxCaptureFileCount),
   };
 }

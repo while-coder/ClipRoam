@@ -72,6 +72,10 @@ export class ClipRoamStore {
   }
   delete(userId: string, entryIds: readonly string[]): void { this.#userStore(userId).delete(entryIds); }
   pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
+  listSticky(userId: string): ClipboardEntry[] { return this.#userStore(userId).listSticky(); }
+  setSticky(userId: string, entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
+    return this.#userStore(userId).setSticky(entryIds, isSticky, maxEntries);
+  }
   setFavorite(userId: string, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
     return this.#userStore(userId).setFavorite(entryIds, isFavorite, favoriteFolderId);
   }

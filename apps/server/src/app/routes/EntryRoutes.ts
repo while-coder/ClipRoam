@@ -7,6 +7,7 @@ import {
   EntryQueryRequestSchema,
   EntryDeleteRequestSchema,
   EntryFavoriteRequestSchema,
+  EntryStickyRequestSchema,
   FavoriteFolderInputSchema,
   type EntryManifestResponse,
   type EntryPublishResponse,
@@ -23,12 +24,13 @@ import { parseOr400 } from "./parseRequest.js";
 const logger = getLogger("EntryRoutes");
 
 export type EntryRouteDeps = {
-  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite" |
+  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite" | "listSticky" | "setSticky" |
     "listFavoriteFolders" | "saveFavoriteFolder" | "deleteFavoriteFolder">;
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
   maxHistoryEntries: (userId: string) => number;
   maxCaptureFileCount: (userId: string) => number;
+  maxStickyEntries: (userId: string) => number;
 };
 
 // Entries are pure request/response over HTTP; the WebSocket only carries
@@ -38,6 +40,27 @@ export type EntryRouteDeps = {
 // any pending metadata-update mark from the same event.
 export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps): void {
   const { store, broadcast, maxHistoryEntries, maxCaptureFileCount } = deps;
+
+  app.get("/entries/sticky", async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    return { entries: store.listSticky(user.id) };
+  });
+
+  app.patch("/entries/sticky", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+    const user = requireSessionUser(request, reply);
+    if (!user) return reply;
+    const body = parseOr400(reply, EntryStickyRequestSchema, request.body, "便签参数无效");
+    if (!body) return reply;
+    const entries = store.setSticky(user.id, body.ids, body.isSticky, deps.maxStickyEntries(user.id));
+    if (entries.length) broadcast(user.id, {
+      type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
+    });
+    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
+      broadcast(user.id, { type: "clipboard.deleted", entryId });
+    }
+    return reply.code(204).send();
+  });
 
   // Paginated identity listing with optional keyword, UTC date-range, kind and
   // source-device filters. Ids only, so a page stays small; details arrive through

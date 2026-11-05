@@ -23,6 +23,7 @@ type EntryRow = {
   id: number;
   version: number;
   is_favorite: number;
+  is_sticky: number;
   favorite_folder_id: string | null;
   kind: string;
   content: string;
@@ -49,6 +50,7 @@ export class UserDataStore {
         id INTEGER PRIMARY KEY,
         version INTEGER NOT NULL DEFAULT 1,
         is_favorite INTEGER NOT NULL DEFAULT 0,
+        is_sticky INTEGER NOT NULL DEFAULT 0,
         favorite_folder_id TEXT,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
@@ -75,6 +77,10 @@ export class UserDataStore {
         ON favorite_folders (COALESCE(parent_id, ''), name);
     `);
     const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
+    if (!columns.some(({ name }) => name === "is_sticky")) {
+      this.#database.exec("ALTER TABLE entries ADD COLUMN is_sticky INTEGER NOT NULL DEFAULT 0");
+    }
+    this.#database.exec("CREATE INDEX IF NOT EXISTS entries_sticky ON entries (id) WHERE is_sticky = 1");
     if (!columns.some(({ name }) => name === "is_favorite")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0");
     }
@@ -166,7 +172,7 @@ export class UserDataStore {
       if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
-          SELECT id, version, is_favorite, favorite_folder_id, kind, content, extra, source_device_id, created_at
+          SELECT id, version, is_favorite, is_sticky, favorite_folder_id, kind, content, extra, source_device_id, created_at
           FROM entries
           WHERE id IN (${placeholders(ids.length)})
           ORDER BY created_at DESC
@@ -261,7 +267,7 @@ export class UserDataStore {
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
-        RETURNING id, version, is_favorite, favorite_folder_id, kind, content, extra, source_device_id, created_at
+        RETURNING id, version, is_favorite, is_sticky, favorite_folder_id, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -285,6 +291,29 @@ export class UserDataStore {
           UPDATE entries SET is_favorite = ?, favorite_folder_id = ${!isFavorite || favoriteFolderId !== undefined ? "?" : "favorite_folder_id"}, version = version + 1
           WHERE id IN (${placeholders(batch.length)})
         `).run(isFavorite ? 1 : 0, ...(!isFavorite || favoriteFolderId !== undefined ? [isFavorite ? favoriteFolderId ?? null : null] : []), ...batch);
+      }
+      return this.listByIds(ids);
+    });
+  }
+
+  listSticky(): ClipboardEntry[] {
+    const rows = this.#database.prepare("SELECT * FROM entries WHERE is_sticky = 1 ORDER BY created_at DESC, id DESC").all() as EntryRow[];
+    return rows.flatMap((row) => { const entry = this.#toEntry(row); return entry ? [entry] : []; });
+  }
+
+  setSticky(entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
+    const ids = [...new Set(entryIds)];
+    return this.#transaction(() => {
+      const entries = this.listByIds(ids);
+      if (entries.length !== ids.length) throw new StickyEntryError("剪贴板记录不存在", 404);
+      if (isSticky) {
+        const { count } = this.#database.prepare("SELECT COUNT(*) AS count FROM entries WHERE is_sticky = 1").get() as { count: number };
+        const added = entries.filter((entry) => !entry.isSticky).length;
+        if (added > 0 && count + added > maxEntries) throw new StickyEntryError(`便签数量已达上限（${maxEntries} 条），请先取消其他便签`, 409);
+      }
+      for (const batch of chunk(ids, QUERY_BATCH)) {
+        this.#database.prepare(`UPDATE entries SET is_sticky = ?, version = version + 1
+          WHERE id IN (${placeholders(batch.length)}) AND is_sticky != ?`).run(isSticky ? 1 : 0, ...batch, isSticky ? 1 : 0);
       }
       return this.listByIds(ids);
     });
@@ -339,16 +368,16 @@ export class UserDataStore {
     ) SELECT id FROM subtree`).all(id) as Array<{ id: string }>).map((folder) => folder.id);
   }
 
-  // Enforces the non-favorite history cap: entries beyond the newest
-  // `maxEntries` are dropped and their ids returned so the route layer can
+  // Enforces the ordinary history cap, excluding favorites and sticky entries.
+  // Entries beyond the newest `maxEntries` are dropped and returned so routes can
   // broadcast clipboard.deleted. Like delete(), only references go away —
   // Stored bytes remain until an administrator removes them.
   prune(maxEntries: number): string[] {
     if (maxEntries <= 0) return [];
     const rows = this.#database.prepare(`
       DELETE FROM entries
-      WHERE is_favorite = 0 AND id NOT IN (
-        SELECT id FROM entries WHERE is_favorite = 0 ORDER BY created_at DESC LIMIT ?
+      WHERE is_favorite = 0 AND is_sticky = 0 AND id NOT IN (
+        SELECT id FROM entries WHERE is_favorite = 0 AND is_sticky = 0 ORDER BY created_at DESC LIMIT ?
       )
       RETURNING id
     `).all(maxEntries) as Array<{ id: number }>;
@@ -379,6 +408,7 @@ export class UserDataStore {
       id: String(row.id),
       version: row.version,
       isFavorite: row.is_favorite === 1,
+      isSticky: row.is_sticky === 1,
       favoriteFolderId: row.favorite_folder_id ?? null,
       kind: row.kind,
       content: row.content,
@@ -394,6 +424,10 @@ export class UserDataStore {
 }
 
 export class FavoriteFolderError extends Error {
+  constructor(message: string, readonly statusCode = 400) { super(message); }
+}
+
+export class StickyEntryError extends Error {
   constructor(message: string, readonly statusCode = 400) { super(message); }
 }
 

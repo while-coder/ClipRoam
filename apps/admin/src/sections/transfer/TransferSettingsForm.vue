@@ -44,6 +44,7 @@ const maxStoredFileMbSelect = computed(() => options(MAX_STORED_FILE_MB_OPTIONS,
 const maxStoredImageMbSelect = computed(() => options(MAX_STORED_IMAGE_MB_OPTIONS, maxStoredImageMb.value, "maxStoredImageMb", (value) => value === 0 ? "0（禁止保存剪贴板图片）" : `${value} MB`));
 const resumableUploadTtlHoursSelect = computed(() => options(RESUMABLE_UPLOAD_TTL_HOURS_OPTIONS, resumableUploadTtlHours.value, "resumableUploadTtlHours", resumableUploadTtlHoursLabel));
 const maxHistoryEntriesSelect = computed(() => options(MAX_HISTORY_ENTRIES_OPTIONS, maxHistoryEntries.value, "maxHistoryEntries", (value) => `${value} 条`));
+const maxStickyEntriesSelect = computed(() => options([0, 5, 10, 20, 30, 50, 100], maxStickyEntries.value, "maxStickyEntries", (value) => value === 0 ? "0（禁止新增便签）" : `${value} 条`));
 const maxCaptureFileCountSelect = computed(() => options(MAX_CAPTURE_FILE_COUNT_OPTIONS, maxCaptureFileCount.value, "maxCaptureFileCount", (value) => `${value} 个`));
 
 const submitting = ref(false);
@@ -56,12 +57,14 @@ const maxStoredFileMb = ref<SettingValue>(100);
 const maxStoredImageMb = ref<SettingValue>(10);
 const resumableUploadTtlHours = ref<SettingValue>(24);
 const maxHistoryEntries = ref<SettingValue>(3000);
+const maxStickyEntries = ref<SettingValue>(20);
 const maxCaptureFileCount = ref<SettingValue>(1000);
 
 function apply(transfer: TransferSettings, overrides?: TransferOverrides): void {
   maxStoredFileMb.value = props.userId ? overrides?.maxStoredFileMb ?? "global" : transfer.maxStoredFileMb;
   maxStoredImageMb.value = props.userId ? overrides?.maxStoredImageMb ?? "global" : transfer.maxStoredImageMb;
   resumableUploadTtlHours.value = props.userId ? overrides?.resumableUploadTtlHours ?? "global" : transfer.resumableUploadTtlHours;
+  maxStickyEntries.value = props.userId ? overrides?.maxStickyEntries ?? "global" : transfer.maxStickyEntries;
   maxHistoryEntries.value = props.userId ? overrides?.maxHistoryEntries ?? "global" : transfer.maxHistoryEntries;
   maxCaptureFileCount.value = props.userId ? overrides?.maxCaptureFileCount ?? "global" : transfer.maxCaptureFileCount;
 }
@@ -100,6 +103,7 @@ async function save(): Promise<void> {
       maxStoredImageMb: maxStoredImageMb.value,
       resumableUploadTtlHours: resumableUploadTtlHours.value,
       maxHistoryEntries: maxHistoryEntries.value,
+      maxStickyEntries: maxStickyEntries.value,
       maxCaptureFileCount: maxCaptureFileCount.value,
     };
     const overrides = Object.fromEntries(Object.entries(settings).filter(([, value]) => typeof value === "number")) as TransferOverrides;
@@ -156,9 +160,12 @@ onMounted(load);
           </SFormItem>
           <SFormItem
             label="单用户最大历史条数"
-            hint="仅计算未收藏记录，超过上限后自动删除最旧记录并同步到各设备；已收藏记录不自动清理。"
+            hint="仅计算未收藏且未标记便签的记录，超过上限后自动删除最旧记录并同步到各设备；收藏和便签不自动清理。"
           >
             <SSelect id="max-history-entries" v-model:value="maxHistoryEntries" :options="maxHistoryEntriesSelect" :disabled="disabled" required />
+          </SFormItem>
+          <SFormItem label="单用户最大便签数" hint="便签独立于收藏，不参与历史自动清理。降低上限不会移除已有便签；设为 0 禁止新增。">
+            <SSelect id="max-sticky-entries" v-model:value="maxStickyEntries" :options="maxStickyEntriesSelect" :disabled="disabled" required />
           </SFormItem>
           <SFormItem label="单次复制文件数上限" hint="单次复制的文件夹超过该文件数量时，设备不捕获、不同步该内容。">
             <SSelect id="max-capture-file-count" v-model:value="maxCaptureFileCount" :options="maxCaptureFileCountSelect" :disabled="disabled" required />
