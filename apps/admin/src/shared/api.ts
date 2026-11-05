@@ -3,6 +3,7 @@ export type TransferSettings = {
   maxStoredImageMb: number;
   resumableUploadTtlHours: number;
   maxHistoryEntries: number;
+  maxStickyEntries: number;
   maxCaptureFileCount: number;
 };
 export type StatusResponse = { transfer: TransferSettings };

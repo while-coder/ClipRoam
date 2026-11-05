@@ -56,6 +56,7 @@ export const ClipboardEntrySchema = z.object({
   id: z.string(),
   version: z.number().int().positive().safe(),
   isFavorite: z.boolean().optional(),
+  isSticky: z.boolean().optional(),
   favoriteFolderId: z.string().uuid().nullable().optional(),
   kind: ClipboardKindSchema,
   content: z.string(),
@@ -135,13 +136,14 @@ export const ChangePasswordSchema = z.object({
 
 // 服务器能力上限，随登录/注册/验证响应和 WebSocket 认证 ACK 下发，变更时广播。
 // 客户端自动上传档位不能超过 `maxStoredFileMb`（0 表示服务器禁止保存文件），
-// `maxHistoryEntries` 是服务器为账号保留的未收藏历史条数上限，
+// `maxHistoryEntries` 是服务器为账号保留的普通历史条数上限（不含收藏和便签），
 // `maxCaptureFileCount` 是单次复制的文件数上限（超过不捕获不同步）。
 export type ServerSettings = {
   maxStoredFileMb: number;
   // 剪贴板图片独立于普通文件，0 表示禁止保存图片。
   maxStoredImageMb: number;
   maxHistoryEntries: number;
+  maxStickyEntries: number;
   maxCaptureFileCount: number;
 };
 
@@ -161,7 +163,7 @@ export const AuthResponseSchema = z.object({
 // Identity and revision belong to the server: it assigns the id (arrival order),
 // timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true, favoriteFolderId: true }).extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true, isSticky: true, favoriteFolderId: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });
@@ -249,6 +251,10 @@ export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
   // Omitted preserves an existing favorite's folder; null explicitly unfiles it.
   favoriteFolderId: z.string().uuid().nullable().optional(),
 });
+
+export const EntryStickyRequestSchema = EntryDeleteRequestSchema.extend({ isSticky: z.boolean() });
+// Independent of history pagination and filters; includes every sticky entry.
+export const StickyEntriesResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
 export const MAX_FAVORITE_FOLDER_DEPTH = 5;
 export const FavoriteFolderInputSchema = z.object({
