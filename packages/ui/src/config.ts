@@ -44,6 +44,7 @@ export function defaultAccountPreferences(): AccountPreferences {
     serverMaxFileMb: DEFAULT_SERVER_MAX_FILE_MB,
     serverMaxImageMb: 10,
     serverMaxHistoryEntries: 3000,
+    serverMaxStickyEntries: 20,
     maxCaptureFileCount: DEFAULT_MAX_CAPTURE_FILE_COUNT,
   };
 }

@@ -24,7 +24,8 @@ async function start(): Promise<void> {
   }
   document.title = appName.value;
   const { default: App } = await (platform.windowLabel === "toast"
-    ? import("./features/toast/ToastWindow.vue") : import("./App.vue"));
+    ? import("./features/toast/ToastWindow.vue")
+    : platform.windowLabel.startsWith("sticky-") ? import("./features/sticky/StickyWindow.vue") : import("./App.vue"));
   createApp(App).use(createUiKit()).mount("#app");
 }
 

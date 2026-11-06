@@ -54,7 +54,7 @@ async function activateEntry(
   }
 }
 
-function copyEntry(entry?: LocalClipboardEntry): Promise<void> {
+export function copyEntry(entry?: LocalClipboardEntry): Promise<void> {
   return activateEntry(entry, "copy_entry");
 }
 

@@ -8,6 +8,8 @@ mod platforms;
 mod updater;
 mod window_mode;
 #[cfg(desktop)]
+mod sticky;
+#[cfg(desktop)]
 mod shortcuts;
 #[path = "../share/mod.rs"]
 mod share;
@@ -36,7 +38,10 @@ pub fn run() {
             platform::create_windows(app.handle())?;
             clipboard::start_monitor(app.handle());
             #[cfg(desktop)]
-            platform::setup_desktop_shell(app.handle())?;
+            {
+                sticky::start(app.handle());
+                platform::setup_desktop_shell(app.handle())?;
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -51,6 +56,16 @@ pub fn run() {
             app::native_debug_tools_supported,
             app::native_open_devtools,
             app::native_start_window_drag,
+            #[cfg(desktop)]
+            sticky::native_sticky_input_mode,
+            #[cfg(desktop)]
+            sticky::native_sticky_set_on_top,
+            #[cfg(desktop)]
+            sticky::native_edit_sticky_notes,
+            #[cfg(desktop)]
+            sticky::native_sticky_finish_edit,
+            #[cfg(desktop)]
+            sticky::native_sticky_forward_right_click,
             window_mode::native_set_window_mode,
             app::native_capture_paste_target,
             app::native_register_quick_paste_shortcut,

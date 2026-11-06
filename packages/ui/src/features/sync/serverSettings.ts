@@ -13,6 +13,7 @@ export function applyServerSettings(preferences: AccountPreferences, settings: u
     ...preferences,
     serverMaxFileMb,
     serverMaxImageMb: readLimit("maxStoredImageMb", preferences.serverMaxImageMb, 0),
+    serverMaxStickyEntries: readLimit("maxStickyEntries", preferences.serverMaxStickyEntries, 0),
     serverMaxHistoryEntries: readLimit("maxHistoryEntries", preferences.serverMaxHistoryEntries, 1),
     maxCaptureFileCount: readLimit("maxCaptureFileCount", preferences.maxCaptureFileCount, 1),
     autoUploadLimitMb: Math.min(preferences.autoUploadLimitMb, serverMaxFileMb),

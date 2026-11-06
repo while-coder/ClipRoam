@@ -14,6 +14,8 @@
     "./account-session": "./src/accountSession.ts",
     "./history-search": "./src/features/history/useHistorySync.ts",
     "./history": "./src/features/history/HistoryView.vue",
+    "./sticky-desktop": "./src/features/sticky/stickyDesktop.ts",
+    "./entry-actions": "./src/features/history/useEntryActions.ts",
     "./bytes": "./src/utils.ts",
     "./errors": "./src/utils.ts",
     "./settings-dialog": "./src/features/settings/SettingsDialog.vue",

@@ -23,6 +23,7 @@
     "ios:build": "node src-tauri/native/ios/prepare.cjs && tauri ios build --ci"
   },
   "dependencies": {
+    "@cliproam/protocol": "workspace:*",
     "@cliproam/ui": "workspace:*",
     "@qingfeng346/ui-kit": "link:../../../ui-kit/ui-kit",
     "@tauri-apps/api": "^2",

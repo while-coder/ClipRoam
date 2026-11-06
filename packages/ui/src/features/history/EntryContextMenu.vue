@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Trash2, ListChecks, Star, Folder } from "lucide-vue-next";
+import { Copy, Download, Trash2, ListChecks, Star, Folder, StickyNote } from "lucide-vue-next";
+import { stickyDesktop } from "../sticky/stickyDesktop";
 import type { LocalClipboardEntry } from "../../types";
 import { useMobileLayout } from "../../platform/runtime";
 
@@ -90,6 +91,7 @@ const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
 const onSelect = run((entry) => emit("select", entry));
 const onDestination = run((entry) => emit("destination", entry));
+const onSticky = run((entry) => { void stickyDesktop.value?.(entry); });
 function onFavorite(isFavorite: boolean): void {
   emit("close");
   emit("favorite", props.entry, isFavorite);
@@ -175,6 +177,9 @@ onBeforeUnmount(() => {
         <span v-if="saving" class="s-spinner" aria-hidden="true" />
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
+      </SButton>
+      <SButton v-if="stickyDesktop && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
+        <StickyNote :size="15" aria-hidden="true" /><span>{{ entry.isSticky ? '取消便签' : '贴到桌面' }}</span>
       </SButton>
       <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.isFavorite)">
         <Star :size="15" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" />

@@ -77,6 +77,17 @@ export class HistoryManager {
     return this.#client.listFavoriteFolders();
   }
 
+  listSticky() {
+    if (!this.#client) throw new Error("同步账号未登录");
+    return this.#client.listSticky();
+  }
+
+  async setSticky(ids: readonly string[], isSticky: boolean): Promise<void> {
+    if (!this.#client) throw new Error("同步账号未登录");
+    await this.#client.setSticky(ids, isSticky);
+    this.invalidate();
+  }
+
   async saveFavoriteFolder(input: FavoriteFolderInput, id?: string): Promise<void> {
     if (!this.#client) throw new Error("同步账号未登录");
     await this.#client.saveFavoriteFolder(input, id);

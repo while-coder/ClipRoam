@@ -4,15 +4,25 @@ import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
 import { isNative, isQuickPaste } from "@cliproam/ui/platform";
 import UpdaterDialog from "./features/updater/UpdaterDialog.vue";
-import { onMounted } from "vue";
+import { onBeforeUnmount, onMounted } from "vue";
 import { native } from "@cliproam/ui/native";
 import { initializeBossKey } from "./features/settings/bossKey";
+import { initializeStickyDesktop } from "./features/sticky/stickyWindows";
+
+let disposeSticky: (() => void) | undefined;
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; disposeSticky?.(); });
 
 onMounted(async () => {
   try {
-    if ((await native.getCapabilities()).globalShortcut) await initializeBossKey();
+    const capabilities = await native.getCapabilities();
+    if (capabilities.globalShortcut) await initializeBossKey();
+    if (isNative && !capabilities.mobile) {
+      disposeSticky = await initializeStickyDesktop();
+      if (disposed) disposeSticky();
+    }
   } catch (error) {
-    console.warn("老板键初始化失败", error);
+    console.warn("桌面功能初始化失败", error);
   }
 });
 </script>

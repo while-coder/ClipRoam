@@ -35,6 +35,9 @@ importers:
 
   apps/app:
     dependencies:
+      '@cliproam/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@cliproam/ui':
         specifier: workspace:*
         version: link:../../packages/ui

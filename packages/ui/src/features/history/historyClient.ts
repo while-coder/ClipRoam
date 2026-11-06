@@ -2,7 +2,7 @@ import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchem
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import { PAGE_SIZE } from "../../config";
-import { FavoriteFolderListSchema, type FavoriteFolder, type FavoriteFolderInput } from "@cliproam/protocol";
+import { FavoriteFolderListSchema, StickyEntriesResponseSchema, type FavoriteFolder, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
 
@@ -58,6 +58,16 @@ export class HistoryClient {
   async listFavoriteFolders(): Promise<FavoriteFolder[]> {
     const result = await this.http.request("GET", "/favorites/folders", { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, FavoriteFolderListSchema, "服务器返回了不兼容的目录列表");
     return result!.folders;
+  }
+
+  async listSticky(): Promise<ClipboardEntry[]> {
+    const result = await this.http.request("GET", "/entries/sticky", { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, StickyEntriesResponseSchema, "服务器返回了不兼容的便签列表");
+    await this.session.history.upsert(result!.entries);
+    return result!.entries;
+  }
+
+  async setSticky(ids: readonly string[], isSticky: boolean): Promise<void> {
+    await this.http.request("PATCH", "/entries/sticky", this.#jsonInit({ ids: [...new Set(ids)], isSticky }, ENTRY_HTTP_TIMEOUT_MS), null, "");
   }
 
   async saveFavoriteFolder(input: FavoriteFolderInput, id?: string): Promise<void> {
