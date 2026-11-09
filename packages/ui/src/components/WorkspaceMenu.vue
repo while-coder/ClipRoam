@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { clientSessionManager } from "../features/sync/clientSessionManager";
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { FilePlus, FolderPlus, Menu, Settings2, StickyNote } from "lucide-vue-next";
-import { showStickyNotes } from "../features/sticky/stickyDesktop";
+import { FilePlus, FolderPlus, Menu, Settings2 } from "lucide-vue-next";
 import { isMobile } from "../platform/runtime";
 import { FilePickerMode } from "../platform/native";
 import { openSettings } from "../features/settings/useSettings";
@@ -76,9 +75,6 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", handlePointerD
       </button>
       <button type="button" role="menuitem" :disabled="uploadingFiles || isMobile" :title="isMobile ? '移动端暂不支持上传文件夹' : undefined" @click="run(() => captureFilesFromPicker(FilePickerMode.Folder))">
         <FolderPlus :size="18" aria-hidden="true" /><span>上传文件夹<small v-if="isMobile">当前设备不支持</small></span>
-      </button>
-      <button v-if="showStickyNotes" type="button" role="menuitem" @click="run(() => showStickyNotes?.())">
-        <StickyNote :size="18" aria-hidden="true" /><span>显示并编辑便签<small>显示全部并解除点击穿透</small></span>
       </button>
       <button type="button" role="menuitem" @click="run(openSettings)">
         <Settings2 :size="18" aria-hidden="true" /><span>设置</span>

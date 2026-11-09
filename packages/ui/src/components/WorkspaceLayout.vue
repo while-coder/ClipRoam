@@ -28,9 +28,9 @@ watch(() => props.activeView, (view) => {
   if (transferTabs.value.some((tab) => tab.view === view)) lastTransferView.value = view;
 }, { immediate: true, flush: "sync" });
 const mobilePages = computed(() => [
-  {view:"history" as const,label:"历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
-  {view:"favorites" as const,label:"收藏夹",icon:Star,count:0,active:props.activeView === "favorites",failed:false},
   {view:"sticky" as const,label:"便签",icon:StickyNote,count:0,active:props.activeView === "sticky",failed:false},
+  {view:"favorites" as const,label:"收藏夹",icon:Star,count:0,active:props.activeView === "favorites",failed:false},
+  {view:"history" as const,label:"历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
   {view:lastTransferView.value,label:"传输",icon:ArrowDownUp,count:transferCount.value,active:transferActive.value,failed:hasTransferFailure.value},
   {view:"devices" as const,label:"设备",icon:MonitorSmartphone,count:0,active:props.activeView === "devices",failed:false},
 ]);

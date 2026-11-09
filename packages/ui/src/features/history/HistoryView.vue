@@ -16,7 +16,6 @@ import {
   Trash2,
   Star,
   RefreshCw,
-  StickyNote,
   X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
@@ -36,8 +35,7 @@ import { getAccountSession } from "../../accountSession";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { useHistoryEvents } from "./useHistorySync";
-import { setEntriesFavorite } from "./useEntryActions";
-import { showStickyNotes } from "../sticky/stickyDesktop";
+import { setEntriesFavorite, setEntriesSticky } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
 import { usePlatform, useMobileLayout, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
@@ -306,6 +304,10 @@ async function confirmDelete(): Promise<void> {
 function removeFromMenu(entry: LocalClipboardEntry): void {
   if (selectedIds.value.has(entry.id) && selectedCount.value > 1) requestSelectedDelete();
   else void props.removeEntries([entry.id]);
+}
+
+function unstickyFromMenu(entry: LocalClipboardEntry): void {
+  void setEntriesSticky([entry.id], false);
 }
 
 function changeHistoryPage(page: number): void {
@@ -580,9 +582,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
     <template v-if="!isQuickPaste" #actions>
-      <SButton v-if="sticky && showStickyNotes" @click="showStickyNotes?.()">
-        <StickyNote :size="15" aria-hidden="true" />显示桌面便签
-      </SButton>
       <SButton :disabled="deleting || (!selecting && !pageEntries.length)" @click="selecting ? clearSelection() : beginSelection()">
         <ListChecks :size="15" aria-hidden="true" />
         {{ selecting ? "取消选择" : "选择" }}
@@ -832,9 +831,11 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       :saving-entry-id="savingEntryId"
       :is-mobile="isMobile"
       :selected-count="selectedIds.has(menuEntry.id) ? selectedCount : 0"
+      :sticky-view="sticky"
       @activate="emit('activate', $event, false)"
       @save="emit('save', $event)"
       @remove="removeFromMenu"
+      @unsticky="unstickyFromMenu"
       @select="beginSelection"
       @close="closeEntryMenu"
     />

@@ -130,6 +130,22 @@ export async function setEntriesFavorite(entryIds: readonly string[], isFavorite
   }
 }
 
+export async function setEntriesSticky(entryIds: readonly string[], isSticky: boolean): Promise<boolean> {
+  if (!entryIds.length) return true;
+  const session = getAccountSession();
+  if (!session?.client) {
+    showNotification({ message: "网络异常，暂时无法修改便签，请检查同步连接", tone: "error" });
+    return false;
+  }
+  try {
+    await session.history.setSticky(entryIds, isSticky);
+    return !session.signal.aborted;
+  } catch (error) {
+    if (!session.signal.aborted) showNotification({ message: `修改便签失败：${errorMessage(error)}`, tone: "error" });
+    return false;
+  }
+}
+
 // Server-confirmed deletion only marks history changed; the view owns refetching.
 export async function removeEntries(entryIds: readonly string[]): Promise<boolean> {
   if (!entryIds.length) return true;

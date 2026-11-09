@@ -22,8 +22,8 @@ import { userDatabasePath } from "../DataPaths.js";
 type EntryRow = {
   id: number | string;
   version: number;
-  is_favorite: number;
-  is_sticky: number;
+  favorite_id?: string | null;
+  sticky_id?: string | null;
   favorite_folder_id: string | null;
   kind: string;
   content: string;
@@ -46,11 +46,8 @@ export class UserDataStore {
   #applySchema(): void {
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS entries (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         version INTEGER NOT NULL DEFAULT 1,
-        is_favorite INTEGER NOT NULL DEFAULT 0,
-        is_sticky INTEGER NOT NULL DEFAULT 0,
-        favorite_folder_id TEXT,
         hash TEXT NOT NULL UNIQUE,
         kind TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -75,90 +72,47 @@ export class UserDataStore {
       CREATE UNIQUE INDEX IF NOT EXISTS favorite_folders_name
         ON favorite_folders (COALESCE(parent_id, ''), name);
     `);
-    const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
-    const legacy = Number(this.#database.pragma("user_version", { simple: true })) < 2;
-    if (legacy && !columns.some(({ name }) => name === "is_sticky")) {
-      this.#database.exec("ALTER TABLE entries ADD COLUMN is_sticky INTEGER NOT NULL DEFAULT 0");
+    for (const table of ["favorites", "sticky_notes"] as const) {
+      this.#database.exec(`CREATE TABLE IF NOT EXISTS ${table} (
+        id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL DEFAULT 1,
+        hash TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        extra TEXT NOT NULL DEFAULT '{}',
+        source_device_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+        ${table === "favorites" ? ", favorite_folder_id TEXT" : ""}
+      ); CREATE INDEX IF NOT EXISTS ${table}_created_at ON ${table} (created_at DESC)`);
     }
-    if (legacy && !columns.some(({ name }) => name === "is_favorite")) {
-      this.#database.exec("ALTER TABLE entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0");
+    this.#database.exec("CREATE INDEX IF NOT EXISTS favorites_folder ON favorites (favorite_folder_id)");
+    // Saved membership and folder changes alter the history's displayed metadata.
+    // Advance its revision too, so clients backfill those changes into their cache.
+    for (const table of ["favorites", "sticky_notes"] as const) {
+      for (const event of ["INSERT", "UPDATE", "DELETE"] as const) {
+        const row = event === "DELETE" ? "OLD" : "NEW";
+        this.#database.exec(`CREATE TRIGGER IF NOT EXISTS ${table}_history_${event.toLowerCase()}
+          AFTER ${event} ON ${table} BEGIN
+            UPDATE entries SET version = version + 1 WHERE hash = ${row}.hash;
+          END`);
+      }
     }
-    if (legacy && !columns.some(({ name }) => name === "favorite_folder_id")) {
-      this.#database.exec("ALTER TABLE entries ADD COLUMN favorite_folder_id TEXT");
-    }
-    if (!columns.some(({ name }) => name === "version")) {
-      this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
-    }
-    const deviceColumns = this.#database.pragma("table_info(devices)") as Array<{ name: string }>;
-    if (!deviceColumns.some(({ name }) => name === "last_online_at")) {
-      this.#database.exec("ALTER TABLE devices ADD COLUMN last_online_at TEXT");
-    }
-    if (deviceColumns.some(({ name }) => name === "updated_at")) {
-      this.#database.exec("ALTER TABLE devices DROP COLUMN updated_at");
-    }
-    if (this.#database.pragma("user_version", { simple: true }) === 0) {
-      this.#transaction(() => {
-        const rows = this.#database.prepare("SELECT id, kind, content, extra FROM entries WHERE kind = 'files'").all() as EntryRow[];
-        const update = this.#database.prepare("UPDATE entries SET hash = ? WHERE id = ?");
-        for (const row of rows) update.run(entryHash({ kind: row.kind, content: row.content, ...parseExtra(row.extra) }), row.id);
-        this.#database.pragma("user_version = 1");
-      });
-    }
-    this.#migrateSavedEntries();
     // A common read shape keeps downloads, activation and detail backfill usable
     // for all three independent kinds of record. Only history accepts publishes.
+    // History rows mirror the saved copies with the same content hash so the
+    // star and sticky state shown next to a history entry match the collections.
     this.#database.exec(`CREATE TEMP VIEW entry_records AS
-      SELECT CAST(id AS TEXT) AS id, version, 0 AS is_favorite, 0 AS is_sticky,
-        NULL AS favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM entries
+      SELECT CAST(e.id AS TEXT) AS id, e.version,
+        f.id AS favorite_id, s.id AS sticky_id,
+        f.favorite_folder_id,
+        e.hash, e.kind, e.content, e.extra, e.source_device_id, e.created_at
+      FROM entries e
+      LEFT JOIN favorites f ON f.hash = e.hash
+      LEFT JOIN sticky_notes s ON s.hash = e.hash
       UNION ALL
-      SELECT id, version, 1, 0, favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM favorites
+      SELECT id, version, id, NULL, favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM favorites
       UNION ALL
-      SELECT id, version, 0, 1, NULL, hash, kind, content, extra, source_device_id, created_at FROM sticky_notes`);
-  }
-
-  #migrateSavedEntries(): void {
-    if (Number(this.#database.pragma("user_version", { simple: true })) >= 2) return;
-    this.#transaction(() => {
-      for (const table of ["favorites", "sticky_notes"] as const) {
-        this.#database.exec(`CREATE TABLE ${table} (
-          id TEXT PRIMARY KEY,
-          version INTEGER NOT NULL DEFAULT 1,
-          hash TEXT NOT NULL UNIQUE,
-          kind TEXT NOT NULL,
-          content TEXT NOT NULL,
-          extra TEXT NOT NULL DEFAULT '{}',
-          source_device_id TEXT NOT NULL,
-          created_at TEXT NOT NULL
-          ${table === "favorites" ? ", favorite_folder_id TEXT" : ""}
-        ); CREATE INDEX ${table}_created_at ON ${table} (created_at DESC)`);
-        const favorite = table === "favorites";
-        const rows = this.#database.prepare(`SELECT * FROM entries WHERE ${favorite ? "is_favorite" : "is_sticky"} = 1`).all() as EntryRow[];
-        for (const row of rows) {
-          this.#database.prepare(`INSERT INTO ${table}
-            (id, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""})
-            SELECT ?, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""}
-            FROM entries WHERE id = ?`).run(`${favorite ? "f" : "s"}-${randomUUID()}`, row.id);
-        }
-      }
-      this.#database.exec(`
-        CREATE INDEX favorites_folder ON favorites (favorite_folder_id);
-        CREATE TABLE history_entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          version INTEGER NOT NULL DEFAULT 1,
-          hash TEXT NOT NULL UNIQUE,
-          kind TEXT NOT NULL,
-          content TEXT NOT NULL,
-          extra TEXT NOT NULL DEFAULT '{}',
-          source_device_id TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        INSERT INTO history_entries SELECT id, version + 1, hash, kind, content, extra, source_device_id, created_at FROM entries;
-        DROP TABLE entries;
-        ALTER TABLE history_entries RENAME TO entries;
-        CREATE INDEX entries_created_at ON entries (created_at DESC);
-      `);
-      this.#database.pragma("user_version = 2");
-    });
+      SELECT id, version, NULL, id, NULL, hash, kind, content, extra, source_device_id, created_at FROM sticky_notes`);
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
@@ -222,7 +176,7 @@ export class UserDataStore {
     for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
       const rows = this.#database
         .prepare(`
-          SELECT id, version, is_favorite, is_sticky, favorite_folder_id, kind, content, extra, source_device_id, created_at
+          SELECT id, version, favorite_id, sticky_id, favorite_folder_id, kind, content, extra, source_device_id, created_at
           FROM entry_records
           WHERE id IN (${placeholders(batch.length)})
           ORDER BY created_at DESC
@@ -315,7 +269,7 @@ export class UserDataStore {
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
-        RETURNING id, version, 0 AS is_favorite, 0 AS is_sticky, NULL AS favorite_folder_id, kind, content, extra, source_device_id, created_at
+        RETURNING id
       `).get(
         entryHash(entry),
         entry.kind,
@@ -323,8 +277,8 @@ export class UserDataStore {
         extra,
         entry.sourceDeviceId,
         createdAt,
-      ) as EntryRow;
-      const storedEntry = this.#toEntry(row)!;
+      ) as { id: number };
+      const storedEntry = this.listByIds([String(row.id)])[0]!;
       this.files.register(entryContents(storedEntry));
       return storedEntry;
     });
@@ -339,7 +293,10 @@ export class UserDataStore {
   }
 
   listSticky(): ClipboardEntry[] {
-    const rows = this.#database.prepare("SELECT * FROM entry_records WHERE is_sticky = 1 ORDER BY created_at DESC, id DESC").all() as EntryRow[];
+    const rows = this.#database.prepare(`
+      SELECT *, id AS sticky_id, NULL AS favorite_folder_id
+      FROM sticky_notes ORDER BY created_at DESC, id DESC
+    `).all() as EntryRow[];
     return rows.flatMap((row) => { const entry = this.#toEntry(row); return entry ? [entry] : []; });
   }
 
@@ -383,8 +340,18 @@ export class UserDataStore {
 
   // Cancellation deletes only destination records; it never alters history or
   // the other saved collection. Return deleted snapshots for push notifications.
+  // A history id addresses the saved copy with the same content hash; an id from
+  // the other collection does not, so cancelling across collections stays a no-op.
   #removeSaved(table: "favorites" | "sticky_notes", ids: readonly string[]): ClipboardEntry[] {
-    const entries = this.listByIds(ids).filter((entry) => table === "favorites" ? entry.isFavorite : entry.isSticky);
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length) return [];
+    const foreignPrefix = table === "favorites" ? "s-" : "f-";
+    const savedIds = (this.#database.prepare(`
+      SELECT DISTINCT saved.id FROM ${table} saved
+      JOIN entry_records e ON e.hash = saved.hash
+      WHERE e.id IN (${placeholders(uniqueIds.length)}) AND e.id NOT LIKE '${foreignPrefix}%'
+    `).all(...uniqueIds) as Array<{ id: string }>).map(({ id }) => id);
+    const entries = this.listByIds(savedIds);
     for (const batch of chunk(entries, QUERY_BATCH)) {
       this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch.map(({ id }) => id));
     }
@@ -484,8 +451,8 @@ export class UserDataStore {
       ...(typeof extra === "object" && extra !== null ? extra : {}),
       id: String(row.id),
       version: row.version,
-      isFavorite: row.is_favorite === 1,
-      isSticky: row.is_sticky === 1,
+      favoriteId: row.favorite_id ?? null,
+      stickyId: row.sticky_id ?? null,
       favoriteFolderId: row.favorite_folder_id ?? null,
       kind: row.kind,
       content: row.content,

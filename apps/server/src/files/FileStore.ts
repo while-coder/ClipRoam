@@ -47,15 +47,6 @@ export class FileStore {
         bitmap BLOB NOT NULL
       );
     `);
-    const fileColumns = this.database.pragma("table_info(files)") as Array<{ name: string }>;
-    if (!fileColumns.some(({ name }) => name === "name")) {
-      this.database.exec("ALTER TABLE files ADD COLUMN name TEXT");
-    }
-    // Old ledgers keep their bitmap; only the unused GC timestamp is removed.
-    const columns = this.database.pragma("table_info(upload_parts)") as Array<{ name: string }>;
-    if (columns.some(({ name }) => name === "updated_at")) {
-      this.database.exec("ALTER TABLE upload_parts DROP COLUMN updated_at");
-    }
   }
 
   close(): void { this.database.close(); }

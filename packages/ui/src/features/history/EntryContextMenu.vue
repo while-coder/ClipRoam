@@ -20,6 +20,8 @@ const props = defineProps<{
   isMobile: boolean;
   selectedCount?: number;
   favoriting?: boolean;
+  /** The menu is open on the sticky-notes page, where removal means cancelling. */
+  stickyView?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +31,7 @@ const emit = defineEmits<{
   select: [entry: LocalClipboardEntry];
   favorite: [entry: LocalClipboardEntry, isFavorite: boolean];
   destination: [entry: LocalClipboardEntry];
+  unsticky: [entry: LocalClipboardEntry];
   close: [];
 }>();
 
@@ -42,8 +45,9 @@ const multiple = computed(() => (props.selectedCount ?? 0) > 1);
 // 删除二次确认：第一击进入待确认态（3 秒无操作自动复位），第二击才执行。
 const confirmingRemove = ref(false);
 const removeLabel = computed(() => {
-  if (confirmingRemove.value) return props.entry.isSticky ? "确认取消便签？" : "确认删除？";
-  if (props.entry.isSticky) return multiple.value ? `取消选中的 ${props.selectedCount} 条便签` : "取消便签";
+  const cancelling = props.stickyView && props.entry.isSticky;
+  if (confirmingRemove.value) return cancelling ? "确认取消便签？" : "确认删除？";
+  if (cancelling) return multiple.value ? `取消选中的 ${props.selectedCount} 条便签` : "取消便签";
   return multiple.value ? `删除选中的 ${props.selectedCount} 条` : "删除";
 });
 let confirmResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -97,6 +101,7 @@ const onSave = run((entry) => emit("save", entry));
 const onSelect = run((entry) => emit("select", entry));
 const onDestination = run((entry) => emit("destination", entry));
 const onSticky = run((entry) => { void stickyDesktop.value?.(entry); });
+const onUnsticky = run((entry) => emit("unsticky", entry));
 function onFavorite(isFavorite: boolean): void {
   emit("close");
   emit("favorite", props.entry, isFavorite);
@@ -183,7 +188,10 @@ onBeforeUnmount(() => {
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
       </SButton>
-      <SButton v-if="stickyDesktop && !entry.isSticky && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
+      <SButton v-if="entry.isSticky && !stickyView && !multiple" type="text" block role="menuitem" @click="onUnsticky(entry)">
+        <StickyNote :size="15" aria-hidden="true" /><span>取消便签</span>
+      </SButton>
+      <SButton v-else-if="stickyDesktop && !entry.isSticky && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
         <StickyNote :size="15" aria-hidden="true" /><span>贴到桌面</span>
       </SButton>
       <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.isFavorite)">

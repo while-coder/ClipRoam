@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import {
   MAX_PUBLISH_BYTES,
   ENTRY_PAGE_DEFAULT_LIMIT,
-  EntryManifestQuerySchema,
+  HistoryManifestQuerySchema,
+  FavoriteManifestQuerySchema,
   EntryPublishRequestSchema,
   EntryQueryRequestSchema,
   EntryDeleteRequestSchema,
@@ -62,20 +63,24 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return reply.code(204).send();
   });
 
-  // Paginated identity listing with optional keyword, UTC date-range, kind and
-  // source-device filters. Ids only, so a page stays small; details arrive through
-  // POST /entries/query. Defaults to history; favorite/sticky filters query
-  // their independent copies. Desktop windows also use the full sticky list.
-  app.get("/entries/manifest", async (request, reply) => {
-    const user = requireSessionUser(request, reply);
-    if (!user) return reply;
-    const query = parseOr400(reply, EntryManifestQuerySchema, request.query, "查询参数无效");
-    if (!query) return reply;
-    // The page size is the client's choice within the schema's bounds;
-    // absent, the server default applies.
-    const pageSize = query.pageSize ?? ENTRY_PAGE_DEFAULT_LIMIT;
-    return store.listManifestPage(user.id, query, pageSize) satisfies EntryManifestResponse;
-  });
+  // Routes select independent collections; paging and detail backfill are shared.
+  // The full /entries/sticky list remains available for desktop windows.
+  for (const [path, collection] of [
+    ["/entries/manifest", "history"],
+    ["/favorites/manifest", "favorites"],
+    ["/entries/sticky/manifest", "sticky"],
+  ] as const) {
+    app.get(path, async (request, reply) => {
+      const user = requireSessionUser(request, reply);
+      if (!user) return reply;
+      const schema = collection === "favorites" ? FavoriteManifestQuerySchema : HistoryManifestQuerySchema;
+      const query = parseOr400(reply, schema, request.query, "查询参数无效");
+      if (!query) return reply;
+      return store.listManifestPage(user.id, {
+        ...query, favoriteOnly: collection === "favorites", stickyOnly: collection === "sticky",
+      }, query.pageSize ?? ENTRY_PAGE_DEFAULT_LIMIT) satisfies EntryManifestResponse;
+    });
+  }
 
   app.post("/entries/query", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
     const user = requireSessionUser(request, reply);

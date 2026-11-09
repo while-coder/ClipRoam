@@ -36,11 +36,11 @@ export class HistoryClient {
     if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
     if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
     for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
-    if (filter.favoriteOnly) params.set("favoriteOnly", "true");
-    if (filter.stickyOnly) params.set("stickyOnly", "true");
-    if (filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
+    const path = filter.stickyOnly ? "/entries/sticky/manifest"
+      : filter.favoriteOnly || filter.favoriteFolderId ? "/favorites/manifest" : "/entries/manifest";
+    if (!filter.stickyOnly && filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
     const result = await this.http.request(
-      "GET", `/entries/manifest?${params}`,
+      "GET", `${path}?${params}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
       EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
     );

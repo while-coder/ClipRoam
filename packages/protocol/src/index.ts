@@ -56,9 +56,9 @@ export const ClipboardEntrySchema = z.object({
   // History has numeric ids; saved copies have independent f-/s- UUID ids.
   id: z.string(),
   version: z.number().int().positive().safe(),
-  // Describe the owning collection, rather than flags on a history record.
-  isFavorite: z.boolean().optional(),
-  isSticky: z.boolean().optional(),
+  // Saved record identities resolved by the server; null means no related copy.
+  favoriteId: z.string().nullable().optional(),
+  stickyId: z.string().nullable().optional(),
   favoriteFolderId: z.string().uuid().nullable().optional(),
   kind: ClipboardKindSchema,
   content: z.string(),
@@ -165,7 +165,7 @@ export const AuthResponseSchema = z.object({
 // Identity and revision belong to the server: it assigns the id (arrival order),
 // timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, isFavorite: true, isSticky: true, favoriteFolderId: true }).extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, favoriteId: true, stickyId: true, favoriteFolderId: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });
@@ -216,7 +216,7 @@ export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("
 // fewer round-trips on fast ones); absent, the server default applies. Filters
 // apply before paging, so a filtered page always holds up to a full page of
 // matching rows.
-export const EntryManifestQuerySchema = z.object({
+const ManifestQuerySchema = z.object({
   stickyOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   favoriteOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   favoriteFolderId: z.union([z.literal("unfiled"), z.string().uuid()]).optional(),
@@ -234,7 +234,18 @@ export const EntryManifestQuerySchema = z.object({
   ),
   page: z.coerce.number().int().min(1).max(100000).optional(),
   pageSize: z.coerce.number().int().min(ENTRY_PAGE_SIZE_RANGE.min).max(ENTRY_PAGE_SIZE_RANGE.max).optional(),
-}).refine((query) => !query.stickyOnly || (!query.favoriteOnly && !query.favoriteFolderId), {
+});
+
+// Public list endpoints choose the collection; callers only supply filters.
+export const HistoryManifestQuerySchema = ManifestQuerySchema.omit({
+  stickyOnly: true, favoriteOnly: true, favoriteFolderId: true,
+}).strict();
+export const FavoriteManifestQuerySchema = ManifestQuerySchema.omit({
+  stickyOnly: true, favoriteOnly: true,
+}).strict();
+
+// Internal store query retains the collection selectors.
+export const EntryManifestQuerySchema = ManifestQuerySchema.refine((query) => !query.stickyOnly || (!query.favoriteOnly && !query.favoriteFolderId), {
   message: "便签列表不能同时筛选收藏目录",
 });
 
