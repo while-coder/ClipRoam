@@ -78,6 +78,7 @@ export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary; pend
  * cache queries.
  */
 export type EntriesManifestFilter = {
+  stickyOnly?: boolean;
   favoriteOnly?: boolean;
   favoriteFolderId?: string;
   query?: string;
@@ -103,7 +104,7 @@ export type NotificationOptions = { message: string; title?: string; tone?: Noti
 export type NotificationPayload = { message: string; title: string; tone: NotificationTone };
 export type ShareImportSummary = { shares: number; texts: number; files: number };
 
-export type WorkspaceView = "history" | "favorites" | "pending-upload" | "uploads" | "downloads" | "devices";
+export type WorkspaceView = "history" | "favorites" | "sticky" | "pending-upload" | "uploads" | "downloads" | "devices";
 
 export type LocalSource = { path: string; source: string; size: number; modifiedAt?: number; fileId?: string };
 export type LocalSources = { roots: string[]; files: LocalSource[] };

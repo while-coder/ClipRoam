@@ -53,20 +53,19 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const body = parseOr400(reply, EntryStickyRequestSchema, request.body, "便签参数无效");
     if (!body) return reply;
     const entries = store.setSticky(user.id, body.ids, body.isSticky, deps.maxStickyEntries(user.id));
-    if (entries.length) broadcast(user.id, {
+    if (body.isSticky && entries.length) broadcast(user.id, {
       type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
     });
-    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
-      broadcast(user.id, { type: "clipboard.deleted", entryId });
+    if (!body.isSticky) for (const entry of entries) {
+      broadcast(user.id, { type: "clipboard.deleted", entryId: entry.id });
     }
     return reply.code(204).send();
   });
 
   // Paginated identity listing with optional keyword, UTC date-range, kind and
   // source-device filters. Ids only, so a page stays small; details arrive through
-  // POST /entries/query. It doubles as the connection-time reconciliation
-  // snapshot: an unfiltered walk until the fetched count reaches total covers
-  // the account.
+  // POST /entries/query. Defaults to history; favorite/sticky filters query
+  // their independent copies. Desktop windows also use the full sticky list.
   app.get("/entries/manifest", async (request, reply) => {
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
@@ -138,11 +137,11 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const body = parseOr400(reply, EntryFavoriteRequestSchema, request.body, "收藏参数无效");
     if (!body) return reply;
     const entries = store.setFavorite(user.id, body.ids, body.isFavorite, body.favoriteFolderId);
-    if (entries.length) broadcast(user.id, {
+    if (body.isFavorite && entries.length) broadcast(user.id, {
       type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
     });
-    for (const entryId of store.pruneHistory(user.id, maxHistoryEntries(user.id))) {
-      broadcast(user.id, { type: "clipboard.deleted", entryId });
+    if (!body.isFavorite) for (const entry of entries) {
+      broadcast(user.id, { type: "clipboard.deleted", entryId: entry.id });
     }
     return reply.code(204).send();
   });

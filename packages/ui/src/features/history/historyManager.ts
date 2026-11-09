@@ -69,6 +69,7 @@ export class HistoryManager {
     if (!entryIds.length) return;
     if (!this.#client) throw new Error("同步账号未登录");
     await this.#client.setFavorite(entryIds, isFavorite, favoriteFolderId);
+    if (!isFavorite) await this.database.batch(entryIds.filter((id) => id.startsWith("f-")).map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
 
@@ -85,6 +86,7 @@ export class HistoryManager {
   async setSticky(ids: readonly string[], isSticky: boolean): Promise<void> {
     if (!this.#client) throw new Error("同步账号未登录");
     await this.#client.setSticky(ids, isSticky);
+    if (!isSticky) await this.database.batch(ids.filter((id) => id.startsWith("s-")).map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
 

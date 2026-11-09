@@ -11,6 +11,7 @@
     "debug": "shx rm -rf debug && tsc -p tsconfig.debug.json",
     "build": "shx rm -rf build dist admin && pnpm --filter @cliproam/protocol build && pnpm --filter @cliproam/admin build && tsc -p tsconfig.json && shx cp -r admin build/admin-ui && pnpm --config.node-linker=hoisted --config.package-import-method=copy --filter @cliproam/server deploy --prod --legacy --ignore-scripts dist",
     "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
     "start": "node build/index.js"
   },
   "dependencies": {

@@ -37,6 +37,7 @@ export class HistoryClient {
     if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
     for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
     if (filter.favoriteOnly) params.set("favoriteOnly", "true");
+    if (filter.stickyOnly) params.set("stickyOnly", "true");
     if (filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
     const result = await this.http.request(
       "GET", `/entries/manifest?${params}`,

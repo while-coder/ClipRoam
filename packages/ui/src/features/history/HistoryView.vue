@@ -16,6 +16,8 @@ import {
   Trash2,
   Star,
   RefreshCw,
+  StickyNote,
+  X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -35,6 +37,7 @@ import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
 import { useHistoryEvents } from "./useHistorySync";
 import { setEntriesFavorite } from "./useEntryActions";
+import { showStickyNotes } from "../sticky/stickyDesktop";
 import { useHistorySelection } from "./useHistorySelection";
 import { usePlatform, useMobileLayout, showNotification } from "../../platform/runtime";
 import { capturingClipboard, captureCurrentClipboard } from "../pending-upload/usePendingUploads";
@@ -56,6 +59,7 @@ const props = withDefaults(defineProps<{
   active?: boolean;
   quickPaste?: boolean;
   favorites?: boolean;
+  sticky?: boolean;
   devicesById: Record<string, Device>;
   currentTime: number;
   importingShare: boolean;
@@ -74,11 +78,12 @@ const { isMobile } = usePlatform();
 const mobileLayout = useMobileLayout();
 const folderPanelWidth = ref(190);
 const isQuickPaste = computed(() => props.quickPaste === true);
+const collectionName = computed(() => props.sticky ? "便签" : props.favorites ? "收藏" : "历史");
+const pageTitle = computed(() => props.sticky ? "便签管理" : props.favorites ? folderTitle.value : "剪贴板历史");
 const pageActive = useHistoryEvents(refreshVisiblePage, () => props.active !== false);
 
 const query = ref("");
 const filter = ref<EntryFilter>("all");
-const favoriteOnly = ref(false);
 const favoriteFolderId = ref("");
 const folders = ref<FavoriteFolder[]>([]);
 const folderRows = computed(() => flattenFavoriteFolders(folders.value));
@@ -224,7 +229,8 @@ const {
   fetchHistoryPage: props.fetchHistoryPage,
   buildFilter: (page) => ({
     query: committedQuery.value,
-    favoriteOnly: props.favorites || favoriteOnly.value,
+    favoriteOnly: props.favorites,
+    stickyOnly: props.sticky,
     favoriteFolderId: props.favorites ? favoriteFolderId.value || undefined : undefined,
     kind: filter.value,
     start: activeTimeRange.value.start,
@@ -232,10 +238,10 @@ const {
     deviceIds: selectedDeviceIds.value,
     page,
   }),
-  filterSources: [committedQuery, filter, favoriteOnly, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds],
+  filterSources: [committedQuery, filter, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds],
   // Hidden views and invalid date ranges must not start background queries.
   canFetch: () => pageActive.value && !timeRangeError.value,
-  onError: (message) => showNotification({ message: `读取历史失败：${message}`, tone: "error" }),
+  onError: (message) => showNotification({ message: `读取${collectionName.value}失败：${message}`, tone: "error" }),
   listElement: historyListElement,
   getSelectedEntryId: () => selectedEntryId.value,
   setSelectedEntryId: (id) => { selectedEntryId.value = id; },
@@ -269,7 +275,7 @@ const selectedCount = computed(() => selectedIds.value.size);
 watch(pageEntries, (entries) => {
   if (menuEntry.value && !entries.some((entry) => entry.id === menuEntry.value?.id)) closeEntryMenu();
 });
-watch([committedQuery, filter, favoriteOnly, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
+watch([committedQuery, filter, favoriteFolderId, timeFilter, startDate, endDate, selectedDeviceIds, currentPage], () => {
   clearSelection();
   closeEntryMenu();
 });
@@ -566,19 +572,23 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
   <FavoriteFoldersPanel v-if="favorites" v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
   <SidebarResizer v-if="favorites && !mobileLayout" storage-key="cliproam.folderPanelWidth" label="收藏目录宽度"
     :default-width="190" :min-width="160" :max-width="400" :content-min-width="320" @resize="folderPanelWidth = $event" />
-  <WorkspacePage :title="favorites ? folderTitle : '剪贴板历史'" layout="history" :data-history-selecting="selecting || undefined">
+  <WorkspacePage :title="pageTitle" layout="history" :data-history-selecting="selecting || undefined">
     <template v-if="favorites" #status>收藏夹</template>
+    <template v-else-if="sticky" #status>独立保存的便签 · 取消后同步关闭各设备窗口</template>
     <template #menu><WorkspaceMenu /></template>
     <template v-if="isQuickPaste" #header>
       <div class="paste-drag-strip" aria-hidden="true" @mousedown.left="startWindowDrag"></div>
     </template>
     <template v-if="!isQuickPaste" #actions>
+      <SButton v-if="sticky && showStickyNotes" @click="showStickyNotes?.()">
+        <StickyNote :size="15" aria-hidden="true" />显示桌面便签
+      </SButton>
       <SButton :disabled="deleting || (!selecting && !pageEntries.length)" @click="selecting ? clearSelection() : beginSelection()">
         <ListChecks :size="15" aria-hidden="true" />
         {{ selecting ? "取消选择" : "选择" }}
       </SButton>
       <SButton
-        v-if="!selecting && !favorites"
+        v-if="!selecting && !favorites && !sticky"
         aria-label="读取当前剪贴板"
         title="读取当前剪贴板"
         :aria-busy="capturingClipboard"
@@ -604,8 +614,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
             ref="searchInput"
             v-model:value="query"
             type="text"
-            :placeholder="favorites ? `搜索${folderTitle}` : '搜索剪贴板历史'"
-            :aria-label="favorites ? `搜索${folderTitle}` : '搜索剪贴板历史'"
+            :placeholder="`搜索${pageTitle}`"
+            :aria-label="`搜索${pageTitle}`"
             enterkeyhint="search"
             clearable
             @keydown.enter="!$event.isComposing && commitSearch()"
@@ -615,8 +625,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
         </label>
         <SButton
           class="history-refresh"
-          aria-label="刷新剪贴板历史"
-          title="刷新剪贴板历史"
+          :aria-label="`刷新${collectionName}`"
+          :title="`刷新${collectionName}`"
           :aria-busy="refreshing"
           :disabled="refreshing || Boolean(timeRangeError)"
           @click="refreshCurrentPage"
@@ -640,15 +650,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
             v-model="selectedDeviceIds"
             :devices="devices"
           />
-          <button
-            v-if="!favorites"
-            class="favorite-filter"
-            type="button"
-            :aria-pressed="favoriteOnly"
-            aria-label="仅显示已收藏"
-            :title="favoriteOnly ? '显示全部记录' : '仅显示已收藏'"
-            @click="favoriteOnly = !favoriteOnly"
-          ><Star :size="13" :fill="favoriteOnly ? 'currentColor' : 'none'" aria-hidden="true" /><span>已收藏</span></button>
         </div>
       </div>
       <div v-if="recentFavoriteIds.length" class="favorite-feedback" role="status">已收藏到「未分类」<SButton size="small" @click="chooseDestination(recentFavoriteIds)">选择目录</SButton><SButton size="small" @click="recentFavoriteIds = []">关闭</SButton></div>
@@ -657,7 +658,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     </section>
     </template>
 
-    <section ref="historyListElement" class="history-list" aria-label="剪贴板历史" @scroll="closeEntryMenu">
+    <section ref="historyListElement" class="history-list" :aria-label="pageTitle" @scroll="closeEntryMenu">
       <div
         v-for="entry in pageEntries"
         :key="entry.id"
@@ -733,11 +734,22 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
         </ClipboardEntryContent>
-        <span v-if="selecting && entry.isFavorite" class="entry-favorite-indicator" role="img" aria-label="已收藏" title="已收藏">
-          <Star :size="17" fill="currentColor" aria-hidden="true" />
-        </span>
         <button
-          v-if="!selecting"
+          v-if="sticky && !selecting"
+          class="entry-favorite"
+          type="button"
+          aria-label="取消便签"
+          title="取消便签"
+          :disabled="deleting"
+          @click.stop="deleteTargets = [entry.id]"
+          @mousedown.stop
+          @dblclick.stop
+          @keydown.stop
+          @touchstart.stop
+          @touchend.stop
+        ><X :size="17" aria-hidden="true" /></button>
+        <button
+          v-else-if="!selecting"
           class="entry-favorite"
           type="button"
           :class="{ active: entry.isFavorite }"
@@ -757,31 +769,31 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
         <Search :size="28" aria-hidden="true" />
-        <strong>{{ timeRangeError ? "日期区间无效" : favorites || favoriteOnly ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (favorites || favoriteOnly ? "在历史中收藏内容并选择目录，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <strong>{{ timeRangeError ? "日期区间无效" : sticky ? "没有匹配的便签" : favorites ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
+        <span>{{ timeRangeError || (sticky ? "在桌面 App 的历史或收藏中选择“贴到桌面”，也可以调整搜索和筛选条件" : favorites ? "在历史中收藏内容并选择目录，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
       </SEmpty>
     </section>
 
     <template #footer>
-      <div v-if="selecting" class="history-selection-actions" role="toolbar" aria-label="历史多选操作">
+      <div v-if="selecting" class="history-selection-actions" role="toolbar" :aria-label="`${collectionName}多选操作`">
         <span role="status" aria-live="polite">已选 {{ selectedCount }} 条</span>
         <SButton :disabled="deleting || !pageEntries.length" @click="toggleAll">{{ allSelected ? "取消全选" : "本页全选" }}</SButton>
         <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], true)">
           <Star :size="15" aria-hidden="true" />收藏
         </SButton>
         <SButton :disabled="deleting || favoriting || !selectedCount" @click="chooseDestination([...selectedIds], favorites && favoriteFolderId !== 'unfiled' ? favoriteFolderId || null : null)">{{ favorites ? '移动到…' : '收藏到…' }}</SButton>
-        <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], false)">取消收藏</SButton>
+        <SButton v-if="favorites" :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], false)">取消收藏</SButton>
         <SButton class="history-selection-delete" type="error" :disabled="deleting || !selectedCount" @click="requestSelectedDelete">
           <Trash2 :size="15" aria-hidden="true" />
-          删除 {{ selectedCount }} 条
+          {{ sticky ? '取消便签' : '删除' }} {{ selectedCount }} 条
         </SButton>
       </div>
       <template v-else>
       <span v-if="isQuickPaste">单击条目粘贴，{{ mobileLayout ? '单击' : '双击' }}图片或文件图标预览</span>
       <span v-else-if="!mobileLayout">双击条目预览，右键打开菜单</span>
       <span v-if="!mobileLayout"><kbd>Esc</kbd> 关闭</span>
-      <nav class="pagination-control" aria-label="历史记录分页">
+      <nav class="pagination-control" :aria-label="`${collectionName}分页`">
         <button
           class="pagination-button"
           type="button"
@@ -829,13 +841,14 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 
     <FavoriteDestinationDialog v-if="destinationIds.length" :folders="folders" :initial-folder-id="destinationFolderId" :count="destinationIds.length" :busy="favoriting" :loading="foldersLoading" :error="destinationError || foldersError" @close="destinationIds = []" @confirm="confirmDestination" @refresh="loadFolders" />
 
-    <SModal v-if="deleteTargets.length" :show="true" :title="`删除 ${deleteTargets.length} 条历史？`" width="420px"
+    <SModal v-if="deleteTargets.length" :show="true" :title="sticky ? `取消 ${deleteTargets.length} 条便签？` : `删除 ${deleteTargets.length} 条${collectionName}？`" width="420px"
       :closable="!deleting" :mask-closable="!deleting" :close-on-esc="!deleting"
       @update:show="!deleting && (deleteTargets = [])">
-      <p>所选历史会从当前账号的所有设备同步删除，此操作无法撤销。</p>
+      <p v-if="sticky">所选便签将被删除，并同步关闭各设备上的对应便签窗口，历史和收藏不受影响。</p>
+      <p v-else>所选{{ collectionName }}会从当前账号的所有设备同步删除，此操作无法撤销。</p>
       <template #footer>
         <SButton :disabled="deleting" @click="deleteTargets = []">取消</SButton>
-        <SButton type="error" :loading="deleting" @click="confirmDelete">确认删除 {{ deleteTargets.length }} 条</SButton>
+        <SButton type="error" :loading="deleting" @click="confirmDelete">{{ sticky ? '确认取消便签' : '确认删除' }} {{ deleteTargets.length }} 条</SButton>
       </template>
     </SModal>
 
@@ -882,19 +895,13 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 }
 .toolbar { container: history-toolbar / inline-size; }
 .history-refresh.s-button { flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
-.favorite-filter { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; height: 27px; margin-left: 5px; padding: 0 9px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 6px; background: rgba(255, 255, 255, 0.04); color: #cbd5e1; font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
-.favorite-filter[aria-pressed="true"] { color: var(--sui-primary); background: var(--sui-bg-active); border-color: var(--sui-primary); }
 .entry-favorite { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
 .entry-favorite.active { color: var(--sui-primary); }
-.entry-favorite-indicator { display: grid; place-items: center; color: var(--sui-primary); }
-.entry-favorite:hover, .favorite-filter:hover { background: var(--sui-bg-hover); }
-.entry-favorite:focus-visible, .favorite-filter:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 2px; }
+.entry-favorite:hover { background: var(--sui-bg-hover); }
+.entry-favorite:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 2px; }
 .entry-favorite:disabled { opacity: 0.5; cursor: wait; }
 :global(.mobile-app .history-item), :global(.mobile-app .history-item.image-entry) { grid-template-columns: 36px minmax(0, 1fr) auto; }
 :global(.mobile-app .history-item.selection-item) { grid-template-columns: 22px minmax(0, 1fr) auto; }
-:global(.mobile-app .filter-scroll .favorite-filter) { width: 32px; height: 32px; margin-left: 0; padding-inline: 0; border-radius: 5px; }
-:global(.mobile-app .favorite-filter span) { display: none; }
-:global(.mobile-app .favorite-filter svg) { width: 17px; height: 17px; }
 :global(.mobile-app .entry-favorite) { min-width: 44px; min-height: 44px; }
 .file-preview-trigger { display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .file-preview-trigger:hover { background: var(--sui-bg-hover); }
@@ -912,14 +919,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
   .filter-scroll :deep(.time-filter-label), .filter-scroll :deep(.device-filter-label) { display: none; }
   .filter-scroll :deep(.time-filter-control .time-filter-trigger),
   .filter-scroll :deep(.device-filter-control .device-filter-trigger) { flex: 1 1 auto; width: 100%; min-width: 0; max-width: none; }
-  .favorite-filter { margin-left: 0; }
 }
-@container history-toolbar (max-width: 460px) {
-  .favorite-filter { flex: 0 0 32px; width: 32px; height: 27px; padding: 0; border-radius: 6px; }
-  .favorite-filter span { display: none; }
-}
-:global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
-:global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)) 32px; }
+:global(.mobile-app .filter-scroll) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+:global(.mobile-app .filter-scroll.has-device-filter) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 :global(.mobile-app .filter-scroll .entry-type-select.s-single-select),
 :global(.mobile-app .filter-scroll .time-filter-control),
 :global(.mobile-app .filter-scroll .device-filter-control) { width: auto; }

@@ -53,8 +53,10 @@ export const ImageInfoSchema = z.object({
 });
 
 export const ClipboardEntrySchema = z.object({
+  // History has numeric ids; saved copies have independent f-/s- UUID ids.
   id: z.string(),
   version: z.number().int().positive().safe(),
+  // Describe the owning collection, rather than flags on a history record.
   isFavorite: z.boolean().optional(),
   isSticky: z.boolean().optional(),
   favoriteFolderId: z.string().uuid().nullable().optional(),
@@ -215,6 +217,7 @@ export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("
 // apply before paging, so a filtered page always holds up to a full page of
 // matching rows.
 export const EntryManifestQuerySchema = z.object({
+  stickyOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   favoriteOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   favoriteFolderId: z.union([z.literal("unfiled"), z.string().uuid()]).optional(),
   search: z.string().trim().min(1).max(100).optional(),
@@ -231,11 +234,12 @@ export const EntryManifestQuerySchema = z.object({
   ),
   page: z.coerce.number().int().min(1).max(100000).optional(),
   pageSize: z.coerce.number().int().min(ENTRY_PAGE_SIZE_RANGE.min).max(ENTRY_PAGE_SIZE_RANGE.max).optional(),
+}).refine((query) => !query.stickyOnly || (!query.favoriteOnly && !query.favoriteFolderId), {
+  message: "便签列表不能同时筛选收藏目录",
 });
 
-// One page of the identity listing. It doubles as the connection-time
-// reconciliation snapshot: a client pages through unfiltered while the
-// fetched count is below total. Details arrive through POST /entries/query.
+// One page of history identities, favorites when favoriteOnly/folder is set,
+// or sticky notes when stickyOnly is set. Details arrive through POST /entries/query.
 export const EntryManifestResponseSchema = z.object({
   manifest: z.array(ClipboardManifestEntrySchema),
   // Matching rows across all pages (the filters apply before paging), so a
@@ -247,11 +251,13 @@ export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema
 
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
 export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
+  // true copies the source into favorites; false deletes favorite ids only.
   isFavorite: z.boolean(),
   // Omitted preserves an existing favorite's folder; null explicitly unfiles it.
   favoriteFolderId: z.string().uuid().nullable().optional(),
 });
 
+// true copies sources into sticky notes; false deletes sticky ids only.
 export const EntryStickyRequestSchema = EntryDeleteRequestSchema.extend({ isSticky: z.boolean() });
 // Independent of history pagination and filters; includes every sticky entry.
 export const StickyEntriesResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });

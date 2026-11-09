@@ -41,6 +41,11 @@ const canCopy = computed(() => props.entry.kind === "text" || (!props.isMobile &
 const multiple = computed(() => (props.selectedCount ?? 0) > 1);
 // 删除二次确认：第一击进入待确认态（3 秒无操作自动复位），第二击才执行。
 const confirmingRemove = ref(false);
+const removeLabel = computed(() => {
+  if (confirmingRemove.value) return props.entry.isSticky ? "确认取消便签？" : "确认删除？";
+  if (props.entry.isSticky) return multiple.value ? `取消选中的 ${props.selectedCount} 条便签` : "取消便签";
+  return multiple.value ? `删除选中的 ${props.selectedCount} 条` : "删除";
+});
 let confirmResetTimer: ReturnType<typeof setTimeout> | undefined;
 
 function resetConfirm(): void {
@@ -178,14 +183,14 @@ onBeforeUnmount(() => {
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
       </SButton>
-      <SButton v-if="stickyDesktop && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
-        <StickyNote :size="15" aria-hidden="true" /><span>{{ entry.isSticky ? '取消便签' : '贴到桌面' }}</span>
+      <SButton v-if="stickyDesktop && !entry.isSticky && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
+        <StickyNote :size="15" aria-hidden="true" /><span>贴到桌面</span>
       </SButton>
       <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.isFavorite)">
         <Star :size="15" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" />
         <span>{{ multiple ? `收藏选中的 ${selectedCount} 条` : entry.isFavorite ? '取消收藏' : '收藏' }}</span>
       </SButton>
-      <SButton v-if="multiple" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
+      <SButton v-if="multiple && entry.isFavorite" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
         <Star :size="15" aria-hidden="true" />
         <span>取消收藏选中的 {{ selectedCount }} 条</span>
       </SButton>
@@ -194,7 +199,7 @@ onBeforeUnmount(() => {
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
-        <span>{{ confirmingRemove ? "确认删除？" : multiple ? `删除选中的 ${selectedCount} 条` : "删除" }}</span>
+        <span>{{ removeLabel }}</span>
       </SButton>
       <SButton v-if="!multiple" type="text" block role="menuitem" @click="onSelect(entry)">
         <ListChecks :size="15" aria-hidden="true" />

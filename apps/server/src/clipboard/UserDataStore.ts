@@ -20,7 +20,7 @@ import { chunk, escapeLike, openDatabase, placeholders, QUERY_BATCH, withTransac
 import { userDatabasePath } from "../DataPaths.js";
 
 type EntryRow = {
-  id: number;
+  id: number | string;
   version: number;
   is_favorite: number;
   is_sticky: number;
@@ -38,8 +38,7 @@ type EntryRow = {
 export class UserDataStore {
   readonly #database: Database.Database;
 
-  constructor(userId: string, readonly files: FileStore) {
-    const databasePath = userDatabasePath(userId);
+  constructor(userId: string, readonly files: FileStore, databasePath = userDatabasePath(userId)) {
     this.#database = openDatabase(databasePath);
     this.#applySchema();
   }
@@ -77,17 +76,16 @@ export class UserDataStore {
         ON favorite_folders (COALESCE(parent_id, ''), name);
     `);
     const columns = this.#database.pragma("table_info(entries)") as Array<{ name: string }>;
-    if (!columns.some(({ name }) => name === "is_sticky")) {
+    const legacy = Number(this.#database.pragma("user_version", { simple: true })) < 2;
+    if (legacy && !columns.some(({ name }) => name === "is_sticky")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN is_sticky INTEGER NOT NULL DEFAULT 0");
     }
-    this.#database.exec("CREATE INDEX IF NOT EXISTS entries_sticky ON entries (id) WHERE is_sticky = 1");
-    if (!columns.some(({ name }) => name === "is_favorite")) {
+    if (legacy && !columns.some(({ name }) => name === "is_favorite")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0");
     }
-    if (!columns.some(({ name }) => name === "favorite_folder_id")) {
+    if (legacy && !columns.some(({ name }) => name === "favorite_folder_id")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN favorite_folder_id TEXT");
     }
-    this.#database.exec("CREATE INDEX IF NOT EXISTS entries_favorite_folder ON entries (favorite_folder_id) WHERE is_favorite = 1");
     if (!columns.some(({ name }) => name === "version")) {
       this.#database.exec("ALTER TABLE entries ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
     }
@@ -106,6 +104,61 @@ export class UserDataStore {
         this.#database.pragma("user_version = 1");
       });
     }
+    this.#migrateSavedEntries();
+    // A common read shape keeps downloads, activation and detail backfill usable
+    // for all three independent kinds of record. Only history accepts publishes.
+    this.#database.exec(`CREATE TEMP VIEW entry_records AS
+      SELECT CAST(id AS TEXT) AS id, version, 0 AS is_favorite, 0 AS is_sticky,
+        NULL AS favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM entries
+      UNION ALL
+      SELECT id, version, 1, 0, favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM favorites
+      UNION ALL
+      SELECT id, version, 0, 1, NULL, hash, kind, content, extra, source_device_id, created_at FROM sticky_notes`);
+  }
+
+  #migrateSavedEntries(): void {
+    if (Number(this.#database.pragma("user_version", { simple: true })) >= 2) return;
+    this.#transaction(() => {
+      for (const table of ["favorites", "sticky_notes"] as const) {
+        this.#database.exec(`CREATE TABLE ${table} (
+          id TEXT PRIMARY KEY,
+          version INTEGER NOT NULL DEFAULT 1,
+          hash TEXT NOT NULL UNIQUE,
+          kind TEXT NOT NULL,
+          content TEXT NOT NULL,
+          extra TEXT NOT NULL DEFAULT '{}',
+          source_device_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+          ${table === "favorites" ? ", favorite_folder_id TEXT" : ""}
+        ); CREATE INDEX ${table}_created_at ON ${table} (created_at DESC)`);
+        const favorite = table === "favorites";
+        const rows = this.#database.prepare(`SELECT * FROM entries WHERE ${favorite ? "is_favorite" : "is_sticky"} = 1`).all() as EntryRow[];
+        for (const row of rows) {
+          this.#database.prepare(`INSERT INTO ${table}
+            (id, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""})
+            SELECT ?, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""}
+            FROM entries WHERE id = ?`).run(`${favorite ? "f" : "s"}-${randomUUID()}`, row.id);
+        }
+      }
+      this.#database.exec(`
+        CREATE INDEX favorites_folder ON favorites (favorite_folder_id);
+        CREATE TABLE history_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          version INTEGER NOT NULL DEFAULT 1,
+          hash TEXT NOT NULL UNIQUE,
+          kind TEXT NOT NULL,
+          content TEXT NOT NULL,
+          extra TEXT NOT NULL DEFAULT '{}',
+          source_device_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO history_entries SELECT id, version + 1, hash, kind, content, extra, source_device_id, created_at FROM entries;
+        DROP TABLE entries;
+        ALTER TABLE history_entries RENAME TO entries;
+        CREATE INDEX entries_created_at ON entries (created_at DESC);
+      `);
+      this.#database.pragma("user_version = 2");
+    });
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
@@ -115,6 +168,7 @@ export class UserDataStore {
   // Recency order follows `created_at`: the rowid no longer reflects it, since
   // a re-copy refreshes the timestamp while keeping its original rowid.
   listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
+    const table = query.stickyOnly ? "sticky_notes" : query.favoriteOnly || query.favoriteFolderId ? "favorites" : "entries";
     // The device filter matches entries whose source is one of the selected
     // devices. An absent filter drops the clause entirely.
     const selectedDeviceIds = [...new Set(query.deviceIds ?? [])];
@@ -126,15 +180,14 @@ export class UserDataStore {
       ? this.#folderSubtree(query.favoriteFolderId) : [];
     const folderParams = Object.fromEntries(folderIds.map((id, index) => [`folder${index}`, id]));
     const folderClause = query.favoriteFolderId === "unfiled"
-      ? "is_favorite = 1 AND favorite_folder_id IS NULL"
-      : folderIds.length ? `is_favorite = 1 AND favorite_folder_id IN (${Object.keys(folderParams).map((name) => `@${name}`).join(", ")})` : "";
+      ? "favorite_folder_id IS NULL"
+      : folderIds.length ? `favorite_folder_id IN (${Object.keys(folderParams).map((name) => `@${name}`).join(", ")})` : "";
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
       WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
         AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
         AND (@kind IS NULL OR kind = @kind)
-        AND (@favoriteOnly = 0 OR is_favorite = 1)
         ${folderClause ? `AND (${folderClause})` : ""}
         ${deviceClause ? `AND (${deviceClause})` : ""}
     `;
@@ -143,21 +196,20 @@ export class UserDataStore {
       dateStart: query.dateStart ? normalizeDateBound(query.dateStart, "start") : null,
       dateEnd: query.dateEnd ? normalizeDateBound(query.dateEnd, "end") : null,
       kind: query.kind ?? null,
-      favoriteOnly: query.favoriteOnly ? 1 : 0,
       ...deviceParams,
       ...folderParams,
     };
     const rows = this.#database
       .prepare(`
         SELECT id, version
-        FROM entries
+        FROM ${table}
         ${where}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT @limit OFFSET @offset
       `)
-      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number; version: number }>;
+      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number | string; version: number }>;
     const { count } = this.#database
-      .prepare(`SELECT COUNT(*) AS count FROM entries ${where}`)
+      .prepare(`SELECT COUNT(*) AS count FROM ${table} ${where}`)
       .get(filters) as { count: number };
     return {
       manifest: rows.map(({ id, version }) => ({ id: String(id), version })),
@@ -168,16 +220,14 @@ export class UserDataStore {
   listByIds(entryIds: readonly string[]): ClipboardEntry[] {
     const entries: ClipboardEntry[] = [];
     for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
-      const ids = batch.map(Number).filter((id) => Number.isInteger(id));
-      if (!ids.length) continue;
       const rows = this.#database
         .prepare(`
           SELECT id, version, is_favorite, is_sticky, favorite_folder_id, kind, content, extra, source_device_id, created_at
-          FROM entries
-          WHERE id IN (${placeholders(ids.length)})
+          FROM entry_records
+          WHERE id IN (${placeholders(batch.length)})
           ORDER BY created_at DESC
         `)
-        .all(...ids) as Array<EntryRow>;
+        .all(...batch) as Array<EntryRow>;
       for (const row of rows) {
         const entry = this.#toEntry(row);
         if (entry) entries.push(entry);
@@ -232,10 +282,8 @@ export class UserDataStore {
     return this.#database.prepare("DELETE FROM devices WHERE device_id = ?").run(deviceId).changes > 0;
   }
 
-  // A deleted device takes the entries it contributed with it, so no fresh
-  // "unknown device" orphans are left behind. Returns the deleted entry ids
-  // for the route layer to broadcast (pool bytes remain stored), or null when the device row
-  // does not exist.
+  // Deleting a device's history preserves its independent favorite/sticky copies.
+  // Returns history ids for deletion pushes, or null if the device does not exist.
   deleteDevice(deviceId: string): string[] | null {
     const exists = this.#database.prepare("SELECT 1 FROM devices WHERE device_id = ?").get(deviceId);
     if (!exists) return null;
@@ -267,7 +315,7 @@ export class UserDataStore {
           hash, kind, content, extra, source_device_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at, version = entries.version + 1
-        RETURNING id, version, is_favorite, is_sticky, favorite_folder_id, kind, content, extra, source_device_id, created_at
+        RETURNING id, version, 0 AS is_favorite, 0 AS is_sticky, NULL AS favorite_folder_id, kind, content, extra, source_device_id, created_at
       `).get(
         entryHash(entry),
         entry.kind,
@@ -283,46 +331,70 @@ export class UserDataStore {
   }
 
   setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
-    const ids = [...new Set(entryIds)];
     return this.#transaction(() => {
-      if (isFavorite && favoriteFolderId) this.#requireFolder(favoriteFolderId);
-      for (const batch of chunk(ids, QUERY_BATCH)) {
-        this.#database.prepare(`
-          UPDATE entries SET is_favorite = ?, favorite_folder_id = ${!isFavorite || favoriteFolderId !== undefined ? "?" : "favorite_folder_id"}, version = version + 1
-          WHERE id IN (${placeholders(batch.length)})
-        `).run(isFavorite ? 1 : 0, ...(!isFavorite || favoriteFolderId !== undefined ? [isFavorite ? favoriteFolderId ?? null : null] : []), ...batch);
-      }
-      return this.listByIds(ids);
+      if (!isFavorite) return this.#removeSaved("favorites", entryIds);
+      if (favoriteFolderId) this.#requireFolder(favoriteFolderId);
+      return this.#copyTo("favorites", entryIds, favoriteFolderId);
     });
   }
 
   listSticky(): ClipboardEntry[] {
-    const rows = this.#database.prepare("SELECT * FROM entries WHERE is_sticky = 1 ORDER BY created_at DESC, id DESC").all() as EntryRow[];
+    const rows = this.#database.prepare("SELECT * FROM entry_records WHERE is_sticky = 1 ORDER BY created_at DESC, id DESC").all() as EntryRow[];
     return rows.flatMap((row) => { const entry = this.#toEntry(row); return entry ? [entry] : []; });
   }
 
   setSticky(entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
-    const ids = [...new Set(entryIds)];
     return this.#transaction(() => {
-      const entries = this.listByIds(ids);
-      if (entries.length !== ids.length) throw new StickyEntryError("剪贴板记录不存在", 404);
-      if (isSticky) {
-        const { count } = this.#database.prepare("SELECT COUNT(*) AS count FROM entries WHERE is_sticky = 1").get() as { count: number };
-        const added = entries.filter((entry) => !entry.isSticky).length;
-        if (added > 0 && count + added > maxEntries) throw new StickyEntryError(`便签数量已达上限（${maxEntries} 条），请先取消其他便签`, 409);
-      }
-      for (const batch of chunk(ids, QUERY_BATCH)) {
-        this.#database.prepare(`UPDATE entries SET is_sticky = ?, version = version + 1
-          WHERE id IN (${placeholders(batch.length)}) AND is_sticky != ?`).run(isSticky ? 1 : 0, ...batch, isSticky ? 1 : 0);
-      }
-      return this.listByIds(ids);
+      if (!isSticky) return this.#removeSaved("sticky_notes", entryIds);
+      return this.#copyTo("sticky_notes", entryIds, undefined, maxEntries);
     });
+  }
+
+  // Each destination owns its content snapshot and identity. Hash deduplication
+  // makes repeated saves idempotent without retaining a link to the source row.
+  #copyTo(table: "favorites" | "sticky_notes", entryIds: readonly string[], folderId?: string | null, maxEntries = Infinity): ClipboardEntry[] {
+    const ids = [...new Set(entryIds)];
+    const sources = this.listByIds(ids);
+    if (sources.length !== ids.length) throw new StickyEntryError("剪贴板记录不存在", 404);
+    let { count } = this.#database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+    const savedIds = new Set<string>();
+    for (const source of sources) {
+      const hash = entryHash(source);
+      let saved = this.#database.prepare(`SELECT id FROM ${table} WHERE hash = ?`).get(hash) as { id: string } | undefined;
+      if (!saved) {
+        if (count >= maxEntries) throw new StickyEntryError(`便签数量已达上限（${maxEntries} 条），请先取消其他便签`, 409);
+        const favorite = table === "favorites";
+        saved = { id: `${favorite ? "f" : "s"}-${randomUUID()}` };
+        this.#database.prepare(`INSERT INTO ${table}
+          (id, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""})
+          VALUES (?, ?, ?, ?, ?, ?, ?${favorite ? ", ?" : ""})`).run(
+          saved.id, hash, source.kind, source.content,
+          JSON.stringify({ html: source.html, rtf: source.rtf, fileInfo: source.fileInfo, imageInfo: source.imageInfo }),
+          source.sourceDeviceId, new Date().toISOString(), ...(favorite ? [folderId ?? null] : []),
+        );
+        count++;
+      } else if (table === "favorites" && folderId !== undefined) {
+        this.#database.prepare("UPDATE favorites SET favorite_folder_id = ?, version = version + 1 WHERE id = ?").run(folderId, saved.id);
+      }
+      savedIds.add(saved.id);
+    }
+    return this.listByIds([...savedIds]);
+  }
+
+  // Cancellation deletes only destination records; it never alters history or
+  // the other saved collection. Return deleted snapshots for push notifications.
+  #removeSaved(table: "favorites" | "sticky_notes", ids: readonly string[]): ClipboardEntry[] {
+    const entries = this.listByIds(ids).filter((entry) => table === "favorites" ? entry.isFavorite : entry.isSticky);
+    for (const batch of chunk(entries, QUERY_BATCH)) {
+      this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch.map(({ id }) => id));
+    }
+    return entries;
   }
 
   listFavoriteFolders(): FavoriteFolder[] {
     return this.#database.prepare(`
       SELECT f.id, f.parent_id AS parentId, f.name, COUNT(e.id) AS entryCount
-      FROM favorite_folders f LEFT JOIN entries e ON e.favorite_folder_id = f.id AND e.is_favorite = 1
+      FROM favorite_folders f LEFT JOIN favorites e ON e.favorite_folder_id = f.id
       GROUP BY f.id ORDER BY f.name COLLATE NOCASE, f.id
     `).all() as FavoriteFolder[];
   }
@@ -347,7 +419,7 @@ export class UserDataStore {
     this.#transaction(() => {
       const ids = this.#folderSubtree(id);
       for (const batch of chunk(ids, QUERY_BATCH)) {
-        this.#database.prepare(`UPDATE entries SET favorite_folder_id = NULL, version = version + 1
+        this.#database.prepare(`UPDATE favorites SET favorite_folder_id = NULL, version = version + 1
           WHERE favorite_folder_id IN (${placeholders(batch.length)})`).run(...batch);
         this.#database.prepare(`DELETE FROM favorite_folders WHERE id IN (${placeholders(batch.length)})`).run(...batch);
       }
@@ -368,7 +440,7 @@ export class UserDataStore {
     ) SELECT id FROM subtree`).all(id) as Array<{ id: string }>).map((folder) => folder.id);
   }
 
-  // Enforces the ordinary history cap, excluding favorites and sticky entries.
+  // Enforces the history cap. Saved copies live in separate tables.
   // Entries beyond the newest `maxEntries` are dropped and returned so routes can
   // broadcast clipboard.deleted. Like delete(), only references go away —
   // Stored bytes remain until an administrator removes them.
@@ -376,8 +448,8 @@ export class UserDataStore {
     if (maxEntries <= 0) return [];
     const rows = this.#database.prepare(`
       DELETE FROM entries
-      WHERE is_favorite = 0 AND is_sticky = 0 AND id NOT IN (
-        SELECT id FROM entries WHERE is_favorite = 0 AND is_sticky = 0 ORDER BY created_at DESC LIMIT ?
+      WHERE id NOT IN (
+        SELECT id FROM entries ORDER BY created_at DESC, id DESC LIMIT ?
       )
       RETURNING id
     `).all(maxEntries) as Array<{ id: number }>;
@@ -387,12 +459,17 @@ export class UserDataStore {
   // Content is shared across entries, so deletion only drops the reference.
   // Stored bytes remain until an administrator removes them.
   delete(entryIds: readonly string[]): void {
-    if (!entryIds.length) return;
-    this.#database.prepare(`DELETE FROM entries WHERE id IN (${placeholders(entryIds.length)})`).run(...entryIds);
+    this.#transaction(() => {
+      for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
+        for (const table of ["entries", "favorites", "sticky_notes"] as const) {
+          this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch);
+        }
+      }
+    });
   }
 
   hasFileReference(entryId: string, downloadId: string): boolean {
-    const row = this.#database.prepare("SELECT kind, extra FROM entries WHERE id = ?")
+    const row = this.#database.prepare("SELECT kind, extra FROM entry_records WHERE id = ?")
       .get(entryId) as { kind: string; extra: string } | undefined;
     return Boolean(row && entryContents({ kind: row.kind, ...parseExtra(row.extra) })
       .some(({ fileId }) => fileId === downloadId));

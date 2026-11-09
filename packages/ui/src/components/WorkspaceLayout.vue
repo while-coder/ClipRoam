@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { appName } from "../branding";
 import { computed, ref, watch } from "vue";
-import { Clipboard, Cloud, CloudOff, ArrowDownUp, MonitorSmartphone, Star } from "lucide-vue-next";
+import { Clipboard, Cloud, CloudOff, ArrowDownUp, MonitorSmartphone, Star, StickyNote } from "lucide-vue-next";
 import type { WorkspaceView } from "../types";
 import { hasTransferFailure, transferTabs } from "./transferNavigation";
 import SidebarResizer from "./SidebarResizer.vue";
@@ -30,6 +30,7 @@ watch(() => props.activeView, (view) => {
 const mobilePages = computed(() => [
   {view:"history" as const,label:"历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
   {view:"favorites" as const,label:"收藏夹",icon:Star,count:0,active:props.activeView === "favorites",failed:false},
+  {view:"sticky" as const,label:"便签",icon:StickyNote,count:0,active:props.activeView === "sticky",failed:false},
   {view:lastTransferView.value,label:"传输",icon:ArrowDownUp,count:transferCount.value,active:transferActive.value,failed:hasTransferFailure.value},
   {view:"devices" as const,label:"设备",icon:MonitorSmartphone,count:0,active:props.activeView === "devices",failed:false},
 ]);
@@ -61,6 +62,10 @@ const mobilePages = computed(() => [
         <button class="nav-item" :class="{ active: activeView === 'favorites' }" type="button"
           :aria-current="activeView === 'favorites' ? 'page' : undefined" @click="emit('update:activeView', 'favorites')">
           <Star :size="17" aria-hidden="true" /><span>收藏夹</span>
+        </button>
+        <button class="nav-item" :class="{ active: activeView === 'sticky' }" type="button"
+          :aria-current="activeView === 'sticky' ? 'page' : undefined" @click="emit('update:activeView', 'sticky')">
+          <StickyNote :size="17" aria-hidden="true" /><span>便签管理</span>
         </button>
         <button
           class="nav-item"

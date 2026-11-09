@@ -160,7 +160,7 @@ onMounted(load);
           </SFormItem>
           <SFormItem
             label="单用户最大历史条数"
-            hint="仅计算未收藏且未标记便签的记录，超过上限后自动删除最旧记录并同步到各设备；收藏和便签不自动清理。"
+            hint="仅计算历史表记录，超过上限后自动删除最旧记录并同步到各设备；独立保存的收藏和便签不受影响。"
           >
             <SSelect id="max-history-entries" v-model:value="maxHistoryEntries" :options="maxHistoryEntriesSelect" :disabled="disabled" required />
           </SFormItem>
