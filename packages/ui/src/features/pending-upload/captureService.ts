@@ -5,8 +5,9 @@ import { clipboardPlatform, type ClipboardData, type ClipboardWrite } from "../.
 import type { LocalSources, StoredEntry } from "../../types";
 import type { FileStat } from "../../platform/files";
 import { applicationDatabase } from "../../platform/database";
-import { isMobile } from "../../platform/runtime";
+import { isMobile, isNative } from "../../platform/runtime";
 import type { FilePickerMode } from "../../platform/native";
+import { imageFromFile, isImageFile } from "./imageImport";
 
 /** All filtering, limits, hashing, queue persistence and retries are portable. */
 export class CaptureService {
@@ -57,7 +58,7 @@ export class CaptureService {
     return work;
   }
 
-  async #capture(data: ClipboardData, captureId?: string, onEnqueued?: () => void): Promise<void> {
+  async #capture(data: ClipboardData, captureId?: string, onEnqueued?: () => void, imageName?: string): Promise<void> {
     this.session.signal.throwIfAborted();
     if (captureId && await this.session.database.get("captures", captureId)) return;
     this.session.state.localClipboardRevision++;
@@ -69,10 +70,27 @@ export class CaptureService {
     } else if (data.kind === "image") {
       const bytes = base64ToBytes(data.data);
       const fileId = await this.session.files.putBlob(bytes);
-      entry.content = `截图（${data.width} × ${data.height}）`;
+      entry.content = imageName ?? `截图（${data.width} × ${data.height}）`;
       entry.imageInfo = { fileId, size: bytes.length, thumbnail: data.thumbnail };
     } else {
       const collected = await this.#collect(data.paths);
+      for (const [name, node] of Object.entries(collected.info)) {
+        if (!isFileNode(node) || !isImageFile(name)) continue;
+        const source = collected.sources.files.find((file) => file.path === name)!;
+        let image: ClipboardData;
+        try { image = await this.session.files.readImage(source.source); }
+        catch { this.session.signal.throwIfAborted(); continue; } // Unsupported or damaged images remain files.
+        if (image.kind !== "image") continue;
+        await this.#capture(image, captureId ? `${captureId}:image:${name}` : undefined, undefined, name);
+        delete collected.info[name];
+        collected.sources.files = collected.sources.files.filter((file) => file !== source);
+        collected.sources.roots = collected.sources.roots.filter((path) => path !== source.source);
+      }
+      if (!Object.keys(collected.info).length) {
+        if (captureId) await this.session.database.put("captures", captureId, true);
+        onEnqueued?.();
+        return;
+      }
       entry.fileInfo = collected.info; entry.sources = collected.sources;
       entry.content = Object.keys(collected.info).join("、");
     }
@@ -174,8 +192,46 @@ export class CaptureService {
   }
 
   /** WebKit's native file input and browsers both return File objects. */
-  async captureFiles(files: File[], captureId?: string): Promise<void> {
+  captureFiles(files: File[], captureId?: string): Promise<void> {
+    const work = this.#work.then(() => this.#captureFiles(files, captureId));
+    this.#work = work.catch(() => undefined);
+    return work;
+  }
+
+  async #captureFiles(files: File[], captureId?: string): Promise<void> {
     if (captureId && await this.session.database.get("captures", captureId)) return;
+    const eligible = files.filter((file) => !(file.webkitRelativePath || file.name).split("/")
+      .map(safeName).some((name) => nameMatches(name, this.session.preferences.excludePatterns)));
+    if (eligible.length > this.session.preferences.maxCaptureFileCount) throw new Error("单次复制文件数量超过上限");
+    if (!eligible.length) throw new Error("没有可用的文件");
+    const remaining: File[] = [];
+    for (let index = 0; index < eligible.length; index++) {
+      const file = eligible[index]!;
+      this.session.signal.throwIfAborted();
+      if (!(file.webkitRelativePath || file.name).includes("/") && isImageFile(file.name)) {
+        let image: ClipboardData | undefined;
+        try {
+          if (isNative) {
+            // iOS file pickers return File objects, but WebKit may not encode
+            // WebP. Use the same native decoder as path-based imports.
+            const fileId = await this.session.files.putBlob(new Uint8Array(await file.arrayBuffer()));
+            const path = await this.session.files.resolve(fileId);
+            if (path) image = await this.session.files.readImage(path);
+          } else image = await imageFromFile(file);
+        }
+        catch { this.session.signal.throwIfAborted(); } // Keep the original when decoding is unavailable.
+        if (image?.kind === "image") {
+          await this.#capture(image, captureId ? `${captureId}:image:${index}` : undefined, undefined, file.name);
+          continue;
+        }
+      }
+      remaining.push(file);
+    }
+    if (!remaining.length) {
+      if (captureId) await this.session.database.put("captures", captureId, true);
+      return;
+    }
+    files = remaining;
     const info: FileInfo = Object.create(null);
     let count = 0;
     for (const file of files) {
