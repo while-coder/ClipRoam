@@ -45,7 +45,7 @@ const multiple = computed(() => (props.selectedCount ?? 0) > 1);
 // 删除二次确认：第一击进入待确认态（3 秒无操作自动复位），第二击才执行。
 const confirmingRemove = ref(false);
 const removeLabel = computed(() => {
-  const cancelling = props.stickyView && props.entry.isSticky;
+  const cancelling = props.stickyView && props.entry.stickyId;
   if (confirmingRemove.value) return cancelling ? "确认取消便签？" : "确认删除？";
   if (cancelling) return multiple.value ? `取消选中的 ${props.selectedCount} 条便签` : "取消便签";
   return multiple.value ? `删除选中的 ${props.selectedCount} 条` : "删除";
@@ -188,22 +188,22 @@ onBeforeUnmount(() => {
         <Download v-else :size="15" aria-hidden="true" />
         <span>{{ saveLabel }}</span>
       </SButton>
-      <SButton v-if="entry.isSticky && !stickyView && !multiple" type="text" block role="menuitem" @click="onUnsticky(entry)">
+      <SButton v-if="entry.stickyId && !stickyView && !multiple" type="text" block role="menuitem" @click="onUnsticky(entry)">
         <StickyNote :size="15" aria-hidden="true" /><span>取消便签</span>
       </SButton>
-      <SButton v-else-if="stickyDesktop && !entry.isSticky && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
-        <StickyNote :size="15" aria-hidden="true" /><span>贴到桌面</span>
+      <SButton v-else-if="stickyDesktop && !entry.stickyId && !multiple && !entry.id.startsWith('p')" type="text" block role="menuitem" @click="onSticky(entry)">
+        <StickyNote :size="15" aria-hidden="true" /><span>添加便签</span>
       </SButton>
-      <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.isFavorite)">
-        <Star :size="15" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" />
-        <span>{{ multiple ? `收藏选中的 ${selectedCount} 条` : entry.isFavorite ? '取消收藏' : '收藏' }}</span>
+      <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(multiple || !entry.favoriteId)">
+        <Star :size="15" :fill="entry.favoriteId ? 'currentColor' : 'none'" aria-hidden="true" />
+        <span>{{ multiple ? `收藏选中的 ${selectedCount} 条` : entry.favoriteId ? '取消收藏' : '添加收藏' }}</span>
       </SButton>
-      <SButton v-if="multiple && entry.isFavorite" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
+      <SButton v-if="multiple && entry.favoriteId" type="text" block role="menuitem" :disabled="favoriting" @click="onFavorite(false)">
         <Star :size="15" aria-hidden="true" />
         <span>取消收藏选中的 {{ selectedCount }} 条</span>
       </SButton>
       <SButton type="text" block role="menuitem" :disabled="favoriting" @click="onDestination(entry)">
-        <Folder :size="15" aria-hidden="true" /><span>{{ entry.isFavorite && !multiple ? '移动到目录…' : '收藏到目录…' }}</span>
+        <Folder :size="15" aria-hidden="true" /><span>{{ entry.favoriteId && !multiple ? '移动到目录…' : '收藏到目录…' }}</span>
       </SButton>
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />

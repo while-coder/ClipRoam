@@ -111,7 +111,10 @@ export class HistoryManager {
 
   async stale(manifest: ClipboardManifestEntry[]): Promise<string[]> {
     const entries = await Promise.all(manifest.map((item) => this.database.get<StoredEntry>("entries", item.id)));
-    return manifest.filter((item, i) => !entries[i] || entries[i]!.version < item.version).map((item) => item.id);
+    return manifest.filter((item, i) => {
+      const entry = entries[i];
+      return !entry || entry.version < item.version || entry.favoriteId === undefined || entry.stickyId === undefined;
+    }).map((item) => item.id);
   }
 
   async upsert(entries: ClipboardEntry[]): Promise<void> {

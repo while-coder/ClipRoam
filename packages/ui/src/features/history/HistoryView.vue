@@ -24,6 +24,7 @@ import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
+import SList from "@qingfeng346/ui-kit/components/list/SList.vue";
 import EntryTypeFilter from "./EntryTypeFilter.vue";
 import DeviceFilterControl from "./DeviceFilterControl.vue";
 import FilePreview from "./FilePreview.vue";
@@ -76,8 +77,8 @@ const { isMobile } = usePlatform();
 const mobileLayout = useMobileLayout();
 const folderPanelWidth = ref(190);
 const isQuickPaste = computed(() => props.quickPaste === true);
-const collectionName = computed(() => props.sticky ? "便签" : props.favorites ? "收藏" : "历史");
-const pageTitle = computed(() => props.sticky ? "便签管理" : props.favorites ? folderTitle.value : "剪贴板历史");
+const collectionName = computed(() => props.sticky ? "便签" : props.favorites ? "收藏夹" : "剪贴板历史");
+const pageTitle = computed(() => props.sticky ? "便签" : props.favorites ? favoriteFolderId.value ? folderTitle.value : "收藏夹" : "剪贴板历史");
 const pageActive = useHistoryEvents(refreshVisiblePage, () => props.active !== false);
 
 const query = ref("");
@@ -136,7 +137,7 @@ const favoritingIds = ref(new Set<string>());
 const favoriting = computed(() => favoritingIds.value.size > 0);
 
 async function toggleFavorite(entry: LocalClipboardEntry): Promise<void> {
-  const adding = !entry.isFavorite;
+  const adding = !entry.favoriteId;
   if (await favoriteEntries([entry.id], adding)) recentFavoriteIds.value = adding ? [entry.id] : [];
 }
 
@@ -161,7 +162,8 @@ const menuY = ref(0);
 const previewEntry = ref<LocalClipboardEntry>();
 // SInput 不 expose 内部 input：实例根节点上 querySelector 一次拿原生元素。
 const searchInput = ref<{ $el?: Element }>();
-const historyListElement = ref<HTMLElement>();
+const historyList = ref<InstanceType<typeof SList>>();
+const historyListElement = computed(() => historyList.value?.element ?? undefined);
 const deleting = ref(false);
 const deleteTargets = ref<string[]>([]);
 
@@ -262,10 +264,17 @@ async function refreshCurrentPage(): Promise<void> {
   if (refreshing.value || timeRangeError.value) return;
   refreshing.value = true;
   try {
-    await fetchPage(currentPage.value);
+    await Promise.all([fetchPage(currentPage.value), props.favorites ? loadFolders() : undefined]);
   } finally {
     refreshing.value = false;
   }
+}
+
+async function refreshFromPull(done: () => void): Promise<void> {
+  cancelLongPress();
+  closeEntryMenu();
+  try { await refreshCurrentPage(); }
+  finally { done(); }
 }
 
 const { selecting, selectedIds, allSelected, start: startSelection, toggle: toggleSelection, toggleAll, clear: clearSelection, setAnchor } = useHistorySelection(computed(() => pageEntries.value.map((entry) => entry.id)));
@@ -657,7 +666,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     </section>
     </template>
 
-    <section ref="historyListElement" class="history-list" :aria-label="pageTitle" @scroll="closeEntryMenu">
+    <SList ref="historyList" class="history-list" :aria-label="pageTitle" :pull-to-refresh="!isQuickPaste"
+      :refresh-disabled="refreshing || selecting || Boolean(timeRangeError) || !pageActive" @refresh="refreshFromPull" @scroll="closeEntryMenu">
       <div
         v-for="entry in pageEntries"
         :key="entry.id"
@@ -721,7 +731,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           :loading="activatingEntryIds.has(entry.id)"
         />
         <ClipboardEntryContent :entry="entry" :device-name="deviceDisplayName(devicesById, entry)" :current-time="currentTime">
-            <template v-if="favorites && entry.isFavorite">
+            <template v-if="favorites && entry.favoriteId">
               <span>·</span><span class="entry-folder-path" :title="folderRows.find((folder) => folder.id === entry.favoriteFolderId)?.path ?? '未分类'">{{ folderRows.find((folder) => folder.id === entry.favoriteFolderId)?.path ?? '未分类' }}</span>
             </template>
             <template v-if="fileEntrySummary(entry)">
@@ -751,10 +761,10 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           v-else-if="!selecting"
           class="entry-favorite"
           type="button"
-          :class="{ active: entry.isFavorite }"
-          :aria-label="entry.isFavorite ? '取消收藏' : '收藏'"
-          :title="entry.isFavorite ? '取消收藏' : '收藏'"
-          :aria-pressed="!!entry.isFavorite"
+          :class="{ active: entry.favoriteId }"
+          :aria-label="entry.favoriteId ? '取消收藏' : '添加收藏'"
+          :title="entry.favoriteId ? '取消收藏' : '添加收藏'"
+          :aria-pressed="!!entry.favoriteId"
           :aria-busy="favoritingIds.has(entry.id)"
           :disabled="favoriting"
           @click.stop="toggleFavorite(entry)"
@@ -763,16 +773,16 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           @keydown.stop
           @touchstart.stop
           @touchend.stop
-        ><Star :size="17" :fill="entry.isFavorite ? 'currentColor' : 'none'" aria-hidden="true" /></button>
+        ><Star :size="17" :fill="entry.favoriteId ? 'currentColor' : 'none'" aria-hidden="true" /></button>
       </div>
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
         <Search :size="28" aria-hidden="true" />
         <strong>{{ timeRangeError ? "日期区间无效" : sticky ? "没有匹配的便签" : favorites ? "没有匹配的收藏" : timeFilter !== "all" ? "该时间段暂无内容" : "没有匹配内容" }}</strong>
-        <span>{{ timeRangeError || (sticky ? "在桌面 App 的历史或收藏中选择“贴到桌面”，也可以调整搜索和筛选条件" : favorites ? "在历史中收藏内容并选择目录，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
+        <span>{{ timeRangeError || (sticky ? "在桌面 App 的剪贴板历史或收藏夹中选择“添加便签”，也可以调整搜索和筛选条件" : favorites ? "在剪贴板历史中选择“添加收藏”，也可以调整搜索和筛选条件" : timeFilter !== "all" ? "可以更换时间范围，或清除时间筛选查看全部记录" : mobileLayout ? "其他设备的内容同步后会显示在这里" : "复制文本后会自动保存到这里") }}</span>
         <SButton v-if="timeFilter !== 'all'" class="empty-filter-reset" size="small" @click="resetTimeFilter">清除时间筛选</SButton>
       </SEmpty>
-    </section>
+    </SList>
 
     <template #footer>
       <div v-if="selecting" class="history-selection-actions" role="toolbar" :aria-label="`${collectionName}多选操作`">

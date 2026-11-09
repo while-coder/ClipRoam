@@ -30,7 +30,7 @@ watch(() => props.activeView, (view) => {
 const mobilePages = computed(() => [
   {view:"sticky" as const,label:"便签",icon:StickyNote,count:0,active:props.activeView === "sticky",failed:false},
   {view:"favorites" as const,label:"收藏夹",icon:Star,count:0,active:props.activeView === "favorites",failed:false},
-  {view:"history" as const,label:"历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
+  {view:"history" as const,label:"剪贴板历史",icon:Clipboard,count:0,active:props.activeView === "history",failed:false},
   {view:lastTransferView.value,label:"传输",icon:ArrowDownUp,count:transferCount.value,active:transferActive.value,failed:hasTransferFailure.value},
   {view:"devices" as const,label:"设备",icon:MonitorSmartphone,count:0,active:props.activeView === "devices",failed:false},
 ]);
@@ -65,7 +65,7 @@ const mobilePages = computed(() => [
         </button>
         <button class="nav-item" :class="{ active: activeView === 'sticky' }" type="button"
           :aria-current="activeView === 'sticky' ? 'page' : undefined" @click="emit('update:activeView', 'sticky')">
-          <StickyNote :size="17" aria-hidden="true" /><span>便签管理</span>
+          <StickyNote :size="17" aria-hidden="true" /><span>便签</span>
         </button>
         <button
           class="nav-item"

@@ -30,6 +30,8 @@ export class UploadManager {
     return [...this.#serveTasks.values()].sort((a, b) => b.startedAt - a.startedAt);
   }
 
+  refresh(): void { this.#notifyServeTasks(); }
+
   record(request: FileRelayRequest): ServeTaskSnapshot {
     const task: ServeTaskSnapshot = {
       id: request.sessionId,

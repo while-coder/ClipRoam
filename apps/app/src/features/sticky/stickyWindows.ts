@@ -188,7 +188,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
     const owner = session;
     if (!owner?.client) return;
     try {
-      await owner.history.setSticky([entry.id], !entry.isSticky);
+      await owner.history.setSticky([entry.id], !entry.stickyId);
       await refresh();
     } catch (error) { if (!owner.signal.aborted) report("修改便签失败", error); }
   };
@@ -206,7 +206,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
       const owner = session;
       if (!owner) return;
       await editExistingNotes();
-      if (!notes.size && refreshed) showNotification({ message: "还没有便签，在历史记录上右键选择“贴到桌面”", tone: "info" });
+      if (!notes.size && refreshed) showNotification({ message: "还没有便签，在剪贴板历史上右键选择“添加便签”", tone: "info" });
     } catch (error) { report("显示便签失败", error); }
   };
   const unlistenEdit = await listen(STICKY_EDIT, () => { void showStickyNotes.value?.(); }, { target: "main" });

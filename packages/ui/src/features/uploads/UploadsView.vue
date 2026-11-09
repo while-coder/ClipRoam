@@ -6,6 +6,7 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
 import type { ServeTaskSnapshot } from "./uploadManager";
+import { getAccountSession } from "../../accountSession";
 
 /** 中继上传台账由账号的 UploadManager 管理，App.vue 将快照传给本页。 */
 const props = defineProps<{
@@ -14,6 +15,11 @@ const props = defineProps<{
 
 const activeServeCount = computed(() =>
   props.serveTasks.filter((task) => task.status === "pending" || task.status === "serving").length);
+
+function refreshFromPull(done: () => void): void {
+  try { getAccountSession()?.uploads.refresh(); }
+  finally { done(); }
+}
 
 function statusText(task: ServeTaskSnapshot): string {
   switch (task.status) {
@@ -39,7 +45,7 @@ function percent(task: ServeTaskSnapshot): number {
       <span role="status">{{ activeServeCount ? `${activeServeCount} 个进行中` : `共 ${serveTasks.length} 个任务` }}</span>
     </template>
 
-    <section id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-uploads" tabindex="0">
+    <SList id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-uploads" tabindex="0" pull-to-refresh @refresh="refreshFromPull">
       <div v-for="task in serveTasks" :key="task.id" class="history-item download-row">
         <span class="kind-icon">
           <span v-if="task.status === 'serving'" class="s-spinner" aria-hidden="true" />
@@ -57,6 +63,6 @@ function percent(task: ServeTaskSnapshot): number {
       </div>
 
       <SEmpty v-if="!serveTasks.length">没有待发送的文件；其他设备请求本机文件时会显示在这里</SEmpty>
-    </section>
+    </SList>
   </WorkspacePage>
 </template>

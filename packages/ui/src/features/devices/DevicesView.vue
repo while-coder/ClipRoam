@@ -60,6 +60,11 @@ async function refresh(): Promise<void> {
   }
 }
 
+async function refreshFromPull(done: () => void): Promise<void> {
+  try { await refresh(); }
+  finally { done(); }
+}
+
 async function removeDevice(device: Device): Promise<void> {
   const session = activeAccountSession.value;
   if (!session?.client || !currentDeviceId.value || device.id === currentDeviceId.value || removingDeviceId.value) return;
@@ -113,7 +118,8 @@ onBeforeUnmount(() => { disposed = true; });
       </SButton>
     </template>
 
-    <section class="device-list history-list" aria-label="设备列表" :aria-busy="loading">
+    <SList class="device-list history-list" aria-label="设备列表" :aria-busy="loading" pull-to-refresh
+      :refresh-disabled="loading || !activeAccountSession?.client" @refresh="refreshFromPull">
       <div v-if="!connected" class="device-summary" role="status">同步连接已断开，设备状态暂不可确认</div>
       <p v-if="refreshError" class="device-error" role="alert">{{ refreshError }}</p>
       <p v-if="removeError" class="device-error" role="alert">{{ removeError }}</p>
@@ -153,7 +159,7 @@ onBeforeUnmount(() => { disposed = true; });
         </dl>
       </article>
       <SEmpty v-if="!devices.length">{{ loading ? '正在获取设备列表…' : refreshError ? '设备列表暂不可用，请点击刷新重试' : '暂无设备，登录同一账号的设备会显示在这里' }}</SEmpty>
-    </section>
+    </SList>
   </WorkspacePage>
 
   <DeviceDetailsDialog v-if="selectedDevice" :device="selectedDevice" :connected="connected"

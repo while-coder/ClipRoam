@@ -6,6 +6,7 @@ import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
 import TransferProgress from "../../components/TransferProgress.vue";
 import type { DownloadRecord, DownloadTaskSnapshot } from "./downloadManager";
+import { refreshDownloadTasks } from "./useDownloads";
 
 const props = defineProps<{ records: readonly DownloadRecord[] }>();
 const emit = defineEmits<{
@@ -15,6 +16,10 @@ const emit = defineEmits<{
   "clear-finished": [];
 }>();
 const expandedRecords = ref(new Set<string>());
+async function refreshFromPull(done: () => void): Promise<void> {
+  try { await refreshDownloadTasks(); }
+  finally { done(); }
+}
 function toggleDetails(id: string): void {
   if (expandedRecords.value.has(id)) expandedRecords.value.delete(id);
   else expandedRecords.value.add(id);
@@ -45,7 +50,7 @@ function percent(record: DownloadRecord): number {
         清空已结束
       </SButton>
     </template>
-    <section id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-downloads" tabindex="0">
+    <SList id="transfer-panel" class="history-list downloads-list" role="tabpanel" aria-labelledby="transfer-tab-downloads" tabindex="0" pull-to-refresh @refresh="refreshFromPull">
       <article v-for="record in records" :key="record.id" class="download-record">
         <div class="download-record-main">
           <button class="download-record-summary" type="button"
@@ -90,7 +95,7 @@ function percent(record: DownloadRecord): number {
         </div>
       </article>
       <SEmpty v-if="!records.length">没有下载记录；下载图片或文件后会显示在这里</SEmpty>
-    </section>
+    </SList>
     <template #footer><span title="保留最近 30 天，最多 500 条已结束记录；清理记录不会删除文件">近 30 天 · 最多 500 条 · 清理记录不删除文件</span></template>
   </WorkspacePage>
 </template>

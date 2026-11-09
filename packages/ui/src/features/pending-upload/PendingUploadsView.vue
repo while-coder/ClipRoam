@@ -6,6 +6,7 @@ import EntryKindIcon from "../../components/EntryKindIcon.vue";
 import ClipboardEntryContent from "../../components/ClipboardEntryContent.vue";
 import WorkspacePage from "../../components/WorkspacePage.vue";
 import WorkspaceMenu from "../../components/WorkspaceMenu.vue";
+import { refreshPendingEntries } from "./usePendingUploads";
 import type { Device, LocalClipboardEntry, UploadProgress } from "../../types";
 
 /**
@@ -26,6 +27,11 @@ const emit = defineEmits<{
 }>();
 
 const hasFailed = computed(() => props.entries.some((entry) => entry.pendingStatus === "failed"));
+
+async function refreshFromPull(done: () => void): Promise<void> {
+  try { await refreshPendingEntries(); }
+  finally { done(); }
+}
 
 /**
  * 队列行的两个进行中阶段：哈希进度来自 Rust 分批写回的 summary（hashCount
@@ -53,7 +59,7 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
       </SButton>
     </template>
 
-    <section id="transfer-panel" class="history-list" role="tabpanel" aria-labelledby="transfer-tab-pending-upload" tabindex="0">
+    <SList id="transfer-panel" class="history-list" role="tabpanel" aria-labelledby="transfer-tab-pending-upload" tabindex="0" pull-to-refresh @refresh="refreshFromPull">
       <div v-for="entry in entries" :key="entry.id" class="history-item pending-item">
         <EntryKindIcon :kind="entry.kind" :root-kind="entry.summary.rootKind" />
         <ClipboardEntryContent :entry="entry" :device-name="deviceDisplayName(devicesById, entry)" :current-time="currentTime">
@@ -73,6 +79,6 @@ function entryUploadStatus(entry: LocalClipboardEntry): string | undefined {
       </div>
 
       <SEmpty v-if="!entries.length">没有待同步的内容，所有内容都已同步到服务器</SEmpty>
-    </section>
+    </SList>
   </WorkspacePage>
 </template>
