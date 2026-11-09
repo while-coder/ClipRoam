@@ -109,7 +109,12 @@ class ShareViewController: UIViewController {
         super.viewDidAppear(animated)
         guard !started else { return }
         started = true
-        let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
+        let items = extensionContext?.inputItems as? [NSExtensionItem] ?? []
+        let providers = items.flatMap { $0.attachments ?? [] }
+        // Some hosts put the shared text in the extension item itself.
+        for item in items where item.attachments?.isEmpty != false {
+            if let text = item.attributedContentText?.string, !text.isEmpty { texts.append(text) }
+        }
         receive(providers, index: 0)
     }
 
@@ -130,19 +135,73 @@ class ShareViewController: UIViewController {
                 } catch { self.fail(error) }
             }
         } else {
-            let type = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) ? UTType.url.identifier : UTType.plainText.identifier
-            provider.loadItem(forTypeIdentifier: type, options: nil) { value, error in
-                do {
-                    if let error = error { throw error }
-                    if let url = value as? URL {
-                        if url.isFileURL { try self.copy(url, index: index) }
-                        else { self.texts.append(url.absoluteString) }
-                    } else if let text = value as? String { self.texts.append(text) }
-                    else if let data = value as? Data, let text = String(data: data, encoding: .utf8) { self.texts.append(text) }
-                    else { throw ShareInbox.failure("无法读取分享文字或链接") }
-                    self.receive(providers, index: index + 1)
-                } catch { self.fail(error) }
+            // Prefer URLs and plain text, then try the host's concrete text
+            // types. A provider need not vend public.utf8-plain-text.
+            var types = [UTType.url.identifier, UTType.plainText.identifier].filter {
+                provider.hasItemConformingToTypeIdentifier($0)
             }
+            for identifier in provider.registeredTypeIdentifiers {
+                if let type = UTType(identifier), type.conforms(to: .text), !types.contains(identifier) {
+                    types.append(identifier)
+                }
+            }
+            receiveText(provider, types: types, position: 0, lastError: nil) { result in
+                switch result {
+                case .success(let value):
+                    do {
+                        if let url = value as? URL, url.isFileURL { try self.copy(url, index: index) }
+                        else if let url = value as? URL { self.texts.append(url.absoluteString) }
+                        else if let text = value as? String { self.texts.append(text) }
+                        self.receive(providers, index: index + 1)
+                    } catch { self.fail(error) }
+                case .failure(let error): self.fail(error)
+                }
+            }
+        }
+    }
+
+    private func receiveText(_ provider: NSItemProvider, types: [String], position: Int,
+                             lastError: Error?, completion: @escaping (Result<Any, Error>) -> Void) {
+        guard position < types.count else {
+            completion(.failure(lastError ?? ShareInbox.failure(
+                "无法读取分享文字或链接（类型：\(provider.registeredTypeIdentifiers.joined(separator: ", "))）"
+            )))
+            return
+        }
+        let identifier = types[position]
+        provider.loadItem(forTypeIdentifier: identifier, options: nil) { value, error in
+            if error == nil {
+                if let url = value as? URL { completion(.success(url)); return }
+                if let text = value as? String, !text.isEmpty { completion(.success(text)); return }
+                if let text = value as? NSAttributedString, !text.string.isEmpty {
+                    completion(.success(text.string)); return
+                }
+                if let data = value as? Data {
+                    let type = UTType(identifier)
+                    // Decode rich text with its document format, not as markup
+                    // or RTF source. Plain text can be UTF-8 or UTF-16.
+                    var text: String?
+                    if type?.conforms(to: .rtf) == true || type?.conforms(to: .html) == true {
+                        let format: NSAttributedString.DocumentType = type?.conforms(to: .rtf) == true ? .rtf : .html
+                        // The HTML importer must run on the main thread.
+                        DispatchQueue.main.async {
+                            let decoded = (try? NSAttributedString(data: data, options: [.documentType: format],
+                                                                  documentAttributes: nil))?.string
+                            if let decoded = decoded, !decoded.isEmpty { completion(.success(decoded)) }
+                            else {
+                                self.receiveText(provider, types: types, position: position + 1,
+                                                 lastError: lastError, completion: completion)
+                            }
+                        }
+                        return
+                    } else {
+                        text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16)
+                    }
+                    if let text = text, !text.isEmpty { completion(.success(text)); return }
+                }
+            }
+            self.receiveText(provider, types: types, position: position + 1,
+                             lastError: error ?? lastError, completion: completion)
         }
     }
 
