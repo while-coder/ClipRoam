@@ -168,7 +168,8 @@ export class DownloadManager {
         changed = true;
       }
       if (!record.destination?.trim()) {
-        const entry = await this.session.database.get<StoredEntry>("entries", record.entryId);
+        const entry = await this.session.database.get<StoredEntry>("entries", record.entryId)
+          ?? await this.session.database.get<StoredEntry>("favorites", record.entryId);
         const ids = entry ? entryContents(entry).map((file) => file.fileId) : record.files.map((file) => file.fileId);
         record.destination = await this.session.files.downloadDestination(ids);
         changed = true;

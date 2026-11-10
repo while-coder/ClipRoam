@@ -67,11 +67,9 @@ export class HistoryClient {
 
   async listSticky(): Promise<LocalClipboardEntry[]> {
     const result = await this.http.request("GET", "/entries/sticky", { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, StickyEntriesResponseSchema, "服务器返回了不兼容的便签列表");
-    await this.session.history.upsert(result!.entries);
-    const ids = result!.entries.map((entry) => entry.id);
-    const fileIds = await this.session.history.unknownFileIds(ids);
+    const fileIds = await this.session.history.unknownEntryFileIds(result!.entries);
     if (fileIds.length) await this.session.history.upsertFiles(await this.#fetchFiles(fileIds));
-    return this.session.history.display(ids, false);
+    return this.session.history.displayEntries(result!.entries, false);
   }
 
   async setSticky(collection: EntryCollection, ids: readonly string[], isSticky: boolean): Promise<void> {
@@ -94,7 +92,7 @@ export class HistoryClient {
     const entryIds = manifest.map((entry) => entry.id);
     if (!entryIds.length) return [];
     try {
-      const missing = await this.session.history.stale(manifest);
+      const missing = await this.session.history.stale(manifest, collection);
       if (missing.length) {
         const entries = await this.#fetchEntries(collection, missing);
         await this.session.history.upsert(entries);

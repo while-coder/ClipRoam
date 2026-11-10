@@ -46,8 +46,13 @@ export class HistoryManager {
     return this.#client?.fetchFavoritePage(filter) ?? Promise.resolve({ total: 0, entries: [] });
   }
 
-  fetchHistoryInfo(manifest: ClipboardManifestEntry[]): Promise<LocalClipboardEntry[]> {
+  async fetchHistoryInfo(manifest: ClipboardManifestEntry[]): Promise<LocalClipboardEntry[]> {
     if (!this.#client) throw new Error("同步账号未登录");
+    if (manifest[0]?.collection === "sticky") {
+      const entries = await this.listSticky(true);
+      const byId = new Map(entries.map((entry) => [entry.id, entry]));
+      return manifest.flatMap((item) => byId.get(item.id) ?? []);
+    }
     return this.#client.fetchHistoryInfo(manifest, manifest[0]?.collection ?? "history");
   }
 
@@ -56,7 +61,7 @@ export class HistoryManager {
   }
 
   async removeLocal(entryId: string): Promise<void> {
-    await this.database.delete("entries", entryId);
+    await this.database.batch([{ name: "entries", id: entryId }, { name: "favorites", id: entryId }]);
     this.invalidate();
   }
 
@@ -73,7 +78,7 @@ export class HistoryManager {
     for (const [collection, ids] of await this.#groupByCollection(entryIds)) {
       await this.#client.delete(collection, ids);
     }
-    await this.database.batch(entryIds.map((id) => ({ name: "entries", id })));
+    await this.database.batch(entryIds.flatMap((id) => [{ name: "entries" as const, id }, { name: "favorites" as const, id }]));
     this.invalidate();
   }
 
@@ -91,7 +96,7 @@ export class HistoryManager {
     } else {
       await this.#client.setFavorite("favorites", ids, false);
     }
-    if (!isFavorite) await this.database.batch(ids.map((id) => ({ name: "entries", id })));
+    if (!isFavorite) await this.database.batch(ids.map((id) => ({ name: "favorites", id })));
     this.invalidate();
   }
 
@@ -133,7 +138,6 @@ export class HistoryManager {
     } else {
       await this.#client.setSticky("sticky", targetIds, false);
     }
-    if (!isSticky) await this.database.batch(targetIds.map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
 
@@ -162,13 +166,17 @@ export class HistoryManager {
 
   async get(entryId: string): Promise<StoredEntry> {
     const pending = /^p\d+$/.test(entryId) ? await this.database.get<PendingRow>("pending", Number(entryId.slice(1))) : undefined;
-    const entry = pending?.entry ?? await this.database.get<StoredEntry>("entries", entryId);
+    const entry = pending?.entry
+      ?? this.stickyEntries.value.find((entry) => entry.id === entryId)
+      ?? await this.database.get<StoredEntry>("entries", entryId)
+      ?? await this.database.get<StoredEntry>("favorites", entryId);
     if (!entry) throw new Error("剪贴板记录不存在");
     return entry;
   }
 
-  async stale(manifest: ClipboardManifestEntry[]): Promise<string[]> {
-    const entries = await Promise.all(manifest.map((item) => this.database.get<StoredEntry>("entries", item.id)));
+  async stale(manifest: ClipboardManifestEntry[], collection: EntryCollection): Promise<string[]> {
+    const store = collection === "favorites" ? "favorites" : "entries";
+    const entries = await Promise.all(manifest.map((item) => this.database.get<StoredEntry>(store, item.id)));
     return manifest.filter((item, i) => {
       const entry = entries[i];
       return !entry || !entry.collection || entry.version < item.version || entry.favoriteId === undefined || entry.stickyId === undefined
@@ -178,15 +186,22 @@ export class HistoryManager {
   }
 
   async upsert(entries: ClipboardEntry[]): Promise<void> {
-    for (const entry of entries) await this.database.update<StoredEntry>("entries", entry.id, (previous) => {
-      if (previous && previous.version > entry.version) return previous;
-      return { ...entry, sources: previous?.sources };
-    });
+    for (const entry of entries) {
+      if (entry.collection === "sticky") continue;
+      await this.database.update<StoredEntry>(entry.collection === "favorites" ? "favorites" : "entries", entry.id, (previous) => {
+        if (previous && previous.version > entry.version) return previous;
+        return { ...entry, sources: previous?.sources };
+      });
+    }
   }
 
   async unknownFileIds(entryIds: string[]): Promise<string[]> {
+    return this.unknownEntryFileIds(await Promise.all(entryIds.map((id) => this.get(id))));
+  }
+
+  async unknownEntryFileIds(entries: readonly ClipboardEntry[]): Promise<string[]> {
     const ids = new Set<string>();
-    for (const id of entryIds) for (const file of entryContents(await this.get(id))) if (file.fileId) ids.add(file.fileId);
+    for (const entry of entries) for (const file of entryContents(entry)) if (file.fileId) ids.add(file.fileId);
     const unknown: string[] = [];
     for (const id of ids) if (!(await this.database.get<FileStatus>("files", id))?.stored) unknown.push(id);
     return unknown;
@@ -198,6 +213,10 @@ export class HistoryManager {
 
   async display(entryIds: string[], lightweight = true): Promise<LocalClipboardEntry[]> {
     const entries = await Promise.all(entryIds.map((id) => this.get(id)));
+    return this.displayEntries(entries, lightweight);
+  }
+
+  async displayEntries(entries: readonly StoredEntry[], lightweight = true): Promise<LocalClipboardEntry[]> {
     const ids = [...new Set(entries.flatMap((entry) => entryContents(entry).map((file) => file.fileId)).filter(Boolean))];
     const available = await this.files.resolveMany(ids);
     const results: LocalClipboardEntry[] = [];

@@ -3,16 +3,16 @@ import { profileName } from "../utils";
 import type { PendingRow, StoredEntry } from "../types";
 
 /** Browser-owned persistence. Each account has its own database. */
-export type StoreName = "entries" | "files" | "pending" | "downloads" | "blobs" | "settings" | "captures";
+export type StoreName = "entries" | "favorites" | "files" | "pending" | "downloads" | "blobs" | "settings" | "captures";
 type Row<T> = { id: string | number; value: T };
-const accountStores: StoreName[] = ["entries", "files", "pending", "downloads", "blobs", "settings", "captures"];
+const accountStores: StoreName[] = ["entries", "favorites", "files", "pending", "downloads", "blobs", "settings", "captures"];
 const openings = new Map<string, Promise<IDBDatabase>>();
 
 function database(name: string, stores: readonly string[]): Promise<IDBDatabase> {
   const existing = openings.get(name);
   if (existing) return existing;
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(name, name === "cliproam-global" ? 3 : 2);
+    const request = indexedDB.open(name, 3);
     let blocked = false;
     request.onupgradeneeded = (event) => {
       const db = request.result;
