@@ -52,8 +52,12 @@ export const ImageInfoSchema = z.object({
   thumbnail: z.string().max(96 * 1024),
 });
 
+export const EntryCollectionSchema = z.enum(["history", "favorites", "sticky"]);
+export type EntryCollection = z.infer<typeof EntryCollectionSchema>;
+
 export const ClipboardEntrySchema = z.object({
-  // History has numeric ids; saved copies have independent f-/s- UUID ids.
+  // Collection is explicit; ids are opaque record identities.
+  collection: EntryCollectionSchema.optional(),
   id: z.string(),
   version: z.number().int().positive().safe(),
   // Saved record identities resolved by the server; null means no related copy.
@@ -99,8 +103,12 @@ export function isFileNode(node: TreeNode): node is { f: string; s: number } {
 
 // Full details are fetched only when the local record is missing or outdated.
 export const ClipboardManifestEntrySchema = z.object({
+  collection: EntryCollectionSchema.optional(),
   id: z.string(),
   version: z.number().int().positive().safe(),
+  // Membership is read-only metadata; it does not change a record's revision.
+  favoriteId: z.string().nullable().optional(),
+  stickyId: z.string().nullable().optional(),
 });
 
 export const DeviceSchema = z.object({
@@ -165,7 +173,7 @@ export const AuthResponseSchema = z.object({
 // Identity and revision belong to the server: it assigns the id (arrival order),
 // timestamp and version, and deduplicates by content hash. A client may still send its
 // local id and clock time; the server drops both.
-export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ version: true, favoriteId: true, stickyId: true, favoriteFolderId: true }).extend({
+export const EntryPublishInputSchema = ClipboardEntrySchema.omit({ collection: true, version: true, favoriteId: true, stickyId: true, favoriteFolderId: true }).extend({
   id: z.string().optional(),
   createdAt: z.string().optional(),
 });
@@ -177,8 +185,13 @@ export const EntryPublishRequestSchema = z.object({
 // Publication only acknowledges the stored identity. History queries validate
 // full details and revisions independently; they must not block queue draining.
 export const EntryPublishResponseSchema = z.object({ entry: ClipboardEntrySchema.pick({ id: true }) });
+export const UploadTokenResponseSchema = z.object({ token: z.string().min(1), expiresAt: z.string().datetime() });
+export const ShortcutTextRequestSchema = z.object({
+  text: z.string().min(1).refine((text) => text.trim().length > 0, "文本不能为空"),
+}).strict();
 
 export const EntryQueryRequestSchema = z.object({
+  collection: EntryCollectionSchema.default("history"),
   entryIds: z.array(z.string()).min(1).max(ENTRY_QUERY_BATCH),
 });
 
@@ -186,6 +199,7 @@ export const EntryQueryRequestSchema = z.object({
 export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
 export const EntryDeleteRequestSchema = z.object({
+  collection: EntryCollectionSchema.default("history"),
   ids: z.array(z.string().min(1).max(100)).min(1).max(ENTRY_QUERY_BATCH),
 });
 
@@ -205,6 +219,7 @@ export const FileQueryRequestSchema = z.object({
 export const FileQueryResponseSchema = z.object({ files: z.array(FileStatusSchema) });
 
 export const FileAccessRequestSchema = z.object({
+  collection: EntryCollectionSchema.default("history"),
   name: z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f/\\]+$/),
   preview: z.boolean().optional(),
 });
@@ -217,8 +232,6 @@ export const FileAccessResponseSchema = z.object({ path: z.string().startsWith("
 // apply before paging, so a filtered page always holds up to a full page of
 // matching rows.
 const ManifestQuerySchema = z.object({
-  stickyOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
-  favoriteOnly: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
   favoriteFolderId: z.union([z.literal("unfiled"), z.string().uuid()]).optional(),
   search: z.string().trim().min(1).max(100).optional(),
   // Either a UTC date (`YYYY-MM-DD`, expanded to the whole day) or a concrete
@@ -238,19 +251,15 @@ const ManifestQuerySchema = z.object({
 
 // Public list endpoints choose the collection; callers only supply filters.
 export const HistoryManifestQuerySchema = ManifestQuerySchema.omit({
-  stickyOnly: true, favoriteOnly: true, favoriteFolderId: true,
+  favoriteFolderId: true,
 }).strict();
-export const FavoriteManifestQuerySchema = ManifestQuerySchema.omit({
-  stickyOnly: true, favoriteOnly: true,
-}).strict();
+export const FavoriteManifestQuerySchema = ManifestQuerySchema.strict();
 
-// Internal store query retains the collection selectors.
-export const EntryManifestQuerySchema = ManifestQuerySchema.refine((query) => !query.stickyOnly || (!query.favoriteOnly && !query.favoriteFolderId), {
-  message: "便签列表不能同时筛选收藏目录",
-});
+// Collection selection belongs to the endpoint, never the query filters.
+export const EntryManifestQuerySchema = ManifestQuerySchema;
 
-// One page of history identities, favorites when favoriteOnly/folder is set,
-// or sticky notes when stickyOnly is set. Details arrive through POST /entries/query.
+// One page of identities from the requested collection.
+// Details arrive through POST /entries/query.
 export const EntryManifestResponseSchema = z.object({
   manifest: z.array(ClipboardManifestEntrySchema),
   // Matching rows across all pages (the filters apply before paging), so a

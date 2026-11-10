@@ -35,6 +35,7 @@ import { flattenFavoriteFolders } from "../favorites/folderTree";
 import { getAccountSession } from "../../accountSession";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import { useHistoryManifest } from "./useHistoryManifest";
+import { useStickyList } from "../sticky/useStickyList";
 import { useHistoryEvents } from "./useHistorySync";
 import { setEntriesFavorite, setEntriesSticky } from "./useEntryActions";
 import { useHistorySelection } from "./useHistorySelection";
@@ -225,12 +226,10 @@ const {
   changePage,
   cancel: cancelPageFetch,
   refresh: refreshPage,
-} = useHistoryManifest({
+} = (props.sticky ? useStickyList : useHistoryManifest)({
   fetchHistoryPage: props.fetchHistoryPage,
   buildFilter: (page) => ({
     query: committedQuery.value,
-    favoriteOnly: props.favorites,
-    stickyOnly: props.sticky,
     favoriteFolderId: props.favorites ? favoriteFolderId.value || undefined : undefined,
     kind: filter.value,
     start: activeTimeRange.value.start,
@@ -264,7 +263,10 @@ async function refreshCurrentPage(): Promise<void> {
   if (refreshing.value || timeRangeError.value) return;
   refreshing.value = true;
   try {
+    if (props.sticky) await getAccountSession()?.history.listSticky(true);
     await Promise.all([fetchPage(currentPage.value), props.favorites ? loadFolders() : undefined]);
+  } catch (error) {
+    showNotification({ message: `读取${collectionName.value}失败：${errorMessage(error)}`, tone: "error" });
   } finally {
     refreshing.value = false;
   }
@@ -787,7 +789,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
     <template #footer>
       <div v-if="selecting" class="history-selection-actions" role="toolbar" :aria-label="`${collectionName}多选操作`">
         <span role="status" aria-live="polite">已选 {{ selectedCount }} 条</span>
-        <SButton :disabled="deleting || !pageEntries.length" @click="toggleAll">{{ allSelected ? "取消全选" : "本页全选" }}</SButton>
+        <SButton :disabled="deleting || !pageEntries.length" @click="toggleAll">{{ allSelected ? "取消全选" : sticky ? "全选" : "本页全选" }}</SButton>
         <SButton :disabled="deleting || favoriting || !selectedCount" @click="favoriteEntries([...selectedIds], true)">
           <Star :size="15" aria-hidden="true" />收藏
         </SButton>
@@ -802,7 +804,8 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       <span v-if="isQuickPaste">单击条目粘贴，{{ mobileLayout ? '单击' : '双击' }}图片或文件图标预览</span>
       <span v-else-if="!mobileLayout">双击条目预览，右键打开菜单</span>
       <span v-if="!mobileLayout"><kbd>Esc</kbd> 关闭</span>
-      <nav class="pagination-control" :aria-label="`${collectionName}分页`">
+      <div v-if="sticky" class="pagination-control"><span class="pagination-status" aria-live="polite">共 {{ manifestTotal }} 条</span></div>
+      <nav v-else class="pagination-control" :aria-label="`${collectionName}分页`">
         <button
           class="pagination-button"
           type="button"

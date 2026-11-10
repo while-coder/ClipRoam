@@ -323,7 +323,8 @@ export class DownloadManager {
         try {
           const offset = writer.size;
           task.snapshot.receivedBytes = offset; this.#publish();
-          const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}`, {
+          const collection = (await this.session.history.get(task.snapshot.entryId)).collection ?? "history";
+          const response = await http.fetch("GET", `/files/${encodeURIComponent(task.snapshot.entryId)}/${task.snapshot.fileId}?collection=${collection}`, {
             signal,
             headers: offset > 0 ? { Range: `bytes=${offset}-`, "If-Range": `"${task.snapshot.fileId}"` } : {},
           });

@@ -5,7 +5,7 @@ export async function videoPreviewUrl(session: AccountSession, entryId: string, 
   session.signal.throwIfAborted();
   const result = await session.http.request("POST", `/files/${encodeURIComponent(entryId)}/${fileId}/access`, {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, preview: true }),
+    body: JSON.stringify({ name, preview: true, collection: (await session.history.get(entryId)).collection ?? "history" }),
   }, FileAccessResponseSchema, "服务器返回的文件访问链接无效");
   session.signal.throwIfAborted();
   if (!result) throw new Error("文件访问链接不可用");
@@ -18,7 +18,7 @@ export async function downloadWithBrowser(session: AccountSession, entryId: stri
   const http = session.http;
   const result = await http.request("POST", `/files/${encodeURIComponent(entryId)}/${fileId}/access`, {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, collection: (await session.history.get(entryId)).collection ?? "history" }),
   }, FileAccessResponseSchema, "服务器返回的文件访问链接无效");
   session.signal.throwIfAborted();
   if (!result) throw new Error("文件访问链接不可用");

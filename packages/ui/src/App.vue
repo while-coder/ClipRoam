@@ -38,6 +38,7 @@ import { activeView, activeAccountSession, getAccountSession } from "./accountSe
 import { clipboardPlatform } from "./platform/clipboard";
 import {
   fetchHistoryPage,
+  fetchFavoritePage,
   focusSearchInput,
   initHistorySync,
 } from "./features/history/useHistorySync";
@@ -575,7 +576,7 @@ onBeforeUnmount(() => {
         :sticky="activeView === 'sticky'"
         v-show="!isQuickPaste"
         ref="historyView"
-        :fetch-history-page="fetchHistoryPage"
+        :fetch-history-page="activeView === 'favorites' ? fetchFavoritePage : fetchHistoryPage"
         :active="!isQuickPaste"
         :devices-by-id="devicesById"
         :current-time="currentTime"

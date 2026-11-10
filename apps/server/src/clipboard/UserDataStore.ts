@@ -9,6 +9,7 @@ import {
   type Device,
   type EntryManifestQuery,
   type EntryPublishInput,
+  type EntryCollection,
   type FileInfo,
   type ImageInfo,
   type FavoriteFolder,
@@ -31,6 +32,8 @@ type EntryRow = {
   source_device_id: string;
   created_at: string;
 };
+
+const collectionTables = { history: "entries", favorites: "favorites", sticky: "sticky_notes" } as const;
 
 // Clipboard records and devices. Contents live in an independent pool that this
 // store only references by id, so a tree is the sole record of which bytes an
@@ -86,33 +89,13 @@ export class UserDataStore {
       ); CREATE INDEX IF NOT EXISTS ${table}_created_at ON ${table} (created_at DESC)`);
     }
     this.#database.exec("CREATE INDEX IF NOT EXISTS favorites_folder ON favorites (favorite_folder_id)");
-    // Saved membership and folder changes alter the history's displayed metadata.
-    // Advance its revision too, so clients backfill those changes into their cache.
+    // Remove legacy cross-collection writes. Membership is derived when reading;
+    // saving, moving or deleting a copy never changes another record's revision.
     for (const table of ["favorites", "sticky_notes"] as const) {
       for (const event of ["INSERT", "UPDATE", "DELETE"] as const) {
-        const row = event === "DELETE" ? "OLD" : "NEW";
-        this.#database.exec(`CREATE TRIGGER IF NOT EXISTS ${table}_history_${event.toLowerCase()}
-          AFTER ${event} ON ${table} BEGIN
-            UPDATE entries SET version = version + 1 WHERE hash = ${row}.hash;
-          END`);
+        this.#database.exec(`DROP TRIGGER IF EXISTS ${table}_history_${event.toLowerCase()}`);
       }
     }
-    // A common read shape keeps downloads, activation and detail backfill usable
-    // for all three independent kinds of record. Only history accepts publishes.
-    // History rows mirror the saved copies with the same content hash so the
-    // star and sticky state shown next to a history entry match the collections.
-    this.#database.exec(`CREATE TEMP VIEW entry_records AS
-      SELECT CAST(e.id AS TEXT) AS id, e.version,
-        f.id AS favorite_id, s.id AS sticky_id,
-        f.favorite_folder_id,
-        e.hash, e.kind, e.content, e.extra, e.source_device_id, e.created_at
-      FROM entries e
-      LEFT JOIN favorites f ON f.hash = e.hash
-      LEFT JOIN sticky_notes s ON s.hash = e.hash
-      UNION ALL
-      SELECT id, version, id, NULL, favorite_folder_id, hash, kind, content, extra, source_device_id, created_at FROM favorites
-      UNION ALL
-      SELECT id, version, NULL, id, NULL, hash, kind, content, extra, source_device_id, created_at FROM sticky_notes`);
   }
 
   // Offset pagination over entry identities with optional keyword, UTC
@@ -121,27 +104,35 @@ export class UserDataStore {
   // from a filtered result set. Full details ride POST /entries/query.
   // Recency order follows `created_at`: the rowid no longer reflects it, since
   // a re-copy refreshes the timestamp while keeping its original rowid.
-  listManifestPage(query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
-    const table = query.stickyOnly ? "sticky_notes" : query.favoriteOnly || query.favoriteFolderId ? "favorites" : "entries";
+  listHistoryManifestPage(query: EntryManifestQuery, limit: number) {
+    // A folder filter never switches a history query to another collection.
+    return this.#listManifestPage("entries", { ...query, favoriteFolderId: undefined }, limit);
+  }
+
+  listFavoriteManifestPage(query: EntryManifestQuery, limit: number) {
+    return this.#listManifestPage("favorites", query, limit);
+  }
+
+  #listManifestPage(table: "entries" | "favorites", query: EntryManifestQuery, limit: number): { manifest: ClipboardManifestEntry[]; total: number } {
     // The device filter matches entries whose source is one of the selected
     // devices. An absent filter drops the clause entirely.
     const selectedDeviceIds = [...new Set(query.deviceIds ?? [])];
     const deviceParams = Object.fromEntries(selectedDeviceIds.map((id, index) => [`device${index}`, id]));
     const deviceClause = selectedDeviceIds.length
-      ? `source_device_id IN (${Object.keys(deviceParams).map((name) => `@${name}`).join(", ")})`
+      ? `e.source_device_id IN (${Object.keys(deviceParams).map((name) => `@${name}`).join(", ")})`
       : "";
     const folderIds = query.favoriteFolderId && query.favoriteFolderId !== "unfiled"
       ? this.#folderSubtree(query.favoriteFolderId) : [];
     const folderParams = Object.fromEntries(folderIds.map((id, index) => [`folder${index}`, id]));
     const folderClause = query.favoriteFolderId === "unfiled"
-      ? "favorite_folder_id IS NULL"
-      : folderIds.length ? `favorite_folder_id IN (${Object.keys(folderParams).map((name) => `@${name}`).join(", ")})` : "";
+      ? "e.favorite_folder_id IS NULL"
+      : folderIds.length ? `e.favorite_folder_id IN (${Object.keys(folderParams).map((name) => `@${name}`).join(", ")})` : "";
     // Shared between the page read and the total count so the two can never
     // disagree about what a "matching row" is.
     const where = `
-      WHERE (@search IS NULL OR content LIKE @search ESCAPE '\\')
-        AND (@dateStart IS NULL OR created_at BETWEEN @dateStart AND @dateEnd)
-        AND (@kind IS NULL OR kind = @kind)
+      WHERE (@search IS NULL OR e.content LIKE @search ESCAPE '\\')
+        AND (@dateStart IS NULL OR e.created_at BETWEEN @dateStart AND @dateEnd)
+        AND (@kind IS NULL OR e.kind = @kind)
         ${folderClause ? `AND (${folderClause})` : ""}
         ${deviceClause ? `AND (${deviceClause})` : ""}
     `;
@@ -155,35 +146,43 @@ export class UserDataStore {
     };
     const rows = this.#database
       .prepare(`
-        SELECT id, version
-        FROM ${table}
+        SELECT e.id, e.version,
+          ${table === "favorites" ? "e.id" : "f.id"} AS favoriteId,
+          ${table === "favorites" ? "NULL" : "s.id"} AS stickyId
+        FROM ${table} e
+        ${table === "entries" ? "LEFT JOIN favorites f ON f.hash = e.hash LEFT JOIN sticky_notes s ON s.hash = e.hash" : ""}
         ${where}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY e.created_at DESC, e.id DESC
         LIMIT @limit OFFSET @offset
       `)
-      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{ id: number | string; version: number }>;
+      .all({ ...filters, limit, offset: ((query.page ?? 1) - 1) * limit }) as Array<{
+        id: number | string; version: number; favoriteId: string | null; stickyId: string | null;
+      }>;
     const { count } = this.#database
-      .prepare(`SELECT COUNT(*) AS count FROM ${table} ${where}`)
+      .prepare(`SELECT COUNT(*) AS count FROM ${table} e ${where}`)
       .get(filters) as { count: number };
     return {
-      manifest: rows.map(({ id, version }) => ({ id: String(id), version })),
+      manifest: rows.map((row) => ({ ...row, id: String(row.id), collection: table === "entries" ? "history" : "favorites" })),
       total: count,
     };
   }
 
-  listByIds(entryIds: readonly string[]): ClipboardEntry[] {
+  listByIds(collection: EntryCollection, entryIds: readonly string[]): ClipboardEntry[] {
+    const table = collectionTables[collection];
     const entries: ClipboardEntry[] = [];
     for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
-      const rows = this.#database
-        .prepare(`
-          SELECT id, version, favorite_id, sticky_id, favorite_folder_id, kind, content, extra, source_device_id, created_at
-          FROM entry_records
-          WHERE id IN (${placeholders(batch.length)})
-          ORDER BY created_at DESC
-        `)
-        .all(...batch) as Array<EntryRow>;
+      const rows = this.#database.prepare(`
+          SELECT e.*,
+            ${collection === "history" ? "f.id" : collection === "favorites" ? "e.id" : "NULL"} AS favorite_id,
+            ${collection === "history" ? "s.id" : collection === "sticky" ? "e.id" : "NULL"} AS sticky_id,
+            ${table === "favorites" ? "e.favorite_folder_id" : "NULL"} AS favorite_folder_id
+          FROM ${table} e
+          ${collection === "history" ? "LEFT JOIN favorites f ON f.hash = e.hash LEFT JOIN sticky_notes s ON s.hash = e.hash" : ""}
+          WHERE e.id IN (${placeholders(batch.length)})
+          ORDER BY e.created_at DESC
+        `).all(...batch) as EntryRow[];
       for (const row of rows) {
-        const entry = this.#toEntry(row);
+        const entry = this.#toEntry(row, collection);
         if (entry) entries.push(entry);
       }
     }
@@ -278,40 +277,41 @@ export class UserDataStore {
         entry.sourceDeviceId,
         createdAt,
       ) as { id: number };
-      const storedEntry = this.listByIds([String(row.id)])[0]!;
+      const storedEntry = this.listByIds("history", [String(row.id)])[0]!;
       this.files.register(entryContents(storedEntry));
       return storedEntry;
     });
   }
 
-  setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
+  setFavorite(collection: EntryCollection, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
     return this.#transaction(() => {
       if (!isFavorite) return this.#removeSaved("favorites", entryIds);
       if (favoriteFolderId) this.#requireFolder(favoriteFolderId);
-      return this.#copyTo("favorites", entryIds, favoriteFolderId);
+      return this.#copyTo("favorites", collection, entryIds, favoriteFolderId);
     });
   }
 
   listSticky(): ClipboardEntry[] {
     const rows = this.#database.prepare(`
-      SELECT *, id AS sticky_id, NULL AS favorite_folder_id
-      FROM sticky_notes ORDER BY created_at DESC, id DESC
+      SELECT s.*, NULL AS favorite_id, s.id AS sticky_id, NULL AS favorite_folder_id
+      FROM sticky_notes s
+      ORDER BY s.created_at DESC, s.id DESC
     `).all() as EntryRow[];
-    return rows.flatMap((row) => { const entry = this.#toEntry(row); return entry ? [entry] : []; });
+    return rows.flatMap((row) => { const entry = this.#toEntry(row, "sticky"); return entry ? [entry] : []; });
   }
 
-  setSticky(entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
+  setSticky(collection: EntryCollection, entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
     return this.#transaction(() => {
       if (!isSticky) return this.#removeSaved("sticky_notes", entryIds);
-      return this.#copyTo("sticky_notes", entryIds, undefined, maxEntries);
+      return this.#copyTo("sticky_notes", collection, entryIds, undefined, maxEntries);
     });
   }
 
   // Each destination owns its content snapshot and identity. Hash deduplication
   // makes repeated saves idempotent without retaining a link to the source row.
-  #copyTo(table: "favorites" | "sticky_notes", entryIds: readonly string[], folderId?: string | null, maxEntries = Infinity): ClipboardEntry[] {
+  #copyTo(table: "favorites" | "sticky_notes", collection: EntryCollection, entryIds: readonly string[], folderId?: string | null, maxEntries = Infinity): ClipboardEntry[] {
     const ids = [...new Set(entryIds)];
-    const sources = this.listByIds(ids);
+    const sources = this.listByIds(collection, ids);
     if (sources.length !== ids.length) throw new StickyEntryError("剪贴板记录不存在", 404);
     let { count } = this.#database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
     const savedIds = new Set<string>();
@@ -321,7 +321,7 @@ export class UserDataStore {
       if (!saved) {
         if (count >= maxEntries) throw new StickyEntryError(`便签数量已达上限（${maxEntries} 条），请先取消其他便签`, 409);
         const favorite = table === "favorites";
-        saved = { id: `${favorite ? "f" : "s"}-${randomUUID()}` };
+        saved = { id: randomUUID() };
         this.#database.prepare(`INSERT INTO ${table}
           (id, hash, kind, content, extra, source_device_id, created_at${favorite ? ", favorite_folder_id" : ""})
           VALUES (?, ?, ?, ?, ?, ?, ?${favorite ? ", ?" : ""})`).run(
@@ -335,23 +335,19 @@ export class UserDataStore {
       }
       savedIds.add(saved.id);
     }
-    return this.listByIds([...savedIds]);
+    return this.listByIds(table === "favorites" ? "favorites" : "sticky", [...savedIds]);
   }
 
   // Cancellation deletes only destination records; it never alters history or
   // the other saved collection. Return deleted snapshots for push notifications.
-  // A history id addresses the saved copy with the same content hash; an id from
-  // the other collection does not, so cancelling across collections stays a no-op.
+  // Only the destination's own ids can remove its snapshots.
   #removeSaved(table: "favorites" | "sticky_notes", ids: readonly string[]): ClipboardEntry[] {
     const uniqueIds = [...new Set(ids)];
     if (!uniqueIds.length) return [];
-    const foreignPrefix = table === "favorites" ? "s-" : "f-";
     const savedIds = (this.#database.prepare(`
-      SELECT DISTINCT saved.id FROM ${table} saved
-      JOIN entry_records e ON e.hash = saved.hash
-      WHERE e.id IN (${placeholders(uniqueIds.length)}) AND e.id NOT LIKE '${foreignPrefix}%'
+      SELECT id FROM ${table} WHERE id IN (${placeholders(uniqueIds.length)})
     `).all(...uniqueIds) as Array<{ id: string }>).map(({ id }) => id);
-    const entries = this.listByIds(savedIds);
+    const entries = this.listByIds(table === "favorites" ? "favorites" : "sticky", savedIds);
     for (const batch of chunk(entries, QUERY_BATCH)) {
       this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch.map(({ id }) => id));
     }
@@ -425,18 +421,17 @@ export class UserDataStore {
 
   // Content is shared across entries, so deletion only drops the reference.
   // Stored bytes remain until an administrator removes them.
-  delete(entryIds: readonly string[]): void {
+  delete(collection: EntryCollection, entryIds: readonly string[]): void {
+    const table = collectionTables[collection];
     this.#transaction(() => {
       for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
-        for (const table of ["entries", "favorites", "sticky_notes"] as const) {
-          this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch);
-        }
+        this.#database.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders(batch.length)})`).run(...batch);
       }
     });
   }
 
-  hasFileReference(entryId: string, downloadId: string): boolean {
-    const row = this.#database.prepare("SELECT kind, extra FROM entry_records WHERE id = ?")
+  hasFileReference(collection: EntryCollection, entryId: string, downloadId: string): boolean {
+    const row = this.#database.prepare(`SELECT kind, extra FROM ${collectionTables[collection]} WHERE id = ?`)
       .get(entryId) as { kind: string; extra: string } | undefined;
     return Boolean(row && entryContents({ kind: row.kind, ...parseExtra(row.extra) })
       .some(({ fileId }) => fileId === downloadId));
@@ -444,12 +439,13 @@ export class UserDataStore {
 
   close(): void { this.#database.close(); }
 
-  #toEntry(row: EntryRow): ClipboardEntry | undefined {
+  #toEntry(row: EntryRow, collection: EntryCollection): ClipboardEntry | undefined {
     let extra: unknown;
     try { extra = JSON.parse(row.extra); } catch { extra = {}; }
     const result = ClipboardEntrySchema.safeParse({
       ...(typeof extra === "object" && extra !== null ? extra : {}),
       id: String(row.id),
+      collection,
       version: row.version,
       favoriteId: row.favorite_id ?? null,
       stickyId: row.sticky_id ?? null,

@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
+import multipart from "@fastify/multipart";
 import { type ServerSettings } from "@cliproam/protocol";
 import { AuthService } from "../account/AuthService.js";
 import { AdminService } from "../admin/AdminService.js";
@@ -8,6 +9,7 @@ import { SocketHub } from "./SocketHub.js";
 import { registerAuthRoutes } from "./routes/AuthRoutes.js";
 import { registerDeviceRoutes } from "./routes/DeviceRoutes.js";
 import { registerEntryRoutes } from "./routes/EntryRoutes.js";
+import { registerShortcutRoutes } from "./routes/ShortcutRoutes.js";
 import { registerFileRoutes } from "./routes/FileRoutes.js";
 import { registerAdminRoutes } from "./routes/AdminRoutes.js";
 import { registerAdminUiRoutes } from "./routes/AdminUiRoutes.js";
@@ -55,6 +57,7 @@ export class ClipRoamServer {
     // Inbound socket messages are only `auth`/`ping` — a small explicit cap,
     // not the publish-body limit that used to double as this value.
     await this.#app.register(websocket, { options: { maxPayload: SMALL_JSON_BODY_LIMIT } });
+    await this.#app.register(multipart);
     this.#registerRoutes();
     await this.#app.listen({ port: SERVER_PORT, host: "0.0.0.0" });
   }
@@ -98,6 +101,13 @@ export class ClipRoamServer {
       maxHistoryEntries: (userId) => this.#configForUser(userId).maxHistoryEntries,
       maxStickyEntries: (userId) => this.#configForUser(userId).maxStickyEntries,
       maxCaptureFileCount: (userId) => this.#configForUser(userId).maxCaptureFileCount,
+    });
+    registerShortcutRoutes(this.#app, {
+      store: this.#store,
+      broadcast: this.#sockets.broadcast.bind(this.#sockets),
+      maxHistoryEntries: (userId) => this.#configForUser(userId).maxHistoryEntries,
+      configForUser: (userId) => this.#configForUser(userId),
+      uploads: this.#uploads,
     });
     registerDeviceRoutes(this.#app, {
       store: this.#store,

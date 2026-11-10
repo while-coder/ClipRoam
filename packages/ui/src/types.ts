@@ -78,8 +78,6 @@ export type LocalClipboardEntry = ClipboardEntry & { summary: EntrySummary; pend
  * cache queries.
  */
 export type EntriesManifestFilter = {
-  stickyOnly?: boolean;
-  favoriteOnly?: boolean;
   favoriteFolderId?: string;
   query?: string;
   kind?: EntryFilter;

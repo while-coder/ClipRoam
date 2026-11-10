@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import {
   MAX_PUBLISH_BYTES,
+  EntryCollectionSchema,
+  type EntryCollection,
   ENTRY_PAGE_DEFAULT_LIMIT,
   HistoryManifestQuerySchema,
   FavoriteManifestQuerySchema,
@@ -25,7 +27,7 @@ import { parseOr400 } from "./parseRequest.js";
 const logger = getLogger("EntryRoutes");
 
 export type EntryRouteDeps = {
-  store: Pick<ClipRoamStore, "listManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite" | "listSticky" | "setSticky" |
+  store: Pick<ClipRoamStore, "listHistoryManifestPage" | "listFavoriteManifestPage" | "listByIds" | "upsert" | "delete" | "pruneHistory" | "setFavorite" | "listSticky" | "setSticky" |
     "listFavoriteFolders" | "saveFavoriteFolder" | "deleteFavoriteFolder">;
   broadcast: (userId: string, message: ServerMessage, exceptDeviceId?: string) => void;
   // Read per request so an admin settings change applies without a restart.
@@ -53,9 +55,9 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!user) return reply;
     const body = parseOr400(reply, EntryStickyRequestSchema, request.body, "便签参数无效");
     if (!body) return reply;
-    const entries = store.setSticky(user.id, body.ids, body.isSticky, deps.maxStickyEntries(user.id));
+    const entries = store.setSticky(user.id, body.collection, body.ids, body.isSticky, deps.maxStickyEntries(user.id));
     if (body.isSticky && entries.length) broadcast(user.id, {
-      type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
+      type: "clipboard.updated", entries: entries.map(({ id, version, collection }) => ({ id, version, collection })),
     });
     if (!body.isSticky) for (const entry of entries) {
       broadcast(user.id, { type: "clipboard.deleted", entryId: entry.id });
@@ -64,11 +66,10 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
   });
 
   // Routes select independent collections; paging and detail backfill are shared.
-  // The full /entries/sticky list remains available for desktop windows.
+  // Sticky notes use the full /entries/sticky response for both list and desktop.
   for (const [path, collection] of [
     ["/entries/manifest", "history"],
     ["/favorites/manifest", "favorites"],
-    ["/entries/sticky/manifest", "sticky"],
   ] as const) {
     app.get(path, async (request, reply) => {
       const user = requireSessionUser(request, reply);
@@ -76,9 +77,10 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
       const schema = collection === "favorites" ? FavoriteManifestQuerySchema : HistoryManifestQuerySchema;
       const query = parseOr400(reply, schema, request.query, "查询参数无效");
       if (!query) return reply;
-      return store.listManifestPage(user.id, {
-        ...query, favoriteOnly: collection === "favorites", stickyOnly: collection === "sticky",
-      }, query.pageSize ?? ENTRY_PAGE_DEFAULT_LIMIT) satisfies EntryManifestResponse;
+      const limit = query.pageSize ?? ENTRY_PAGE_DEFAULT_LIMIT;
+      return (collection === "favorites"
+        ? store.listFavoriteManifestPage(user.id, query, limit)
+        : store.listHistoryManifestPage(user.id, query, limit)) satisfies EntryManifestResponse;
     });
   }
 
@@ -87,7 +89,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!user) return reply;
     const body = parseOr400(reply, EntryQueryRequestSchema, request.body, "查询参数无效");
     if (!body) return reply;
-    return { entries: store.listByIds(user.id, body.entryIds) } satisfies EntryQueryResponse;
+    return { entries: store.listByIds(user.id, body.collection, body.entryIds) } satisfies EntryQueryResponse;
   });
 
   // Entries carry an unbounded directory tree, so the publish body needs the
@@ -120,7 +122,9 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     const { id } = request.params as { id: string };
-    const [entry] = store.listByIds(user.id, [id]);
+    const collection = parseOr400(reply, EntryCollectionSchema.default("history"), (request.query as { collection?: string }).collection, "记录类型无效");
+    if (!collection) return reply;
+    const [entry] = store.listByIds(user.id, collection, [id]);
     if (!entry) return reply.code(404).send({ message: "剪贴板记录不存在" });
     // File-list clipboards are intentionally history-only. Broadcasting them
     // would make receivers materialize unused directory views and temporary
@@ -130,7 +134,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (entry.kind !== "files") {
       // Self-excluded on purpose: a delayed self-echo would overwrite a
       // newer local clipboard captured moments after this one.
-      broadcast(user.id, { type: "clipboard.activated", entry: { id: entry.id, version: entry.version } }, user.deviceId);
+      broadcast(user.id, { type: "clipboard.activated", entry: { id: entry.id, version: entry.version, collection: entry.collection } }, user.deviceId);
       logger.info(`Clipboard activated: user=${user.id} entry=${entry.id} device=${user.deviceId}`);
     }
     return { entry } satisfies EntryActivateResponse;
@@ -141,9 +145,9 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!user) return reply;
     const body = parseOr400(reply, EntryFavoriteRequestSchema, request.body, "收藏参数无效");
     if (!body) return reply;
-    const entries = store.setFavorite(user.id, body.ids, body.isFavorite, body.favoriteFolderId);
+    const entries = store.setFavorite(user.id, body.collection, body.ids, body.isFavorite, body.favoriteFolderId);
     if (body.isFavorite && entries.length) broadcast(user.id, {
-      type: "clipboard.updated", entries: entries.map(({ id, version }) => ({ id, version })),
+      type: "clipboard.updated", entries: entries.map(({ id, version, collection }) => ({ id, version, collection })),
     });
     if (!body.isFavorite) for (const entry of entries) {
       broadcast(user.id, { type: "clipboard.deleted", entryId: entry.id });
@@ -185,9 +189,9 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return reply.code(204).send();
   });
 
-  const deleteEntries = (userId: string, ids: readonly string[]): void => {
+  const deleteEntries = (userId: string, collection: EntryCollection, ids: readonly string[]): void => {
     const uniqueIds = [...new Set(ids)];
-    store.delete(userId, uniqueIds);
+    store.delete(userId, collection, uniqueIds);
     logger.info(`Clipboard entries deleted: user=${userId} entries=${uniqueIds.join(",")}`);
     // Include already-absent ids so all devices converge on the same state.
     for (const entryId of uniqueIds) broadcast(userId, { type: "clipboard.deleted", entryId });
@@ -198,7 +202,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     if (!user) return reply;
     const body = parseOr400(reply, EntryDeleteRequestSchema, request.body, "删除参数无效");
     if (!body) return reply;
-    deleteEntries(user.id, body.ids);
+    deleteEntries(user.id, body.collection, body.ids);
     return reply.code(204).send();
   });
 
@@ -207,7 +211,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     const user = requireSessionUser(request, reply);
     if (!user) return reply;
     const { id } = request.params as { id: string };
-    deleteEntries(user.id, [id]);
+    deleteEntries(user.id, "history", [id]);
     return reply.code(204).send();
   });
 }

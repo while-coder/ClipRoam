@@ -8,14 +8,20 @@ import { onBeforeUnmount, onMounted } from "vue";
 import { native } from "@cliproam/ui/native";
 import { initializeBossKey } from "./features/settings/bossKey";
 import { initializeStickyDesktop } from "./features/sticky/stickyWindows";
+import { initializeIosShortcuts } from "./features/shortcuts/iosShortcuts";
 
 let disposeSticky: (() => void) | undefined;
+let disposeIosShortcuts: (() => void) | undefined;
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; disposeSticky?.(); });
+onBeforeUnmount(() => { disposed = true; disposeSticky?.(); disposeIosShortcuts?.(); });
 
 onMounted(async () => {
   try {
     const capabilities = await native.getCapabilities();
+    if (capabilities.mobile) {
+      const device = await native.getDeviceInfo();
+      if (device.osType === "ios" && !disposed) disposeIosShortcuts = initializeIosShortcuts(device.osVersion);
+    }
     if (capabilities.globalShortcut) await initializeBossKey();
     if (isNative && !capabilities.mobile) {
       disposeSticky = await initializeStickyDesktop();

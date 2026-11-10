@@ -48,6 +48,10 @@ export async function fetchHistoryPage(
   return getAccountSession()?.history.fetchHistoryPage(filter) ?? { total: 0, entries: [] };
 }
 
+export async function fetchFavoritePage(filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
+  return getAccountSession()?.history.fetchFavoritePage(filter) ?? { total: 0, entries: [] };
+}
+
 /** Notify the currently subscribed history view. */
 export function refreshHistory(): void {
   getAccountSession()?.history.invalidate();

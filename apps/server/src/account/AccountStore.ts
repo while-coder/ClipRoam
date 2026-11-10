@@ -52,11 +52,22 @@ export class AccountStore {
       );
       CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+      CREATE TABLE IF NOT EXISTS upload_tokens (
+        token_hash TEXT PRIMARY KEY,
+        session_hash TEXT NOT NULL UNIQUE REFERENCES sessions(token_hash) ON DELETE CASCADE ON UPDATE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS user_transfer_settings (
         user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         settings_json TEXT NOT NULL
       );
     `);
+    // Preserve already configured shortcuts when widening the upload capability.
+    if (this.#database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'text_upload_tokens'").get()) {
+      withTransaction(this.#database, () => {
+        this.#database.exec("INSERT OR IGNORE INTO upload_tokens SELECT token_hash, session_hash FROM text_upload_tokens");
+        this.#database.exec("DROP TABLE text_upload_tokens");
+      });
+    }
     this.#database.exec("CREATE UNIQUE INDEX IF NOT EXISTS sessions_user_device_id ON sessions(user_id, device_id)");
     this.#removeExpiredSessions(new Date());
   }
@@ -155,6 +166,33 @@ export class AccountStore {
     `).get(hashSessionToken(token), new Date().toISOString()) as AuthenticatedUser | undefined;
   }
 
+  issueUploadToken(userId: string, deviceId: string): { token: string; expiresAt: string } {
+    const session = this.#database.prepare(`SELECT token_hash, expires_at FROM sessions
+      WHERE user_id = ? AND device_id = ? AND expires_at > ?`)
+      .get(userId, deviceId, new Date().toISOString()) as { token_hash: string; expires_at: string } | undefined;
+    if (!session) throw new InvalidCredentialsError();
+    const token = `upload_${randomBytes(32).toString("base64url")}`;
+    this.#database.prepare(`INSERT INTO upload_tokens (token_hash, session_hash) VALUES (?, ?)
+      ON CONFLICT(session_hash) DO UPDATE SET token_hash = excluded.token_hash`).run(hashSessionToken(token), session.token_hash);
+    return { token, expiresAt: session.expires_at };
+  }
+
+  authenticateUploadToken(token: string): AuthenticatedUser | undefined {
+    if (!token.startsWith("upload_")) return undefined;
+    return this.#database.prepare(`
+      SELECT users.id, users.username, sessions.device_id AS deviceId, sessions.expires_at AS expiresAt
+      FROM upload_tokens uploads JOIN sessions ON sessions.token_hash = uploads.session_hash
+      JOIN users ON users.id = sessions.user_id
+      WHERE uploads.token_hash = ? AND sessions.expires_at > ?
+    `).get(hashSessionToken(token), new Date().toISOString()) as AuthenticatedUser | undefined;
+  }
+
+  revokeUploadToken(userId: string, deviceId: string): void {
+    this.#database.prepare(`DELETE FROM upload_tokens WHERE session_hash IN
+      (SELECT token_hash FROM sessions WHERE user_id = ? AND device_id = ?)`)
+      .run(userId, deviceId);
+  }
+
   listUsers(search?: string): AdminUserSummary[] {
     // Active sessions double as the device count: one session row per user +
     // device pair, so opening each per-user database for a real count is not
@@ -223,14 +261,17 @@ export class AccountStore {
     const createdAt = new Date();
     const expiresAt = new Date(createdAt.getTime() + ACCOUNT_SESSION_LIFETIME_MS);
     this.#removeExpiredSessions(createdAt);
-    this.#database.prepare(`
-      INSERT INTO sessions (token_hash, user_id, device_id, expires_at, created_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(user_id, device_id) DO UPDATE SET
-        token_hash = excluded.token_hash,
-        expires_at = excluded.expires_at,
-        created_at = excluded.created_at
-    `).run(hashSessionToken(token), user.id, deviceId, expiresAt.toISOString(), createdAt.toISOString());
+    withTransaction(this.#database, () => {
+      this.revokeUploadToken(user.id, deviceId);
+      this.#database.prepare(`
+        INSERT INTO sessions (token_hash, user_id, device_id, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, device_id) DO UPDATE SET
+          token_hash = excluded.token_hash,
+          expires_at = excluded.expires_at,
+          created_at = excluded.created_at
+      `).run(hashSessionToken(token), user.id, deviceId, expiresAt.toISOString(), createdAt.toISOString());
+    });
     return { sessionToken: token, expiresAt: expiresAt.toISOString(), user };
   }
 

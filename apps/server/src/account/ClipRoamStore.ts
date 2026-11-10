@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import type {
   ClipboardEntry,
+  EntryCollection,
   Device,
   EntryManifestQuery,
   EntryManifestResponse,
@@ -57,11 +58,18 @@ export class ClipRoamStore {
     return this.#accounts.authenticateSession(token);
   }
 
-  listManifestPage(userId: string, query: EntryManifestQuery, limit: number): EntryManifestResponse {
-    return this.#userStore(userId).listManifestPage(query, limit);
+  issueUploadToken(userId: string, deviceId: string) { return this.#accounts.issueUploadToken(userId, deviceId); }
+  authenticateUploadToken(token: string) { return this.#accounts.authenticateUploadToken(token); }
+  revokeUploadToken(userId: string, deviceId: string): void { this.#accounts.revokeUploadToken(userId, deviceId); }
+
+  listHistoryManifestPage(userId: string, query: EntryManifestQuery, limit: number): EntryManifestResponse {
+    return this.#userStore(userId).listHistoryManifestPage(query, limit);
   }
-  listByIds(userId: string, entryIds: readonly string[]): ClipboardEntry[] {
-    return this.#userStore(userId).listByIds(entryIds);
+  listFavoriteManifestPage(userId: string, query: EntryManifestQuery, limit: number): EntryManifestResponse {
+    return this.#userStore(userId).listFavoriteManifestPage(query, limit);
+  }
+  listByIds(userId: string, collection: EntryCollection, entryIds: readonly string[]): ClipboardEntry[] {
+    return this.#userStore(userId).listByIds(collection, entryIds);
   }
   upsertDevice(userId: string, device: Device): void { this.#userStore(userId).upsertDevice(device); }
   recordDeviceOnline(userId: string, deviceId: string): string { return this.#userStore(userId).recordDeviceOnline(deviceId); }
@@ -70,14 +78,14 @@ export class ClipRoamStore {
   upsert(userId: string, entry: EntryPublishInput): ClipboardEntry {
     return this.#userStore(userId).upsert(entry);
   }
-  delete(userId: string, entryIds: readonly string[]): void { this.#userStore(userId).delete(entryIds); }
+  delete(userId: string, collection: EntryCollection, entryIds: readonly string[]): void { this.#userStore(userId).delete(collection, entryIds); }
   pruneHistory(userId: string, maxEntries: number): string[] { return this.#userStore(userId).prune(maxEntries); }
   listSticky(userId: string): ClipboardEntry[] { return this.#userStore(userId).listSticky(); }
-  setSticky(userId: string, entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
-    return this.#userStore(userId).setSticky(entryIds, isSticky, maxEntries);
+  setSticky(userId: string, collection: EntryCollection, entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
+    return this.#userStore(userId).setSticky(collection, entryIds, isSticky, maxEntries);
   }
-  setFavorite(userId: string, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
-    return this.#userStore(userId).setFavorite(entryIds, isFavorite, favoriteFolderId);
+  setFavorite(userId: string, collection: EntryCollection, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): ClipboardEntry[] {
+    return this.#userStore(userId).setFavorite(collection, entryIds, isFavorite, favoriteFolderId);
   }
   listFavoriteFolders(userId: string): FavoriteFolder[] { return this.#userStore(userId).listFavoriteFolders(); }
   saveFavoriteFolder(userId: string, input: FavoriteFolderInput, id?: string): void {
@@ -136,8 +144,8 @@ export class ClipRoamStore {
     }
     return removed;
   }
-  canReadFile(userId: string, entryId: string, fileId: string): boolean {
-    return this.#userStore(userId).hasFileReference(entryId, fileId);
+  canReadFile(userId: string, collection: EntryCollection, entryId: string, fileId: string): boolean {
+    return this.#userStore(userId).hasFileReference(collection, entryId, fileId);
   }
   close(): void {
     clearInterval(this.#sweepTimer);

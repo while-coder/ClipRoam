@@ -37,6 +37,31 @@ iOS 使用 `src-tauri/native/ios/locales/*.lproj/InfoPlist.strings`，macOS 使�
 
 浏览器支持目录选择 API 时，多文件和文件夹可保存到用户选择的目录，保留嵌套目录和空目录；每个文件下载并校验后流式写入。不支持该 API 时只提供单文件下载，导出文件夹或多文件会明确提示不支持。取消或失败时停止当前文件写入，已保存的文件保留在所选目录。
 
+## iOS 27 短信自动同步快速添加
+
+iOS 16 及更新版本提供“同步文本到 ClipRoam”“同步文件到 ClipRoam”两个快捷指令动作。多文件和文件夹保留目录结构及空目录。图片可通过文件动作作为普通文件上传，保留原始文件。上传成功会更新同账号其他在线客户端的历史列表，不会自动覆盖系统剪贴板。
+
+两个动作共用 Keychain 内的上传专用凭证；凭证不能读取历史、下载或删除记录。退出登录、重新登录或会话失效后，需要由 App 重新配置。旧的文字上传凭证会在服务端升级时自动迁移。
+
+快捷指令动作随 App 安装提供；iOS 27 的快速添加入口还需要发布一份带“收到信息”触发器的预制自动化。在已安装当前 App 的 iOS 27 设备上创建并验证：信息正文作为“同步文本到 ClipRoam”的文本参数，不加入账号、服务器地址或上传令牌，然后通过系统分享取得 iCloud 链接。
+
+将真实分享链接写入 `apps/app/.env.production.local` 的 `VITE_IOS_SMS_SHORTCUT_URL` 后重新构建 iOS App。只接受 `https://www.icloud.com/shortcuts/` 下的 32 位快捷指令 ID 链接。开发调试可在 `.env.development.local` 配置同名变量。分享链接是公开模板，不应包含任何用户数据或凭据。
+
+配置有效链接后，iOS 27 及更新版本的设置页可打开系统添加页面；用户仍须确认添加、开启自动化、关闭运行前确认并完成首次授权。iOS 26 保留手动指引；尚未配置真实模板链接时，快速添加按钮禁用并提供手动配置说明。打开链接不代表用户已添加或启用自动化，App 不显示安装成功状态。
+
+### 上传接口
+
+使用普通登录凭证调用 `POST /shortcuts/token` 获取上传凭证，之后在下列请求中携带 `Authorization: Bearer <upload token>`：
+
+| 接口 | 请求格式 | 内容 |
+| --- | --- | --- |
+| `POST /shortcuts/text` | `application/json` | `{ "text": "内容" }` |
+| `POST /shortcuts/files` | `multipart/form-data` | 一个或多个 `file` / `files` 文件字段，生成一条文件记录 |
+
+文件字段的 `filename` 可填写相对路径（如 `资料/说明.txt`）。可增加一个 `directories` 文本字段，值为 JSON 字符串数组（如 `["资料/空目录"]`），保留空目录。重复文件路径、绝对路径和 `..` 路径会被拒绝。所有文件接收并校验完成后才发布记录，限制沿用账号的文件大小、文件数量和历史条数配置。
+
+两个接口成功时均返回 `{ "entry": { "id": "..." } }`，并向同账号在线客户端发送 `clipboard.created`。`DELETE /shortcuts/token` 可撤销当前设备的上传凭证；上传凭证也可调用这个撤销接口。
+
 ## macOS 签名与辅助功能授权
 
 macOS 默认使用固定自签名证书 `cliproam-dev` 签名整个 `.app`。Bundle ID 保持 `com.whilecode.cliproam`；持续使用同一张证书，使签名要求不再绑定每次构建变化的 `cdhash`。缺少证书时构建失败，不自动降级为 ad-hoc 签名。自签名证书不提供 Apple 公证或 Gatekeeper 信任。

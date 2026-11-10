@@ -1,4 +1,4 @@
-import { entryContents, type ClipboardEntry, type ClipboardManifestEntry, type FileStatus, type FavoriteFolderInput } from "@cliproam/protocol";
+import { entryContents, type ClipboardEntry, type EntryCollection, type ClipboardManifestEntry, type FileStatus, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry, PendingRow, StoredEntry } from "../../types";
@@ -6,6 +6,7 @@ import { HistoryClient } from "./historyClient";
 import { summarize } from "../../utils";
 import type { AccountDatabase } from "../../platform/database";
 import type { AccountFiles } from "../../platform/files";
+import { shallowRef } from "vue";
 
 /** Account-wide entry cache and server history operations; views own filters and selection. */
 export class HistoryManager {
@@ -13,6 +14,10 @@ export class HistoryManager {
   readonly files: AccountFiles;
   #listeners = new Set<() => void>();
   #client?: HistoryClient;
+  readonly stickyEntries = shallowRef<LocalClipboardEntry[]>([]);
+  #stickyVersion = 0;
+  #stickyLoadedVersion = -1;
+  #stickyRequest?: Promise<LocalClipboardEntry[]>;
 
   constructor(private readonly session: AccountSession) {
     this.files = session.files;
@@ -29,6 +34,7 @@ export class HistoryManager {
   delEvent(listener: () => void): void { this.#listeners.delete(listener); }
 
   invalidate(): void {
+    this.#stickyVersion++;
     if (!this.session.signal.aborted) for (const listener of [...this.#listeners]) listener();
   }
 
@@ -36,9 +42,13 @@ export class HistoryManager {
     return this.#client?.fetchHistoryPage(filter) ?? Promise.resolve({ total: 0, entries: [] });
   }
 
+  fetchFavoritePage(filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
+    return this.#client?.fetchFavoritePage(filter) ?? Promise.resolve({ total: 0, entries: [] });
+  }
+
   fetchHistoryInfo(manifest: ClipboardManifestEntry[]): Promise<LocalClipboardEntry[]> {
     if (!this.#client) throw new Error("同步账号未登录");
-    return this.#client.fetchHistoryInfo(manifest);
+    return this.#client.fetchHistoryInfo(manifest, manifest[0]?.collection ?? "history");
   }
 
   async getEntry(entryId: string): Promise<LocalClipboardEntry> {
@@ -60,7 +70,9 @@ export class HistoryManager {
 
   async delete(entryIds: readonly string[]): Promise<void> {
     if (!this.#client) throw new Error("同步账号未登录");
-    await this.#client.delete(entryIds);
+    for (const [collection, ids] of await this.#groupByCollection(entryIds)) {
+      await this.#client.delete(collection, ids);
+    }
     await this.database.batch(entryIds.map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
@@ -68,8 +80,18 @@ export class HistoryManager {
   async setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<void> {
     if (!entryIds.length) return;
     if (!this.#client) throw new Error("同步账号未登录");
-    await this.#client.setFavorite(entryIds, isFavorite, favoriteFolderId);
-    if (!isFavorite) await this.database.batch(entryIds.filter((id) => id.startsWith("f-")).map((id) => ({ name: "entries", id })));
+    const ids = isFavorite ? entryIds : (await Promise.all(entryIds.map(async (id) =>
+      (await this.get(id)).favoriteId,
+    ))).filter((id): id is string => !!id);
+    if (!ids.length) return;
+    if (isFavorite) {
+      for (const [collection, sourceIds] of await this.#groupByCollection(ids)) {
+        await this.#client.setFavorite(collection, sourceIds, true, favoriteFolderId);
+      }
+    } else {
+      await this.#client.setFavorite("favorites", ids, false);
+    }
+    if (!isFavorite) await this.database.batch(ids.map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
 
@@ -78,15 +100,40 @@ export class HistoryManager {
     return this.#client.listFavoriteFolders();
   }
 
-  listSticky() {
+  listSticky(force = false): Promise<LocalClipboardEntry[]> {
     if (!this.#client) throw new Error("同步账号未登录");
-    return this.#client.listSticky();
+    if (force) this.#stickyVersion++;
+    if (this.#stickyRequest) return this.#stickyRequest;
+    if (this.#stickyLoadedVersion === this.#stickyVersion) return Promise.resolve(this.stickyEntries.value);
+    this.#stickyRequest = (async () => {
+      while (true) {
+        this.session.signal.throwIfAborted();
+        const version = this.#stickyVersion;
+        const entries = await this.#client!.listSticky();
+        this.session.signal.throwIfAborted();
+        if (version !== this.#stickyVersion) continue;
+        this.#stickyLoadedVersion = version;
+        this.stickyEntries.value = entries;
+        return entries;
+      }
+    })().finally(() => { this.#stickyRequest = undefined; });
+    return this.#stickyRequest;
   }
 
   async setSticky(ids: readonly string[], isSticky: boolean): Promise<void> {
     if (!this.#client) throw new Error("同步账号未登录");
-    await this.#client.setSticky(ids, isSticky);
-    if (!isSticky) await this.database.batch(ids.filter((id) => id.startsWith("s-")).map((id) => ({ name: "entries", id })));
+    const targetIds = isSticky ? ids : (await Promise.all(ids.map(async (id) =>
+      (await this.get(id)).stickyId,
+    ))).filter((id): id is string => !!id);
+    if (!targetIds.length) return;
+    if (isSticky) {
+      for (const [collection, sourceIds] of await this.#groupByCollection(targetIds)) {
+        await this.#client.setSticky(collection, sourceIds, true);
+      }
+    } else {
+      await this.#client.setSticky("sticky", targetIds, false);
+    }
+    if (!isSticky) await this.database.batch(targetIds.map((id) => ({ name: "entries", id })));
     this.invalidate();
   }
 
@@ -102,6 +149,17 @@ export class HistoryManager {
     this.invalidate();
   }
 
+  async #groupByCollection(ids: readonly string[]): Promise<Map<EntryCollection, string[]>> {
+    const groups = new Map<EntryCollection, string[]>();
+    for (const id of ids) {
+      const collection = (await this.get(id)).collection ?? "history";
+      const group = groups.get(collection) ?? [];
+      group.push(id);
+      groups.set(collection, group);
+    }
+    return groups;
+  }
+
   async get(entryId: string): Promise<StoredEntry> {
     const pending = /^p\d+$/.test(entryId) ? await this.database.get<PendingRow>("pending", Number(entryId.slice(1))) : undefined;
     const entry = pending?.entry ?? await this.database.get<StoredEntry>("entries", entryId);
@@ -113,7 +171,9 @@ export class HistoryManager {
     const entries = await Promise.all(manifest.map((item) => this.database.get<StoredEntry>("entries", item.id)));
     return manifest.filter((item, i) => {
       const entry = entries[i];
-      return !entry || entry.version < item.version || entry.favoriteId === undefined || entry.stickyId === undefined;
+      return !entry || !entry.collection || entry.version < item.version || entry.favoriteId === undefined || entry.stickyId === undefined
+        || (item.favoriteId !== undefined && entry.favoriteId !== item.favoriteId)
+        || (item.stickyId !== undefined && entry.stickyId !== item.stickyId);
     }).map((item) => item.id);
   }
 

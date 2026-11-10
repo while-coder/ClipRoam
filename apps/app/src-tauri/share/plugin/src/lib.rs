@@ -57,6 +57,20 @@ struct AcknowledgeRequest<'a> {
     id: &'a str,
 }
 
+#[cfg(target_os = "ios")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutConfiguration<'a> {
+    server_address: Option<&'a str>,
+    session_token: Option<&'a str>,
+}
+
+#[cfg(target_os = "ios")]
+#[derive(Serialize)]
+struct ShortcutLink<'a> {
+    url: &'a str,
+}
+
 #[derive(Deserialize)]
 pub struct DirectorySelection {
     pub uri: Option<String>,
@@ -116,6 +130,34 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
+    #[cfg(target_os = "ios")]
+    pub async fn add_sms_shortcut(&self, url: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin_async::<serde_json::Value>("addSmsShortcut", ShortcutLink { url })
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    #[cfg(target_os = "ios")]
+    pub async fn configure_shortcuts(
+        &self,
+        server_address: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<()> {
+        self.0
+            .run_mobile_plugin_async::<serde_json::Value>(
+                "configureShortcuts",
+                ShortcutConfiguration {
+                    server_address,
+                    session_token,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     pub async fn device_metadata(&self) -> Result<DeviceMetadata> {
         self.0
             .run_mobile_plugin_async("deviceMetadata", ())

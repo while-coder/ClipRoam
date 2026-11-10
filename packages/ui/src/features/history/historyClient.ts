@@ -1,4 +1,4 @@
-import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type ClipboardManifestEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
+import { ENTRY_QUERY_BATCH, EntryManifestResponseSchema, EntryQueryResponseSchema, FileQueryResponseSchema, type ClipboardEntry, type EntryCollection, type ClipboardManifestEntry, type FileQueryRequest, type FileStatus } from "@cliproam/protocol";
 import type { AccountSession } from "../../accountSession";
 import type { SyncRequester } from "../sync/httpClient";
 import { PAGE_SIZE } from "../../config";
@@ -27,32 +27,36 @@ export class HistoryClient {
   }
 
   /** One server page defines both the visible identities and the total. */
-  async fetchHistoryPage(
-    filter: EntriesManifestFilter,
-  ): Promise<EntriesManifestPage> {
+  fetchHistoryPage(filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
+    return this.#fetchPage("/entries/manifest", filter);
+  }
+
+  fetchFavoritePage(filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
+    return this.#fetchPage("/favorites/manifest", filter);
+  }
+
+  async #fetchPage(path: string, filter: EntriesManifestFilter): Promise<EntriesManifestPage> {
     const params = new URLSearchParams({ page: String(filter.page ?? 1), pageSize: String(PAGE_SIZE) });
     if (filter.query?.trim()) params.set("search", filter.query.trim());
     if (filter.kind && filter.kind !== "all") params.set("kind", filter.kind);
     if (filter.start !== undefined) params.set("dateStart", new Date(filter.start).toISOString());
     if (filter.end !== undefined) params.set("dateEnd", new Date(filter.end).toISOString());
     for (const id of filter.deviceIds ?? []) params.append("deviceIds", id);
-    const path = filter.stickyOnly ? "/entries/sticky/manifest"
-      : filter.favoriteOnly || filter.favoriteFolderId ? "/favorites/manifest" : "/entries/manifest";
-    if (!filter.stickyOnly && filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
+    if (path === "/favorites/manifest" && filter.favoriteFolderId) params.set("favoriteFolderId", filter.favoriteFolderId);
     const result = await this.http.request(
       "GET", `${path}?${params}`,
       { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) },
       EntryManifestResponseSchema, "服务器返回了不兼容的历史列表响应",
     );
-    const entries = await this.fetchHistoryInfo(result!.manifest);
+    const entries = await this.fetchHistoryInfo(result!.manifest, path === "/favorites/manifest" ? "favorites" : "history");
     if (this.session.signal.aborted) return { total: 0, entries: [] };
     return { total: result!.total, entries };
   }
 
-  async setFavorite(entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<void> {
+  async setFavorite(collection: EntryCollection, entryIds: readonly string[], isFavorite: boolean, favoriteFolderId?: string | null): Promise<void> {
     for (let offset = 0; offset < entryIds.length; offset += ENTRY_QUERY_BATCH) {
       await this.http.request("PATCH", "/entries/favorite",
-        this.#jsonInit({ ids: [...new Set(entryIds.slice(offset, offset + ENTRY_QUERY_BATCH))], isFavorite, favoriteFolderId }, ENTRY_HTTP_TIMEOUT_MS), null, "");
+        this.#jsonInit({ collection, ids: [...new Set(entryIds.slice(offset, offset + ENTRY_QUERY_BATCH))], isFavorite, favoriteFolderId }, ENTRY_HTTP_TIMEOUT_MS), null, "");
     }
   }
 
@@ -61,14 +65,17 @@ export class HistoryClient {
     return result!.folders;
   }
 
-  async listSticky(): Promise<ClipboardEntry[]> {
+  async listSticky(): Promise<LocalClipboardEntry[]> {
     const result = await this.http.request("GET", "/entries/sticky", { signal: AbortSignal.timeout(ENTRY_HTTP_TIMEOUT_MS) }, StickyEntriesResponseSchema, "服务器返回了不兼容的便签列表");
     await this.session.history.upsert(result!.entries);
-    return result!.entries;
+    const ids = result!.entries.map((entry) => entry.id);
+    const fileIds = await this.session.history.unknownFileIds(ids);
+    if (fileIds.length) await this.session.history.upsertFiles(await this.#fetchFiles(fileIds));
+    return this.session.history.display(ids, false);
   }
 
-  async setSticky(ids: readonly string[], isSticky: boolean): Promise<void> {
-    await this.http.request("PATCH", "/entries/sticky", this.#jsonInit({ ids: [...new Set(ids)], isSticky }, ENTRY_HTTP_TIMEOUT_MS), null, "");
+  async setSticky(collection: EntryCollection, ids: readonly string[], isSticky: boolean): Promise<void> {
+    await this.http.request("PATCH", "/entries/sticky", this.#jsonInit({ collection, ids: [...new Set(ids)], isSticky }, ENTRY_HTTP_TIMEOUT_MS), null, "");
   }
 
   async saveFavoriteFolder(input: FavoriteFolderInput, id?: string): Promise<void> {
@@ -82,13 +89,14 @@ export class HistoryClient {
   /** Only detail backfill writes server entry/file information into the cache. */
   async fetchHistoryInfo(
     manifest: ClipboardManifestEntry[],
+    collection: EntryCollection = "history",
   ): Promise<LocalClipboardEntry[]> {
     const entryIds = manifest.map((entry) => entry.id);
     if (!entryIds.length) return [];
     try {
       const missing = await this.session.history.stale(manifest);
       if (missing.length) {
-        const entries = await this.#fetchEntries(missing);
+        const entries = await this.#fetchEntries(collection, missing);
         await this.session.history.upsert(entries);
       }
       // Only this page's details supply file identities; unknown/unstored files
@@ -105,11 +113,11 @@ export class HistoryClient {
     }
   }
 
-  async #fetchEntries(entryIds: readonly string[]): Promise<ClipboardEntry[]> {
+  async #fetchEntries(collection: EntryCollection, entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     return this.#queryBatched(entryIds, async (batch) => {
       const result = await this.http.request(
         "POST", "/entries/query",
-        this.#jsonInit({ entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
+        this.#jsonInit({ collection, entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
         EntryQueryResponseSchema, "服务器返回了不兼容的历史记录响应",
       );
       return result!.entries;
@@ -136,11 +144,11 @@ export class HistoryClient {
     return queried!.files;
   }
 
-  async delete(ids: readonly string[]): Promise<void> {
+  async delete(collection: EntryCollection, ids: readonly string[]): Promise<void> {
     await this.http.request(
       "DELETE",
       "/entries",
-      this.#jsonInit({ ids }, ENTRY_HTTP_TIMEOUT_MS),
+      this.#jsonInit({ collection, ids }, ENTRY_HTTP_TIMEOUT_MS),
       null,
       "",
     );

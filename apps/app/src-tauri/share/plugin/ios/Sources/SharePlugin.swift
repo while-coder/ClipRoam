@@ -271,7 +271,47 @@ private struct AcknowledgeArgs: Decodable {
     let id: String
 }
 
+private struct ShortcutArgs: Decodable {
+    let serverAddress: String?
+    let sessionToken: String?
+}
+
+private struct ShortcutLinkArgs: Decodable {
+    let url: String
+}
+
 private final class SharePlugin: Plugin {
+    @objc func addSmsShortcut(_ invoke: Invoke) throws {
+        guard #available(iOS 27.0, *) else {
+            invoke.reject("快速添加短信自动同步需要 iOS 27 或更新版本")
+            return
+        }
+        let args = try invoke.parseArgs(ShortcutLinkArgs.self)
+        guard let parts = URLComponents(string: args.url), parts.scheme == "https",
+              parts.host?.lowercased() == "www.icloud.com", parts.port == nil,
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
+              parts.path.range(of: "^/shortcuts/[a-fA-F0-9]{32}/?$", options: .regularExpression) != nil,
+              let url = parts.url else { throw ShortcutSession.failure("快捷指令分享链接无效") }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url, options: [:]) { opened in
+                if opened { invoke.resolve() }
+                else { invoke.reject("无法打开快捷指令，请确认已安装系统“快捷指令”App") }
+            }
+        }
+    }
+
+    @objc func configureShortcuts(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(ShortcutArgs.self)
+        if #available(iOS 16.0, *) {
+            Task {
+                do {
+                    try await ShortcutSession.configure(serverAddress: args.serverAddress, sessionToken: args.sessionToken)
+                    invoke.resolve()
+                } catch { invoke.reject(error.localizedDescription) }
+            }
+        } else { invoke.reject("快捷指令需要 iOS 16 或更新版本") }
+    }
+
     @objc func deviceMetadata(_ invoke: Invoke) {
         var result: JSObject = ["deviceBrand": "Apple"]
         if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,

@@ -14,6 +14,10 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
   // system display name. XcodeGen scans this target's sources for .lproj files
   // and installs them at the app bundle root as localized resources.
   fs.cpSync(path.join(__dirname, "locales"), path.join(apple, target), { recursive: true });
+  // App Intents must be compiled into the app target for Xcode's metadata extractor.
+  fs.copyFileSync(path.join(__dirname, "ClipRoamShortcuts.swift"), path.join(apple, target, "ClipRoamShortcuts.swift"));
+  fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/ShortcutSession.swift"),
+    path.join(apple, target, "ShortcutSession.swift"));
   const version = require(path.join(root, "package.json")).version;
   const buildVersion = project.match(/^\s+CFBundleVersion:\s*["']?([^\s"']+)/m)?.[1] ?? version;
   const appGroup = { "com.apple.security.application-groups": ["group.com.whilecode.cliproam"] };

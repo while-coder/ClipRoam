@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import {
   FILE_CHUNK_SIZE,
+  EntryCollectionSchema,
   FileIdSchema,
   FileQueryRequestSchema,
   FileAccessRequestSchema,
@@ -38,13 +39,13 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     const { entryId, fileId } = request.params as { entryId: string; fileId: string };
     const body = parseOr400(reply, FileAccessRequestSchema, request.body, "文件访问参数无效");
     if (!body) return reply;
-    if (!FileIdSchema.safeParse(fileId).success || !store.canReadFile(user.id, entryId, fileId)) {
+    if (!FileIdSchema.safeParse(fileId).success || !store.canReadFile(user.id, body.collection, entryId, fileId)) {
       return reply.code(404).send({ message: "文件不存在或无权访问" });
     }
     if (body.preview && !videoContentType(body.name)) {
       return reply.code(400).send({ message: "暂不支持此文件类型的在线播放" });
     }
-    const access = accessTokens.issue(user.id, entryId, fileId, body.name, body.preview);
+    const access = accessTokens.issue(user.id, body.collection, entryId, fileId, body.name, body.preview);
     return { path: `/files/${encodeURIComponent(entryId)}/${fileId}?access=${access}` };
   });
 
@@ -90,7 +91,7 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
   // may read it.
   app.get("/files/:entryId/:fileId", async (request, reply) => {
     const { entryId, fileId } = request.params as { entryId: string; fileId: string };
-    const query = request.query as { access?: string };
+    const query = request.query as { access?: string; collection?: string };
     const access = typeof query.access === "string" ? accessTokens.verify(query.access, entryId, fileId) : undefined;
     if (query.access !== undefined && !access) return reply.code(401).send({ message: "文件访问链接已失效" });
     const user = access ? { id: access.userId } : requireSessionUser(request, reply);
@@ -98,7 +99,9 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     if (!FileIdSchema.safeParse(fileId).success || !entryId) {
       return reply.code(400).send({ message: "下载参数无效" });
     }
-    if (!store.canReadFile(user.id, entryId, fileId)) {
+    const collection = parseOr400(reply, EntryCollectionSchema.default("history"), access?.collection ?? query.collection, "记录类型无效");
+    if (!collection) return reply;
+    if (!store.canReadFile(user.id, collection, entryId, fileId)) {
       return reply.code(404).send({ message: "文件不存在或无权访问" });
     }
     const stored = store.files().get(fileId);

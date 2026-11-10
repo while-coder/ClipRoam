@@ -3,7 +3,7 @@ import { computed, nextTick, onScopeDispose, ref, watch, type Ref, type WatchSou
 import { PAGE_SIZE } from "../../config";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 
-type ManifestOptions = {
+export type ManifestOptions = {
   fetchHistoryPage: (
     filter: EntriesManifestFilter,
   ) => Promise<EntriesManifestPage>;

@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { EntryCollectionSchema, type EntryCollection } from "@cliproam/protocol";
 
-type FileAccess = { userId: string; name: string; expires: number; preview?: boolean };
+type FileAccess = { collection: EntryCollection; userId: string; name: string; expires: number; preview?: boolean };
 const ACCESS_LIFETIME_MS = 60 * 60 * 1000;
 
 export function videoContentType(name: string): string | undefined {
@@ -24,8 +25,8 @@ export function videoContentType(name: string): string | undefined {
 export class FileAccessTokens {
   readonly #key = randomBytes(32);
 
-  issue(userId: string, entryId: string, fileId: string, name: string, preview = false): string {
-    const payload = Buffer.from(JSON.stringify({ userId, name, preview, expires: Date.now() + ACCESS_LIFETIME_MS })).toString("base64url");
+  issue(userId: string, collection: EntryCollection, entryId: string, fileId: string, name: string, preview = false): string {
+    const payload = Buffer.from(JSON.stringify({ userId, collection, name, preview, expires: Date.now() + ACCESS_LIFETIME_MS })).toString("base64url");
     return `${payload}.${this.#sign(entryId, fileId, payload).toString("base64url")}`;
   }
 
@@ -38,7 +39,7 @@ export class FileAccessTokens {
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return;
     try {
       const access = JSON.parse(Buffer.from(payload, "base64url").toString()) as FileAccess;
-      if (typeof access.userId !== "string" || typeof access.name !== "string"
+      if (!EntryCollectionSchema.safeParse(access.collection).success || typeof access.userId !== "string" || typeof access.name !== "string"
         || !Number.isSafeInteger(access.expires) || access.expires <= Date.now()) return;
       return access;
     } catch { return; }

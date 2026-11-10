@@ -180,7 +180,8 @@ export async function initializeStickyDesktop(): Promise<() => void> {
       void refresh().catch((error) => { if (!owner.signal.aborted) report("便签同步失败", error); });
     }, 120);
     owner.history.addEvent(changed);
-    onCleanup(() => owner.history.delEvent(changed));
+    const stopEntries = watch(owner.history.stickyEntries, changed);
+    onCleanup(() => { owner.history.delEvent(changed); stopEntries(); });
     changed();
   }, { immediate: true, flush: "sync" });
 
@@ -200,7 +201,10 @@ export async function initializeStickyDesktop(): Promise<() => void> {
     try { await editExistingNotes(); }
     catch (error) { report("恢复便签操作失败", error); }
     let refreshed = true;
-    try { await refresh(); }
+    try {
+      await session?.history.listSticky(true);
+      await refresh();
+    }
     catch (error) { refreshed = false; report("便签同步失败", error); }
     try {
       const owner = session;

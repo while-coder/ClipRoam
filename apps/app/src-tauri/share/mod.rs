@@ -31,6 +31,39 @@ pub(crate) struct NativeShare {
     pub(crate) paths: Vec<String>,
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn native_configure_ios_shortcuts(
+    app: AppHandle,
+    server_address: Option<String>,
+    session_token: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        app.share_receiver()
+            .configure_shortcuts(server_address.as_deref(), session_token.as_deref())
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (app, server_address, session_token);
+        Err("当前平台不支持 iOS 快捷指令".to_string())
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn native_add_ios_sms_shortcut(app: AppHandle, url: String) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        app.share_receiver().add_sms_shortcut(&url).await.map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (app, url);
+        Err("快速添加短信自动同步需要 iOS 27 或更新版本".to_string())
+    }
+}
+
 #[tauri::command(rename_all = "camelCase", async)]
 pub(crate) fn native_pending_shares(
     app: AppHandle,
