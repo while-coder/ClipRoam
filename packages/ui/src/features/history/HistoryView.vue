@@ -846,7 +846,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
       @save="emit('save', $event)"
       @remove="removeFromMenu"
       @unsticky="unstickyFromMenu"
-      @select="beginSelection"
       @close="closeEntryMenu"
     />
 

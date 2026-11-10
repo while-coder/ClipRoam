@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { canSaveEntry, saveEntryLabel } from "../../utils";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Copy, Download, Trash2, ListChecks, Star, Folder, StickyNote } from "lucide-vue-next";
+import { Copy, Download, Trash2, Star, Folder, StickyNote } from "lucide-vue-next";
 import { stickyDesktop } from "../sticky/stickyDesktop";
 import type { LocalClipboardEntry } from "../../types";
 import { useMobileLayout } from "../../platform/runtime";
@@ -28,7 +28,6 @@ const emit = defineEmits<{
   activate: [entry: LocalClipboardEntry];
   save: [entry: LocalClipboardEntry];
   remove: [entry: LocalClipboardEntry];
-  select: [entry: LocalClipboardEntry];
   favorite: [entry: LocalClipboardEntry, isFavorite: boolean];
   destination: [entry: LocalClipboardEntry];
   unsticky: [entry: LocalClipboardEntry];
@@ -98,7 +97,6 @@ function run(action: (entry: LocalClipboardEntry) => void): (entry: LocalClipboa
 
 const onActivate = run((entry) => emit("activate", entry));
 const onSave = run((entry) => emit("save", entry));
-const onSelect = run((entry) => emit("select", entry));
 const onDestination = run((entry) => emit("destination", entry));
 const onSticky = run((entry) => { void stickyDesktop.value?.(entry); });
 const onUnsticky = run((entry) => emit("unsticky", entry));
@@ -208,10 +206,6 @@ onBeforeUnmount(() => {
       <SButton type="text" block role="menuitem" class="danger" :class="{ confirming: confirmingRemove }" @click="requestRemove(entry)">
         <Trash2 :size="15" aria-hidden="true" />
         <span>{{ removeLabel }}</span>
-      </SButton>
-      <SButton v-if="!multiple" type="text" block role="menuitem" @click="onSelect(entry)">
-        <ListChecks :size="15" aria-hidden="true" />
-        <span>多选</span>
       </SButton>
     </div>
   </Teleport>
