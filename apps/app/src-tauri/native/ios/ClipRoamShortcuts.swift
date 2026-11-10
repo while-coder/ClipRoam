@@ -1,6 +1,5 @@
 import AppIntents
 import Foundation
-import UniformTypeIdentifiers
 
 @available(iOS 16.0, *)
 struct SyncTextToClipRoam: AppIntent {
@@ -37,7 +36,7 @@ struct SyncFilesToClipRoam: AppIntent {
     static var openAppWhenRun: Bool = false
     static var authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
-    @Parameter(title: "文件", supportedTypeIdentifiers: [UTType.item.identifier])
+    @Parameter(title: "文件", supportedTypeIdentifiers: ["public.item"])
     var files: [IntentFile]
 
     static var parameterSummary: some ParameterSummary { Summary("同步 \(\.$files) 到 ClipRoam") }
