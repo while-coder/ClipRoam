@@ -21,7 +21,6 @@ use std::{thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, Size, Window, WindowEvent};
 
 const TRAY_SHOW_MAIN: &str = "show-main";
-const TRAY_EDIT_STICKY: &str = "edit-sticky";
 const TRAY_QUIT: &str = "quit";
 
 pub(crate) fn register_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
@@ -189,14 +188,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         true,
         None::<&str>,
     )?;
-    let edit_sticky = MenuItem::with_id(
-        app,
-        TRAY_EDIT_STICKY,
-        if chinese { "编辑便签（解除穿透）" } else { "Edit Sticky Notes (Unlock)" },
-        true,
-        None::<&str>,
-    )?;
-    let menu = Menu::with_items(app, &[&show_main, &edit_sticky, &quit])?;
+    let menu = Menu::with_items(app, &[&show_main, &quit])?;
     #[cfg(target_os = "macos")]
     let icon = tauri::image::Image::from_bytes(include_bytes!("../../../native/macos/icons/tray-macos.png"))?;
     #[cfg(not(target_os = "macos"))]
@@ -213,14 +205,6 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_SHOW_MAIN => {
                 let _ = show_main_window(app);
-            }
-            TRAY_EDIT_STICKY => {
-                // Recover native mouse input immediately, even if the main
-                // webview is hidden and its JS callbacks have been suspended.
-                if let Err(error) = crate::sticky::edit_all(app) {
-                    log::warn!("[sticky] failed to unlock notes: {error}");
-                }
-                let _ = app.emit_to("main", "cliproam://sticky-edit", ());
             }
             TRAY_QUIT => app.exit(0),
             _ => {}

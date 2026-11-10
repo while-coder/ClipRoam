@@ -1,41 +1,22 @@
-import { base64ToBytes, bytesToBase64 } from "../utils";
 import { applicationDatabase } from "./database";
 import { native, type DeviceInfo } from "./native";
 import type { Device } from "@cliproam/protocol";
 import type { SyncConfig } from "../types";
 import { normalizeServerAddress } from "../features/sync/authApi";
 
-/** Application storage for encrypted login configuration and device identity. */
-const CONFIG_KEY = "cliproam.connection.v2";
-const SAVED_ACCOUNTS_KEY = "cliproam.saved-accounts.v2";
-const ENCRYPTION_KEY = "cliproam.storage-key.v1";
-type EncryptedConfig = { version: 1; iv: string; ciphertext: string };
-type SavedAccounts = Record<string, { username: string; token: string }[]>;
+/** Application storage for login configuration and device identity. */
+const CONFIG_KEY = "cliproam.lastlogin";
+const SAVED_ACCOUNTS_KEY = "cliproam.saved-accounts";
+type SavedAccounts = Record<string, Record<string, string>>;
 
 function serverKey(config: SyncConfig): string {
   return normalizeServerAddress(config.serverAddress);
 }
 
-async function readEncrypted<T>(id: string): Promise<T | undefined> {
-  const stored = await applicationDatabase.get<EncryptedConfig>("meta", id);
-  if (!stored) return undefined;
-  if (stored.version !== 1) throw new Error("不支持的本地登录配置版本");
-  const key = await localKey(false);
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToBytes(stored.iv) }, key, base64ToBytes(stored.ciphertext));
-  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
-}
-
-async function encrypt(value: unknown): Promise<EncryptedConfig> {
-  const key = await localKey(true), iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(value));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
-  return { version: 1, iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(ciphertext)) };
-}
-
 export async function readSavedAccounts(): Promise<SyncConfig[]> {
-  const accounts = await readEncrypted<SavedAccounts>(SAVED_ACCOUNTS_KEY) ?? {};
+  const accounts = await readSavedAccountMap();
   return Object.entries(accounts).flatMap(([address, users]) => {
-    return users.map(({ username, token }) => ({
+    return Object.entries(users).map(([username, token]) => ({
       serverAddress: normalizeServerAddress(address),
       username,
       sessionToken: token,
@@ -43,79 +24,81 @@ export async function readSavedAccounts(): Promise<SyncConfig[]> {
   });
 }
 
+async function readSavedAccountMap(): Promise<SavedAccounts> {
+  let accounts = await applicationDatabase.get<SavedAccounts>("meta", SAVED_ACCOUNTS_KEY);
+  const legacy = await applicationDatabase.get<SavedAccounts>("meta", "cliproam.saved-accounts.v2");
+  if (legacy) {
+    accounts ??= "ciphertext" in legacy ? {} : legacy;
+    await applicationDatabase.batch([
+      { name: "meta", id: SAVED_ACCOUNTS_KEY, value: accounts },
+      { name: "meta", id: "cliproam.saved-accounts.v2" },
+    ]);
+  }
+  return accounts && !("ciphertext" in accounts) ? accounts : {};
+}
+
 /** Forget credentials without deleting the account's clipboard archive or stopping its live session. */
 export async function removeSavedAccounts(config?: SyncConfig, wholeServer = false): Promise<void> {
-  const accounts = config ? await readEncrypted<SavedAccounts>(SAVED_ACCOUNTS_KEY) ?? {} : {};
+  const accounts = config ? await readSavedAccountMap() : {};
   if (config) {
     const key = serverKey(config);
-    const users = wholeServer ? [] : accounts[key]?.filter((user) => user.username !== config.username) ?? [];
-    if (users.length) accounts[key] = users;
-    else delete accounts[key];
-  }
-  const current = await readLoginConfig();
-  const changes = [{ name: "meta" as const, id: SAVED_ACCOUNTS_KEY, value: await encrypt(accounts) }];
-  if (current && (!config || (serverKey(current) === serverKey(config) && (wholeServer || current.username === config.username)))) {
-    changes.push({ name: "meta", id: CONFIG_KEY, value: await encrypt({ ...current, sessionToken: "" }) });
-  }
-  await applicationDatabase.batch(changes);
-}
-
-async function localKey(create: boolean): Promise<CryptoKey> {
-  let encoded = await applicationDatabase.get<string>("meta", ENCRYPTION_KEY);
-  if (encoded) {
-    let key: CryptoKey | undefined;
-    try {
-      const bytes = base64ToBytes(encoded);
-      if (bytes.length !== 32) throw new Error("invalid key");
-      key = await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
-    } catch {
-      if (!create) throw new Error("本地登录配置无法解密，请重新登录");
-      encoded = undefined;
-    }
-    if (key && encoded) {
-      return key;
+    if (wholeServer) delete accounts[key];
+    else if (Object.prototype.hasOwnProperty.call(accounts, key)) {
+      delete accounts[key]![config.username];
+      if (!Object.keys(accounts[key]!).length) delete accounts[key];
     }
   }
-  if (!encoded && create) {
-    encoded = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
-    await applicationDatabase.put("meta", ENCRYPTION_KEY, encoded);
-  }
-  if (!encoded) throw new Error("本地登录配置无法解密，请重新登录");
-  return crypto.subtle.importKey("raw",base64ToBytes(encoded),"AES-GCM",false,["encrypt","decrypt"]);
+  await readLoginConfig();
+  await applicationDatabase.batch([
+    { name: "meta", id: SAVED_ACCOUNTS_KEY, value: accounts },
+    { name: "meta", id: "cliproam.saved-accounts.v2" },
+    { name: "meta", id: "cliproam.storage-key.v1" },
+  ]);
 }
 
-/** Persist the local key and ciphertext alongside device identity in IndexedDB. */
 export async function readLoginConfig(): Promise<SyncConfig | null> {
-  const stored = await applicationDatabase.get<EncryptedConfig>("meta", CONFIG_KEY);
-  if (!stored) return null;
-  try {
-    if (stored.version !== 1) throw new Error("unsupported version");
-    const key = await localKey(false);
-    const plaintext = await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(stored.iv)},key,base64ToBytes(stored.ciphertext));
-    const config = JSON.parse(new TextDecoder().decode(plaintext)) as SyncConfig;
-    if (typeof config.serverAddress !== "string" || typeof config.username !== "string" || typeof config.sessionToken !== "string") throw new Error("invalid config");
-    return { ...config, serverAddress: normalizeServerAddress(config.serverAddress) };
-  } catch {
-    throw new Error("本地登录配置无法解密，请输入账号信息重新登录");
+  let config = await applicationDatabase.get<{ address: string; username: string }>("meta", CONFIG_KEY);
+  const legacy = await applicationDatabase.get<SyncConfig>("meta", "cliproam.connection.v2");
+  if (!config && legacy && typeof legacy.serverAddress === "string" && typeof legacy.username === "string") {
+    config = { address: normalizeServerAddress(legacy.serverAddress), username: legacy.username };
   }
+  if (legacy) {
+    await applicationDatabase.batch([
+      ...(config ? [{ name: "meta" as const, id: CONFIG_KEY, value: config }] : []),
+      { name: "meta", id: "cliproam.connection.v2" },
+      { name: "meta", id: "cliproam.storage-key.v1" },
+    ]);
+  }
+  if (!config) return null;
+  const serverAddress = normalizeServerAddress(config.address);
+  const accounts = await readSavedAccountMap();
+  const users = accounts[serverAddress];
+  const sessionToken = users && Object.prototype.hasOwnProperty.call(users, config.username) ? users[config.username] : "";
+  return { serverAddress, username: config.username, sessionToken };
 }
 
 export async function writeLoginConfig(config: SyncConfig | null): Promise<void> {
   if (!config) {
-    await applicationDatabase.delete("meta", CONFIG_KEY);
+    await applicationDatabase.batch([
+      { name: "meta", id: CONFIG_KEY },
+      { name: "meta", id: "cliproam.connection.v2" },
+      { name: "meta", id: "cliproam.storage-key.v1" },
+    ]);
     return;
   }
   config = { ...config, serverAddress: normalizeServerAddress(config.serverAddress) };
-  const accounts = await readEncrypted<SavedAccounts>(SAVED_ACCOUNTS_KEY) ?? {};
+  const accounts = await readSavedAccountMap();
   const key = serverKey(config);
-  const users = accounts[key] ?? [];
-  const existing = users.findIndex((user) => user.username === config.username);
-  if (config.sessionToken || existing >= 0) {
-    accounts[key] = [{ username: config.username, token: config.sessionToken }, ...users.filter((user) => user.username !== config.username)];
+  const users = Object.prototype.hasOwnProperty.call(accounts, key) ? accounts[key]! : {};
+  if (config.sessionToken || Object.prototype.hasOwnProperty.call(users, config.username)) {
+    accounts[key] = { [config.username]: config.sessionToken, ...Object.fromEntries(Object.entries(users).filter(([username]) => username !== config.username)) };
   }
   await applicationDatabase.batch([
-    { name: "meta", id: CONFIG_KEY, value: await encrypt(config) },
-    { name: "meta", id: SAVED_ACCOUNTS_KEY, value: await encrypt(accounts) },
+    { name: "meta", id: CONFIG_KEY, value: { address: config.serverAddress, username: config.username } },
+    { name: "meta", id: "cliproam.connection.v2" },
+    { name: "meta", id: SAVED_ACCOUNTS_KEY, value: accounts },
+    { name: "meta", id: "cliproam.saved-accounts.v2" },
+    { name: "meta", id: "cliproam.storage-key.v1" },
   ]);
 }
 
