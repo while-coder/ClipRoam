@@ -57,7 +57,6 @@ struct AcknowledgeRequest<'a> {
     id: &'a str,
 }
 
-#[cfg(target_os = "ios")]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ShortcutConfiguration<'a> {
@@ -130,7 +129,6 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
-    #[cfg(target_os = "ios")]
     pub async fn configure_widget(
         &self,
         server_address: Option<&str>,

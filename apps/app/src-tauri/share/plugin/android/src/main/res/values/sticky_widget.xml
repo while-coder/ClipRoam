@@ -1,0 +1,16 @@
+<resources>
+    <string name="sticky_widget_name">Sticky notes</string>
+    <string name="sticky_widget_description">View your synced sticky notes on the home screen</string>
+    <string name="sticky_widget_refresh">Refresh</string>
+    <string name="sticky_widget_login">Open the app and sign in</string>
+    <string name="sticky_widget_empty">No sticky notes. Add one in the app.</string>
+    <string name="sticky_widget_loading">Syncing sticky notes…</string>
+    <string name="sticky_widget_offline">Unable to sync · showing saved notes</string>
+    <string name="sticky_widget_status">%1$d notes · updated %2$s</string>
+    <color name="sticky_widget_background">#F8FAFC</color>
+    <color name="sticky_widget_note">#FFFFFF</color>
+    <color name="sticky_widget_text">#0F172A</color>
+    <color name="sticky_widget_muted">#475569</color>
+    <color name="sticky_widget_accent">#1D4ED8</color>
+    <color name="sticky_widget_ripple">#2260A5FA</color>
+</resources>

@@ -1,0 +1,10 @@
+<resources>
+    <string name="sticky_widget_name">便签</string>
+    <string name="sticky_widget_description">在桌面查看同步便签</string>
+    <string name="sticky_widget_refresh">刷新</string>
+    <string name="sticky_widget_login">打开 App 登录后查看便签</string>
+    <string name="sticky_widget_empty">暂无便签，请在 App 中添加</string>
+    <string name="sticky_widget_loading">正在同步便签…</string>
+    <string name="sticky_widget_offline">同步失败 · 显示上次内容</string>
+    <string name="sticky_widget_status">%1$d 条便签 · 更新于 %2$s</string>
+</resources>

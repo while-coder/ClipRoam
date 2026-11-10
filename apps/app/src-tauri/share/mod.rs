@@ -32,6 +32,26 @@ pub(crate) struct NativeShare {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn native_configure_android_widget(
+    app: AppHandle,
+    server_address: Option<String>,
+    session_token: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        app.share_receiver()
+            .configure_widget(server_address.as_deref(), session_token.as_deref())
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, server_address, session_token);
+        Err("当前平台不支持 Android 小组件".to_string())
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn native_configure_ios_widget(
     app: AppHandle,
     server_address: Option<String>,

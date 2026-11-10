@@ -37,6 +37,12 @@ class AcknowledgeArgs {
 class PendingArgs { lateinit var scope: String }
 
 @InvokeArg
+class WidgetArgs {
+    var serverAddress: String? = null
+    var sessionToken: String? = null
+}
+
+@InvokeArg
 class CopyFileArgs {
     lateinit var source: String
     lateinit var parent: String
@@ -66,10 +72,24 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onResume() {
         trigger("share-received", JSObject())
+        StickyWidgetSync.refresh(activity)
     }
 
     override fun onDestroy() {
         scope.cancel()
+    }
+
+    @Command
+    fun configureWidget(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(WidgetArgs::class.java)
+            StickyWidgetStore.configure(activity, args.serverAddress, args.sessionToken)
+            StickyWidgetProvider.render(activity)
+            StickyWidgetSync.configure(activity)
+            invoke.resolve()
+        } catch (error: Exception) {
+            invoke.reject(error.message ?: "Unable to configure sticky widget")
+        }
     }
 
     @Command

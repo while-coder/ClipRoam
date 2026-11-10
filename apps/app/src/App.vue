@@ -10,12 +10,14 @@ import { initializeBossKey } from "./features/settings/bossKey";
 import { initializeStickyDesktop } from "./features/sticky/stickyWindows";
 import { initializeIosShortcuts } from "./features/shortcuts/iosShortcuts";
 import { initializeIosWidget } from "./features/sticky/iosWidget";
+import { initializeAndroidWidget } from "./features/sticky/androidWidget";
 
 let disposeSticky: (() => void) | undefined;
 let disposeIosShortcuts: (() => void) | undefined;
 let disposeIosWidget: (() => void) | undefined;
+let disposeAndroidWidget: (() => void) | undefined;
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; disposeSticky?.(); disposeIosShortcuts?.(); disposeIosWidget?.(); });
+onBeforeUnmount(() => { disposed = true; disposeSticky?.(); disposeIosShortcuts?.(); disposeIosWidget?.(); disposeAndroidWidget?.(); });
 
 onMounted(async () => {
   try {
@@ -25,6 +27,8 @@ onMounted(async () => {
       if (device.osType === "ios" && !disposed) {
         disposeIosShortcuts = initializeIosShortcuts(device.osVersion);
         disposeIosWidget = initializeIosWidget();
+      } else if (device.osType === "android" && !disposed) {
+        disposeAndroidWidget = initializeAndroidWidget();
       }
     }
     if (capabilities.globalShortcut) await initializeBossKey();
