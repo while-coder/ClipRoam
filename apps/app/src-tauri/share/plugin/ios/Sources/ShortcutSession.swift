@@ -3,7 +3,7 @@ import Security
 import CryptoKit
 
 struct ShortcutSession: Codable {
-    let serverAddress: String
+    let uploadUrl: String
     let uploadToken: String
     let expiresAt: String
     let sessionFingerprint: String
@@ -46,11 +46,25 @@ struct ShortcutSession: Codable {
         guard status == errSecSuccess, let data = result as? Data else {
             throw failure("请先解锁 iPhone 并打开 ClipRoam 登录，然后重试快捷指令")
         }
-        return try JSONDecoder().decode(ShortcutSession.self, from: data)
+        let decoder = JSONDecoder()
+        if let session = try? decoder.decode(ShortcutSession.self, from: data) { return session }
+        // Existing installs stored the server base address instead of the full upload URL.
+        struct PreviousSession: Decodable {
+            let serverAddress: String
+            let uploadToken: String
+            let expiresAt: String
+            let sessionFingerprint: String
+        }
+        let previous = try decoder.decode(PreviousSession.self, from: data)
+        let session = ShortcutSession(uploadUrl: try endpoint(previous.serverAddress, "/shortcuts/text").absoluteString,
+            uploadToken: previous.uploadToken, expiresAt: previous.expiresAt, sessionFingerprint: previous.sessionFingerprint)
+        try save(session)
+        return session
     }
 
-    func endpoint(_ path: String = "/shortcuts/text") throws -> URL {
-        try Self.endpoint(serverAddress, path)
+    func endpoint(_ action: String = "text") throws -> URL {
+        let url = try Self.endpoint(uploadUrl, "")
+        return action == "text" ? url : url.deletingLastPathComponent().appendingPathComponent(action)
     }
 
     private static func endpoint(_ address: String, _ path: String) throws -> URL {
@@ -73,13 +87,14 @@ struct ShortcutSession: Codable {
         let fingerprint = SHA256.hash(data: Data(loginToken.utf8)).map { String(format: "%02x", $0) }.joined()
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let cached = try? load(), cached.serverAddress == address, cached.sessionFingerprint == fingerprint,
+        let uploadUrl = try endpoint(address, "/shortcuts/text").absoluteString
+        if let cached = try? load(), cached.uploadUrl == uploadUrl, cached.sessionFingerprint == fingerprint,
            let expiry = formatter.date(from: cached.expiresAt), expiry > Date() { return }
         try await clear()
         let data = try await request(url: endpoint(address, "/shortcuts/token"), token: loginToken, method: "POST")
         struct Credential: Decodable { let token: String; let expiresAt: String }
         let credential = try JSONDecoder().decode(Credential.self, from: data)
-        try save(ShortcutSession(serverAddress: address, uploadToken: credential.token,
+        try save(ShortcutSession(uploadUrl: uploadUrl, uploadToken: credential.token,
                                  expiresAt: credential.expiresAt, sessionFingerprint: fingerprint))
     }
 
@@ -88,7 +103,7 @@ struct ShortcutSession: Codable {
         let cached = try? load()
         // Always clear locally, even when the server cannot be reached at logout.
         try save(nil)
-        if let cached = cached, let url = try? cached.endpoint("/shortcuts/token") {
+        if let cached = cached, let url = try? cached.endpoint("token") {
             _ = try? await request(url: url, token: cached.uploadToken, method: "DELETE", timeout: 5)
         }
     }

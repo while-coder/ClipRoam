@@ -117,7 +117,7 @@ private enum ShortcutMultipartUpload {
         }
         try write("--\(boundary)--\r\n")
         try output.close()
-        let data = try await ShortcutSession.request(url: account.endpoint("/shortcuts/files"),
+        let data = try await ShortcutSession.request(url: account.endpoint("files"),
             token: account.uploadToken, method: "POST", bodyFile: bodyURL,
             contentType: "multipart/form-data; boundary=\(boundary)", timeout: 300)
         try ShortcutSession.checkUploadResult(data)

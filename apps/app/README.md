@@ -51,6 +51,8 @@ iOS 16 及更新版本提供“同步文本到 ClipRoam”“同步文件到 Cli
 
 ### 上传接口
 
+iOS 和 Android 使用相同的原生上传配置内容：`uploadUrl`（完整的 `/shortcuts/text` URL）、`uploadToken`（独立上传凭证）、`expiresAt`（服务端返回的 ISO 8601 有效期）、`sessionFingerprint`（登录凭证的 SHA-256，用于判断是否需要重新配置）。登录后保存，退出登录后清除。iOS 存入 Keychain，Android 存入应用私有且排除备份的文件；短信触发方式和 Android 待上传队列独立于这份配置。iOS 已保存的旧版服务器地址会在读取时转换为完整上传 URL。
+
 使用普通登录凭证调用 `POST /shortcuts/token` 获取上传凭证，之后在下列请求中携带 `Authorization: Bearer <upload token>`：
 
 | 接口 | 请求格式 | 内容 |

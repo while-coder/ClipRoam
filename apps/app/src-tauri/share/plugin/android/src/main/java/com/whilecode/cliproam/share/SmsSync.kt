@@ -92,8 +92,8 @@ internal object SmsSync {
         }
         val previous = read(stateFile(context))
         if (uploadUrl != null && previous?.optString("uploadUrl") == uploadUrl
-            && previous.optString("fingerprint") == fingerprint
-            && previous.optLong("expiresAt") > System.currentTimeMillis()) {
+            && previous.optString("sessionFingerprint") == fingerprint
+            && expiresAt(previous.getString("expiresAt")) > System.currentTimeMillis()) {
             schedule(context)
             return
         }
@@ -102,23 +102,22 @@ internal object SmsSync {
         outbox(context).listFiles()?.forEach { it.delete() }
         WorkManager.getInstance(context).cancelUniqueWork(WORK)
         if (previous != null) try {
-            request(previous.getString("tokenUrl"), previous.getString("token"), "DELETE")
+            request(URL(URL(previous.getString("uploadUrl")), "token").toString(), previous.getString("uploadToken"), "DELETE")
         } catch (_: Exception) { /* Local credentials are already gone. */ }
         if (address == null || loginToken == null) return
         val tokenUrl = endpoint(address, "/shortcuts/token")
         val credential = request(tokenUrl, loginToken, "POST")
         val token = credential.getString("token")
         require(token.isNotBlank()) { "上传凭证为空" }
-        write(stateFile(context), JSONObject().put("uploadUrl", uploadUrl).put("tokenUrl", tokenUrl)
-            .put("token", token).put("fingerprint", fingerprint)
-            .put("expiresAt", expiresAt(credential.getString("expiresAt")))
-            .put("generation", UUID.randomUUID().toString()))
+        write(stateFile(context), JSONObject().put("uploadUrl", uploadUrl)
+            .put("uploadToken", token).put("sessionFingerprint", fingerprint)
+            .put("expiresAt", credential.getString("expiresAt")))
     }
 
     @Synchronized
     fun enqueue(context: Context, texts: List<String>): String? {
         val session = read(stateFile(context)) ?: return null
-        if (session.optLong("expiresAt") <= System.currentTimeMillis()) return null
+        if (expiresAt(session.getString("expiresAt")) <= System.currentTimeMillis()) return null
         val directory = outbox(context)
         check(directory.isDirectory || directory.mkdirs()) { "无法保存待同步短信" }
         var latest: String? = null
@@ -126,7 +125,7 @@ internal object SmsSync {
             val name = "${UUID.randomUUID()}.json"
             write(File(directory, name), JSONObject()
                 .put("text", text).put("createdAt", System.currentTimeMillis())
-                .put("generation", session.getString("generation")))
+                .put("sessionFingerprint", session.getString("sessionFingerprint")))
             latest = name
         }
         // Persist a recovery job before attempting immediate delivery.
@@ -151,14 +150,14 @@ internal object SmsSync {
             ?: return false
         val sms = read(file)
         val session = read(stateFile(context))
-        if (sms == null || session == null || sms.optString("generation") != session.optString("generation")
+        if (sms == null || session == null || sms.optString("sessionFingerprint") != session.optString("sessionFingerprint")
             || System.currentTimeMillis() - sms.optLong("createdAt") > MAX_AGE
-            || session.optLong("expiresAt") <= System.currentTimeMillis()) {
+            || expiresAt(session.getString("expiresAt")) <= System.currentTimeMillis()) {
             file.delete()
             return true
         }
         try {
-            val result = request(session.getString("uploadUrl"), session.getString("token"), "POST",
+            val result = request(session.getString("uploadUrl"), session.getString("uploadToken"), "POST",
                 JSONObject().put("text", sms.getString("text")))
             require(result.getJSONObject("entry").getString("id").isNotBlank()) { "服务器未确认短信上传" }
             file.delete()
