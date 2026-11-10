@@ -129,6 +129,25 @@ fn mobile_init<R: Runtime, C: DeserializeOwned>(
 pub struct ShareReceiver<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> ShareReceiver<R> {
+    #[cfg(target_os = "android")]
+    pub async fn configure_sms(
+        &self,
+        server_address: Option<&str>,
+        session_token: Option<&str>,
+    ) -> Result<()> {
+        self.0
+            .run_mobile_plugin_async::<serde_json::Value>(
+                "configureSms",
+                ShortcutConfiguration {
+                    server_address,
+                    session_token,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     pub async fn configure_widget(
         &self,
         server_address: Option<&str>,

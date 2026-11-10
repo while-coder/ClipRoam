@@ -72,6 +72,14 @@ iOS 16 及更新版本提供“同步文本到 ClipRoam”“同步文件到 Cli
 
 `ios:init`、`ios:dev` 和 `ios:build` 会通过 `native/ios/prepare.cjs` 生成并嵌入 WidgetKit 扩展。SideStore 重签名时须保留 `ClipRoamWidget.appex`，并授予它与主应用相同的 App Group。Windows 可运行 `node --test apps/app/src-tauri/native/ios/prepare.test.cjs` 验证工程生成；Swift 编译、真机添加小组件及后台刷新需在 macOS/Xcode 和 iOS 设备验证。
 
+## Android 新短信同步
+
+Android 登录成功（包括恢复登录）后，原生插件会申请独立上传凭证，并将完整的 `/shortcuts/text` 上传 URL、凭证及有效期保存在应用私有的 `noBackupFilesDir/sms-session.json` 中，不保存完整登录凭证。首次配置会请求“接收短信”权限；拒绝后可在系统应用权限中允许，或重新登录重试。
+
+取得权限后，Manifest 中的原生短信接收器会合并分段短信，将所有新收到的短信正文同步到同账号的剪贴板历史，不读取历史收件箱，也不筛选验证码。接收后先持久化待上传记录，再立即发起短超时 HTTP 请求；失败时由 WorkManager 在网络可用后重试。待上传短信保存在同一私有、不参与备份的目录中，超过 10 分钟后丢弃。退出登录或切换账号会清理旧凭证和待上传短信，并尝试撤销服务端上传凭证，避免串号上传。
+
+同步不依赖 WebView 常驻。强行停止应用、撤销短信权限、厂商后台限制及网络异常仍会影响接收或上传；真机锁屏、进程回收、断网恢复和多 SIM 卡短信需实机验证。此入口同步的是系统交付的 SMS 广播，不读取其他应用通知或 RCS 消息。桌面端沿用现有历史更新链路。
+
 ## macOS 签名与辅助功能授权
 
 macOS 默认使用固定自签名证书 `cliproam-dev` 签名整个 `.app`。Bundle ID 保持 `com.whilecode.cliproam`；持续使用同一张证书，使签名要求不再绑定每次构建变化的 `cdhash`。缺少证书时构建失败，不自动降级为 ad-hoc 签名。自签名证书不提供 Apple 公证或 Gatekeeper 信任。

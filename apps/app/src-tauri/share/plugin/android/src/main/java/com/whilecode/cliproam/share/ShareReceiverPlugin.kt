@@ -1,6 +1,10 @@
 package com.whilecode.cliproam.share
 
 import android.app.Activity
+import android.Manifest
+import app.tauri.PermissionState
+import app.tauri.annotation.Permission
+import app.tauri.annotation.PermissionCallback
 import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
@@ -64,7 +68,7 @@ class CopyDocumentsArgs {
     lateinit var directory: String
 }
 
-@TauriPlugin
+@TauriPlugin(permissions = [Permission(strings = [Manifest.permission.RECEIVE_SMS], alias = "sms")])
 class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -77,6 +81,30 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun onDestroy() {
         scope.cancel()
+    }
+
+    @Command
+    fun configureSms(invoke: Invoke) {
+        val args = invoke.parseArgs(WidgetArgs::class.java)
+        scope.launch {
+            try {
+                SmsSync.configure(activity, args.serverAddress, args.sessionToken)
+                if (args.serverAddress == null) {
+                    invoke.resolve()
+                } else activity.runOnUiThread {
+                    if (getPermissionState("sms") == PermissionState.GRANTED) invoke.resolve()
+                    else requestPermissionForAlias("sms", invoke, "smsPermissionResult")
+                }
+            } catch (error: Exception) {
+                invoke.reject(error.message ?: "无法配置短信同步")
+            }
+        }
+    }
+
+    @PermissionCallback
+    private fun smsPermissionResult(invoke: Invoke) {
+        if (getPermissionState("sms") == PermissionState.GRANTED) invoke.resolve()
+        else invoke.reject("未获得接收短信权限，请在系统应用权限中允许后重新登录")
     }
 
     @Command
