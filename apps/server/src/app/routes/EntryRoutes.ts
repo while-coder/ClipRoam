@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import {
   MAX_PUBLISH_BYTES,
   EntryCollectionSchema,
-  type EntryCollection,
   ENTRY_PAGE_DEFAULT_LIMIT,
   HistoryManifestQuerySchema,
   FavoriteManifestQuerySchema,
@@ -65,7 +64,7 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return reply.code(204).send();
   });
 
-  // Routes select independent collections; paging and detail backfill are shared.
+  // Routes select independent collections; request bodies never select a table.
   // Sticky notes use the full /entries/sticky response for both list and desktop.
   for (const [path, collection] of [
     ["/entries/manifest", "history"],
@@ -84,13 +83,32 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     });
   }
 
-  app.post("/entries/query", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
-    const user = requireSessionUser(request, reply);
-    if (!user) return reply;
-    const body = parseOr400(reply, EntryQueryRequestSchema, request.body, "查询参数无效");
-    if (!body) return reply;
-    return { entries: store.listByIds(user.id, body.collection, body.entryIds) } satisfies EntryQueryResponse;
-  });
+  for (const [path, collection] of [
+    ["/entries", "history"],
+    ["/favorites", "favorites"],
+    ["/entries/sticky", "sticky"],
+  ] as const) {
+    app.post(`${path}/query`, { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+      const user = requireSessionUser(request, reply);
+      if (!user) return reply;
+      const body = parseOr400(reply, EntryQueryRequestSchema, request.body, "查询参数无效");
+      if (!body) return reply;
+      return { entries: store.listByIds(user.id, collection, body.entryIds) } satisfies EntryQueryResponse;
+    });
+
+    app.delete(path, { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
+      const user = requireSessionUser(request, reply);
+      if (!user) return reply;
+      const body = parseOr400(reply, EntryDeleteRequestSchema, request.body, "删除参数无效");
+      if (!body) return reply;
+      const ids = [...new Set(body.ids)];
+      store.delete(user.id, collection, ids);
+      logger.info(`Clipboard entries deleted: user=${user.id} collection=${collection} entries=${ids.join(",")}`);
+      // Include already-absent ids so all devices converge on the same state.
+      for (const entryId of ids) broadcast(user.id, { type: "clipboard.deleted", entryId });
+      return reply.code(204).send();
+    });
+  }
 
   // Entries carry an unbounded directory tree, so the publish body needs the
   // protocol-wide cap (MAX_PUBLISH_BYTES).
@@ -189,31 +207,6 @@ export function registerEntryRoutes(app: FastifyInstance, deps: EntryRouteDeps):
     return reply.code(204).send();
   });
 
-  const deleteEntries = (userId: string, collection: EntryCollection, ids: readonly string[]): void => {
-    const uniqueIds = [...new Set(ids)];
-    store.delete(userId, collection, uniqueIds);
-    logger.info(`Clipboard entries deleted: user=${userId} entries=${uniqueIds.join(",")}`);
-    // Include already-absent ids so all devices converge on the same state.
-    for (const entryId of uniqueIds) broadcast(userId, { type: "clipboard.deleted", entryId });
-  };
-
-  app.delete("/entries", { bodyLimit: SMALL_JSON_BODY_LIMIT }, async (request, reply) => {
-    const user = requireSessionUser(request, reply);
-    if (!user) return reply;
-    const body = parseOr400(reply, EntryDeleteRequestSchema, request.body, "删除参数无效");
-    if (!body) return reply;
-    deleteEntries(user.id, body.collection, body.ids);
-    return reply.code(204).send();
-  });
-
-  // Compatibility for clients using the original single-entry endpoint.
-  app.delete("/entries/:id", async (request, reply) => {
-    const user = requireSessionUser(request, reply);
-    if (!user) return reply;
-    const { id } = request.params as { id: string };
-    deleteEntries(user.id, "history", [id]);
-    return reply.code(204).send();
-  });
 }
 
 function fileTreeWithinLimits(body: unknown, maxFiles: number): boolean {

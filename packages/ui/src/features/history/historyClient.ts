@@ -5,6 +5,11 @@ import { PAGE_SIZE } from "../../config";
 import { FavoriteFolderListSchema, StickyEntriesResponseSchema, type FavoriteFolder, type FavoriteFolderInput } from "@cliproam/protocol";
 import type { EntriesManifestFilter, EntriesManifestPage, LocalClipboardEntry } from "../../types";
 const ENTRY_HTTP_TIMEOUT_MS = 30_000;
+const entryPaths: Record<EntryCollection, string> = {
+  history: "/entries",
+  favorites: "/favorites",
+  sticky: "/entries/sticky",
+};
 
 /** Server paging and versioned detail backfill; never reads the pending queue. */
 export class HistoryClient {
@@ -114,8 +119,8 @@ export class HistoryClient {
   async #fetchEntries(collection: EntryCollection, entryIds: readonly string[]): Promise<ClipboardEntry[]> {
     return this.#queryBatched(entryIds, async (batch) => {
       const result = await this.http.request(
-        "POST", "/entries/query",
-        this.#jsonInit({ collection, entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
+        "POST", `${entryPaths[collection]}/query`,
+        this.#jsonInit({ entryIds: batch }, ENTRY_HTTP_TIMEOUT_MS),
         EntryQueryResponseSchema, "服务器返回了不兼容的历史记录响应",
       );
       return result!.entries;
@@ -145,8 +150,8 @@ export class HistoryClient {
   async delete(collection: EntryCollection, ids: readonly string[]): Promise<void> {
     await this.http.request(
       "DELETE",
-      "/entries",
-      this.#jsonInit({ collection, ids }, ENTRY_HTTP_TIMEOUT_MS),
+      entryPaths[collection],
+      this.#jsonInit({ ids }, ENTRY_HTTP_TIMEOUT_MS),
       null,
       "",
     );

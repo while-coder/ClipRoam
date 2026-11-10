@@ -191,17 +191,15 @@ export const ShortcutTextRequestSchema = z.object({
 }).strict();
 
 export const EntryQueryRequestSchema = z.object({
-  collection: EntryCollectionSchema.default("history"),
   entryIds: z.array(z.string()).min(1).max(ENTRY_QUERY_BATCH),
-});
+}).strict();
 
 // Ids the server does not know are simply absent, not an error.
 export const EntryQueryResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
 export const EntryDeleteRequestSchema = z.object({
-  collection: EntryCollectionSchema.default("history"),
   ids: z.array(z.string().min(1).max(100)).min(1).max(ENTRY_QUERY_BATCH),
-});
+}).strict();
 
 // Whether the pool holds the bytes for a batch of content ids — the state the
 // per-entry `missing` list used to inline. Size rides along so callers can
@@ -271,6 +269,7 @@ export const DeviceListResponseSchema = z.object({ devices: z.array(DeviceSchema
 
 export const EntryActivateResponseSchema = z.object({ entry: ClipboardEntrySchema });
 export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
+  collection: EntryCollectionSchema.default("history"),
   // true copies the source into favorites; false deletes favorite ids only.
   isFavorite: z.boolean(),
   // Omitted preserves an existing favorite's folder; null explicitly unfiles it.
@@ -278,7 +277,10 @@ export const EntryFavoriteRequestSchema = EntryDeleteRequestSchema.extend({
 });
 
 // true copies sources into sticky notes; false deletes sticky ids only.
-export const EntryStickyRequestSchema = EntryDeleteRequestSchema.extend({ isSticky: z.boolean() });
+export const EntryStickyRequestSchema = EntryDeleteRequestSchema.extend({
+  collection: EntryCollectionSchema.default("history"),
+  isSticky: z.boolean(),
+});
 // Independent of history pagination and filters; includes every sticky entry.
 export const StickyEntriesResponseSchema = z.object({ entries: z.array(ClipboardEntrySchema) });
 
