@@ -33,7 +33,7 @@ type EntryRow = {
   created_at: string;
 };
 
-const collectionTables = { history: "entries", favorites: "favorites", sticky: "sticky_notes" } as const;
+const collectionTables = { history: "entries", favorites: "favorites", sticky: "stickies" } as const;
 
 // Clipboard records and devices. Contents live in an independent pool that this
 // store only references by id, so a tree is the sole record of which bytes an
@@ -75,7 +75,7 @@ export class UserDataStore {
       CREATE UNIQUE INDEX IF NOT EXISTS favorite_folders_name
         ON favorite_folders (COALESCE(parent_id, ''), name);
     `);
-    for (const table of ["favorites", "sticky_notes"] as const) {
+    for (const table of ["favorites", "stickies"] as const) {
       this.#database.exec(`CREATE TABLE IF NOT EXISTS ${table} (
         id TEXT PRIMARY KEY,
         version INTEGER NOT NULL DEFAULT 1,
@@ -91,7 +91,7 @@ export class UserDataStore {
     this.#database.exec("CREATE INDEX IF NOT EXISTS favorites_folder ON favorites (favorite_folder_id)");
     // Remove legacy cross-collection writes. Membership is derived when reading;
     // saving, moving or deleting a copy never changes another record's revision.
-    for (const table of ["favorites", "sticky_notes"] as const) {
+    for (const table of ["favorites", "stickies"] as const) {
       for (const event of ["INSERT", "UPDATE", "DELETE"] as const) {
         this.#database.exec(`DROP TRIGGER IF EXISTS ${table}_history_${event.toLowerCase()}`);
       }
@@ -150,7 +150,7 @@ export class UserDataStore {
           ${table === "favorites" ? "e.id" : "f.id"} AS favoriteId,
           s.id AS stickyId
         FROM ${table} e
-        LEFT JOIN sticky_notes s ON s.hash = e.hash
+        LEFT JOIN stickies s ON s.hash = e.hash
         ${table === "entries" ? "LEFT JOIN favorites f ON f.hash = e.hash" : ""}
         ${where}
         ORDER BY e.created_at DESC, e.id DESC
@@ -178,7 +178,7 @@ export class UserDataStore {
             ${collection === "sticky" ? "e.id" : "s.id"} AS sticky_id,
             ${table === "favorites" ? "e.favorite_folder_id" : "NULL"} AS favorite_folder_id
           FROM ${table} e
-          ${collection === "sticky" ? "" : "LEFT JOIN sticky_notes s ON s.hash = e.hash"}
+          ${collection === "sticky" ? "" : "LEFT JOIN stickies s ON s.hash = e.hash"}
           ${collection === "favorites" ? "" : "LEFT JOIN favorites f ON f.hash = e.hash"}
           WHERE e.id IN (${placeholders(batch.length)})
           ORDER BY e.created_at DESC
@@ -296,7 +296,7 @@ export class UserDataStore {
   listSticky(): ClipboardEntry[] {
     const rows = this.#database.prepare(`
       SELECT s.*, f.id AS favorite_id, s.id AS sticky_id, NULL AS favorite_folder_id
-      FROM sticky_notes s
+      FROM stickies s
       LEFT JOIN favorites f ON f.hash = s.hash
       ORDER BY s.created_at DESC, s.id DESC
     `).all() as EntryRow[];
@@ -305,14 +305,14 @@ export class UserDataStore {
 
   setSticky(collection: EntryCollection, entryIds: readonly string[], isSticky: boolean, maxEntries: number): ClipboardEntry[] {
     return this.#transaction(() => {
-      if (!isSticky) return this.#removeSaved("sticky_notes", entryIds);
-      return this.#copyTo("sticky_notes", collection, entryIds, undefined, maxEntries);
+      if (!isSticky) return this.#removeSaved("stickies", entryIds);
+      return this.#copyTo("stickies", collection, entryIds, undefined, maxEntries);
     });
   }
 
   // Each destination owns its content snapshot and identity. Hash deduplication
   // makes repeated saves idempotent without retaining a link to the source row.
-  #copyTo(table: "favorites" | "sticky_notes", collection: EntryCollection, entryIds: readonly string[], folderId?: string | null, maxEntries = Infinity): ClipboardEntry[] {
+  #copyTo(table: "favorites" | "stickies", collection: EntryCollection, entryIds: readonly string[], folderId?: string | null, maxEntries = Infinity): ClipboardEntry[] {
     const ids = [...new Set(entryIds)];
     const sources = this.listByIds(collection, ids);
     if (sources.length !== ids.length) throw new StickyEntryError("剪贴板记录不存在", 404);
@@ -344,7 +344,7 @@ export class UserDataStore {
   // Cancellation deletes only destination records; it never alters history or
   // the other saved collection. Return deleted snapshots for push notifications.
   // Only the destination's own ids can remove its snapshots.
-  #removeSaved(table: "favorites" | "sticky_notes", ids: readonly string[]): ClipboardEntry[] {
+  #removeSaved(table: "favorites" | "stickies", ids: readonly string[]): ClipboardEntry[] {
     const uniqueIds = [...new Set(ids)];
     if (!uniqueIds.length) return [];
     const savedIds = (this.#database.prepare(`

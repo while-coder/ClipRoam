@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SModal from '@qingfeng346/ui-kit/components/SModal.vue'
 import SButton from '@qingfeng346/ui-kit/components/button/SButton.vue'
-import { useAppVersion, useMobileLayout } from '@cliproam/ui/platform'
+import { showNotification, useAppVersion, useMobileLayout } from '@cliproam/ui/platform'
 import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-vue-next'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -35,6 +35,7 @@ const currentReleaseVisible = computed(() => releaseNotesReady.value
 const renderedCurrentNotes = computed(() => DOMPurify.sanitize(marked.parse(currentReleaseNotes.value, { async: false }) as string))
 
 watch(appVersion, (version) => {
+  releaseNotesReady.value = false
   if (!version) return
   try {
     releaseNotesDismissed.value = localStorage.getItem(releaseNotesKey) === version
@@ -45,11 +46,12 @@ watch(appVersion, (version) => {
 }, { immediate: true })
 
 function dismissCurrentRelease() {
-  releaseNotesDismissed.value = true
   try {
     localStorage.setItem(releaseNotesKey, appVersion.value)
+    releaseNotesDismissed.value = true
   } catch (error) {
     console.warn('[updater] 无法保存版本内容展示记录', error)
+    showNotification({ message: '无法保存版本内容展示记录，请重试', tone: 'error' })
   }
 }
 const title = computed(() => ({
