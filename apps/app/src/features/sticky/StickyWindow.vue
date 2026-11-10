@@ -86,8 +86,10 @@ async function fitContent(): Promise<void> {
   const [monitor, position] = await Promise.all([currentMonitor(), current.outerPosition()]);
   if (disposed) return;
   const scale = monitor?.scaleFactor ?? await current.scaleFactor();
-  const maxWidth = Math.max(240, Math.min(420, monitor ? monitor.workArea.size.width / scale - 24 : 420));
-  const maxHeight = Math.max(100, Math.min(360, monitor ? monitor.workArea.size.height / scale - 24 : 360));
+  const minWidth = appearanceOpen.value ? 260 : 200;
+  const minHeight = appearanceOpen.value ? 200 : 64;
+  const maxWidth = Math.max(minWidth, Math.min(420, monitor ? monitor.workArea.size.width / scale - 24 : 420));
+  const maxHeight = Math.max(minHeight, Math.min(360, monitor ? monitor.workArea.size.height / scale - 24 : 360));
   const contentStyle = getComputedStyle(content.value);
   const paddingX = parseFloat(contentStyle.paddingLeft) + parseFloat(contentStyle.paddingRight);
   const paddingY = parseFloat(contentStyle.paddingTop) + parseFloat(contentStyle.paddingBottom);
@@ -123,7 +125,7 @@ async function fitContent(): Promise<void> {
   let width: number;
   let height: number;
   try {
-    width = Math.ceil(Math.min(maxWidth, Math.max(240, probe.getBoundingClientRect().width + paddingX + 2)));
+    width = Math.ceil(Math.min(maxWidth, Math.max(minWidth, probe.getBoundingClientRect().width + paddingX + 2)));
     // Leave a small measurement margin for physical-pixel rounding at HiDPI.
     // Otherwise a final character can wrap after resizing and introduce a bar.
     const requiredHeight = () => {
@@ -136,7 +138,7 @@ async function fitContent(): Promise<void> {
       width = Math.ceil(maxWidth);
       naturalHeight = requiredHeight();
     }
-    height = Math.min(maxHeight, Math.max(100, naturalHeight));
+    height = Math.min(maxHeight, Math.max(minHeight, naturalHeight));
     contentScrollable.value = naturalHeight > maxHeight;
   } finally { probe.remove(); }
   if (Math.abs(window.innerWidth - width) > 1 || Math.abs(window.innerHeight - height) > 1) {
@@ -162,7 +164,7 @@ function scheduleFit(): void {
   });
 }
 
-watch([payload, error], scheduleFit, { flush: "post" });
+watch([payload, error, appearanceOpen], scheduleFit, { flush: "post" });
 
 async function toggleOnTop(): Promise<void> {
   try {
@@ -222,7 +224,7 @@ onMounted(async () => {
     await current.setResizable(false);
     await current.setMaximizable(false);
     await current.setMinimizable(false);
-    await current.setMinSize(new LogicalSize(240, 100));
+    await current.setMinSize(new LogicalSize(200, 64));
     contentObserver = new ResizeObserver(scheduleFit);
     if (contentBody.value) contentObserver.observe(contentBody.value);
     onTop.value = await current.isAlwaysOnTop();
@@ -304,7 +306,7 @@ onBeforeUnmount(() => {
   color: #f8fafc; background: rgb(17 26 41 / var(--sticky-background-opacity, 0.78));
   border: 1px solid var(--sticky-line); border-radius: 12px; font-size: 14px;
 }
-.sticky-header { display: flex; flex: 0 0 38px; height: 38px; align-items: center; padding: 3px 7px 0 14px; gap: 1px; user-select: none; opacity: var(--sticky-chrome-opacity, 1); }
+.sticky-header { display: flex; flex: 0 0 30px; height: 30px; align-items: center; padding: 0 5px 0 10px; gap: 1px; user-select: none; opacity: var(--sticky-chrome-opacity, 1); }
 .sticky-toolbar { position: relative; flex-shrink: 0; }
 .sticky-actions { display: flex; align-items: center; gap: 1px; }
 .sticky-actions.concealed { visibility: hidden; pointer-events: none; }
@@ -314,13 +316,13 @@ button { display: inline-flex; justify-content: center; align-items: center; gap
 button:hover:not(:disabled) { background: var(--sui-bg-hover); }
 .sticky-icon { width: 28px; padding: 4px; flex-shrink: 0; color: var(--sticky-muted); }
 .sticky-icon[aria-pressed="true"] { color: var(--sticky-accent); background: var(--sui-bg-hover); }
-.sticky-content { flex: 1; min-height: 0; padding: 12px 16px 16px; overflow: hidden; scrollbar-width: thin; scrollbar-color: rgba(203, 213, 225, 0.3) transparent; opacity: var(--sticky-content-opacity, 1); }
+.sticky-content { flex: 1; min-height: 0; padding: 4px 10px 8px; overflow: hidden; scrollbar-width: thin; scrollbar-color: rgba(203, 213, 225, 0.3) transparent; opacity: var(--sticky-content-opacity, 1); }
 .sticky-content.scrollable { overflow-y: auto; }
-.sticky-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; user-select: text; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+.sticky-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; user-select: text; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
 .sticky-image { display: block; max-width: 100%; max-height: var(--sticky-image-max-height, 240px); width: auto; height: auto; object-fit: contain; margin: 0 auto; border-radius: 7px; }
 .sticky-status { color: var(--sticky-muted); font-size: 12px; overflow-wrap: anywhere; }
 .sticky-error { padding: 8px 12px; margin: 0; max-height: 80px; overflow: auto; color: var(--sui-error, #fca5a5); font-size: 12px; }
-.sticky-appearance { position: absolute; z-index: 2; top: 38px; left: 8px; right: 8px; max-height: calc(100% - 46px); overflow: auto; padding: 10px 12px; border: 1px solid var(--sticky-line); border-radius: 8px; background: rgba(17, 26, 41, 0.98); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); }
+.sticky-appearance { position: absolute; z-index: 2; top: 30px; left: 8px; right: 8px; max-height: calc(100% - 38px); overflow: auto; padding: 10px 12px; border: 1px solid var(--sticky-line); border-radius: 8px; background: rgba(17, 26, 41, 0.98); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); }
 .sticky-appearance-heading { display: flex; align-items: center; gap: 6px; }
 .sticky-appearance label { display: flex; flex: 1; justify-content: space-between; gap: 8px; color: var(--sticky-muted); font-size: 12px; }
 .sticky-appearance output { color: var(--sticky-accent); font-variant-numeric: tabular-nums; }

@@ -15,8 +15,8 @@ import {
   ListChecks,
   Trash2,
   Star,
+  StickyNote,
   RefreshCw,
-  X,
 } from "lucide-vue-next";
 import TimeFilterControl from "./TimeFilterControl.vue";
 import EntryContextMenu from "./EntryContextMenu.vue";
@@ -93,7 +93,6 @@ const foldersError = ref("");
 const destinationIds = ref<string[]>([]);
 const destinationFolderId = ref<string | null>(null);
 const destinationError = ref("");
-const recentFavoriteIds = ref<string[]>([]);
 let folderLoadToken = 0;
 async function loadFolders(): Promise<void> {
   if (!pageActive.value) return;
@@ -130,16 +129,22 @@ function destinationFromMenu(entry: LocalClipboardEntry): void {
 async function confirmDestination(folderId: string | null): Promise<void> {
   if (await favoriteEntries(destinationIds.value, true, folderId)) {
     destinationIds.value = [];
-    recentFavoriteIds.value = [];
     showNotification({ message: "已保存到所选收藏目录", tone: "success" });
   } else destinationError.value = "保存失败，请检查连接或重新选择目录后重试";
 }
 const favoritingIds = ref(new Set<string>());
 const favoriting = computed(() => favoritingIds.value.size > 0);
+const updatingStickyIds = ref(new Set<string>());
+
+async function toggleSticky(entry: LocalClipboardEntry): Promise<void> {
+  if (deleting.value || updatingStickyIds.value.has(entry.id)) return;
+  updatingStickyIds.value.add(entry.id);
+  try { await setEntriesSticky([entry.id], !entry.stickyId); }
+  finally { updatingStickyIds.value.delete(entry.id); }
+}
 
 async function toggleFavorite(entry: LocalClipboardEntry): Promise<void> {
-  const adding = !entry.favoriteId;
-  if (await favoriteEntries([entry.id], adding)) recentFavoriteIds.value = adding ? [entry.id] : [];
+  await favoriteEntries([entry.id], !entry.favoriteId);
 }
 
 async function favoriteEntries(ids: readonly string[], isFavorite: boolean, folderId?: string | null): Promise<boolean> {
@@ -393,7 +398,6 @@ function leaveHistory(): void {
   closeEntryMenu();
   previewEntry.value = undefined;
   if (!favoriting.value) destinationIds.value = [];
-  recentFavoriteIds.value = [];
   if (!deleting.value) deleteTargets.value = [];
   clearSelection();
 }
@@ -662,7 +666,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           />
         </div>
       </div>
-      <div v-if="recentFavoriteIds.length" class="favorite-feedback" role="status">已收藏到「未分类」<SButton size="small" @click="chooseDestination(recentFavoriteIds)">选择目录</SButton><SButton size="small" @click="recentFavoriteIds = []">关闭</SButton></div>
       <SButton v-if="favorites && favoriteFolderId && committedQuery" size="small" @click="favoriteFolderId = ''">搜索全部收藏</SButton>
       <p v-if="mobileLayout" class="mobile-history-hint">{{ selecting ? "点击条目勾选，仅选择当前页；返回可退出选择" : "单击条目预览，长按打开菜单" }}</p>
     </section>
@@ -745,22 +748,24 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
               <STag size="small" :type="uploadStatusTagType(entryUploadStatus(entry))">{{ entryUploadStatus(entry) }}</STag>
             </template>
         </ClipboardEntryContent>
-        <button
-          v-if="sticky && !selecting"
-          class="entry-favorite"
-          type="button"
-          aria-label="取消便签"
-          title="取消便签"
-          :disabled="deleting"
-          @click.stop="deleteTargets = [entry.id]"
-          @mousedown.stop
-          @dblclick.stop
-          @keydown.stop
-          @touchstart.stop
-          @touchend.stop
-        ><X :size="17" aria-hidden="true" /></button>
-        <button
-          v-else-if="!selecting"
+        <div v-if="!selecting" class="entry-marks">
+          <button
+            class="entry-favorite"
+            type="button"
+            :class="{ active: entry.stickyId }"
+            :aria-label="entry.stickyId ? '取消便签' : '添加便签'"
+            :title="entry.stickyId ? '取消便签' : '添加便签'"
+            :aria-pressed="!!entry.stickyId"
+            :aria-busy="updatingStickyIds.has(entry.id)"
+            :disabled="deleting || updatingStickyIds.has(entry.id)"
+            @click.stop="toggleSticky(entry)"
+            @mousedown.stop
+            @dblclick.stop
+            @keydown.stop
+            @touchstart.stop
+            @touchend.stop
+          ><StickyNote :size="17" :fill="entry.stickyId ? 'currentColor' : 'none'" aria-hidden="true" /></button>
+          <button
           class="entry-favorite"
           type="button"
           :class="{ active: entry.favoriteId }"
@@ -768,7 +773,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           :title="entry.favoriteId ? '取消收藏' : '添加收藏'"
           :aria-pressed="!!entry.favoriteId"
           :aria-busy="favoritingIds.has(entry.id)"
-          :disabled="favoriting"
+          :disabled="deleting || favoriting"
           @click.stop="toggleFavorite(entry)"
           @mousedown.stop
           @dblclick.stop
@@ -776,6 +781,7 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
           @touchstart.stop
           @touchend.stop
         ><Star :size="17" :fill="entry.favoriteId ? 'currentColor' : 'none'" aria-hidden="true" /></button>
+        </div>
       </div>
 
       <SEmpty v-if="!manifestTotal" class="empty-state">
@@ -901,13 +907,13 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 <style scoped>
 .history-workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
 .history-workspace.with-favorite-folders { grid-template-columns: var(--folder-panel-width, 190px) minmax(0, 1fr); }
-.favorite-feedback { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--color-secondary-text); font-size: 12px; }
 .entry-folder-path { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 768px) {
   .history-workspace.with-favorite-folders { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 }
 .toolbar { container: history-toolbar / inline-size; }
 .history-refresh.s-button { flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
+.entry-marks { display: flex; align-items: center; gap: 4px; }
 .entry-favorite { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-secondary-text); cursor: pointer; }
 .entry-favorite.active { color: var(--sui-primary); }
 .entry-favorite:hover { background: var(--sui-bg-hover); }

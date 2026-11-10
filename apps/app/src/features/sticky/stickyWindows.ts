@@ -68,7 +68,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
     });
     const noteWindow = new WebviewWindow(label, {
       url: "index.html", title: `${appName.value} ${isChinese.value ? "便签" : "Sticky Note"}`, width: 320, height: 160,
-      minWidth: 240, minHeight: 100, decorations: false, resizable: false,
+      minWidth: 200, minHeight: 64, decorations: false, resizable: false,
       maximizable: false, minimizable: false,
       skipTaskbar: true, alwaysOnTop: layout?.alwaysOnTop ?? false,
       alwaysOnBottom: !(layout?.alwaysOnTop ?? false), focusable: false,

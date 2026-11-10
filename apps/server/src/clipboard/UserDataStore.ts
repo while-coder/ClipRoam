@@ -148,9 +148,10 @@ export class UserDataStore {
       .prepare(`
         SELECT e.id, e.version,
           ${table === "favorites" ? "e.id" : "f.id"} AS favoriteId,
-          ${table === "favorites" ? "NULL" : "s.id"} AS stickyId
+          s.id AS stickyId
         FROM ${table} e
-        ${table === "entries" ? "LEFT JOIN favorites f ON f.hash = e.hash LEFT JOIN sticky_notes s ON s.hash = e.hash" : ""}
+        LEFT JOIN sticky_notes s ON s.hash = e.hash
+        ${table === "entries" ? "LEFT JOIN favorites f ON f.hash = e.hash" : ""}
         ${where}
         ORDER BY e.created_at DESC, e.id DESC
         LIMIT @limit OFFSET @offset
@@ -173,11 +174,12 @@ export class UserDataStore {
     for (const batch of chunk([...new Set(entryIds)], QUERY_BATCH)) {
       const rows = this.#database.prepare(`
           SELECT e.*,
-            ${collection === "history" ? "f.id" : collection === "favorites" ? "e.id" : "NULL"} AS favorite_id,
-            ${collection === "history" ? "s.id" : collection === "sticky" ? "e.id" : "NULL"} AS sticky_id,
+            ${collection === "favorites" ? "e.id" : "f.id"} AS favorite_id,
+            ${collection === "sticky" ? "e.id" : "s.id"} AS sticky_id,
             ${table === "favorites" ? "e.favorite_folder_id" : "NULL"} AS favorite_folder_id
           FROM ${table} e
-          ${collection === "history" ? "LEFT JOIN favorites f ON f.hash = e.hash LEFT JOIN sticky_notes s ON s.hash = e.hash" : ""}
+          ${collection === "sticky" ? "" : "LEFT JOIN sticky_notes s ON s.hash = e.hash"}
+          ${collection === "favorites" ? "" : "LEFT JOIN favorites f ON f.hash = e.hash"}
           WHERE e.id IN (${placeholders(batch.length)})
           ORDER BY e.created_at DESC
         `).all(...batch) as EntryRow[];
@@ -293,8 +295,9 @@ export class UserDataStore {
 
   listSticky(): ClipboardEntry[] {
     const rows = this.#database.prepare(`
-      SELECT s.*, NULL AS favorite_id, s.id AS sticky_id, NULL AS favorite_folder_id
+      SELECT s.*, f.id AS favorite_id, s.id AS sticky_id, NULL AS favorite_folder_id
       FROM sticky_notes s
+      LEFT JOIN favorites f ON f.hash = s.hash
       ORDER BY s.created_at DESC, s.id DESC
     `).all() as EntryRow[];
     return rows.flatMap((row) => { const entry = this.#toEntry(row, "sticky"); return entry ? [entry] : []; });
