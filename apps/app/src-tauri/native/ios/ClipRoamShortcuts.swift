@@ -37,7 +37,7 @@ struct SyncFilesToClipRoam: AppIntent {
     static var openAppWhenRun: Bool = false
     static var authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
-    @Parameter(title: "文件", supportedContentTypes: [.item])
+    @Parameter(title: "文件", supportedTypeIdentifiers: [UTType.item.identifier])
     var files: [IntentFile]
 
     static var parameterSummary: some ParameterSummary { Summary("同步 \(\.$files) 到 ClipRoam") }
@@ -94,7 +94,8 @@ private enum ShortcutMultipartUpload {
                         errorHandler: { _, error in enumerationError = error; return false }) else {
                         throw ShortcutSession.failure("无法读取文件夹")
                     }
-                    for case let child as URL in iterator {
+                    while let entry = iterator.nextObject() {
+                        guard let child = entry as? URL else { continue }
                         let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey])
                         guard values.isSymbolicLink != true else { throw ShortcutSession.failure("暂不支持上传符号链接") }
                         let relative = rootName + "/" + String(child.path.dropFirst(url.path.count + 1))
