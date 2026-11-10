@@ -156,6 +156,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
       }
       else if (payload.action === "unpin") {
         await owner.history.setSticky([note.payload.entry.id], false);
+        if (!owner.signal.aborted) showNotification({ message: "已取消便签", tone: "success" });
         await refresh();
       } else if (payload.action === "copy" || payload.action === "save") {
         const entry = await owner.history.getEntry(note.payload.entry.id);
@@ -191,6 +192,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
     if (!owner?.client) return;
     try {
       await owner.history.setSticky([entry.id], !entry.stickyId);
+      if (!owner.signal.aborted) showNotification({ message: entry.stickyId ? "已取消便签" : "已添加便签", tone: "success" });
       await refresh();
     } catch (error) { if (!owner.signal.aborted) report("修改便签失败", error); }
   };

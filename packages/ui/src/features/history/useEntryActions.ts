@@ -123,7 +123,9 @@ export async function setEntriesFavorite(entryIds: readonly string[], isFavorite
   }
   try {
     await session.history.setFavorite(entryIds, isFavorite, favoriteFolderId);
-    return !session.signal.aborted;
+    if (session.signal.aborted) return false;
+    showNotification({ message: isFavorite ? favoriteFolderId !== undefined ? "已保存到所选收藏目录" : "已添加收藏" : "已取消收藏", tone: "success" });
+    return true;
   } catch (error) {
     if (!session.signal.aborted) showNotification({ message: `修改收藏失败：${errorMessage(error)}`, tone: "error" });
     return false;
@@ -139,7 +141,9 @@ export async function setEntriesSticky(entryIds: readonly string[], isSticky: bo
   }
   try {
     await session.history.setSticky(entryIds, isSticky);
-    return !session.signal.aborted;
+    if (session.signal.aborted) return false;
+    showNotification({ message: isSticky ? "已添加便签" : "已取消便签", tone: "success" });
+    return true;
   } catch (error) {
     if (!session.signal.aborted) showNotification({ message: `修改便签失败：${errorMessage(error)}`, tone: "error" });
     return false;

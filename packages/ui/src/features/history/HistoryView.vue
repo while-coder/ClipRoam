@@ -129,7 +129,6 @@ function destinationFromMenu(entry: LocalClipboardEntry): void {
 async function confirmDestination(folderId: string | null): Promise<void> {
   if (await favoriteEntries(destinationIds.value, true, folderId)) {
     destinationIds.value = [];
-    showNotification({ message: "已保存到所选收藏目录", tone: "success" });
   } else destinationError.value = "保存失败，请检查连接或重新选择目录后重试";
 }
 const favoritingIds = ref(new Set<string>());
