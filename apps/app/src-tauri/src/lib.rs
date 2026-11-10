@@ -88,6 +88,7 @@ pub fn run() {
             share::native_pending_shares,
             share::native_ack_share,
             share::native_configure_ios_shortcuts,
+            share::native_configure_ios_widget,
             share::native_add_ios_sms_shortcut,
             updater::native_update_permission_status,
             updater::native_update_request_permission,

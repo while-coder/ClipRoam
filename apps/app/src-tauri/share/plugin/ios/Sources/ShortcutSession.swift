@@ -140,7 +140,7 @@ struct ShortcutSession: Codable {
     }
 
     static func failure(_ message: String) -> NSError {
-        NSError(domain: "ClipRoam.Shortcuts", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "ClipRoam.Shortcuts", code: 1, userInfo: [NSLocalizedDescriptionKey: AppBrand.message(message)])
     }
 }
 

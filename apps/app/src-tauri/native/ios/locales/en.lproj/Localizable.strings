@@ -1,0 +1,10 @@
+"同步文本到 ClipRoam" = "Sync Text to ClipRoam";
+"将传入的文本直接同步到当前登录的 ClipRoam 账号，可用于收到信息时的个人自动化。" = "Sync text to your signed-in ClipRoam account, including from message automations.";
+"同步文件到 ClipRoam" = "Sync Files to ClipRoam";
+"上传文件或文件夹并保留目录结构，同步到当前登录的 ClipRoam 账号。" = "Upload files or folders to your signed-in ClipRoam account, preserving folder structure.";
+"同步 ${text} 到 ClipRoam" = "Sync ${text} to ClipRoam";
+"同步 ${files} 到 ClipRoam" = "Sync ${files} to ClipRoam";
+"文本" = "Text";
+"文件" = "Files";
+"同步文本" = "Sync Text";
+"同步文件" = "Sync Files";

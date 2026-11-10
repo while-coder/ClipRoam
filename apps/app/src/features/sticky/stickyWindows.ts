@@ -1,4 +1,5 @@
 import { watch } from "vue";
+import { appName, isChinese } from "@cliproam/ui/branding";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -66,7 +67,7 @@ export async function initializeStickyDesktop(): Promise<() => void> {
         && layout.y + 40 * monitor.scaleFactor <= position.y + size.height;
     });
     const noteWindow = new WebviewWindow(label, {
-      url: "index.html", title: "ClipRoam 便签", width: 320, height: 160,
+      url: "index.html", title: `${appName.value} ${isChinese.value ? "便签" : "Sticky Note"}`, width: 320, height: 160,
       minWidth: 240, minHeight: 100, decorations: false, resizable: false,
       maximizable: false, minimizable: false,
       skipTaskbar: true, alwaysOnTop: layout?.alwaysOnTop ?? false,

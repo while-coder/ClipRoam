@@ -18,6 +18,8 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
   fs.copyFileSync(path.join(__dirname, "ClipRoamShortcuts.swift"), path.join(apple, target, "ClipRoamShortcuts.swift"));
   fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/ShortcutSession.swift"),
     path.join(apple, target, "ShortcutSession.swift"));
+  fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/AppBrand.swift"),
+    path.join(apple, target, "AppBrand.swift"));
   const version = require(path.join(root, "package.json")).version;
   const buildVersion = project.match(/^\s+CFBundleVersion:\s*["']?([^\s"']+)/m)?.[1] ?? version;
   const appGroup = { "com.apple.security.application-groups": ["group.com.whilecode.cliproam"] };
@@ -25,6 +27,18 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
     { name: "ClipRoamShare", identifier: "share", title: "ClipRoam", point: "com.apple.share-services" },
     { name: "ClipRoamAction", identifier: "action", title: "Save to ClipRoam", point: "com.apple.ui-services" },
   ];
+  const embeddedExtensions = [...extensions, { name: "ClipRoamWidget" }];
+  const widgetSource = path.join(apple, "ClipRoamWidget");
+  fs.mkdirSync(widgetSource, { recursive: true });
+  fs.cpSync(path.join(__dirname, "widget"), widgetSource, { recursive: true });
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    fs.copyFileSync(path.join(__dirname, "locales", `${locale}.lproj`, "InfoPlist.strings"),
+      path.join(widgetSource, `${locale}.lproj`, "InfoPlist.strings"));
+  }
+  fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/AppBrand.swift"),
+    path.join(widgetSource, "AppBrand.swift"));
+  fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/StickyWidgetStore.swift"),
+    path.join(widgetSource, "StickyWidgetStore.swift"));
   // XcodeGen puts this after embedding extensions. Sign executables only: Xcode
   // may still copy Swift libraries/resources before Tauri packages the archive.
   const sideloadSigning = {
@@ -48,7 +62,7 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
       '  if [ "$actual" != "$expected" ]; then echo "error: App Group entitlements mismatch: $bundle" >&2; exit 1; fi',
       '  echo "Verified App Group entitlements: $bundle"',
       '}',
-      ...extensions.map(({ name }) =>
+      ...embeddedExtensions.map(({ name }) =>
         `sign_executable "$app/PlugIns/${name}.appex" "$SRCROOT/${name}/${name}.entitlements"`),
       `sign_executable "$app" "$SRCROOT/${target}/${target}.entitlements"`,
     ].join("\n"),
@@ -58,6 +72,8 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
     fs.mkdirSync(source, { recursive: true });
     fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/SharePlugin.swift"),
       path.join(source, "SharePlugin.swift"));
+    fs.copyFileSync(path.join(root, "apps/app/src-tauri/share/plugin/ios/Sources/AppBrand.swift"),
+      path.join(source, "AppBrand.swift"));
     fs.cpSync(path.join(__dirname, "locales"), source, { recursive: true });
     if (extension === "ClipRoamAction") {
       fs.cpSync(path.join(__dirname, "action-locales"), source, { recursive: true });
@@ -79,7 +95,7 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
           STRIP_INSTALLED_PRODUCT: "NO", ENABLE_USER_SCRIPT_SANDBOXING: "NO",
           OTHER_LDFLAGS: ["$(inherited)", "-framework", "UniformTypeIdentifiers"] } },
         entitlements: { path: `${target}/${target}.entitlements`, properties: appGroup },
-        dependencies: extensions.map(({ name }) => ({ target: name, embed: true })),
+        dependencies: embeddedExtensions.map(({ name }) => ({ target: name, embed: true })),
         postBuildScripts: [sideloadSigning],
       },
       ...Object.fromEntries(extensions.map(({ name: extension, identifier, title, point }) => [extension, {
@@ -111,6 +127,25 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
         } },
         entitlements: { path: `${extension}/${extension}.entitlements`, properties: appGroup },
       }])),
+      ClipRoamWidget: {
+        type: "app-extension", platform: "iOS", deploymentTarget: "14.0",
+        sources: [{ path: "ClipRoamWidget", excludes: ["*.plist", "*.entitlements"] }],
+        settings: { groups: ["app"], base: {
+          PRODUCT_NAME: "ClipRoamWidget", PRODUCT_BUNDLE_IDENTIFIER: "com.whilecode.cliproam.widget",
+          SWIFT_VERSION: "5.0", APPLICATION_EXTENSION_API_ONLY: true,
+          SKIP_INSTALL: true, TARGETED_DEVICE_FAMILY: "1,2", GENERATE_INFOPLIST_FILE: false,
+          OTHER_LDFLAGS: ["$(inherited)", "-framework", "WidgetKit", "-framework", "SwiftUI"],
+        } },
+        info: { path: "ClipRoamWidget/Info.plist", properties: {
+          CFBundleDisplayName: "ClipRoam", CFBundleShortVersionString: version, CFBundleVersion: buildVersion,
+          CFBundleDevelopmentRegion: "en", CFBundleLocalizations: ["en", "zh-Hans", "zh-Hant"],
+          NSExtension: { NSExtensionPointIdentifier: "com.apple.widgetkit-extension" },
+          // Match the main app's support for user-hosted HTTP / LAN servers.
+          NSAppTransportSecurity: { NSAllowsArbitraryLoads: true },
+          NSLocalNetworkUsageDescription: "ClipRoam connects to your server to update sticky notes.",
+        } },
+        entitlements: { path: "ClipRoamWidget/ClipRoamWidget.entitlements", properties: appGroup },
+      },
     },
   };
   const specPath = path.join(apple, "project.cliproam.json");
@@ -119,7 +154,7 @@ function prepareIos(apple = path.resolve(__dirname, "../../gen/apple"), generate
     syncIcons(apple);
     execFileSync("xcodegen", ["generate", "--spec", specPath], { cwd: apple, stdio: "inherit" });
   }
-  console.log("已配置 iOS 分享扩展、操作扩展、App Group 和应用图标");
+  console.log("已配置 iOS 分享扩展、操作扩展、便签小组件、App Group 和应用图标");
   return spec;
 }
 

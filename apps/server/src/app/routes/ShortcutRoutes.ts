@@ -37,7 +37,7 @@ export function registerShortcutRoutes(app: FastifyInstance, { store, broadcast,
   app.post("/shortcuts/text", { bodyLimit: MAX_PUBLISH_BYTES }, async (request, reply) => {
     const token = readBearerToken(request.headers.authorization);
     const user = token ? store.authenticateUploadToken(token) : undefined;
-    if (!user) return reply.code(401).send({ message: "上传凭证已失效，请打开 ClipRoam 重新配置" });
+    if (!user) return reply.code(401).send({ message: "上传凭证已失效，请打开随心贴重新配置" });
     const body = parseOr400(reply, ShortcutTextRequestSchema, request.body, "文本参数无效");
     if (!body) return reply;
     const entry = store.upsert(user.id, { kind: "text", content: body.text, sourceDeviceId: user.deviceId });
@@ -51,7 +51,7 @@ export function registerShortcutRoutes(app: FastifyInstance, { store, broadcast,
   app.post("/shortcuts/files", async (request, reply) => {
     const token = readBearerToken(request.headers.authorization);
     const user = token ? store.authenticateUploadToken(token) : undefined;
-    if (!user) return reply.code(401).send({ message: "上传凭证已失效，请打开 ClipRoam 重新配置" });
+    if (!user) return reply.code(401).send({ message: "上传凭证已失效，请打开随心贴重新配置" });
     try {
       const input = await receiveShortcutUpload(request, user.id, configForUser(user.id), uploads);
       const entry = store.upsert(user.id, { ...input, sourceDeviceId: user.deviceId });

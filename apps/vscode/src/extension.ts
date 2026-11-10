@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel = current;
     let markReady!: () => void;
     let rejectReady!: (error: Error) => void;
-    const readyTimeout = setTimeout(() => rejectReady(new Error("ClipRoam 界面加载超时，请关闭标签页后重试")), 30_000);
+    const readyTimeout = setTimeout(() => rejectReady(new Error(`${displayName} 界面加载超时，请关闭标签页后重试`)), 30_000);
     ready = new Promise<void>((resolve, reject) => {
       markReady = () => { clearTimeout(readyTimeout); resolve(); };
       rejectReady = (error) => { clearTimeout(readyTimeout); reject(error); };
@@ -57,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     current.onDidDispose(() => {
       listener.dispose();
-      rejectReady(new Error("ClipRoam 标签页已关闭"));
+      rejectReady(new Error(`${displayName} 标签页已关闭`));
       if (panel === current) panel = undefined;
       saveTargets.clear();
     }, undefined, context.subscriptions);

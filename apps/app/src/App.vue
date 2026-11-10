@@ -9,18 +9,23 @@ import { native } from "@cliproam/ui/native";
 import { initializeBossKey } from "./features/settings/bossKey";
 import { initializeStickyDesktop } from "./features/sticky/stickyWindows";
 import { initializeIosShortcuts } from "./features/shortcuts/iosShortcuts";
+import { initializeIosWidget } from "./features/sticky/iosWidget";
 
 let disposeSticky: (() => void) | undefined;
 let disposeIosShortcuts: (() => void) | undefined;
+let disposeIosWidget: (() => void) | undefined;
 let disposed = false;
-onBeforeUnmount(() => { disposed = true; disposeSticky?.(); disposeIosShortcuts?.(); });
+onBeforeUnmount(() => { disposed = true; disposeSticky?.(); disposeIosShortcuts?.(); disposeIosWidget?.(); });
 
 onMounted(async () => {
   try {
     const capabilities = await native.getCapabilities();
     if (capabilities.mobile) {
       const device = await native.getDeviceInfo();
-      if (device.osType === "ios" && !disposed) disposeIosShortcuts = initializeIosShortcuts(device.osVersion);
+      if (device.osType === "ios" && !disposed) {
+        disposeIosShortcuts = initializeIosShortcuts(device.osVersion);
+        disposeIosWidget = initializeIosWidget();
+      }
     }
     if (capabilities.globalShortcut) await initializeBossKey();
     if (isNative && !capabilities.mobile) {

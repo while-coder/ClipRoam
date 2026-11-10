@@ -292,7 +292,7 @@ class ShareActivity : Activity() {
                         finish()
                     } catch (error: Exception) {
                         AlertDialog.Builder(this).setTitle("分享已保存")
-                            .setMessage("请打开 ClipRoam 后自动导入。")
+                            .setMessage("请打开 ${applicationInfo.loadLabel(packageManager)} 后自动导入。")
                             .setPositiveButton("完成") { _, _ -> finish() }.show()
                     }
                 }

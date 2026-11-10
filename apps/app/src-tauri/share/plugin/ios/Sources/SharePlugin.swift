@@ -5,6 +5,7 @@ import UIKit
 import UniformTypeIdentifiers
 #else
 import Tauri
+import WidgetKit
 #endif
 
 struct SharedItem: Codable {
@@ -43,7 +44,7 @@ enum ShareInbox {
     }()
 
     static func failure(_ message: String) -> NSError {
-        NSError(domain: "ClipRoam.Share", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "ClipRoam.Share", code: 1, userInfo: [NSLocalizedDescriptionKey: AppBrand.message(message)])
     }
 
     static func root() throws -> URL {
@@ -95,7 +96,7 @@ class ShareViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         let status = UILabel()
-        status.text = "正在保存到 ClipRoam…"
+        status.text = AppBrand.message("正在保存到 ClipRoam…")
         status.textAlignment = .center
         status.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(status)
@@ -239,13 +240,13 @@ class ShareViewController: UIViewController {
         while let current = responder {
             if let application = current as? UIApplication {
                 application.open(url, options: [:]) { opened in
-                    self.finish(opened ? nil : "内容已保存，请重新从分享菜单打开 ClipRoam 以导入。")
+                    self.finish(opened ? nil : AppBrand.message("内容已保存，请重新从分享菜单打开 ClipRoam 以导入。"))
                 }
                 return
             }
             responder = current.next
         }
-        finish("内容已保存，请重新从分享菜单打开 ClipRoam 以导入。")
+        finish(AppBrand.message("内容已保存，请重新从分享菜单打开 ClipRoam 以导入。"))
     }
 
     private func fail(_ error: Error) {
@@ -256,7 +257,7 @@ class ShareViewController: UIViewController {
     private func finish(_ message: String?) {
         DispatchQueue.main.async {
             guard let message = message else { self.extensionContext?.completeRequest(returningItems: nil); return }
-            let alert = UIAlertController(title: "分享到 ClipRoam", message: message, preferredStyle: .alert)
+            let alert = UIAlertController(title: AppBrand.message("分享到 ClipRoam"), message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "关闭", style: .default) { _ in self.extensionContext?.completeRequest(returningItems: nil) })
             self.present(alert, animated: true)
         }
@@ -281,6 +282,13 @@ private struct ShortcutLinkArgs: Decodable {
 }
 
 private final class SharePlugin: Plugin {
+    @objc func configureWidget(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(ShortcutArgs.self)
+        try StickyWidgetStore.configure(serverAddress: args.serverAddress, sessionToken: args.sessionToken)
+        WidgetCenter.shared.reloadTimelines(ofKind: StickyWidgetStore.kind)
+        invoke.resolve()
+    }
+
     @objc func addSmsShortcut(_ invoke: Invoke) throws {
         guard #available(iOS 27.0, *) else {
             invoke.reject("快速添加短信自动同步需要 iOS 27 或更新版本")

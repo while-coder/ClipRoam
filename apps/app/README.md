@@ -62,6 +62,16 @@ iOS 16 及更新版本提供“同步文本到 ClipRoam”“同步文件到 Cli
 
 两个接口成功时均返回 `{ "entry": { "id": "..." } }`，并向同账号在线客户端发送 `clipboard.created`。`DELETE /shortcuts/token` 可撤销当前设备的上传凭证；上传凭证也可调用这个撤销接口。
 
+### iOS 便签小组件
+
+在主屏幕添加「随心贴 便签」（英文环境为「ClipRoam Notes」）小组件后，显示当前登录账号最近的便签。小、中、大尺寸分别显示最近 1、3、5 条；图片和文件显示名称，不下载附件。
+
+小组件通过现有 `GET /entries/sticky` 接口独立联网，申请每 30 分钟更新一次；实际刷新时间由 iOS 调度，不保证准时。App 收到记录变化后也会请求刷新。网络失败时保留上次成功的缓存和更新时间；登录失效时清空缓存并提示打开 App。
+
+登录配置与缓存保存在受文件保护、排除备份的 App Group `StickyWidget/state.json` 中，供主应用和小组件共享。切换账号或退出登录会清除旧账号的快照；首次使用、重新登录或服务器地址变更后需打开一次 App。小组件复用当前登录凭证，不使用仅供上传的快捷指令凭证。
+
+`ios:init`、`ios:dev` 和 `ios:build` 会通过 `native/ios/prepare.cjs` 生成并嵌入 WidgetKit 扩展。SideStore 重签名时须保留 `ClipRoamWidget.appex`，并授予它与主应用相同的 App Group。Windows 可运行 `node --test apps/app/src-tauri/native/ios/prepare.test.cjs` 验证工程生成；Swift 编译、真机添加小组件及后台刷新需在 macOS/Xcode 和 iOS 设备验证。
+
 ## macOS 签名与辅助功能授权
 
 macOS 默认使用固定自签名证书 `cliproam-dev` 签名整个 `.app`。Bundle ID 保持 `com.whilecode.cliproam`；持续使用同一张证书，使签名要求不再绑定每次构建变化的 `cdhash`。缺少证书时构建失败，不自动降级为 ad-hoc 签名。自签名证书不提供 Apple 公证或 Gatekeeper 信任。

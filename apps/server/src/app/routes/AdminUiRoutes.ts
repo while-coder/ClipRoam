@@ -16,6 +16,7 @@ export function registerAdminUiRoutes(app: FastifyInstance): void {
     .header("Cache-Control", "no-cache")
     .type("text/html; charset=utf-8")
     .send(`<!doctype html><html><head><meta charset="utf-8"><title>ClipRoam</title></head><body><script>
+      document.title = /^zh(?:[-_]|$)/i.test(navigator.language) ? "随心贴" : "ClipRoam";
       const target = new URL(window.location.href);
       target.pathname = target.pathname.replace(/\\/?$/, "/") + "admin/";
       window.location.replace(target.href);
