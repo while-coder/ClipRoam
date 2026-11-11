@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { highlightLimit, languageForFile, textLanguages } from "./textLanguages";
+import SSelect from "@qingfeng346/ui-kit/components/SSelect.vue";
 
 const props = withDefaults(defineProps<{
   text: string;
@@ -12,6 +13,11 @@ const props = withDefaults(defineProps<{
   emptyText: "",
 });
 const language = ref("auto");
+const languageOptions = [
+  { value: "auto", label: "自动识别" },
+  { value: "plaintext", label: "纯文本" },
+  ...textLanguages.map(([value, label]) => ({ value, label })),
+];
 const highlighter = shallowRef<typeof import("./textHighlight")>();
 const loadFailed = ref(false);
 let disposed = false;
@@ -40,13 +46,10 @@ const detectedLabel = computed(() => {
     <slot />
     <div class="text-preview-panel">
       <div class="text-preview-toolbar">
-        <label>语言
-          <select v-model="language">
-            <option value="auto">自动识别</option>
-            <option value="plaintext">纯文本</option>
-            <option v-for="[value, name] in textLanguages" :key="value" :value="value">{{ name }}</option>
-          </select>
-        </label>
+        <div class="text-preview-language">
+          <span>语言</span>
+          <SSelect v-model:value="language" size="small" class="text-preview-language-select" :options="languageOptions" aria-label="预览语言" />
+        </div>
         <span role="status">{{ text.length > highlightLimit ? '内容较大，显示纯文本' : loadFailed ? '高亮加载失败，显示纯文本' : highlighter ? detectedLabel : '正在加载高亮…' }}</span>
       </div>
       <pre class="text-preview-content" tabindex="0" :aria-label="label"><code v-if="highlighted && text" class="hljs" v-html="highlighted.html" /><code v-else>{{ text || emptyText }}</code></pre>
@@ -67,8 +70,9 @@ const detectedLabel = computed(() => {
   background: var(--sui-bg-hover);
 }
 .text-preview-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--sui-border-strong); color: var(--color-secondary-text); font-size: 12px; }
-.text-preview-toolbar label { display: flex; align-items: center; gap: 8px; }
-.text-preview-toolbar select { min-height: 32px; max-width: 180px; padding: 4px 8px; border: 1px solid var(--sui-border-strong); border-radius: 4px; color: var(--color-foreground); background: var(--color-surface); }
+.text-preview-language { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.text-preview-language-select { width: 140px; max-width: 180px; }
+.text-preview-language-select :deep(.s-select) { min-height: 32px; }
 .text-preview-content {
   flex: 1;
   min-height: 0;
@@ -89,6 +93,6 @@ const detectedLabel = computed(() => {
 .text-preview-content :deep(code) { display: block; padding: 0; background: transparent; font: inherit; white-space: inherit; overflow-wrap: inherit; }
 @media (max-width: 640px) {
   .text-preview { padding: 12px; }
-  .text-preview-toolbar select { min-height: 44px; }
+  .text-preview-language-select :deep(.s-select) { min-height: 34px; }
 }
 </style>

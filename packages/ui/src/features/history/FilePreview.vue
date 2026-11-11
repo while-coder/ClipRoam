@@ -118,11 +118,11 @@ function fileIcon(name: string) {
     @back="opened = undefined"
     @close="emit('close')"
   />
-  <SModal v-else :show="true" :title="entry.content" width="760px" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal v-else class="entry-preview-modal" fill-height :body-scrollable="false" :mask-closable="true" :show="true" :title="entry.content" width="760px" @update:show="(value: boolean) => { if (!value) emit('close') }">
     <div class="file-preview">
       <p class="file-preview-summary">{{ fileEntrySummary(entry) }}</p>
-      <div v-if="browsing" class="file-preview-toolbar">
-        <span>{{ selected?.path || (mobileLayout ? '单击文件预览，点击文件夹展开' : '双击文件预览，点击文件夹展开') }}</span>
+      <div v-if="browsing && !mobileLayout" class="file-preview-toolbar">
+        <span v-if="selected">{{ selected.path }}</span>
         <SButton :disabled="!selected" @click="opened = selected">打开文件</SButton>
       </div>
       <div v-if="loading" class="preview-status" role="status">
@@ -170,13 +170,13 @@ function fileIcon(name: string) {
 </template>
 
 <style scoped>
-.file-preview { padding: 16px; }
-.file-preview-summary { margin: 0 0 12px; color: var(--color-secondary-text); font-size: 13px; }
-.file-preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--sui-border-strong); }
-.file-preview-toolbar span { min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary-text); font-size: 13px; }
+.file-preview { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 16px; overflow: hidden; }
+.file-preview-summary { flex-shrink: 0; margin: 0 0 12px; color: var(--color-secondary-text); font-size: 13px; }
+.file-preview-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--sui-border-strong); }
+.file-preview-toolbar span { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary-text); font-size: 13px; }
 .file-preview-toolbar :deep(.s-button) { flex-shrink: 0; }
 .preview-status { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 160px; color: var(--color-secondary-text); }
-.file-preview-list { max-height: min(560px, calc(100dvh - 220px)); margin: 0; padding: 0; overflow: auto; list-style: none; }
+.file-preview-list { flex: 0 1 auto; min-height: 0; overscroll-behavior: contain; max-height: min(560px, calc(100dvh - 220px)); margin: 0; padding: 0; overflow: auto; list-style: none; }
 .file-preview-row { display: grid; grid-template-columns: 14px 17px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--color-foreground); font-size: 13px; text-align: left; cursor: pointer; }
 .file-preview-row:hover, .file-preview-row.selected { background: var(--sui-bg-hover); }
 .file-preview-row.selected { box-shadow: inset 0 0 0 1px var(--sui-border-strong); }

@@ -875,6 +875,9 @@ defineExpose({ focusSearch, focusSearchInput, currentPage, openEntryPreview });
 
     <SModal
       v-if="previewEntry?.kind === ClipboardKind.Text"
+      class="entry-preview-modal"
+      fill-height
+      :mask-closable="true"
       :key="previewEntry.id"
       :show="true"
       title="文本预览"
@@ -883,7 +886,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage, openEntryPreview });
     >
       <TextPreview :text="previewEntry.content" />
       <template #footer>
-        <SButton @click="closeEntryPreview">关闭</SButton>
         <SButton
           type="primary"
           :disabled="activatingEntryIds.has(previewEntry.id)"

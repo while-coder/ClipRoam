@@ -601,6 +601,64 @@ button.image-thumbnail { cursor: zoom-in; }
 /* 文件名允许连续字符换行，标题变高时保留关闭按钮和完整标题。 */
 .file-content-preview-modal .s-modal-header { flex-shrink: 0; align-items: flex-start; }
 .file-content-preview-modal .s-modal-header h2 { white-space: normal; overflow-wrap: anywhere; }
+/* 文件文本预览由内容区独立滚动，弹窗正文及中间容器只传递可用高度。 */
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .markdown-preview,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .text-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .markdown-toolbar,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .text-preview-toolbar,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .preview-note,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .markdown-note { flex-shrink: 0; }
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .markdown-content,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .text-preview-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+}
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .markdown-content,
+.file-content-preview-modal.entry-preview-modal.s-modal-overlay .text-preview-content { overscroll-behavior: contain; }
+/* 移动端预览保留遮罩空白，覆盖组件库在窄屏上的全屏布局。 */
+@media (max-width: 768px) {
+  body > .entry-preview-modal.s-modal-overlay {
+    --entry-preview-height: min(80dvh, calc(100dvh - max(24px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))));
+    box-sizing: border-box;
+    align-items: center;
+    padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .entry-preview-modal.s-modal-overlay > .s-modal-box {
+    width: 100% !important;
+    max-width: 100%;
+    max-height: var(--entry-preview-height);
+    border: 1px solid var(--sui-border);
+    border-radius: 14px;
+  }
+  .entry-preview-modal.s-modal-overlay > .s-modal-box.fill-height { height: var(--entry-preview-height); }
+  .entry-preview-modal.s-modal-overlay .s-modal-header,
+  .entry-preview-modal.s-modal-overlay .s-modal-footer { flex-shrink: 0; }
+  .entry-preview-modal.s-modal-overlay .s-modal-header { min-height: 38px; gap: 8px; padding: 0 12px; align-items: center; }
+  .entry-preview-modal.s-modal-overlay .s-modal-header h2 { font-size: 14px; line-height: 20px; white-space: nowrap; }
+  .entry-preview-modal.s-modal-overlay .s-modal-header .s-icon-close { width: 36px; height: 36px; font-size: 20px; }
+  .entry-preview-modal.s-modal-overlay .s-modal-body { padding: 8px 12px; }
+  .entry-preview-modal.s-modal-overlay .s-modal-footer { flex-wrap: wrap; gap: 8px; padding: 4px 12px; }
+  .entry-preview-modal.s-modal-overlay .s-modal-footer .s-button,
+  .entry-preview-modal.s-modal-overlay .markdown-toolbar .s-button { min-height: 36px; padding: 4px 10px; font-size: 13px; line-height: 20px; }
+  .entry-preview-modal.s-modal-overlay .text-preview,
+  .entry-preview-modal.s-modal-overlay .file-preview,
+  .entry-preview-modal.s-modal-overlay .markdown-preview { padding: 0; }
+  .entry-preview-modal.s-modal-overlay .text-preview-toolbar { flex-shrink: 0; gap: 6px; padding: 0 8px; }
+  .entry-preview-modal.s-modal-overlay .text-preview-language-select .s-select { min-height: 34px; padding: 4px 8px; font-size: 13px; line-height: 20px; }
+  .entry-preview-modal.s-modal-overlay .text-preview-content { padding: 8px; }
+  .entry-preview-modal.s-modal-overlay .text-preview-panel {
+    height: auto;
+    max-height: min(420px, 50dvh);
+  }
+}
 /* 设置页固定高度（参考 sterm）：body 不滚，form 纵向 flex —— STabs 吃满剩余并内部滚动（左 tabs 固定）。 */
 /* Contain scrolling even on short tabs, and over the header, navigation or mask. */
 .settings-modal { overflow: auto; overscroll-behavior: contain; }

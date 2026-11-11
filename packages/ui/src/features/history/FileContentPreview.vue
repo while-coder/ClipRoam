@@ -138,7 +138,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal class="file-content-preview-modal" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal class="file-content-preview-modal entry-preview-modal" fill-height :mask-closable="true" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image && kind !== ClipboardKind.Text" @update:show="(value: boolean) => { if (!value) emit('close') }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
@@ -159,7 +159,6 @@ onMounted(async () => {
       <SButton type="primary" @click="downloadFile">
         <Download :size="15" aria-hidden="true" />下载
       </SButton>
-      <SButton @click="emit('close')">关闭</SButton>
     </template>
   </SModal>
 </template>
