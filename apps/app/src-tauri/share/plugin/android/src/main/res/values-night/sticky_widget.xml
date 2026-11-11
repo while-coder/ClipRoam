@@ -1,7 +1,9 @@
 <resources>
-    <color name="sticky_widget_background">#0F172A</color>
+    <color name="sticky_widget_background">#292929</color>
     <color name="sticky_widget_note">#1E293B</color>
     <color name="sticky_widget_text">#F8FAFC</color>
     <color name="sticky_widget_muted">#CBD5E1</color>
     <color name="sticky_widget_accent">#93C5FD</color>
+    <color name="sticky_widget_header">@color/sticky_widget_background</color>
+    <color name="sticky_widget_divider">#454545</color>
 </resources>

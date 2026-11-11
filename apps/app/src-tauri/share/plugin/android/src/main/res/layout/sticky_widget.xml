@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="12dp"
+    android:orientation="vertical"
     android:background="@drawable/sticky_widget_background">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical" android:background="@drawable/sticky_widget_header">
         <TextView android:id="@+id/sticky_title" android:layout_width="0dp" android:layout_height="match_parent"
             android:layout_weight="1" android:gravity="center_vertical" android:text="@string/sticky_widget_name"
-            android:textColor="@color/sticky_widget_text" android:textSize="18sp" android:textStyle="bold"
+            android:textColor="@color/sticky_widget_header_text" android:paddingStart="16dp" android:textSize="18sp" android:textStyle="bold"
             android:background="@drawable/sticky_widget_touch" />
         <TextView android:id="@+id/sticky_refresh" android:layout_width="64dp" android:layout_height="48dp"
             android:gravity="center" android:text="@string/sticky_widget_refresh" android:textSize="14sp"
-            android:textColor="@color/sticky_widget_accent" android:background="@drawable/sticky_widget_touch"
+            android:textColor="@color/sticky_widget_header_text" android:background="@drawable/sticky_widget_touch"
             android:contentDescription="@string/sticky_widget_refresh" />
     </LinearLayout>
     <TextView android:id="@+id/sticky_status" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:text="@string/sticky_widget_loading" android:textColor="@color/sticky_widget_muted"
-        android:textSize="12sp" android:maxLines="2" android:paddingBottom="8dp" />
-    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        android:textSize="12sp" android:maxLines="2" android:paddingHorizontal="16dp" android:paddingVertical="8dp" />
+    <FrameLayout android:paddingHorizontal="8dp" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <ListView android:id="@+id/sticky_list" android:layout_width="match_parent" android:layout_height="match_parent"
-            android:divider="@android:color/transparent" android:dividerHeight="6dp" />
+            android:divider="@color/sticky_widget_divider" android:dividerHeight="1dp" />
         <TextView android:id="@+id/sticky_empty" android:layout_width="match_parent" android:layout_height="match_parent"
             android:gravity="center" android:text="@string/sticky_widget_login" android:textSize="14sp"
             android:textColor="@color/sticky_widget_muted" />

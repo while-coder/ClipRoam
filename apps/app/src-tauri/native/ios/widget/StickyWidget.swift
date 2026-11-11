@@ -75,7 +75,7 @@ struct StickyWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     private var visibleNotes: [StickyWidgetNote] {
-        Array(entry.state.notes.prefix(family == .systemSmall ? 1 : family == .systemMedium ? 3 : 5))
+        Array(entry.state.notes.prefix(family == .systemSmall ? 1 : family == .systemMedium ? 2 : 5))
     }
 
     private var emptyMessage: LocalizedStringKey {
@@ -86,41 +86,56 @@ struct StickyWidgetView: View {
         return "还没有便签，在历史记录中添加"
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "note.text").foregroundColor(.accentColor)
-                Text("便签").font(.headline)
-                Spacer(minLength: 0)
-                if !entry.state.notes.isEmpty {
-                    Text("\(entry.state.notes.count)").font(.caption).foregroundColor(.secondary)
-                }
-            }
-            if visibleNotes.isEmpty {
-                Text(emptyMessage).font(.subheadline).foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    private func entryURL(_ note: StickyWidgetNote) -> URL {
+        var url = URLComponents()
+        url.scheme = "cliproam"
+        url.host = "widget"
+        url.queryItems = [URLQueryItem(name: "id", value: note.id)]
+        return url.url!
+    }
+
+    private func row(_ note: StickyWidgetNote) -> some View {
+        let lines = note.content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(lines.first ?? note.kind).font(.body).foregroundColor(.primary).lineLimit(1)
+            if lines.count > 1 {
+                Text(lines.dropFirst().joined(separator: " ")).font(.caption).foregroundColor(.secondary).lineLimit(1)
             } else {
-                ForEach(visibleNotes) { note in
-                    HStack(alignment: .top, spacing: 6) {
-                        if note.kind != "text" {
-                            Image(systemName: note.kind == "image" ? "photo" : "doc")
-                                .foregroundColor(.secondary).accessibilityHidden(true)
-                        }
-                        Text(note.content).font(.body)
-                            .lineLimit(family == .systemSmall ? 5 : family == .systemMedium ? 1 : 2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            if let updated = entry.state.updatedAt {
-                HStack(spacing: 4) {
-                    if entry.offline { Image(systemName: "wifi.slash"); Text("缓存") }
-                    else { Text("更新于") }
-                    Text(updated, style: .time)
-                }.font(.caption2).foregroundColor(.secondary)
+                Text("无更多文本").font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.vertical, 6).contentShape(Rectangle())
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                Text("便签").font(.headline)
+                Spacer(minLength: 0)
+                Text("\(entry.state.notes.count)").font(.caption)
+            }
+            .foregroundColor(.primary)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            VStack(alignment: .leading, spacing: 0) {
+                if visibleNotes.isEmpty {
+                    Text(emptyMessage).font(.subheadline).foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                } else {
+                    ForEach(visibleNotes) { note in
+                        if family == .systemSmall { row(note) }
+                        else { Link(destination: entryURL(note)) { row(note) } }
+                        Divider()
+                    }
+                    Spacer(minLength: 0)
+                }
+                if entry.offline {
+                    Label("缓存", systemImage: "wifi.slash").font(.caption2).foregroundColor(.secondary)
+                }
+            }.padding(.horizontal, 12)
+        }
+        .widgetURL(visibleNotes.first.map { entryURL($0) } ?? URL(string: "cliproam://widget"))
     }
 
     @ViewBuilder

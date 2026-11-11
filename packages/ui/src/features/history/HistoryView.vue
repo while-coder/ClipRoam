@@ -580,15 +580,18 @@ function resetTimeFilter(): void {
   endDate.value = "";
 }
 
-defineExpose({ focusSearch, focusSearchInput, currentPage });
+defineExpose({ focusSearch, focusSearchInput, currentPage, openEntryPreview });
 </script>
 
 <template>
-  <div class="history-workspace app-content" :class="{ 'with-favorite-folders': favorites }" :style="{ '--folder-panel-width': `${folderPanelWidth}px` }">
-  <FavoriteFoldersPanel v-if="favorites" v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
+  <div class="history-workspace app-content" :class="{ 'with-favorite-folders': favorites && !mobileLayout }" :style="{ '--folder-panel-width': `${folderPanelWidth}px` }">
+  <FavoriteFoldersPanel v-if="favorites && !mobileLayout" v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
   <SidebarResizer v-if="favorites && !mobileLayout" storage-key="cliproam.folderPanelWidth" label="收藏目录宽度"
     :default-width="190" :min-width="160" :max-width="400" :content-min-width="320" @resize="folderPanelWidth = $event" />
   <WorkspacePage :title="pageTitle" layout="history" :data-history-selecting="selecting || undefined">
+    <template v-if="favorites && mobileLayout" #title>
+      <FavoriteFoldersPanel v-model="favoriteFolderId" :folders="folders" :loading="foldersLoading" :error="foldersError" @refresh="loadFolders" />
+    </template>
     <template v-if="favorites" #status>收藏夹</template>
     <template v-else-if="sticky" #status>独立保存的便签 · 取消后同步关闭各设备窗口</template>
     <template #menu><WorkspaceMenu /></template>
@@ -907,9 +910,6 @@ defineExpose({ focusSearch, focusSearchInput, currentPage });
 .history-workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
 .history-workspace.with-favorite-folders { grid-template-columns: var(--folder-panel-width, 190px) minmax(0, 1fr); }
 .entry-folder-path { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 768px) {
-  .history-workspace.with-favorite-folders { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-}
 .toolbar { container: history-toolbar / inline-size; }
 .history-refresh.s-button { flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 5px; }
 .entry-marks { display: flex; align-items: center; gap: 4px; }

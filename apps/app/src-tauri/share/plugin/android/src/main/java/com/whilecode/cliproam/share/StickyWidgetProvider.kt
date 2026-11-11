@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.net.Uri
 import android.text.format.DateFormat
 import android.view.View
 import android.widget.RemoteViews
@@ -74,6 +75,7 @@ class StickyWidgetProvider : AppWidgetProvider() {
                 }
                 // Collection rows use a mutable template so the launcher can attach their fill-in intent.
                 context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+                    launch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     views.setPendingIntentTemplate(R.id.sticky_list, PendingIntent.getActivity(context, 1, launch,
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE))
                 }
@@ -100,8 +102,13 @@ class StickyWidgetService : RemoteViewsService() {
         override fun getViewAt(position: Int): RemoteViews? {
             val note = notes.optJSONObject(position) ?: return null
             return RemoteViews(context.packageName, R.layout.sticky_widget_row).apply {
-                setTextViewText(R.id.sticky_note, note.optString("content"))
-                setOnClickFillInIntent(R.id.sticky_note, Intent())
+                val lines = note.optString("content").lines().filter { it.isNotBlank() }
+                setTextViewText(R.id.sticky_note, lines.firstOrNull() ?: note.optString("kind"))
+                setTextViewText(R.id.sticky_note_summary, lines.drop(1).joinToString(" ").ifBlank {
+                    context.getString(R.string.sticky_widget_no_more_text)
+                })
+                setOnClickFillInIntent(R.id.sticky_row, Intent().setData(Uri.Builder()
+                    .scheme("cliproam").authority("widget").appendQueryParameter("id", note.getString("id")).build()))
             }
         }
     }

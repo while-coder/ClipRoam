@@ -14,7 +14,7 @@ import { applyServerSettings } from "./features/sync/serverSettings";
 import { cancelSettingsRequests, initSettings } from "./features/settings/useSettings";
 import { settingsVisible } from "./features/settings/useSettings";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
-import MobileSettingsDialog from "./features/settings/MobileSettingsDialog.vue";
+import MobileSettingsDialog, { type MobileSettingsSection } from "./features/settings/MobileSettingsDialog.vue";
 import HistoryView from "./features/history/HistoryView.vue";
 import DownloadsView from "./features/downloads/DownloadsView.vue";
 import DevicesView from "./features/devices/DevicesView.vue";
@@ -69,6 +69,8 @@ import type {
   SyncConfig,
 } from "./types";
 
+defineProps<{ mobileSettingsSections?: MobileSettingsSection[] }>();
+
 useFileDropUpload();
 
 watch(appName, (name) => { document.title = name; }, { immediate: true });
@@ -115,6 +117,29 @@ const verifyingSession = ref(false);
 const savedSessionConfig = ref<SyncConfig>();
 const savedAccounts = ref<SyncConfig[]>([]);
 const savedConfigReadFailed = ref(false);
+// Widget requests survive the login screen and open only in the ready account.
+const pendingWidgetEntry = ref<string>();
+function openWidgetEntry(id: string): void { pendingWidgetEntry.value = id; }
+defineExpose({ openWidgetEntry });
+watch([pendingWidgetEntry, initializing, setupVisible, hasSavedSyncConfig, activeAccountSession], async () => {
+  const id = pendingWidgetEntry.value;
+  const session = getAccountSession();
+  if (!id || initializing.value || setupVisible.value || !hasSavedSyncConfig.value || !session) return;
+  pendingWidgetEntry.value = undefined;
+  try {
+    const entries = await session.history.listSticky(true);
+    if (session !== getAccountSession() || session.signal.aborted) return;
+    const entry = entries.find((item) => item.id === id);
+    if (!entry) throw new Error("该便签已被删除或不再可用");
+    settingsVisible.value = false;
+    activeView.value = "sticky";
+    await nextTick();
+    historyView.value?.openEntryPreview(entry);
+  } catch (error) {
+    if (!session.signal.aborted) showNotification({ message: `打开便签失败：${errorMessage(error)}`, tone: "error" });
+  }
+}, { flush: "post" });
+
 let authenticationController: AbortController | undefined;
 const { importingShare } = useShareReceiver(computed(() =>
   !initializing.value && hasSavedSyncConfig.value && !setupVisible.value && !isQuickPaste.value && Boolean(getActiveConfig()?.sessionToken),
@@ -640,7 +665,11 @@ onBeforeUnmount(() => {
       <slot v-if="!isQuickPaste && !mobileLayout && settingsVisible" name="settings" :current-username="currentUsername">
         <SettingsDialog :current-username="currentUsername" />
       </slot>
-      <MobileSettingsDialog v-if="!isQuickPaste && mobileLayout && settingsVisible" :current-username="currentUsername" />
+      <MobileSettingsDialog v-if="!isQuickPaste && mobileLayout && settingsVisible" :current-username="currentUsername" :sections="mobileSettingsSections">
+        <template #default="{ section }">
+          <slot name="mobile-settings-content" :current-username="currentUsername" :section="section" />
+        </template>
+      </MobileSettingsDialog>
     </template>
   </WorkspaceLayout>
 

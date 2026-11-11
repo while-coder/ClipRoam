@@ -74,6 +74,26 @@ class ShareReceiverPlugin(private val activity: Activity) : Plugin(activity) {
 
     private val inbox = File(activity.filesDir, "cliproam-shares")
 
+    private var widgetEntryId: String? = null
+
+    override fun onNewIntent(intent: Intent) {
+        val uri = intent.data
+        if (uri?.scheme == "cliproam" && uri.host == "widget") {
+            widgetEntryId = uri.getQueryParameter("id")
+            intent.data = null
+            trigger("widget-open", JSObject())
+        }
+    }
+
+    @Command
+    fun pendingWidgetEntry(invoke: Invoke) {
+        val uri = activity.intent?.data
+        val coldId = if (uri?.scheme == "cliproam" && uri.host == "widget") uri.getQueryParameter("id") else null
+        if (coldId != null) activity.intent.data = null
+        invoke.resolve(JSObject().put("id", widgetEntryId ?: coldId ?: JSONObject.NULL))
+        widgetEntryId = null
+    }
+
     override fun onResume() {
         trigger("share-received", JSObject())
         StickyWidgetSync.refresh(activity)

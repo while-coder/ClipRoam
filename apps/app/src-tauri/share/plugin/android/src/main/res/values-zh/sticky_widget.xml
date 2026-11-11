@@ -7,4 +7,5 @@
     <string name="sticky_widget_loading">正在同步便签…</string>
     <string name="sticky_widget_offline">同步失败 · 显示上次内容</string>
     <string name="sticky_widget_status">%1$d 条便签 · 更新于 %2$s</string>
+    <string name="sticky_widget_no_more_text">无更多文本</string>
 </resources>

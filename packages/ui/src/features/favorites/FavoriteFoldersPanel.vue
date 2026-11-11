@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onDeactivated, ref, useId, watch } from "vue";
 import SCascadeMenu from "@qingfeng346/ui-kit/components/SCascadeMenu.vue";
-import { ChevronRight, Folder, FolderOpen, Info, Menu, MoreHorizontal, Plus, Star } from "lucide-vue-next";
+import { Check, ChevronDown, ChevronRight, Folder, FolderOpen, Info, MoreHorizontal, Plus, Star } from "lucide-vue-next";
 import { MAX_FAVORITE_FOLDER_DEPTH, type FavoriteFolder } from "@cliproam/protocol";
 import { getAccountSession } from "../../accountSession";
 import { useMobileLayout } from "../../platform/runtime";
@@ -31,6 +31,7 @@ const formError = ref("");
 const moveError = ref("");
 type FolderRow = typeof rows.value[number];
 const tree = ref<HTMLElement>();
+const mobileTree = ref<HTMLElement>();
 const focusedId = ref("");
 watch(visibleRows, (visible) => {
   if (focusedId.value && focusedId.value !== "unfiled" && !visible.some((folder) => folder.id === focusedId.value)) focusedId.value = "";
@@ -99,6 +100,7 @@ function openDrawer(): void {
     if (folder.descendantIds.includes(props.modelValue)) collapsed.value.delete(folder.id);
   }
   drawerOpen.value = true;
+  void nextTick(() => mobileTree.value?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: "nearest" }));
 }
 function navigateMobile(id: string): void {
   emit("update:modelValue", id);
@@ -229,9 +231,9 @@ async function remove(): Promise<void> {
 </script>
 
 <template>
-  <aside class="favorite-folders" aria-label="收藏目录" @contextmenu="openPanelMenu">
+  <aside class="favorite-folders" :class="{ 'mobile-folder-picker': mobile }" aria-label="收藏目录" @contextmenu="openPanelMenu">
     <button v-if="mobile" class="folder-mobile-trigger" :aria-label="`打开收藏目录，当前：${currentPath}`" aria-haspopup="dialog" :aria-expanded="drawerOpen" :aria-controls="drawerOpen ? drawerId : undefined" @click="openDrawer">
-      <Menu :size="20" aria-hidden="true" /><span class="folder-trigger-label">目录</span><span class="folder-trigger-path" :title="currentPath">{{ currentPath }}</span><ChevronRight :size="16" aria-hidden="true" />
+      <span class="folder-trigger-path" :title="currentPath">{{ currentPath }}</span><ChevronDown :size="18" aria-hidden="true" />
     </button>
     <template v-else>
       <div class="folder-heading"><strong>收藏目录</strong></div>
@@ -258,14 +260,14 @@ async function remove(): Promise<void> {
     </template>
   </aside>
 
-  <SModal v-if="mobile" :id="drawerId" v-model:show="drawerOpen" class="favorite-folder-drawer" title="收藏目录">
-    <nav class="mobile-folder-navigation" aria-label="收藏目录导航">
-      <button class="folder-link" :class="{ active: !modelValue }" :aria-current="!modelValue ? 'page' : undefined" @click="navigateMobile('')"><Star :size="18" aria-hidden="true" />全部收藏</button>
-      <button class="folder-link" :class="{ active: modelValue === 'unfiled' }" :aria-current="modelValue === 'unfiled' ? 'page' : undefined" @click="navigateMobile('unfiled')"><Folder :size="18" aria-hidden="true" />未分类</button>
+  <SModal v-if="mobile" :id="drawerId" v-model:show="drawerOpen" class="favorite-folder-drawer" title="切换收藏目录" :subtitle="`当前：${currentPath}`" :closable="!busy" :mask-closable="!busy" :close-on-esc="!busy">
+    <nav ref="mobileTree" class="mobile-folder-navigation" aria-label="收藏目录导航">
+      <button class="folder-link" :class="{ active: !modelValue }" :aria-current="!modelValue ? 'page' : undefined" @click="navigateMobile('')"><Star :size="18" aria-hidden="true" /><span>全部收藏</span><Check v-if="!modelValue" :size="18" aria-hidden="true" /></button>
+      <button class="folder-link" :class="{ active: modelValue === 'unfiled' }" :aria-current="modelValue === 'unfiled' ? 'page' : undefined" @click="navigateMobile('unfiled')"><Folder :size="18" aria-hidden="true" /><span>未分类</span><Check v-if="modelValue === 'unfiled'" :size="18" aria-hidden="true" /></button>
       <div v-for="folder in visibleRows" :key="folder.id" class="mobile-folder-row" :class="{ active: modelValue === folder.id }" :style="{ paddingLeft: `${(folder.depth - 1) * 16}px` }">
         <button v-if="folder.descendantIds.length > 1" class="folder-toggle" :aria-label="`${collapsed.has(folder.id) ? '展开' : '收起'}${folder.name}`" :aria-expanded="!collapsed.has(folder.id)" @click="collapsed.has(folder.id) ? collapsed.delete(folder.id) : collapsed.add(folder.id)"><ChevronRight :size="16" :class="{ expanded: !collapsed.has(folder.id) }" /></button>
         <span v-else class="folder-toggle-spacer" />
-        <button class="folder-link" :aria-current="modelValue === folder.id ? 'page' : undefined" :title="folder.path" @click="navigateMobile(folder.id)"><Folder :size="18" aria-hidden="true" /><span>{{ folder.name }}</span><small>{{ folder.count }}</small></button>
+        <button class="folder-link" :aria-current="modelValue === folder.id ? 'page' : undefined" :title="folder.path" @click="navigateMobile(folder.id)"><Folder :size="18" aria-hidden="true" /><span>{{ folder.name }}</span><small>{{ folder.count }}</small><Check v-if="modelValue === folder.id" :size="18" aria-hidden="true" /></button>
         <button class="folder-icon-button" :disabled="busy || loading || !!error" :aria-label="`${folder.name}的操作`" @click="openMenu($event, folder)"><MoreHorizontal :size="18" /></button>
       </div>
     </nav>
@@ -330,33 +332,36 @@ async function remove(): Promise<void> {
 .folder-form, .folder-form label, .folder-select-field { display: grid; gap: 8px; }
 .folder-form { gap: 16px; }
 .folder-form p { margin: 0; color: var(--color-secondary-text); font-size: 12px; }
-.folder-mobile-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--color-foreground); font: inherit; cursor: pointer; text-align: left; }
-.folder-mobile-trigger svg, .folder-trigger-label { flex: none; }
-.folder-trigger-label { font-size: 14px; }
-.folder-trigger-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--color-secondary-text); }
+.favorite-folders.mobile-folder-picker { min-width: 0; overflow: visible; padding: 0; border: 0; }
+.folder-mobile-trigger { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; min-height: 48px; padding: 0 4px; border: 0; border-radius: 8px; background: transparent; color: var(--color-foreground); font: inherit; cursor: pointer; text-align: left; touch-action: manipulation; }
+.folder-mobile-trigger svg { flex: none; color: var(--sui-primary); }
+.folder-trigger-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 600; }
 .folder-mobile-trigger:focus-visible { outline: 2px solid var(--sui-primary); outline-offset: 2px; }
 .mobile-folder-navigation { display: grid; gap: 4px; }
 .mobile-folder-row { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 .mobile-folder-row.active { color: var(--sui-primary); background: var(--sui-bg-active); }
 .mobile-folder-row.active .folder-link { color: inherit; }
-.mobile-folder-navigation .folder-link { min-height: 48px; font-size: 15px; }
+.mobile-folder-navigation .folder-link { min-height: 52px; gap: 12px; font-size: 16px; }
 .mobile-folder-navigation .folder-icon-button, .mobile-folder-navigation .folder-toggle { width: 44px; height: 48px; flex: none; }
 .mobile-folder-navigation .folder-toggle-spacer { width: 44px; }
 .mobile-folder-actions { display: grid; gap: 8px; }
 .mobile-folder-actions :deep(.s-button), .mobile-folder-navigation .s-button { min-height: 44px; }
 .folder-mobile-trigger:active, .mobile-folder-navigation button:active { background: var(--sui-bg-hover); }
-:global(.favorite-folder-drawer.s-modal-overlay) { padding: 0; align-items: stretch; justify-content: flex-start; }
-:global(.favorite-folder-drawer .s-modal-box) { width: min(340px, 86vw) !important; height: 100%; max-height: 100%; border: 0; border-right: 1px solid var(--color-border); border-radius: 0; padding-left: env(safe-area-inset-left, 0px); box-sizing: border-box; }
-:global(.favorite-folder-drawer .s-modal-header) { flex: none; padding-top: max(12px, env(safe-area-inset-top, 0px)); }
-:global(.favorite-folder-drawer .s-icon-close) { width: 44px; height: 44px; }
+:global(.favorite-folder-drawer.s-modal-overlay), :global(.favorite-folder-actions.s-modal-overlay) { padding: 0; align-items: flex-end; justify-content: center; }
+:global(.favorite-folder-drawer .s-modal-box), :global(.favorite-folder-actions .s-modal-box) { width: min(640px, 100%) !important; max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 16px); border: 1px solid var(--color-border); border-bottom: 0; border-radius: 20px 20px 0 0; padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); box-sizing: border-box; }
+:global(.favorite-folder-drawer .s-modal-box) { height: min(72dvh, 640px); }
+:global(.favorite-folder-drawer .s-modal-header), :global(.favorite-folder-actions .s-modal-header) { flex: none; padding: 12px 16px; }
+:global(.favorite-folder-drawer .s-modal-sub) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:global(.favorite-folder-drawer .s-icon-close), :global(.favorite-folder-actions .s-icon-close) { width: 48px; height: 48px; }
 :global(.favorite-folder-drawer .s-modal-body) { flex: 1; padding: 12px; }
-:global(.favorite-folder-drawer .s-modal-footer) { flex: none; padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)); }
-:global(.favorite-folder-drawer .s-modal-footer .s-button) { min-height: 44px; }
+:global(.favorite-folder-drawer .s-modal-footer) { flex: none; padding: 12px 16px max(16px, env(safe-area-inset-bottom, 0px)); }
+:global(.favorite-folder-actions .s-modal-body) { padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
+:global(.favorite-folder-drawer .s-modal-footer .s-button) { min-height: 48px; }
 :global(.favorite-folder-drawer.s-modal-enter-active), :global(.favorite-folder-drawer.s-modal-leave-active) { transition: opacity 200ms ease; }
 :global(.favorite-folder-drawer.s-modal-enter-active .s-modal-box), :global(.favorite-folder-drawer.s-modal-leave-active .s-modal-box) { transition: transform 200ms ease; }
-:global(.favorite-folder-drawer.s-modal-enter-from .s-modal-box), :global(.favorite-folder-drawer.s-modal-leave-to .s-modal-box) { transform: translateX(-100%); }
+:global(.favorite-folder-drawer.s-modal-enter-from .s-modal-box), :global(.favorite-folder-drawer.s-modal-leave-to .s-modal-box), :global(.favorite-folder-actions.s-modal-enter-from .s-modal-box), :global(.favorite-folder-actions.s-modal-leave-to .s-modal-box) { transform: translateY(100%); }
 @media (prefers-reduced-motion: reduce) {
-  :global(.favorite-folder-drawer.s-modal-overlay), :global(.favorite-folder-drawer .s-modal-box) { transition: none; }
+  :global(.favorite-folder-drawer.s-modal-overlay), :global(.favorite-folder-drawer .s-modal-box), :global(.favorite-folder-actions.s-modal-overlay), :global(.favorite-folder-actions .s-modal-box) { transition: none; }
 }
 @media (max-width: 768px) {
   .favorite-folders { padding: 4px 16px; border-right: 0; border-bottom: 1px solid var(--color-border); }

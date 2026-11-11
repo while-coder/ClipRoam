@@ -3,6 +3,40 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 #[cfg(target_os = "ios")]
+static WIDGET_ENTRY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "ios")]
+pub(crate) fn request_widget_preview(app: &AppHandle, id: String) {
+    use tauri::Emitter;
+    *WIDGET_ENTRY.lock().unwrap() = Some(id);
+    let _ = app.emit("cliproam://widget-open", ());
+}
+
+#[tauri::command]
+pub(crate) async fn native_pending_widget_entry(
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        return app
+            .share_receiver()
+            .pending_widget_entry()
+            .await
+            .map_err(|e| e.to_string());
+    }
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        return Ok(serde_json::json!({ "id": WIDGET_ENTRY.lock().unwrap().take() }));
+    }
+    #[cfg(desktop)]
+    {
+        let _ = app;
+        Ok(serde_json::json!({ "id": null }))
+    }
+}
+
+#[cfg(target_os = "ios")]
 static SHARE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(target_os = "ios")]
@@ -115,7 +149,10 @@ pub(crate) async fn native_configure_ios_shortcuts(
 pub(crate) async fn native_add_ios_sms_shortcut(app: AppHandle, url: String) -> Result<(), String> {
     #[cfg(target_os = "ios")]
     {
-        app.share_receiver().add_sms_shortcut(&url).await.map_err(|e| e.to_string())
+        app.share_receiver()
+            .add_sms_shortcut(&url)
+            .await
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "ios"))]
     {

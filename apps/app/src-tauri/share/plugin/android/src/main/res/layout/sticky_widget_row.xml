@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/sticky_note" android:layout_width="match_parent" android:layout_height="wrap_content"
-    android:minHeight="56dp" android:padding="12dp" android:gravity="center_vertical"
-    android:textColor="@color/sticky_widget_text" android:textSize="15sp"
-    android:maxLines="4" android:ellipsize="end" android:background="@drawable/sticky_widget_note_background" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sticky_row" android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:minHeight="64dp" android:paddingHorizontal="8dp" android:paddingVertical="10dp"
+    android:background="@drawable/sticky_widget_touch">
+    <TextView android:id="@+id/sticky_note" android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:textColor="@color/sticky_widget_text" android:textSize="16sp" android:maxLines="1" android:ellipsize="end" />
+    <TextView android:id="@+id/sticky_note_summary" android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:layout_marginTop="4dp" android:textColor="@color/sticky_widget_muted" android:textSize="13sp" android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>

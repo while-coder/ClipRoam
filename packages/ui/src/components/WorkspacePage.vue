@@ -14,7 +14,7 @@ withDefaults(defineProps<{
       <header class="titlebar workspace-titlebar">
         <div class="page-title">
           <span :class="{ 'workspace-page-status': !!$slots.status }"><slot name="status">工作区</slot></span>
-          <h1>{{ title }}</h1>
+          <slot name="title"><h1>{{ title }}</h1></slot>
         </div>
         <div class="titlebar-actions"><slot name="actions" /><slot name="menu" /></div>
       </header>

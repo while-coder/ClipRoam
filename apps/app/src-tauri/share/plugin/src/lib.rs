@@ -148,6 +148,14 @@ impl<R: Runtime> ShareReceiver<R> {
             .map_err(Into::into)
     }
 
+    #[cfg(target_os = "android")]
+    pub async fn pending_widget_entry(&self) -> Result<serde_json::Value> {
+        self.0
+            .run_mobile_plugin_async("pendingWidgetEntry", ())
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn configure_widget(
         &self,
         server_address: Option<&str>,

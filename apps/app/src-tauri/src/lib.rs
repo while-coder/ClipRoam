@@ -85,6 +85,7 @@ pub fn run() {
             files::native_fs_remove,
             files::native_save_dialog,
             files::native_pick_files,
+            share::native_pending_widget_entry,
             share::native_pending_shares,
             share::native_ack_share,
             share::native_configure_ios_shortcuts,
@@ -103,6 +104,13 @@ pub fn run() {
         .run(|_app, _event| {
             #[cfg(target_os = "ios")]
             if let tauri::RunEvent::Opened { urls } = &_event {
+                for url in urls {
+                    if url.scheme() == "cliproam" && url.host_str() == Some("widget") {
+                        if let Some((_, id)) = url.query_pairs().find(|(key, _)| key == "id") {
+                            share::request_widget_preview(_app, id.into_owned());
+                        }
+                    }
+                }
                 if urls
                     .iter()
                     .any(|url| url.scheme() == "cliproam" && url.host_str() == Some("share"))

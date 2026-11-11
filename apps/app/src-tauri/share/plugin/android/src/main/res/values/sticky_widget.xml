@@ -9,8 +9,12 @@
     <string name="sticky_widget_status">%1$d notes · updated %2$s</string>
     <color name="sticky_widget_background">#F8FAFC</color>
     <color name="sticky_widget_note">#FFFFFF</color>
-    <color name="sticky_widget_text">#0F172A</color>
+    <color name="sticky_widget_text">#242424</color>
     <color name="sticky_widget_muted">#475569</color>
     <color name="sticky_widget_accent">#1D4ED8</color>
     <color name="sticky_widget_ripple">#2260A5FA</color>
+    <color name="sticky_widget_header_text">@color/sticky_widget_text</color>
+    <color name="sticky_widget_header">@color/sticky_widget_background</color>
+    <color name="sticky_widget_divider">#E2E8F0</color>
+    <string name="sticky_widget_no_more_text">No additional text</string>
 </resources>
