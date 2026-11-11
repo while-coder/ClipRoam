@@ -85,7 +85,7 @@ const detectedLabel = computed(() => {
   color: var(--color-foreground);
   background: transparent;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
   user-select: text;
   -webkit-user-select: text;

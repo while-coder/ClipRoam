@@ -138,7 +138,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal class="file-content-preview-modal entry-preview-modal" fill-height :mask-closable="true" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image && kind !== ClipboardKind.Text" @update:show="(value: boolean) => { if (!value) emit('close') }">
+  <SModal class="file-content-preview-modal entry-preview-modal" fill-height :mask-closable="true" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image && kind !== ClipboardKind.Text" @update:show="(value: boolean) => { if (!value) { if (back) emit('back'); else emit('close'); } }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
@@ -152,7 +152,6 @@ onMounted(async () => {
       <p v-if="truncated" class="preview-note" role="status">文件较大，仅显示前 2 MiB 内容。</p>
     </TextPreview>
     <template #footer>
-      <SButton v-if="back" @click="emit('back')">返回文件列表</SButton>
       <SButton v-if="canCopy" :loading="copying" :disabled="loading || copying || !!error" @click="copyToClipboard">
         <Copy :size="15" aria-hidden="true" />复制到剪贴板
       </SButton>
