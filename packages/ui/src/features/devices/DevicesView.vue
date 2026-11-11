@@ -160,10 +160,9 @@ onBeforeUnmount(() => { disposed = true; });
       </article>
       <SEmpty v-if="!devices.length">{{ loading ? '正在获取设备列表…' : refreshError ? '设备列表暂不可用，请点击刷新重试' : '暂无设备，登录同一账号的设备会显示在这里' }}</SEmpty>
     </SList>
+    <DeviceDetailsDialog v-if="selectedDevice" :device="selectedDevice" :connected="connected"
+      :current-device="selectedDevice.id === currentDeviceId" @close="selectedDeviceId = ''" />
   </WorkspacePage>
-
-  <DeviceDetailsDialog v-if="selectedDevice" :device="selectedDevice" :connected="connected"
-    :current-device="selectedDevice.id === currentDeviceId" @close="selectedDeviceId = ''" />
 </template>
 
 <style scoped>
