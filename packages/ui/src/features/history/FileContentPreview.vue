@@ -9,6 +9,7 @@ import { errorMessage, safeName } from "../../utils";
 import { DownloadCancelledError } from "../downloads/downloadManager";
 import { downloadWithBrowser, videoPreviewUrl } from "../downloads/fileAccess";
 import { audioMimeType, decodePreviewText, filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
+import RichTextPreview from "../../components/preview/RichTextPreview.vue";
 import ImagePreview from "../../components/preview/ImagePreview.vue";
 import TextPreview from "../../components/preview/TextPreview.vue";
 import MarkdownPreview from "../../components/preview/MarkdownPreview.vue";
@@ -26,8 +27,10 @@ const source = ref("");
 const textLimit = 2 * 1024 * 1024;
 const truncated = ref(false);
 const copying = ref(false);
+const richTextReady = ref(false);
+function onRichTextReady(value: string): void { text.value = value; richTextReady.value = true; }
 const { platformCapabilities } = usePlatform();
-const canCopy = computed(() => kind === ClipboardKind.Text || (kind === ClipboardKind.Image
+const canCopy = computed(() => kind === ClipboardKind.Text || (kind === FilePreviewKind.RichText && richTextReady.value) || (kind === ClipboardKind.Image
   && platformCapabilities.value.imageClipboard
   && clipboardPlatform.canWriteImage));
 let disposed = false;
@@ -50,6 +53,12 @@ async function copyToClipboard(): Promise<void> {
   copying.value = true;
   const release = session.files.retain([props.file.fileId]);
   try {
+    if (kind === FilePreviewKind.RichText) {
+      await clipboardPlatform.write({ kind: ClipboardKind.Text, text: text.value }, false);
+      session.signal.throwIfAborted();
+      showNotification({ message: "已复制到系统剪贴板", tone: "success" });
+      return;
+    }
     // Copy the complete file, even when the text preview only shows its beginning.
     await session.downloads.ensureLocalFile(props.entryId, props.file.fileId);
     const bytes = await session.files.readCached(props.file.fileId, 0, props.file.size);
@@ -101,7 +110,7 @@ async function downloadFile(): Promise<void> {
 }
 
 onMounted(async () => {
-  if (!kind) return;
+  if (!kind || kind === FilePreviewKind.RichText) return;
   loading.value = true;
   try {
     const session = getAccountSession();
@@ -138,10 +147,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <SModal class="file-content-preview-modal entry-preview-modal" fill-height :mask-closable="true" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image && kind !== ClipboardKind.Text" @update:show="(value: boolean) => { if (!value) { if (back) emit('back'); else emit('close'); } }">
+  <SModal class="file-content-preview-modal entry-preview-modal" fill-height :mask-closable="true" :show="true" :title="file.name" :width="kind === ClipboardKind.Image || kind === FilePreviewKind.Video ? '980px' : '760px'" :body-scrollable="kind !== ClipboardKind.Image && kind !== ClipboardKind.Text && kind !== FilePreviewKind.RichText" @update:show="(value: boolean) => { if (!value) { if (back) emit('back'); else emit('close'); } }">
     <div v-if="loading" class="preview-status" role="status"><span class="s-spinner" aria-hidden="true" />正在加载文件…</div>
     <div v-else-if="error" class="preview-status" role="alert">{{ error }}</div>
     <div v-else-if="!kind" class="preview-status">暂不支持此文件类型的预览</div>
+    <RichTextPreview v-else-if="kind === FilePreviewKind.RichText" :entry-id="entryId" :file="file" @ready="onRichTextReady" />
     <ImagePreview v-else-if="kind === ClipboardKind.Image && source" :src="source" :title="file.name" />
     <AudioPreview v-else-if="kind === FilePreviewKind.Audio && source" :src="source" :title="file.name" />
     <VideoPreview v-else-if="kind === FilePreviewKind.Video && source" :src="source" :title="file.name" :refresh-source="getVideoSource" />

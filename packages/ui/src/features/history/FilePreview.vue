@@ -6,7 +6,8 @@ import { ClipboardKind, isFileNode, type FileInfo, type TreeNode } from "@clipro
 import { ChevronDown, ChevronRight, File, FileText, Image, Music, Video, Folder, FolderOpen } from "lucide-vue-next";
 import type { LocalClipboardEntry } from "../../types";
 import FileContentPreview from "./FileContentPreview.vue";
-import { filePreviewKind, FilePreviewKind, type PreviewFile } from "./filePreview";
+import RtfdPreview from "../../components/preview/RtfdPreview.vue";
+import { filePreviewKind, FilePreviewKind, rtfdDocument, type PreviewFile, type RtfdDocument } from "./filePreview";
 import { useMobileLayout } from "../../platform/runtime";
 
 const props = defineProps<{ entry: LocalClipboardEntry }>();
@@ -17,6 +18,7 @@ const error = ref("");
 const expanded = ref(new Set<string>());
 const selected = ref<PreviewFile>();
 const opened = ref<PreviewFile>();
+const openedDocument = ref<RtfdDocument>();
 const browsing = ref(false);
 const mobileLayout = useMobileLayout();
 let disposed = false;
@@ -35,7 +37,10 @@ onMounted(async () => {
     fileInfo.value = entry.fileInfo;
     const roots = Object.entries(entry.fileInfo);
     const single = roots.length === 1 ? roots[0] : undefined;
-    if (single && isFileNode(single[1])) {
+    const document = single && rtfdDocument(single[0], single[0], single[1]);
+    if (document) {
+      openedDocument.value = document;
+    } else if (single && isFileNode(single[1])) {
       opened.value = { name: single[0], path: single[0], fileId: single[1].f, size: single[1].s };
     } else {
       browsing.value = true;
@@ -54,6 +59,7 @@ interface PreviewRow {
   depth: number;
   node: TreeNode;
   directory: boolean;
+  document?: RtfdDocument;
   detail: string;
 }
 
@@ -73,14 +79,16 @@ const rows = computed(() => {
   pushChildren(fileInfo.value ?? {}, "", 0);
   while (pending.length) {
     const row = pending.pop()!;
-    const file = isFileNode(row.node);
+    const document = rtfdDocument(row.name, row.path, row.node);
+    const file = isFileNode(row.node) || !!document;
     const childCount = file ? 0 : Object.keys(row.node).length;
     result.push({
       ...row,
       directory: !file,
-      detail: isFileNode(row.node) ? formatFileSize(row.node.s) : childCount ? `${childCount} 项` : "空目录",
+      document,
+      detail: document ? `${document.files.length} 个文件` : isFileNode(row.node) ? formatFileSize(row.node.s) : childCount ? `${childCount} 项` : "空目录",
     });
-    if (!isFileNode(row.node) && expanded.value.has(row.path)) {
+    if (!file && !isFileNode(row.node) && expanded.value.has(row.path)) {
       pushChildren(row.node, row.path, row.depth + 1);
     }
   }
@@ -93,23 +101,38 @@ function toggleDirectory(path: string): void {
 }
 
 function selectFile(row: PreviewRow): void {
-  if (isFileNode(row.node)) selected.value = { name: row.name, path: row.path, fileId: row.node.f, size: row.node.s };
+  if (row.document) selected.value = { ...row.document.body, name: row.name, path: row.path };
+  else if (isFileNode(row.node)) selected.value = { name: row.name, path: row.path, fileId: row.node.f, size: row.node.s };
 }
 
 function openFile(row: PreviewRow): void {
   selectFile(row);
-  opened.value = selected.value;
+  openSelected();
+}
+function openSelected(): void {
+  const row = rows.value.find(row => row.path === selected.value?.path);
+  openedDocument.value = row?.document;
+  opened.value = row?.document ? undefined : selected.value;
 }
 
 function fileIcon(name: string) {
   const kind = filePreviewKind(name);
-  return kind === FilePreviewKind.Image ? Image : kind === FilePreviewKind.Text ? FileText : kind === FilePreviewKind.Audio ? Music : kind === FilePreviewKind.Video ? Video : File;
+  return kind === FilePreviewKind.Image ? Image : kind === FilePreviewKind.Text || kind === FilePreviewKind.RichText ? FileText : kind === FilePreviewKind.Audio ? Music : kind === FilePreviewKind.Video ? Video : File;
 }
 </script>
 
 <template>
+  <RtfdPreview
+    v-if="openedDocument"
+    :key="openedDocument.path"
+    :entry-id="entry.id"
+    :document="openedDocument"
+    :back="browsing"
+    @back="openedDocument = undefined"
+    @close="emit('close')"
+  />
   <FileContentPreview
-    v-if="opened"
+    v-else-if="opened"
     :key="opened.path"
     :entry-id="entry.id"
     :file="opened"
@@ -123,7 +146,7 @@ function fileIcon(name: string) {
       <p class="file-preview-summary">{{ fileEntrySummary(entry) }}</p>
       <div v-if="browsing && !mobileLayout" class="file-preview-toolbar">
         <span v-if="selected">{{ selected.path }}</span>
-        <SButton :disabled="!selected" @click="opened = selected">打开文件</SButton>
+        <SButton :disabled="!selected" @click="openSelected">打开文件</SButton>
       </div>
       <div v-if="loading" class="preview-status" role="status">
         <span class="s-spinner" aria-hidden="true" />正在加载目录…
@@ -158,7 +181,7 @@ function fileIcon(name: string) {
             @keydown.enter.prevent="openFile(row)"
           >
             <span aria-hidden="true" />
-            <component :is="fileIcon(row.name)" :size="17" aria-hidden="true" />
+            <component :is="row.document ? FileText : fileIcon(row.name)" :size="17" aria-hidden="true" />
             <span class="file-preview-name">{{ row.name }}</span>
             <span class="file-preview-detail">{{ row.detail }}</span>
           </button>

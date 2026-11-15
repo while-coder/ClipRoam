@@ -23,7 +23,8 @@
     "./platform": "./src/platform/runtime.ts"
   },
   "scripts": {
-    "check": "vue-tsc --noEmit"
+    "check": "vue-tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "peerDependencies": {
     "vue": "^3.5.43"
@@ -34,12 +35,16 @@
     "dompurify": "^3.4.13",
     "highlight.js": "^11.12.0",
     "lucide-vue-next": "^0.468.0",
-    "marked": "^18.0.10"
+    "marked": "^18.0.10",
+    "rtf.js": "^3.0.9",
+    "utif": "^3.1.0"
   },
   "ciDependencies": {
     "@qingfeng346/ui-kit": "https://github.com/while-coder/ui-kit.git#0.0.1&path:/ui-kit"
   },
   "devDependencies": {
+    "jsdom": "^26.1.0",
+    "tsx": "^4.23.12",
     "typescript": "~5.6.2",
     "vue": "^3.5.43",
     "vue-tsc": "^2.1.10"
