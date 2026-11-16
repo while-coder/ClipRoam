@@ -193,7 +193,9 @@ signed_dev() {
   check_identity >/dev/null
   (
     cd "$ROOT/apps/app"
-    APPLE_SIGNING_IDENTITY="$IDENTITY" pnpm exec tauri build --debug --bundles app
+    # 本地开发仅生成固定证书签名的 .app，无需发布更新包及其签名私钥。
+    APPLE_SIGNING_IDENTITY="$IDENTITY" pnpm exec tauri build --debug --bundles app \
+      --config '{"bundle":{"createUpdaterArtifacts":false}}'
     verify "$TARGET_DIR/debug/bundle/macos/ClipRoam.app"
     open "$TARGET_DIR/debug/bundle/macos/ClipRoam.app"
   )

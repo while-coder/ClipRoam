@@ -8,6 +8,11 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
+    /* Resolve Vue for source packages linked from outside this workspace. */
+    "paths": {
+      "vue": ["./node_modules/vue"],
+      "vue/*": ["./node_modules/vue/*"]
+    },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

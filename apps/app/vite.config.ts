@@ -4,6 +4,7 @@ import vue from "@vitejs/plugin-vue";
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [vue()],
+  resolve: { dedupe: ["vue"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
