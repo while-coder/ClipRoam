@@ -1,3 +1,6 @@
+/// <reference path="./utif.d.ts" />
+
+// Consumers compile this shared source with their own tsconfig; include the UTIF types explicitly.
 /** Decode only the first TIFF page and bound its RGBA allocation before decompression. */
 export async function decodeTiff(bytes: Uint8Array): Promise<{ width: number; height: number; rgba: Uint8ClampedArray }> {
   const imported = await import("utif");
