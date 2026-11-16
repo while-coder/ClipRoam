@@ -166,7 +166,21 @@ verify() {
   printf '%s\n' "$requirement"
 }
 
+ensure_cargo() {
+  # IDE 启动的终端可能没有加载 Rust 安装时写入的 shell 环境。
+  if ! command -v cargo >/dev/null 2>&1; then
+    local cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+    if [ -x "$cargo_bin/cargo" ]; then
+      export PATH="$cargo_bin:$PATH"
+    else
+      echo "找不到 cargo；请先安装 Rust，或将 Cargo 的 bin 目录加入 PATH" >&2
+      return 1
+    fi
+  fi
+}
+
 signed_build() {
+  ensure_cargo
   check_identity >/dev/null
   (
     cd "$ROOT/apps/app"
@@ -175,6 +189,7 @@ signed_build() {
 }
 
 signed_dev() {
+  ensure_cargo
   check_identity >/dev/null
   (
     cd "$ROOT/apps/app"

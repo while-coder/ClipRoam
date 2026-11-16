@@ -20,6 +20,12 @@ function patchAndroidManifest(android) {
       `${applicationTag[0]}\n    <meta-data android:name="${DISTRIBUTION_SOURCE_META}" android:value="${source}" />`,
     );
   }
+  // mDNS discovery needs Wi-Fi multicast packets while LAN transfer is enabled.
+  for (const permission of ["ACCESS_WIFI_STATE", "CHANGE_WIFI_MULTICAST_STATE"]) {
+    if (!manifest.includes(`android.permission.${permission}`)) {
+      manifest = manifest.replace("</manifest>", `    <uses-permission android:name="android.permission.${permission}" />\n</manifest>`);
+    }
+  }
   // 应用内更新：APK 安装需要「安装未知应用」权限，下载目录通过 FileProvider 共享给系统安装器。
   if (!manifest.includes("android.permission.REQUEST_INSTALL_PACKAGES")) {
     manifest = manifest.replace(

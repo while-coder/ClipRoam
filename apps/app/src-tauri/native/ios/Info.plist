@@ -43,7 +43,9 @@
     </dict>
     <!-- iOS 14+ 访问局域网设备需要本地网络权限，
          没有这个声明的话直连 http://192.168.x.x:port 会静默失败。 -->
+    <key>NSBonjourServices</key>
+    <array><string>_cliproam._tcp</string></array>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>ClipRoam needs access to your local network to connect to your clipboard sync server.</string>
+    <string>ClipRoam uses your local network to discover nearby devices, transfer files directly, and connect to your sync server.</string>
   </dict>
 </plist>

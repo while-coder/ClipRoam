@@ -300,6 +300,7 @@ defineExpose({ setFields, setAuthMode, focusServerInput, focusPasswordInput });
           : (authMode === "login" ? "登录" : "创建账号") }}
       </SButton>
       <SButton v-if="authMode === 'login' && savedAccounts.length" type="text" :disabled="busy" block @click="emit('clear-accounts')">清空所有登录记录</SButton>
+      <slot name="extra-actions" />
     </SForm>
   </section>
 

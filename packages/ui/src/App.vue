@@ -580,7 +580,9 @@ onBeforeUnmount(() => {
       @retry-saved-config="retrySavedConfig"
       @close="closeSetup"
       @reset-error="setupError = ''"
-    />
+    >
+      <template #extra-actions><slot name="setup-actions" /></template>
+    </SetupWizard>
   </main>
 
   <WorkspaceLayout v-else :key="activeAccountSession?.id ?? 'signed-out'"
@@ -593,6 +595,7 @@ onBeforeUnmount(() => {
     :connected="connected"
     :connection-status="connectionStatus"
   >
+    <template v-if="$slots['navigation-extra']" #navigation-extra><slot name="navigation-extra" /></template>
     <KeepAlive>
       <HistoryView
         v-if="activeView === 'history' || activeView === 'favorites' || activeView === 'sticky'"

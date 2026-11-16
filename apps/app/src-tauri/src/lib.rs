@@ -3,6 +3,7 @@ mod branding;
 mod autostart;
 mod clipboard;
 mod files;
+mod lan;
 mod platform;
 mod platforms;
 mod updater;
@@ -34,6 +35,7 @@ pub fn run() {
             app.manage(shortcuts::ShortcutState::default());
             app.manage(window_mode::WindowModeState::default());
             app.manage(clipboard::ClipboardState::default());
+            app.manage(lan::LanState::default());
             platform::manage_platform_state(app.handle())?;
             platform::create_windows(app.handle())?;
             clipboard::start_monitor(app.handle());
@@ -85,6 +87,12 @@ pub fn run() {
             files::native_fs_remove,
             files::native_save_dialog,
             files::native_pick_files,
+            lan::native_lan_start,
+            lan::native_lan_stop,
+            lan::native_lan_snapshot,
+            lan::native_lan_connect,
+            lan::native_lan_decide,
+            lan::native_lan_send,
             share::native_pending_widget_entry,
             share::native_pending_shares,
             share::native_ack_share,

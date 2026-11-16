@@ -92,6 +92,7 @@ const mobilePages = computed(() => [
       </nav>
 
       <div class="sidebar-bottom">
+        <slot name="navigation-extra" />
         <div class="sidebar-status" :class="connectionStatus.tone" :title="connectionStatus.title">
           <Cloud v-if="connected" :size="15" aria-hidden="true" />
           <CloudOff v-else :size="15" aria-hidden="true" />
@@ -124,5 +125,10 @@ const mobilePages = computed(() => [
     </nav>
 
     <slot name="overlays" />
+    <div v-if="mobile && !quickPaste && $slots['navigation-extra']" class="native-navigation-extra"><slot name="navigation-extra" /></div>
   </main>
 </template>
+
+<style scoped>
+.native-navigation-extra { position: fixed; right: 16px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 20; }
+</style>

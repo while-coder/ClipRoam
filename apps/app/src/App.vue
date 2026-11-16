@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import RustSettingsDialog from "./features/settings/RustSettingsDialog.vue";
+import LanTransfer from "./features/lan/LanTransfer.vue";
+import { Radio } from "lucide-vue-next";
 import IosShortcutsCard from "./features/settings/IosShortcutsCard.vue";
 import SharedApp from "@cliproam/ui/app";
 import HistoryView from "@cliproam/ui/history";
@@ -20,6 +22,7 @@ const mobileSettingsSections = computed(() => iosShortcutsAvailable.value ? [
 ] : []);
 
 const sharedApp = ref<InstanceType<typeof SharedApp>>();
+const lanTransfer = ref<InstanceType<typeof LanTransfer>>();
 let disposeWidgetNavigation: (() => void) | undefined;
 async function initializeWidgetNavigation(android: boolean): Promise<void> {
   const consume = async () => {
@@ -71,6 +74,12 @@ onMounted(async () => {
 
 <template>
   <SharedApp ref="sharedApp" :mobile-settings-sections="mobileSettingsSections">
+    <template #setup-actions>
+      <SButton v-if="isNative" block @click="lanTransfer?.open()"><Radio :size="16" />免登录 · 局域网传输</SButton>
+    </template>
+    <template #navigation-extra>
+      <SButton v-if="isNative" @click="lanTransfer?.open()"><Radio :size="16" />局域网传输</SButton>
+    </template>
     <template #quick-paste="{ bindings, register }">
       <HistoryView :ref="register" v-bind="bindings" quick-paste />
     </template>
@@ -81,6 +90,7 @@ onMounted(async () => {
       <IosShortcutsCard v-if="section === 'ios-shortcuts'" :current-username="currentUsername" />
     </template>
     <template #native-overlays>
+      <LanTransfer v-if="isNative && !isQuickPaste" ref="lanTransfer" />
       <UpdaterDialog v-if="isNative && !isQuickPaste" />
     </template>
   </SharedApp>
