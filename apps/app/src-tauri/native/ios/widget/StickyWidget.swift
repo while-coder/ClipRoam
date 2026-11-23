@@ -94,30 +94,55 @@ struct StickyWidgetView: View {
         return url.url!
     }
 
+    private func thumbnail(_ note: StickyWidgetNote) -> UIImage? {
+        guard note.kind == "image", let encoded = note.imageInfo?.thumbnail,
+              let data = Data(base64Encoded: encoded) else { return nil }
+        return UIImage(data: data)
+    }
+
+    @ViewBuilder
     private func row(_ note: StickyWidgetNote) -> some View {
-        let lines = note.content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(lines.first ?? note.kind).font(.body).foregroundColor(.primary).lineLimit(1)
-            if lines.count > 1 {
-                Text(lines.dropFirst().joined(separator: " ")).font(.caption).foregroundColor(.secondary).lineLimit(1)
-            } else {
-                Text("无更多文本").font(.caption).foregroundColor(.secondary).lineLimit(1)
+        if family == .systemSmall {
+            VStack(alignment: .leading, spacing: 4) {
+                if let image = thumbnail(note) {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel(Text(note.content))
+                } else {
+                    Text(note.content).font(.system(size: 13)).foregroundColor(.primary)
+                        .lineLimit(nil)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+        } else {
+            HStack(alignment: .top, spacing: 6) {
+                if let image = thumbnail(note) {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(width: 40, height: 40)
+                        .accessibilityLabel(Text(note.content))
+                }
+                Text(note.content).font(.system(size: 13)).foregroundColor(.primary)
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 5).contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.vertical, 6).contentShape(Rectangle())
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 Image(systemName: "folder")
-                Text("便签").font(.headline)
+                Text("便签").font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
                 Text("\(entry.state.notes.count)").font(.caption)
             }
+            .font(.system(size: 11))
             .foregroundColor(.primary)
-            .padding(.horizontal, 12).padding(.vertical, 10)
+            .padding(.horizontal, 8).padding(.vertical, 5)
             VStack(alignment: .leading, spacing: 0) {
                 if visibleNotes.isEmpty {
                     Text(emptyMessage).font(.subheadline).foregroundColor(.secondary)
@@ -126,14 +151,14 @@ struct StickyWidgetView: View {
                     ForEach(visibleNotes) { note in
                         if family == .systemSmall { row(note) }
                         else { Link(destination: entryURL(note)) { row(note) } }
-                        Divider()
+                        if family != .systemSmall && note.id != visibleNotes.last?.id { Divider() }
                     }
-                    Spacer(minLength: 0)
+                    if family != .systemSmall { Spacer(minLength: 0) }
                 }
                 if entry.offline {
                     Label("缓存", systemImage: "wifi.slash").font(.caption2).foregroundColor(.secondary)
                 }
-            }.padding(.horizontal, 12)
+            }.padding(.horizontal, 8).padding(.bottom, 6)
         }
         .widgetURL(visibleNotes.first.map { entryURL($0) } ?? URL(string: "cliproam://widget"))
     }
@@ -148,7 +173,7 @@ struct StickyWidgetView: View {
         if #available(iOS 17.0, *) {
             protectedContent.containerBackground(.background, for: .widget)
         } else {
-            protectedContent.padding().background(Color(UIColor.systemBackground))
+            protectedContent.padding(8).background(Color(UIColor.systemBackground))
         }
     }
 }

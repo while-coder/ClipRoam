@@ -4,6 +4,11 @@ struct StickyWidgetNote: Codable, Identifiable {
     let id: String
     let kind: String
     let content: String
+    var imageInfo: StickyWidgetImageInfo? = nil
+}
+
+struct StickyWidgetImageInfo: Codable {
+    let thumbnail: String
 }
 
 struct StickyWidgetSession: Codable, Equatable {
@@ -119,7 +124,7 @@ enum StickyWidgetStore {
     static func save(notes: [StickyWidgetNote], for session: StickyWidgetSession) throws -> StickyWidgetState {
         try update { state in
             guard state.session == session else { return }
-            state.notes = notes.map { StickyWidgetNote(id: $0.id, kind: $0.kind, content: String($0.content.prefix(1024))) }
+            state.notes = notes
             state.updatedAt = Date()
             state.requiresLogin = false
         }

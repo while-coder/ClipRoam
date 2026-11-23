@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sticky_row" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:padding="2dp" android:background="@drawable/sticky_widget_touch">
+    <TextView android:id="@+id/sticky_note" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:gravity="top|start" android:textColor="@color/sticky_widget_text" android:textSize="13sp" />
+    <ImageView android:id="@+id/sticky_thumbnail" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scaleType="fitCenter" android:visibility="gone" />
+</FrameLayout>

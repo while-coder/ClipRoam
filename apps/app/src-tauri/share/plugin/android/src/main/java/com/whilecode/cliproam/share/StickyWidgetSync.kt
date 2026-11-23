@@ -83,7 +83,8 @@ class StickyWidgetWorker(context: Context, params: WorkerParameters) : Worker(co
                 val entry = entries.getJSONObject(index)
                 notes.put(JSONObject().put("id", entry.getString("id"))
                     .put("kind", entry.getString("kind"))
-                    .put("content", entry.getString("content").take(1024)))
+                    .put("content", entry.getString("content"))
+                    .put("imageInfo", entry.optJSONObject("imageInfo")))
             }
             if (!isStopped && StickyWidgetStore.complete(context, generation, notes = notes)) StickyWidgetProvider.render(context)
             return Result.success()
