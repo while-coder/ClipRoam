@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SModal from '@qingfeng346/ui-kit/components/SModal.vue'
 import SButton from '@qingfeng346/ui-kit/components/button/SButton.vue'
-import { showNotification, useAppVersion, useMobileLayout } from '@cliproam/ui/platform'
+import { useAppVersion, useMobileLayout } from '@cliproam/ui/platform'
 import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-vue-next'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -45,14 +45,18 @@ watch(appVersion, (version) => {
   releaseNotesReady.value = true
 }, { immediate: true })
 
-function dismissCurrentRelease() {
+watch(currentReleaseVisible, (visible) => {
+  if (!visible) return
   try {
+    // 展示后立即记录，避免直接退出应用时下次启动重复弹出。
     localStorage.setItem(releaseNotesKey, appVersion.value)
-    releaseNotesDismissed.value = true
   } catch (error) {
     console.warn('[updater] 无法保存版本内容展示记录', error)
-    showNotification({ message: '无法保存版本内容展示记录，请重试', tone: 'error' })
   }
+}, { immediate: true })
+
+function dismissCurrentRelease() {
+  releaseNotesDismissed.value = true
 }
 const title = computed(() => ({
   available: '发现新版本',
